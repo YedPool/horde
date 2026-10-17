@@ -88,7 +88,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # ack: THE ORC THAT ASKED acknowledges the founder's answer, and the question is closed with it as the
     # closer (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED). The one verb an Orc runs: which
     # Orc it is, is proven from the session it runs in (acks below), never taken from the command line.
-    ack    = @{ number = $true;  flags = @("Answer", "Id", "Json");                 usage = "ack <number> [-Answer <record>] [-Id <32 hex>] [-Json]"; acks = $true }
+    ack    = @{ number = $true;  flags = @("Answer", "Id", "Json");                 usage = "ack <number> -Answer <record> [-Id <32 hex>] [-Json]"; acks = $true }
     # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
     # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
     route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
@@ -573,8 +573,12 @@ function Invoke-HordeDecisionCommand {
     # It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
     # another verb, a missing number, a file it cannot read.
     # -Sender: for ack, who is running the command, as notices/Sender.ps1's Resolve-HordeNoticeSender proves
-    # it ({ ok; reason; label }); a test hands in its own. Left out, it is proven when ack needs it.
-    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given, [scriptblock]$Sender = $null)
+    # it ({ ok; reason; label }); a test hands in its own. Left out, it is proven when ack needs it, from
+    # -SenderArgs (Resolve-HordeNoticeSender's own sources: Environment, Identity, Processes, RegistryRoot,
+    # Self), which a test fills with a fleet of its own. -SeatProof answers whether that session holds the
+    # seat of the Orc whose label it wears ({ ok; reason }); left out it is Get-HordeLabelSeat's proof,
+    # from -SeatArgs (Root, Table, Identity).
+    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given, [scriptblock]$Sender = $null, [hashtable]$SenderArgs = @{}, [scriptblock]$SeatProof = $null, [hashtable]$SeatArgs = @{})
     $spec = $script:HordeDecisionCommandVerbs[$Verb]
     # Copied into a plain table: the bound parameters of a script block and a table built by a test are
     # different dictionary types, and only a plain table answers ContainsKey for both.
@@ -659,17 +663,34 @@ function Invoke-HordeDecisionCommand {
             if ($null -ne $Sender) { $who = & $Sender }
             else {
                 . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
-                $who = Resolve-HordeNoticeSender
+                $who = Resolve-HordeNoticeSender @SenderArgs
             }
             if ($null -eq $who -or -not [bool]$who.ok) { throw ("decisions ack is run by the Orc that asked, from inside its own session, and which session this is could not be proven: " + $(if ($null -eq $who) { "nothing answered" } else { ("" + $who.reason) -replace '\Ano notice was sent: ', '' })) }
             if ("$($who.label)" -cnotmatch '\A[A-Z]\z') { throw ("decisions ack is run by the Orc that asked, and this session's fleet label is '" + $who.label + "', which is not an Orc's lane letter. The warchief closes a question with: horde decisions close <number> -Outcome <one line>") }
+            # THE LABEL IS NOT THE ROLE: the sender's name falls back to the agent's own name for the
+            # session, so any session named with one capital letter wears an Orc's label. Routing finds
+            # an Orc by its label AND the role orc, with the seat's still-there proof; ack holds the
+            # session to the same proof, and the seat found must be this very session.
+            $held = $null
+            if ($null -ne $SeatProof) { $held = & $SeatProof $who }
+            else {
+                . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+                $held = $null
+                try {
+                    $seatFound = Get-HordeLabelSeat -Label "$($who.label)" -Role "orc" @SeatArgs
+                    if ($seatFound.state -ceq "known" -and "$($seatFound.value.sessionId)" -ieq "$($who.sessionId)") { $held = [pscustomobject]@{ ok = $true; reason = "" } }
+                    else { $held = [pscustomobject]@{ ok = $false; reason = $(if ($seatFound.state -ceq "known") { "the Orc " + $who.label + " is another session" } elseif ("$($seatFound.reason)" -ne "") { "$($seatFound.reason)" } else { "no live session wears the label with the role orc" }) } }
+                } catch { $held = [pscustomobject]@{ ok = $false; reason = $_.Exception.Message } }
+            }
+            if ($null -eq $held -or -not [bool]$held.ok) { throw ("decisions ack is run by the Orc that asked, and this session is not proven to be Orc " + $who.label + ": its fleet record does not wear that label with the role orc (" + $(if ($null -eq $held) { "nothing answered" } else { "" + $held.reason }) + "). The warchief closes a question with: horde decisions close <number> -Outcome <one line>") }
             $request["actor"] = $script:HordeDecisionAckActor
             $request["by"] = "$($who.label)"
-            if ($have.ContainsKey("Answer")) {
-                $answerText = "$($have['Answer'])"
-                if ($answerText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Answer is the record of the answer you were sent, as the notice names it: -Answer 57" + $usageNote) }
-                $request["answer"] = [long]$answerText
-            }
+            # THE ANSWER IS NAMED, ALWAYS: an ack that named none would close over whatever stood at that
+            # moment, perhaps words the founder changed a second ago. The notice names the record.
+            if (-not $have.ContainsKey("Answer")) { throw ("decisions ack needs -Answer <record>: the answer you were sent, as the notice names it, so that what you acknowledge is what you read" + $usageNote) }
+            $answerText = "$($have['Answer'])"
+            if ($answerText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Answer is the record of the answer you were sent, as the notice names it: -Answer 57" + $usageNote) }
+            $request["answer"] = [long]$answerText
         }
         "mark-read" {
             if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }

@@ -72,6 +72,7 @@ $script:HordeDecisionRouteMessengerNeeds = @("body.untyped", "idempotent.post", 
 $script:HordeDecisionRouteModule = "decisions-route"
 $script:HordeDecisionRouteSettings = New-HordeModuleSettings -Module $script:HordeDecisionRouteModule -Settings @(
     @{ name = "passSeconds"; kind = "whole"; default = 60; min = 5; max = 3600; what = "How often the store is read for answers to route and questions to flag when nothing in it changed, in seconds." }
+    @{ name = "seatGraceSeconds"; kind = "whole"; default = 300; min = 0; max = 3600; what = "How long an answer waits for an Orc seat that cannot be proven just now before it goes to the warchief, in seconds." }
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label a routed answer is from: the founder's, F, whose words it carries." }
 )
 # Who the notice is from: the router is no session, so it names itself, as the bell does.
@@ -81,6 +82,10 @@ $script:HordeDecisionRouteTtlSeconds = 604800
 $script:HordeDecisionRouteStages = @("accepted", "handed-over", "seen")
 # The most of his words, and of a title, the analyst's one line carries.
 $script:HordeDecisionRouteAnalystChars = 300
+# When each answer's Orc seat was first found UNPROVABLE (not absent), by purpose, question and answer: the
+# grace before it falls back to the warchief runs from here (review of 2026-10-16, finding 1). It lives as
+# long as the router does; a router that starts again starts the grace again, which only waits longer.
+$script:HordeDecisionRouteUnknownSince = @{}
 
 function Get-HordeDecisionRouteSettingsDeclaration { return $script:HordeDecisionRouteSettings }
 
@@ -163,12 +168,16 @@ function Resolve-HordeDecisionRouteTarget {
     param([Parameter(Mandatory = $true)]$Question, [Parameter(Mandatory = $true)][scriptblock]$Seat)
     $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
     $note = ""
+    $seatState = ""
     if ($asker.seat -ceq "orc") {
         $found = $null
         try { $found = & $Seat "orc" $asker.label } catch { $found = New-HordeUnknown -Reason $_.Exception.Message }
         if ($null -ne $found -and "$($found.state)" -ceq "known" -and "$($found.value.sessionId)" -ne "") {
-            return [pscustomobject]@{ ok = $true; seat = "orc"; label = $asker.label; sessionId = "$($found.value.sessionId)"; resolved = $true; note = ""; problem = "" }
+            return [pscustomobject]@{ ok = $true; seat = "orc"; label = $asker.label; sessionId = "$($found.value.sessionId)"; resolved = $true; note = ""; problem = ""; seatState = "known"; asker = $asker.seat }
         }
+        # ABSENT is a seat that is plainly not there; anything else (unknown, a reader that threw, no
+        # answer) is a seat that cannot be proven NOW, which the pass waits out before it falls back.
+        $seatState = $(if ($null -ne $found -and "$($found.state)" -ceq "absent") { "absent" } else { "unknown" })
         $why = $(if ($null -eq $found) { "nothing answered" } elseif ("$($found.reason)" -ne "") { "$($found.reason)" } else { "no live session wears its label with the role orc" })
         $note = $asker.shown + "'s seat could not be found (" + $why + "), so the answer went to the warchief instead"
     }
@@ -178,9 +187,9 @@ function Resolve-HordeDecisionRouteTarget {
     if ($null -eq $boss -or "$($boss.state)" -cne "known" -or "$($boss.value.sessionId)" -eq "") {
         $why = $(if ($null -eq $boss) { "nothing answered" } elseif ("$($boss.reason)" -ne "") { "$($boss.reason)" } else { "no live session holds the role" })
         $lead = $(if ($note -ne "") { $note + ", and " } else { "" })
-        return [pscustomobject]@{ ok = $false; seat = ""; label = ""; sessionId = ""; resolved = $false; note = $note; problem = ($lead + "the warchief's seat cannot be had: " + $why) }
+        return [pscustomobject]@{ ok = $false; seat = ""; label = ""; sessionId = ""; resolved = $false; note = $note; problem = ($lead + "the warchief's seat cannot be had: " + $why); seatState = $seatState; asker = $asker.seat }
     }
-    return [pscustomobject]@{ ok = $true; seat = "warchief"; label = ""; sessionId = "$($boss.value.sessionId)"; resolved = ($note -eq ""); note = $note; problem = "" }
+    return [pscustomobject]@{ ok = $true; seat = "warchief"; label = ""; sessionId = "$($boss.value.sessionId)"; resolved = ($note -eq ""); note = $note; problem = ""; seatState = $seatState; asker = $asker.seat }
 }
 
 function Format-HordeDecisionRouteNotice {
@@ -205,10 +214,11 @@ function Format-HordeDecisionRouteNotice {
     }
     [void]$lines.Add("Question " + $number + ": " + $q.title)
     [void]$lines.Add("Answered by the founder, " + "$($m.routeShown)" + " (record " + $seq + ", " + $m.at + ").")
-    if ($Item.purpose -ceq "answer") {
-        [void]$lines.Add("His words:")
-        foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }
-    }
+    # HIS WORDS GO WITH EVERY NOTICE, THE REMINDER TOO (review of 2026-10-16, finding 2): the reminder's
+    # target is found again when it is sent, and an Orc that never received the answer (it went to the
+    # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
+    [void]$lines.Add("His words:")
+    foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }
     if ($mine) {
         [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer:")
         [void]$lines.Add("  horde decisions ack " + $number + " -Answer " + $seq)
@@ -251,7 +261,8 @@ function Format-HordeDecisionRouteAnalystLine {
     # a stated length, where it went, and the token it is found by again.
     param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)][string]$Token)
     $cut = { param([string]$Text) $first = @(([string]$Text) -split "\r?\n")[0]; if ($first.Length -gt $script:HordeDecisionRouteAnalystChars) { $first = $first.Substring(0, $script:HordeDecisionRouteAnalystChars) + "..." }; return $first }
-    $to = $(if ($Target.seat -ceq "orc") { "Orc " + $Target.label } else { "the warchief" + $(if (-not $Target.resolved) { " (askedBy '" + $Item.question.askedBy + "' could not be resolved)" } else { "" }) })
+    $why = $(if ($Target.resolved) { "" } elseif ("$($Target.asker)" -ceq "orc") { " (askedBy '" + $Item.question.askedBy + "' is clear, but that Orc's seat was not found)" } else { " (askedBy '" + $Item.question.askedBy + "' could not be resolved)" })
+    $to = $(if ($Target.seat -ceq "orc") { "Orc " + $Target.label } else { "the warchief" + $why })
     return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder, " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
 }
 
@@ -260,7 +271,7 @@ function Invoke-HordeDecisionRoutePass {
     # routed; pending }: outcome nothing, routed or pending; lines one plain line for each answer sent,
     # reminded or left pending; routed and pending how many. -Clock, -Seat and -Analyst are for a test
     # that hands in its own; -StoreRoot names a store that is not this home's own.
-    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "")
+    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "", [int]$SeatGraceSeconds = 300)
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Seat) { $Seat = { param([string]$Role, [string]$Label) if ($Label -ceq "") { return (Get-HordeRoleSeat -Role $Role) }; return (Get-HordeLabelSeat -Label $Label -Role $Role) } }
@@ -293,6 +304,21 @@ function Invoke-HordeDecisionRoutePass {
         $seq = [long]$item.answer.sequence
         $what = $(if ($item.purpose -ceq "nudge") { "the reminder for question " + $number } else { "answer record " + $seq + " of question " + $number })
         $target = Resolve-HordeDecisionRouteTarget -Question $item.question -Seat $Seat
+        # AN ORC SEAT THAT CANNOT BE PROVEN JUST NOW is waited for, not given up: the route record is one
+        # per answer and purpose, so an answer sent to the warchief for a seat that was only restarting
+        # would never go to its Orc when the Orc is back. Only absent, or still unprovable after the grace,
+        # falls back to the warchief.
+        $graceKey = $item.purpose + "|" + $number + "|" + $seq
+        if ($target.seatState -cne "unknown") { $script:HordeDecisionRouteUnknownSince.Remove($graceKey) }
+        else {
+            if (-not $script:HordeDecisionRouteUnknownSince.ContainsKey($graceKey)) { $script:HordeDecisionRouteUnknownSince[$graceKey] = $now }
+            $waited = ($now - [datetime]$script:HordeDecisionRouteUnknownSince[$graceKey]).TotalSeconds
+            if ($waited -lt $SeatGraceSeconds) {
+                $pending++
+                [void]$lines.Add("pending: " + $what + " waits for " + (Get-HordeDecisionAsker -AskedBy "$($item.question.askedBy)").shown + "'s seat, which cannot be proven just now (" + $target.note + "); after " + $SeatGraceSeconds + " s without it, it goes to the warchief")
+                continue
+            }
+        }
         if (-not $target.ok) { $pending++; [void]$lines.Add("pending: " + $what + " was not sent: " + $target.problem + ". It is tried again"); continue }
         $noticeId = Get-HordeDecisionRouteNoticeId -HordeHome $HordeHome -Purpose $item.purpose -Number $number -Answer $seq -SessionId $target.sessionId
         $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $from; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
@@ -383,7 +409,7 @@ function Invoke-HordeDecisionRouteTurn {
     try { $mine = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mine = $true }
     if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; lines = @(); againMs = 0 } }
     $pass = $null
-    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" }
+    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" -SeatGraceSeconds ([int]$v.seatGraceSeconds) }
     finally { try { $mutex.ReleaseMutex() } catch { }; $mutex.Dispose() }
     # The mark AFTER the pass: the records this pass wrote itself are no change to read again for. A record
     # another writer made during the pass is read at the latest passSeconds later.

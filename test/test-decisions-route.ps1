@@ -101,7 +101,7 @@ function Say { param([int]$Number, [string]$Text, [string]$Route = "window", [st
 function Reply { param([int]$Number, [string]$Text)
     $a = Op "say" @{ id = (New-Id); actor = "warchief"; number = $Number; speaker = "warchief"; route = "command"; text = $Text }
     if ($a.state -cne "known" -or $a.value.outcome -cne "done") { throw ("the warchief's words were not saved: " + $a.reason + " " + (@($a.value.findings) -join "; ")) } }
-function Pass { return (Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seat -Analyst $analyst -HordeHome $hordeHome) }
+function Pass { param([int]$Grace = 300) return (Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seat -Analyst $analyst -HordeHome $hordeHome -SeatGraceSeconds $Grace) }
 function Show { param([int]$Number) return (Op "show" @{ number = $Number }).value.question }
 function Routes { param([int]$Number) $q = Show $Number; if ($null -eq $q.PSObject.Properties["routes"]) { return @() }; return @($q.routes) }
 function PostsTo { param([string]$Session) return @($script:posts | Where-Object { "$($_.sessionId)" -ceq $Session }) }
@@ -213,7 +213,8 @@ $qGone = Add-Question "Orc G" "Should the gone step go ahead?"
 $qTwo = Add-Question "Orc E" "Should the doubled step go ahead?"
 $qBoss = Add-Question "M (Thrall)" "Should the warchief step go ahead?"
 $sOdd = Say $qOdd "Yes to the odd one."; $sGone = Say $qGone "Yes to the gone one."; $sTwo = Say $qTwo "Yes to the doubled one."; $sBoss = Say $qBoss "Yes to the warchief."
-$p = Pass
+# GRACE 0 (the setting seatGraceSeconds): an unprovable seat falls back at once. The default grace is tested below.
+$p = Pass 0
 $toBoss = @(PostsTo "warchief-session-1")
 Check ($p.routed -eq 4 -and $toBoss.Count -eq 4) ("all four went to the warchief's seat (" + ($p.lines -join " | ") + ")")
 $rOdd = @(Routes $qOdd)[0]
@@ -338,7 +339,7 @@ Check (@((Op "list" @{}).value.unclosed | Where-Object { [int]$_.number -eq $qAs
 
 Write-Host ""
 Write-Host "--- ack: the asking Orc closes it as the closer; every other ack is refused in words ---" -ForegroundColor Cyan
-$wrong = Ack $qHour "D"
+$wrong = Ack $qHour "D" $sHour2
 Check ($wrong.value.outcome -ceq "refused" -and $wrong.value.reason -ceq ("nothing was written: question " + $qHour + " was asked by 'Orc C', not by Orc D: only the Orc that asked it acknowledges its answer")) "another Orc's ack is refused, in words"
 $stale = Ack $qHour "C" $sHour
 Check ($stale.value.outcome -ceq "refused" -and $stale.value.reason -ceq ("nothing was written: it acknowledges record " + $sHour + ", and the answer that stands under question " + $qHour + " is record " + $sHour2 + ": read that one (horde decisions show " + $qHour + "), then acknowledge it")) "an ack of an answer he has since replaced is refused, naming the one that stands"
@@ -348,21 +349,21 @@ Check (@((Op "list" @{}).value.unclosed | Where-Object { [int]$_.number -eq $qHo
 $late = Ack $qHour "C" $sHour2
 Check ($late.value.outcome -ceq "refused" -and $late.value.reason -ceq ("nothing was written: question " + $qHour + " is already closed: an acknowledgement closes only an open question, and never opens a closed one again") -and (Show $qHour).state -ceq "closed") "a late ack on a closed question is refused, and it stays closed"
 $qBare = Add-Question "Orc C" "Should the unanswered step go ahead?"
-$bare = Ack $qBare "C"
+$bare = Ack $qBare "C" 1
 Check ($bare.value.outcome -ceq "refused" -and $bare.value.reason -ceq ("nothing was written: question " + $qBare + " has no answer of the founder to acknowledge: only an answered question is closed this way") -and (Show $qBare).state -ceq "open") "an ack of an unanswered question is refused, in words"
 $bareNamed = Ack $qBare "C" 1
 Check ($bareNamed.value.outcome -ceq "refused" -and $bareNamed.value.reason -like ("*question " + $qBare + " has no answer of the founder to acknowledge*")) "and so is one that names an answer the question does not have"
-$askedAgain = Ack $qAsked "D"
+$askedAgain = Ack $qAsked "D" $sPartA
 Check ($askedAgain.value.outcome -ceq "refused" -and $askedAgain.value.reason -like ("*question " + $qAsked + " is still waiting for the founder - a part of it is unanswered, or he was asked again after his answer - so it is not closed by an acknowledgement")) "an ack of a question still waiting for him is refused"
 $qWarchief = Add-Question "M (Thrall)" "Should the keeper's own step go ahead?"
-$null = Say $qWarchief "Yes, keeper."
-$boss = Ack $qWarchief "M"
+$sWarchief = Say $qWarchief "Yes, keeper."
+$boss = Ack $qWarchief "M" $sWarchief
 Check ($boss.value.outcome -ceq "refused" -and $boss.value.reason -like "*was asked by 'M (Thrall)', not by Orc M*") "a question the warchief asked is acknowledged by no Orc, M included"
-$shape = Ack $qWarchief "C3"
+$shape = Ack $qWarchief "C3" $sWarchief
 Check ($shape.value.outcome -ceq "refused" -and $shape.value.reason -ceq "the request is not what 'ack' takes; nothing was done") "a lane letter that is not one capital letter is refused by the request's shape"
-$bossC = Ack $qWarchief "C"
+$bossC = Ack $qWarchief "C" $sWarchief
 Check ($bossC.value.outcome -ceq "refused" -and $bossC.value.reason -like "*was asked by 'M (Thrall)', not by Orc C*") "no Orc acknowledges a question the warchief asked"
-$byKeeper = Op "ack" @{ id = (New-Id); actor = "warchief"; number = $qWarchief; by = "C" }
+$byKeeper = Op "ack" @{ id = (New-Id); actor = "warchief"; number = $qWarchief; by = "C"; answer = $sWarchief }
 Check ($byKeeper.value.outcome -ceq "refused" -and $byKeeper.value.reason -like "'warchief' is not a role that may acknowledge the founder's answer to a question it asked*") "the keeper closes with close: ack is an Orc's"
 $qRepost = Add-Question "Orc C" "Should the repost step go ahead?"
 $sRepost = Say $qRepost "Yes, repost."
@@ -374,8 +375,10 @@ Check ($parked.value.outcome -ceq "done" -and $first.value.outcome -ceq "done" -
 $qFill = Add-Question "Orc C" "Should the filled-in step go ahead?"
 $sFill = Say $qFill "Yes, filled in."
 $filled = Ack $qFill "C"
+Check ($filled.value.outcome -ceq "refused" -and $filled.value.reason -like "*an acknowledgement names the answer it acknowledges*" -and (Show $qFill).state -ceq "open") "an ack that names no answer is refused at the operation, and writes nothing: it would close over whatever stands (finding 4)"
+$filled = Ack $qFill "C" $sFill
 $ackFile = Join-Path (Get-HordeDecisionStoreRoot) (([long]$filled.value.sequence).ToString("D10") + ".json")
-Check ($filled.value.outcome -ceq "done" -and [long](ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ackFile))).data.answer -eq $sFill) "an ack that names no answer acknowledges the one that stands, and its record says which"
+Check ($filled.value.outcome -ceq "done" -and [long](ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ackFile))).data.answer -eq $sFill) "an ack that names the answer closes it, and its record says which"
 
 Write-Host ""
 Write-Host "--- the command line: ack proves which Orc runs it ---" -ForegroundColor Cyan
@@ -383,16 +386,17 @@ $qCli = Add-Question "Orc D" "Should the command-line step go ahead?"
 $sCli = Say $qCli "Yes, from the command line."
 $asD = { return [pscustomobject]@{ ok = $true; reason = ""; sessionId = "orc-d-session"; label = "D" } }
 $asC3 = { return [pscustomobject]@{ ok = $true; reason = ""; sessionId = "c3-session"; label = "C3" } }
+$seatOk = { param($Who) return [pscustomobject]@{ ok = $true; reason = "" } }
 $nobody = { return [pscustomobject]@{ ok = $false; reason = "no notice was sent: this is not run from inside a session (no id)"; sessionId = ""; label = "" } }
-Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli" } -Sender $nobody } "decisions ack is run by the Orc that asked, from inside its own session, and which session this is could not be proven: this is not run from inside a session (no id)") "run outside a session: refused, saying why"
-Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli" } -Sender $asC3 } "this session's fleet label is 'C3', which is not an Orc's lane letter") "run by a session that is no Orc: refused"
-Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "x" } -Sender $asD } "-Answer is the record of the answer you were sent") "an -Answer that is not a record's number is refused"
+Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli" } -Sender $nobody -SeatProof $seatOk } "decisions ack is run by the Orc that asked, from inside its own session, and which session this is could not be proven: this is not run from inside a session (no id)") "run outside a session: refused, saying why"
+Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli" } -Sender $asC3 -SeatProof $seatOk } "this session's fleet label is 'C3', which is not an Orc's lane letter") "run by a session that is no Orc: refused"
+Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "x" } -Sender $asD -SeatProof $seatOk } "-Answer is the record of the answer you were sent") "an -Answer that is not a record's number is refused"
 $asC = { return [pscustomobject]@{ ok = $true; reason = ""; sessionId = "orc-c-session"; label = "C" } }
-$cliWrong = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "$sCli" } -Sender $asC
+$cliWrong = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "$sCli" } -Sender $asC -SeatProof $seatOk
 Check ($cliWrong.failure -like ("*question " + $qCli + " was asked by 'Orc D', not by Orc C*") -and (Show $qCli).state -ceq "open") "the Orc the session proves to be is the one held to askedBy: Orc C cannot close Orc D's question"
-$cli = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "$sCli" } -Sender $asD
+$cli = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "$sCli" } -Sender $asD -SeatProof $seatOk
 Check ($cli.failure -ceq "" -and $cli.lines[0] -ceq ("Closed question " + $qCli + ": Should the command-line step go ahead?") -and $cli.lines[1] -like "  closed: acknowledged by Orc D. Acknowledged by Orc D:*") ("Orc D's own ack closes its question (" + ($cli.lines -join " | ") + ")")
-$cliLate = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli" } -Sender $asD
+$cliLate = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qCli"; Answer = "$sCli" } -Sender $asD -SeatProof $seatOk
 Check ($cliLate.failure -like "*question $qCli is already closed*" -and $cliLate.lines[0] -like "Refused:*already closed*") "and a second ack fails the command, in words"
 $routeVerb = Invoke-HordeDecisionCommand -Verb "route" -Given @{}
 Check ($routeVerb.routes -eq $true -and @($routeVerb.lines).Count -eq 0) "route is no operation of its own at the command line: it hands on to one pass of the router"
@@ -444,6 +448,93 @@ $a3 = Send-HordeDecisionRouteAnalyst -Text "DECISION: question 1 (t) answered. [
 Check ($a3.said -like "already left for the analyst as *" -and @(Get-ChildItem -LiteralPath $mailDir -Filter "*.txt").Count -eq 0) "nor once the analyst's supervisor has delivered it"
 $a4 = Send-HordeDecisionRouteAnalyst -Text "DECISION: question 2 (t) answered. [route def]" -Token "[route def]" -HordeHome $analystHome -Since ([datetime]::UtcNow)
 Check ($a4.said -like "left for the analyst as *" -and @(Get-ChildItem -LiteralPath $mailDir -Filter "*.txt").Count -eq 1) "CONTROL: another token is another line"
+
+
+Write-Host ""
+Write-Host "--- an Orc seat that cannot be proven just now is waited for, not given up (review finding 1) ---" -ForegroundColor Cyan
+$script:seats["orc F"] = "orc-f-session"
+$script:fUnknown = $false
+$script:seatBase = $seat
+$seatF = {
+    param([string]$Role, [string]$Label)
+    if ($Role -ceq "orc" -and $Label -ceq "F" -and $script:fUnknown) { return (New-HordeUnknown -Reason "the registry could not be read (Orc F is restarting)") }
+    return (& $script:seatBase $Role $Label)
+}
+function PassF { return (Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seatF -Analyst $analyst -HordeHome $hordeHome) }
+$qF1 = Add-Question "Orc F" "Should the restarting step go ahead?"
+$sF1 = Say $qF1 "Yes, F1 words."
+$script:fUnknown = $true
+$p = PassF
+Check ($p.outcome -ceq "pending" -and @($p.lines | Where-Object { $_ -clike ("pending: answer record " + $sF1 + " of question " + $qF1 + " waits for Orc F's seat, which cannot be proven just now*") }).Count -eq 1 -and @(Routes $qF1).Count -eq 0 -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") }).Count -eq 0) ("a seat that is unknown: nothing is sent to the warchief, nothing is recorded (" + ($p.lines -join " | ") + ")")
+Advance 2
+$p = PassF
+Check (@(Routes $qF1).Count -eq 0 -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") }).Count -eq 0) "and it is still waiting inside the grace"
+$script:fUnknown = $false
+$p = PassF
+$toF = @(PostsTo "orc-f-session" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") })
+$rF1 = @(Routes $qF1)
+Check ($toF.Count -eq 1 -and $rF1.Count -eq 1 -and $rF1[0].seat -ceq "orc" -and $rF1[0].resolved -eq $true -and "$($rF1[0].sessionId)" -ceq "orc-f-session") "the seat back inside the grace: the answer reaches the Orc that asked, and the record says so"
+# PAST THE GRACE: the warchief, as before, and the analyst's line says the seat was missing, not the asker.
+$qF2 = Add-Question "Orc F" "Should the lost-seat step go ahead?"
+$sF2 = Say $qF2 "Yes, F2 words."
+$script:fUnknown = $true
+$p = PassF
+Advance 6
+$p = PassF
+$rF2 = @(Routes $qF2)
+Check ($rF2.Count -eq 1 -and $rF2[0].seat -ceq "warchief" -and $rF2[0].resolved -eq $false -and $rF2[0].note -like "Orc F's seat could not be found (the registry could not be read*" -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF2 + ":*") }).Count -eq 1) "still unprovable after the grace: it goes to the warchief"
+Check (@($script:analystLines | Where-Object { $_.text -like ("*question " + $qF2 + " (*sent to the warchief (askedBy 'Orc F' is clear, but that Orc's seat was not found).*") }).Count -eq 1) "and the analyst is told the asker was clear and the seat was not found"
+# THE REMINDER carries his words, and goes to the seat as it is then: an Orc that never saw the answer is not told to acknowledge it blind (finding 2).
+$script:fUnknown = $false
+Advance 61
+$p = PassF
+$nudgeF = @(PostsTo "orc-f-session" | Where-Object { $_.body -like ("UNCLOSED QUESTION " + $qF2 + ":*") })
+Check ($nudgeF.Count -eq 1 -and "$($nudgeF[0].body)".Contains("Yes, F2 words.") -and "$($nudgeF[0].body)".Contains("horde decisions ack " + $qF2 + " -Answer " + $sF2)) "the reminder to an Orc that was sent nothing carries his words, beside the command that acknowledges them"
+
+Write-Host ""
+Write-Host "--- ack: the session must hold the Orc's seat (role orc), not merely wear its letter (review finding 3) ---" -ForegroundColor Cyan
+. (Join-Path $root "notices\Sender.ps1")
+$utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$sessionVariable = ("" + (Get-HordeSelfSessionId -Environment @{}).reason).Split(" ")[0]
+$t0 = (New-Object DateTime 2026, 10, 14, 1, 0, 0, ([DateTimeKind]::Utc)).AddTicks(1234560)
+$ctl = Join-Path $work "ack-control"; New-Item -ItemType Directory -Path $ctl -Force | Out-Null
+$proj = Join-Path $work "ack-projects"; New-Item -ItemType Directory -Path $proj -Force | Out-Null
+$reg = Join-Path $work "ack-fleet"; New-Item -ItemType Directory -Path (Join-Path $reg "registry\sessions") -Force | Out-Null
+function Sid { param([int]$N) return ("cccccccc-0000-4000-8000-" + $N.ToString("000000000000")) }
+function New-AckSession {
+    # A running session as the agent's own control file shows it, and its record in the fleet's registry.
+    param([int]$ProcId, [string]$SessionId, [datetime]$Created, [string]$Role, [string]$Pane)
+    $ms = ([DateTimeOffset]$Created.ToUniversalTime().AddSeconds(90)).ToUnixTimeMilliseconds()
+    $o = [ordered]@{ pid = $ProcId; sessionId = $SessionId; cwd = "C:\work"; startedAt = $ms; procStart = "" + $Created.ToFileTimeUtc(); version = "9.9.9"; peerProtocol = 1; peerFeatures = @("f"); kind = "interactive"; entrypoint = "cli"; messagingSocketPath = ("\\.\pipe\LOCAL\ack-" + $ProcId); name = "C"; nameSource = "user"; nameSince = $ms; updatedAt = $ms; status = "busy"; statusUpdatedAt = $ms; bridgeSessionId = ("bridge-" + $ProcId) }
+    [System.IO.File]::WriteAllText((Join-Path $ctl ("" + $ProcId + ".json")), ($o | ConvertTo-Json -Depth 4), $utf8)
+    $r = [ordered]@{ claudeSessionId = $SessionId; label = "C"; role = $Role; pane = $Pane; instance = "t1"; lastSeen = "2026-10-14T02:00:00.0000000Z" }
+    [System.IO.File]::WriteAllText((Join-Path $reg ("registry\sessions\" + $SessionId + ".json")), ($r | ConvertTo-Json -Compress), $utf8)
+}
+# Session 1 (process 100, shell 200, the command 300) is NOT an Orc, yet its fleet label is "C"; session 2
+# (process 400, shell 500, command 600) is the Orc C.
+New-AckSession -ProcId 100 -SessionId (Sid 1) -Created $t0 -Role "master" -Pane "5"
+New-AckSession -ProcId 400 -SessionId (Sid 2) -Created $t0.AddSeconds(5) -Role "orchestrator" -Pane "6"
+$rows = @{}
+foreach ($r in @(@(100, 1, $t0), @(200, 100, $t0.AddSeconds(1)), @(300, 200, $t0.AddSeconds(2)), @(400, 1, $t0.AddSeconds(5)), @(500, 400, $t0.AddSeconds(6)), @(600, 500, $t0.AddSeconds(7)))) { $rows[[int]$r[0]] = [pscustomobject]@{ pid = [int]$r[0]; parent = [int]$r[1]; name = "p"; created = $r[2]; commandLine = "" } }
+$procs = New-HordeKnown -Value $rows
+$identArgs = @{ ClaudeDir = $ctl; ProjectsDir = $proj }
+$identity = Get-HordeIdentity @identArgs -Processes $procs
+$qNonOrc = Add-Question "Orc C" "Should the impostor step go ahead?"
+$sNonOrc = Say $qNonOrc "Yes, for the real Orc C."
+# THE SENDER IS NOT STUBBED: it is proven from the environment, the process table and the registry above.
+$senderNonOrc = @{ Environment = @{ $sessionVariable = (Sid 1) }; Identity = $identArgs; Processes = $procs; RegistryRoot = $reg; Self = 300 }
+$senderOrc = @{ Environment = @{ $sessionVariable = (Sid 2) }; Identity = $identArgs; Processes = $procs; RegistryRoot = $reg; Self = 600 }
+$seatArgs = @{ Root = $reg; Identity = $identity }
+$proven = Resolve-HordeNoticeSender @senderNonOrc
+Check ($proven.ok -and $proven.label -ceq "C" -and $proven.sessionId -ceq (Sid 1)) ("CONTROL: the real sender proves session 1 as 'C' by its label alone (" + $proven.reason + ")")
+Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qNonOrc"; Answer = "$sNonOrc" } -SenderArgs $senderNonOrc -SeatArgs $seatArgs } "this session is not proven to be Orc C") "a session that is no Orc but wears the asker's letter is refused"
+Check ((Show $qNonOrc).state -ceq "open") "and the question stays open"
+$byOrc = Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qNonOrc"; Answer = "$sNonOrc" } -SenderArgs $senderOrc -SeatArgs $seatArgs
+Check ($byOrc.failure -ceq "" -and (Show $qNonOrc).state -ceq "closed" -and (Show $qNonOrc).closedBy -ceq "Orc C") ("CONTROL: the session that holds the Orc C seat acknowledges it (" + $byOrc.failure + ")")
+$qNeed = Add-Question "Orc D" "Should the unnamed-answer step go ahead?"
+$sNeed = Say $qNeed "Yes, unnamed."
+Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qNeed" } -Sender $asD -SeatProof $seatOk } "decisions ack needs -Answer <record>") "the command line refuses an ack that names no answer (finding 4)"
+Check ((Show $qNeed).state -ceq "open") "and writes nothing"
 
 }
 finally {

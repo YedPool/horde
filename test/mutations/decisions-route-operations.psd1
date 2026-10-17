@@ -6,9 +6,9 @@
     Suite  = "test\test-decisions-route.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "an-ack-that-names-no-answer-records-none"
-           Find = '$Data["answer"] = [long]$standing.sequence'
-           Replace = '' }
+        @{ Name = "an-ack-that-names-no-answer-is-written"
+           Find = 'if ($Data.Contains("answer")) { return [pscustomobject]@{ why = ""; write = $true'
+           Replace = 'if ($true) { return [pscustomobject]@{ why = ""; write = $true' }
         @{ Name = "the-list-without-its-flag"
            Find = 'counts = [pscustomobject]$counts; unclosed = $unclosed })'
            Replace = 'counts = [pscustomobject]$counts; unclosed = @() })' }

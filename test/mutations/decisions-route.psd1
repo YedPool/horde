@@ -50,8 +50,8 @@
            Find = 'if ($null -eq $boss -or "$($boss.state)" -cne "known" -or "$($boss.value.sessionId)" -eq "") {'
            Replace = 'if ($null -eq $boss) {' }
         @{ Name = "unresolved-said-resolved"
-           Find = 'resolved = ($note -eq ""); note = $note; problem = "" }'
-           Replace = 'resolved = $true; note = $note; problem = "" }' }
+           Find = 'resolved = ($note -eq ""); note = $note; problem = ""; seatState'
+           Replace = 'resolved = $true; note = $note; problem = ""; seatState' }
         # --- exactly once
         @{ Name = "notice-id-ignores-the-answer"
            Find = '+ $Number + "`n" + $Answer + "`n" + $SessionId'
@@ -70,8 +70,8 @@
            Replace = 'if ($true) {' }
         # --- the analyst
         @{ Name = "the-analyst-is-not-told"
-           Find = 'try { $sent = & $Analyst (Format-HordeDecisionRouteAnalystLine'
-           Replace = 'try { $sent = $null; $null = (Format-HordeDecisionRouteAnalystLine' }
+           Find = 'try { $sent = & $Analyst (Format-HordeDecisionRouteAnalystLine -Item $item -Target $target -Token $token) $token (ConvertFrom-HordeDecisionRouteTime -Text "$($item.answer.at)") } catch {'
+           Replace = 'try { $sent = $null } catch {' }
         @{ Name = "the-analyst-is-told-of-reminders"
            Find = '        if ($item.purpose -ceq "answer") {'
            Replace = '        if ($true) {' }
@@ -104,5 +104,21 @@
         @{ Name = "a-refused-settings-file-routes-anyway"
            Find = 'if ($settings.state -ceq "refused") {'
            Replace = 'if ($false) {' }
+        # --- an Orc seat that cannot be proven now is waited for (review of 2026-10-16)
+        @{ Name = "an-unprovable-seat-falls-back-at-once"
+           Find = 'if ($waited -lt $SeatGraceSeconds) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "an-unprovable-seat-is-waited-for-ever"
+           Find = 'if ($waited -lt $SeatGraceSeconds) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "an-absent-seat-is-treated-as-unprovable"
+           Find = '$seatState = $(if ($null -ne $found -and "$($found.state)" -ceq "absent") { "absent" } else { "unknown" })'
+           Replace = '$seatState = "unknown"' }
+        @{ Name = "a-reminder-without-his-words"
+           Find = '@(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }'
+           Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r?\n")) { [void]$lines.Add("  " + $l) }' }
+        @{ Name = "the-analyst-blames-the-asker-for-a-missing-seat"
+           Find = 'elseif ("$($Target.asker)" -ceq "orc")'
+           Replace = 'elseif ($false)' }
     )
 }

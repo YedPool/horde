@@ -18,5 +18,14 @@
         @{ Name = "a-bad-answer-number-taken"
            Find = 'if ($answerText -cnotmatch ''\A[1-9][0-9]{0,9}\z'') { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "an-orc-seat-is-not-proven"
+           Find = 'if ($null -eq $held -or -not [bool]$held.ok) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "the-seat-found-may-be-another-session"
+           Find = '-ieq "$($who.sessionId)"'
+           Replace = '-ieq "$($seatFound.value.sessionId)"' }
+        @{ Name = "an-ack-needs-no-answer-at-the-command-line"
+           Find = 'if (-not $have.ContainsKey("Answer")) { throw'
+           Replace = 'if ($false) { throw' }
     )
 }

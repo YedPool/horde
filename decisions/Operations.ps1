@@ -290,7 +290,7 @@ function Get-HordeDecisionRouteContent {
 }
 
 function Get-HordeDecisionAckContent {
-    # A checked ack request as { body; findings }: which Orc, and - when the request names it - which answer.
+    # A checked ack request as { body; findings }: which Orc and which answer (the operation refuses one that names none).
     param($Request, $Definitions)
     $body = [ordered]@{ by = [string]$Request.by }
     if (Test-HordeDecisionMember -Object $Request -Name "answer") { $body["answer"] = [long]$Request.answer }
@@ -298,17 +298,14 @@ function Get-HordeDecisionAckContent {
 }
 
 function Complete-HordeDecisionAckData {
-    # AN ACKNOWLEDGEMENT THAT NAMES NO ANSWER acknowledges the one that stands, worked out from the list as
-    # it stands at each try and written into the record, so the record always says which answer it was.
+    # AN ACKNOWLEDGEMENT NAMES THE ANSWER IT ACKNOWLEDGES, ALWAYS (review of 2026-10-16, finding 4): one
+    # that named none would close the question over whatever stood at write time, perhaps words the
+    # founder changed a second before. The notice names the record, so none is taken for the asking.
     # Whether it may close the question is the rules' (Step-HordeDecisionAcked), asked when it is applied.
     param($Request, $List, $Data)
     if ($Data.Contains("answer")) { return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data } }
     $number = [int]$Data["number"]
-    $standing = $null
-    if ($List.questions.ContainsKey($number)) { $standing = Get-HordeDecisionStandingAnswer -Question $List.questions[$number] }
-    if ($null -eq $standing) { return [pscustomobject]@{ why = ("question " + $number + " has no answer of " + (Get-HordeDecisionSpeakerShown -Speaker (Get-HordeDecisionFirstTurn)) + " to acknowledge: only an answered question is closed this way"); write = $false; more = $null; data = $null } }
-    $Data["answer"] = [long]$standing.sequence
-    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
+    return [pscustomobject]@{ why = ("an acknowledgement names the answer it acknowledges: the record the notice gave you (horde decisions ack " + $number + " -Answer <record>); nothing was written, because without it the question would be closed over whatever stands now"); write = $false; more = $null; data = $null }
 }
 
 function Get-HordeDecisionReopenContent {
