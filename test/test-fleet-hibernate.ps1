@@ -139,12 +139,12 @@ function New-Deps {
                 $gapAt = $script:w.gapSel[$gl].AddSeconds(5)
                 if ($script:clock.at -ge $gapAt) { $turns += [pscustomobject]@{ at = $gapAt; text = "no, leave this one running" } }
             }
-            # A RE-CHECK is a look since the ask (the since it is given is the ask's own time); the founder types after it.
+            # A RE-CHECK is any look after the ask was posted (its since reaches back to the selection); the founder types after it.
             $lbl = $script:labelOf["" + $c.sessionId]
-            if ($script:w.askedAt.ContainsKey($lbl) -and $since -ge $script:w.askedAt[$lbl]) {
+            if ($script:w.askedAt.ContainsKey($lbl)) {
                 $script:w.recheck[$lbl] = 1 + [int]$script:w.recheck[$lbl]
                 if ($script:w.recheckUnreadable.ContainsKey($lbl)) { return (New-HordeUnknown -Reason "its transcript could not be read again") }
-                if ($script:w.typedAfterAsk.ContainsKey($lbl)) { $turns += [pscustomobject]@{ at = $since.AddSeconds(30); text = "wait, not that one" } }
+                if ($script:w.typedAfterAsk.ContainsKey($lbl)) { $turns += [pscustomobject]@{ at = $script:clock.at; text = "wait, not that one" } }
             }
             New-HordeKnown -Value $turns }
         OrcTiers = {

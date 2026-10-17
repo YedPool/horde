@@ -331,7 +331,7 @@ function Invoke-HordeWakeTick {
         # a throw - knocks on nobody this tick (core/Wake.ps1, Get-HordeWakeHold), and says why.
         $asleep = @{}; $asleepUnknown = ""
         try {
-            $sleepers = $(if ($null -ne $ReadAsleep) { & $ReadAsleep } else { Get-HordeFleetAsleep -HordeHome $HordeHome })
+            $sleepers = $(if ($null -ne $ReadAsleep) { & $ReadAsleep } else { Get-HordeFleetAsleep -HordeHome $HordeHome -KeepMarkers:($mode -cne "live") })
             if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") {
                 $asleep = $sleepers.value
                 # A RECORD THAT COULD NOT BE READ IS SKIPPED AND SAID, never a reason to knock on nobody (T-0216).

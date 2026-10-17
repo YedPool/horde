@@ -13,6 +13,9 @@
         @{ Name = "unknown-sleepers-ignored"
            Find = 'elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }'
            Replace = 'elseif (Test-HordeAnswer $sleepers) { }' }
+        @{ Name = "shadow-and-proof-watchers-clear-markers"
+           Find = ' -KeepMarkers:($mode -cne "live") })'
+           Replace = ' })' }
         @{ Name = "skipped-records-not-journaled"
            Find = 'foreach ($line in @($skippedRecords.Value)) {'
            Replace = 'foreach ($line in @()) {' }

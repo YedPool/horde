@@ -124,6 +124,9 @@
         @{ Name = "typing-not-looked-at-again"
            Find = '$hit = Get-HordeFleetFounderTyped -Turns @($typed.value) -Since ([datetime]$Request.askedAt)'
            Replace = '$hit = $null' }
+        @{ Name = "typing-recheck-starts-at-the-ask"
+           Find = 'typedSince = $typedSince; reason'
+           Replace = 'typedSince = $p.askedAt; reason' }
         @{ Name = "unreadable-typing-recheck-taken-as-clear"
            Find = 'if ($null -eq $typed -or "" + $typed.state -cne "known") { return (& $ans "not-yet"'
            Replace = 'if ($false) { return (& $ans "not-yet"' }

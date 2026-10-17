@@ -62,7 +62,8 @@ function Get-HordeFleetAsleep {
     # (-HostAdapter, fleet/Port.ps1, Unmark; when not given, the one loaded host if there is one), so a hand
     # restart does not leave it barred from the next terminal restore (T-0216). The answer's `cleared` lists
     # what was said about a marker, one line each.
-    param([string]$HordeHome = (Get-HordeHome), $Agent = $null, $HostAdapter = $null)
+    # -KeepMarkers: a watcher that must change nothing (SHADOW or PROOF) reads who sleeps and removes no marker.
+    param([string]$HordeHome = (Get-HordeHome), $Agent = $null, $HostAdapter = $null, [switch]$KeepMarkers)
     $dir = Get-HordeFleetHibernationsDir -HordeHome $HordeHome
     $out = @{}
     $skipped = New-Object System.Collections.ArrayList
@@ -70,7 +71,7 @@ function Get-HordeFleetAsleep {
     $done = {
         param($map)
         $cleared = @()
-        if ($running.Count -gt 0) {
+        if ($running.Count -gt 0 -and -not $KeepMarkers) {
             $h = $HostAdapter
             if ($null -eq $h) { $foundHost = Resolve-HordeFleetAdapter -Kind "host"; if ($foundHost.state -ceq "known") { $h = $foundHost.value } }
             $cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($running))

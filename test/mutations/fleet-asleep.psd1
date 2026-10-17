@@ -28,6 +28,9 @@
         @{ Name = "running-session-keeps-its-hibernated-marker"
            Find = '[void]$running.Add("" + $sid); [void]$running.Add("" + (Get-HordeFleetCurrentId -Session $s))'
            Replace = '' }
+        @{ Name = "keep-markers-switch-ignored"
+           Find = 'if ($running.Count -gt 0 -and -not $KeepMarkers) {'
+           Replace = 'if ($running.Count -gt 0) {' }
         @{ Name = "sleeping-session-loses-its-hibernated-marker"
            Find = '$cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($running))'
            Replace = '$cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($sleepers))' }

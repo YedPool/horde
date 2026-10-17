@@ -333,11 +333,14 @@ function Invoke-HordeFleetParkSession {
     # this run - never retried, never exited. A reading that cannot be made is "not yet", and is made again.
     $typedFor = Get-HordeFleetMember $Request "typedFor"
     if ($null -eq $typedFor -or $null -eq $Deps.PSObject.Properties["Typed"]) { return (& $ans "not-yet" "whether the founder typed into it since its ask cannot be checked, so it is not sent its exit command") }
-    $typed = & $Deps.Typed $typedFor ([datetime]$Request.askedAt)
+    # THE LOOK STARTS WHERE THE SELECTION's OWN LOOK-BACK STARTED, not at the ask (review of PR 326): the record, the
+    # markers and the earlier sessions' asks come between the two, and he may type into this session in that gap.
+    $typedFrom = $(if ($null -ne $Request.PSObject.Properties["typedSince"] -and $Request.typedSince -is [datetime]) { [datetime]$Request.typedSince } else { [datetime]$Request.askedAt })
+    $typed = & $Deps.Typed $typedFor $typedFrom
     if ($null -eq $typed -or "" + $typed.state -cne "known") { return (& $ans "not-yet" ("whether the founder typed into it since its ask could not be read: " + $(if ($null -ne $typed) { "" + $typed.reason } else { "no reading" }))) }
-    $hit = Get-HordeFleetFounderTyped -Turns @($typed.value) -Since ([datetime]$Request.askedAt)
+    $hit = Get-HordeFleetFounderTyped -Turns @($typed.value) -Since $typedFrom
     if ($null -ne $hit) {
-        $m.blocked = "the founder typed into it at " + (Format-HordeFleetTime -At $hit.at) + ", after its ask, so it is left running and never sent its exit command"
+        $m.blocked = "the founder typed into it at " + (Format-HordeFleetTime -At $hit.at) + ", since it was looked at for selection, so it is left running and never sent its exit command"
         return (& $ans "refused" $m.blocked)
     }
     $sent = & $Deps.Exit $Request.sessionId $Request.reason
@@ -438,6 +441,8 @@ function Invoke-HordeFleetHibernate {
             return $sel
         }
     }
+    # THE INSTANT THE SELECTION's 30-MINUTE LOOK-BACK BEGAN, carried to the re-check before each exit command.
+    $typedSince = $now.AddMinutes(-$script:HordeFleetHibernateTypedMinutes)
     $picked = @(& $Selector $found.candidates)
     $caller = $(if ($null -ne $Deps.PSObject.Properties["Caller"]) { "" + (& $Deps.Caller) } else { "" })
     $chosen = New-Object System.Collections.ArrayList
@@ -447,7 +452,7 @@ function Invoke-HordeFleetHibernate {
         $why = Get-HordeFleetTierExclusion -Candidate $c -All @($found.candidates) -Tiers $tierMap
         if ($null -eq $why) {
             $typed = $null
-            if (-not (Test-HordeFleetMaster -Candidate $c)) { $typed = & $Deps.Typed $c $now.AddMinutes(-$script:HordeFleetHibernateTypedMinutes) }
+            if (-not (Test-HordeFleetMaster -Candidate $c)) { $typed = & $Deps.Typed $c $typedSince }
             $why = Get-HordeFleetExclusion -Candidate $c -Analysts @($an.value) -Questions @($q.value) -Typed $typed -Now $now -Caller $caller
         }
         if ($null -eq $why) { [void]$chosen.Add($c) } else { [void]$excluded.Add([pscustomobject]@{ candidate = $c; reason = $why.reason; detail = $why.detail }) }
@@ -604,7 +609,7 @@ function Invoke-HordeFleetHibernate {
                 # An Orc goes after every Warg of it chosen here has exited.
                 $waitingFor = @($ordered | Where-Object { "" + $_.sessionId -cne $sid -and (Get-HordeFleetDescendants -Candidates @($ordered) -Root $sid | ForEach-Object { "" + $_.candidate.sessionId }) -ccontains ("" + $_.sessionId) -and "" + $_.state -cne "exited" })
                 if ($waitingFor.Count -gt 0) { $p.why = "it waits for its Wargs to exit first (" + (@($waitingFor | ForEach-Object { Get-HordeFleetSessionName -Session $_ }) -join ", ") + ")"; continue }
-                $req = [pscustomobject]@{ sessionId = $sid; label = "" + $s.label; cwd = "" + $s.cwd; process = (Get-HordeFleetMember $s "process"); typedFor = $candBySid[$sid]; parkedPath = $p.path; askedAt = $p.askedAt; reason = ("hibernation " + $id)
+                $req = [pscustomobject]@{ sessionId = $sid; label = "" + $s.label; cwd = "" + $s.cwd; process = (Get-HordeFleetMember $s "process"); typedFor = $candBySid[$sid]; parkedPath = $p.path; askedAt = $p.askedAt; typedSince = $typedSince; reason = ("hibernation " + $id)
                     others = @($recordIds | Where-Object { $_ -cne $sid }); since = $since; memo = $p.memo }
                 $step = & $park $req
                 if ($null -eq $step) { $step = [pscustomobject]@{ outcome = "not-yet"; reason = "the park step answered nothing"; fileSeen = $false; said = "" } }
