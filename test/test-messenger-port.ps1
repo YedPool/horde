@@ -140,7 +140,7 @@ $cases = @(
     @{ change = { param($m) $m.from.deviceId = "laptop" }; like = "from.deviceId"; what = "a sender device that is not a device id" },
     @{ change = { param($m) $m.from.sessionId = "CON" }; like = "from.sessionId"; what = "a sender session id that is a DOS device name" },
     @{ change = { param($m) $m.from | Add-Member -NotePropertyName pane -NotePropertyValue 4 }; like = "from.pane"; what = "a sender with a member outside the list" },
-    @{ change = { param($m) $m.from | Add-Member -NotePropertyName system -NotePropertyValue "evil" }; like = "from.system"; what = "a sender system that is not the reserved one" },
+    @{ change = { param($m) $m.from.PSObject.Properties.Remove("label"); $m.from | Add-Member -NotePropertyName system -NotePropertyValue "evil" }; like = "is not one of"; what = "a sender system that is not the reserved one" },
     @{ change = { param($m) $m.from | Add-Member -NotePropertyName system -NotePropertyValue "horde" }; like = "from.system"; what = "a sender that is both a system and a hub label" },
     @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue "founder" }; like = "from.verified"; what = "a verified sender that is not an object" },
     @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -Kind "M") }; like = "from.verified.kind"; what = "a verified sender of a kind outside the list" },
