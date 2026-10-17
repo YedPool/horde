@@ -404,6 +404,17 @@ $script:world.error = "the control folder is empty"
 Check ((Get-HordeFleetAsleep -HordeHome $script:hh).state -ceq "unknown") "when which sessions run cannot be read, who sleeps is unknown and nobody is knocked"
 $script:world.error = ""
 $script:world.stopped[$script:sids["K"]] = $true
+# THE NEWEST RECORD IS THE LAST WORD: a later hibernation holds K woken and K1 exited again, and the earlier one
+# still says K exited. Records are read oldest first so the later one wins.
+$later = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
+$later.id = "20990102-000000"
+foreach ($ls in @($later.sessions)) { if ($ls.sessionId -ceq $script:sids["K"]) { Add-HordeFleetState -Session $ls -State "waking" -At $t; Add-HordeFleetState -Session $ls -State "woken" -At $t } }
+$laterDir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $script:hh) "20990102-000000"
+[void](New-Item -ItemType Directory -Path $laterDir -Force)
+[void](Write-HordeFleetRecord -Dir $laterDir -Record $later)
+$nw = Get-HordeFleetAsleep -HordeHome $script:hh
+Check ($nw.state -ceq "known" -and -not $nw.value.ContainsKey($script:sids["K"]) -and $nw.value.ContainsKey($script:sids["K1"])) "a session the newest record holds woken is awake though an older record says it exited; the one it still holds exited sleeps"
+Remove-Item -LiteralPath $laterDir -Recurse -Force
 $woke = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
 foreach ($s in @($woke.sessions)) { if ($s.sessionId -ceq $script:sids["K"]) { Add-HordeFleetState -Session $s -State "waking" -At $t; Add-HordeFleetState -Session $s -State "woken" -At $t } }
 [void](Write-HordeFleetRecord -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $script:hh) $r.id) -Record $woke)

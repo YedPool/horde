@@ -189,7 +189,10 @@ Remove-Item -LiteralPath $nr -Recurse -Force -ErrorAction SilentlyContinue
 Section "hibernate writes the marker a wake removes (T-0216)"
 # {v:1, sessionId, by:"horde", reason:"hibernated", at}, at <profile>\.wezurrect\no-restore\<uuid>.json, written whole by
 # rename so the terminal's restore never reads half of one.
-$nw = Join-Path $env:TEMP ("horde-test-fleet-host-mark-" + [guid]::NewGuid().ToString("N"))
+# The markers folder sits one level down in a folder of its own, so an id that climbs out of it lands inside the
+# folder this test removes, never in TEMP.
+$nwRoot = Join-Path $env:TEMP ("horde-test-fleet-host-mark-" + [guid]::NewGuid().ToString("N"))
+$nw = Join-Path $nwRoot "no-restore"
 $sidW = "cccccccc-3333-4333-8333-333333333333"
 $at = [datetime]::new(2026, 10, 16, 11, 30, 5, [System.DateTimeKind]::Utc)
 $w = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $nw
@@ -206,7 +209,7 @@ Check ($again.state -ceq "known" -and ([System.IO.File]::ReadAllText($mp) | Conv
 $rm = Remove-HordeWeztermFleetNoRestore -SessionId $sidW -Dir $nw
 Check ($rm.state -ceq "known" -and $rm.value -ceq "removed") "THE TWO MATCH: the wake's remover finds and removes exactly the marker the writer made"
 $bad = Write-HordeWeztermFleetNoRestore -SessionId "..\x" -Reason "hibernated" -At $at -Dir $nw
-Check ($bad.state -ceq "unknown" -and -not (Test-Path -LiteralPath (Join-Path $nw "..\x.json"))) "an id that is not a session id writes nothing"
+Check ($bad.state -ceq "unknown" -and -not (Test-Path -LiteralPath (Join-Path $nwRoot "x.json"))) "an id that is not a session id writes nothing, not even beside the folder"
 $bad = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "because" -At $at -Dir $nw
 Check ($bad.state -ceq "unknown" -and -not (Test-Path -LiteralPath $mp)) "a reason that is not parked or hibernated writes nothing"
 $blocked = Join-Path $env:TEMP ("horde-test-fleet-host-markfile-" + [guid]::NewGuid().ToString("N"))
@@ -214,7 +217,7 @@ $blocked = Join-Path $env:TEMP ("horde-test-fleet-host-markfile-" + [guid]::NewG
 $bad = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $blocked
 Check ($bad.state -ceq "unknown" -and $bad.reason -like "*could not be written*") ("a folder that cannot be made is unknown, with the reason (" + $bad.reason + ")")
 Remove-Item -LiteralPath $blocked -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $nw -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $nwRoot -Recurse -Force -ErrorAction SilentlyContinue
 $hh2 = Resolve-HordeFleetAdapter -Kind "host"
 Check ($null -ne $hh2.value.PSObject.Properties["mark"] -and $null -ne $hh2.value.mark) "the adapter registers its marker writer with the port"
 
