@@ -51,7 +51,8 @@
 # only as lower-case session UUIDs and -FromLabel only as a label. So, before any process starts: a
 # target that is not a session UUID is held, bad-to; a sender whose session id is not one is named by its
 # hub label alone (-FromSessionId is never passed a non-UUID); a sender label that is not a hub label, or
-# a sender with neither, is held, bad-from.
+# a sender with neither, is held, bad-from. The one exception is the port's reserved from.system "horde":
+# it is posted as -FromLabel horde and never with a -FromSessionId.
 #
 # A VERIFIED SENDER (the founder's first live use, 2026-10-11: his phone's lines reached his Thrall as
 # "the sender calls itself: F (not verified)", though the relay had verified each one). A message's
@@ -585,6 +586,19 @@ function Send-HordeWezfleetMessengerPost {
     $label = $(if ($fl.has -and $null -ne $fl.value) { [string]$fl.value } else { "" })
     if ($label -ne "" -and $label -cnotmatch $script:HordeWezfleetMessengerLabelPattern) {
         return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason ("bad-from: the sender label '" + (ConvertTo-HordeWezfleetMessengerLine $label) + "' is not a hub label; nothing was started"))
+    }
+    # THE RESERVED SYSTEM SENDER (messengers/Port.ps1): "horde" is passed as -FromLabel horde - the one
+    # name here that is not a hub label - and -FromSessionId is NEVER passed, whatever the sender holds.
+    # Any other system, or one with a label or a verified claim, is held bad-from.
+    $fy = Get-HordeMessengerMember $from.value "system"
+    $system = $(if ($fy.has -and $null -ne $fy.value) { [string]$fy.value } else { "" })
+    if ($fy.has) {
+        $fvx = Get-HordeMessengerMember $from.value "verified"
+        if ($system -cne "horde" -or $label -ne "" -or $fvx.has) {
+            return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason ("bad-from: the sender system '" + (ConvertTo-HordeWezfleetMessengerLine $system) + "' is not the reserved 'horde', or it also holds a label or a verified claim; nothing was started"))
+        }
+        $label = "horde"
+        $fromSid = ""
     }
     $sidOk = ($fromSid -cmatch $script:HordeWezfleetMessengerSessionPattern)
     if (-not $sidOk -and $label -eq "") {

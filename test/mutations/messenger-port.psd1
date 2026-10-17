@@ -95,8 +95,14 @@
            Replace = '' }
         # --- a verified sender (the founder's first live use, 2026-10-11)
         @{ Name = "verified-member-not-allowed"
-           Find = '@("deviceId", "sessionId", "label", "verified")'
-           Replace = '@("deviceId", "sessionId", "label")' }
+           Find = '@("deviceId", "sessionId", "label", "verified", "system")'
+           Replace = '@("deviceId", "sessionId", "label", "system")' }
+        @{ Name = "system-not-closed"
+           Find = '$script:HordeMessengerSystems -cnotcontains $fy.value'
+           Replace = '$false' }
+        @{ Name = "system-with-label-allowed"
+           Find = 'elseif ($fl.has -or (Get-HordeMessengerMember $from.value "verified").has)'
+           Replace = 'elseif ($false)' }
         @{ Name = "verified-not-checked"
            Find = 'if ($fv.has) { foreach ($x in @(Test-HordeMessengerVerified $fv.value)) { [void]$out.Add($x) } }'
            Replace = '$null = $fv' }

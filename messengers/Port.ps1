@@ -88,7 +88,13 @@ $script:HordeMessengerCapabilityNames = @("body.untyped", "idempotent.post", "re
 $script:HordeNodeMessengerRequires = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeMessengerStages = @("accepted", "handed-over", "seen", "expired", "held")
 $script:HordeMessengerMembers = @("messageId", "sessionId", "label", "from", "body", "ttlSeconds")
-$script:HordeMessengerFromMembers = @("deviceId", "sessionId", "label", "verified")
+$script:HordeMessengerFromMembers = @("deviceId", "sessionId", "label", "verified", "system")
+# A RESERVED SYSTEM SENDER (third review of PR 318): from.system = "horde" says this node itself sent the
+# line, with no session behind it (a wake started from the phone). Closed to this one word; it excludes
+# from.label and from.verified, since it is not a hub label, and a messenger shows it as the name "horde"
+# and never as a session id. Nothing that came over a link can carry it (session.deliver's from has no
+# such member).
+$script:HordeMessengerSystems = @("horde")
 # A VERIFIED SENDER's members and their closed values (the header).
 $script:HordeMessengerVerifiedMembers = @("kind", "by", "keyId")
 $script:HordeMessengerVerifiedKinds = @("founder")
@@ -308,6 +314,11 @@ function Test-HordeMessengerMessage {
         if (-not $fs.has -or -not (Test-HordeMessengerText $fs.value $p.session)) { [void]$out.Add("from.sessionId is not a session id") }
         $fl = Get-HordeMessengerMember $from.value "label"
         if ($fl.has -and -not (Test-HordeMessengerText $fl.value $p.label)) { [void]$out.Add("from.label is not a hub label") }
+        $fy = Get-HordeMessengerMember $from.value "system"
+        if ($fy.has) {
+            if ($fy.value -isnot [string] -or $script:HordeMessengerSystems -cnotcontains $fy.value) { [void]$out.Add("from.system is not one of " + ($script:HordeMessengerSystems -join ", ")) }
+            elseif ($fl.has -or (Get-HordeMessengerMember $from.value "verified").has) { [void]$out.Add("from.system is the sender's whole name: it cannot also carry from.label or from.verified") }
+        }
         $fv = Get-HordeMessengerMember $from.value "verified"
         if ($fv.has) { foreach ($x in @(Test-HordeMessengerVerified $fv.value)) { [void]$out.Add($x) } }
     }
