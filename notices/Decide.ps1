@@ -96,7 +96,7 @@ function Submit-HordeNotify {
     # fixed sentence: the text looked like a secret), "cut-off" (over the cap: not written; the founder
     # told now, once - notice is that cutoff notice), "held" (over the cap, the founder already told) or
     # "failed" (nothing written, reason says why).
-    param([Parameter(Mandatory = $true)]$Sender, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [string]$HordeHome = "", $Now = $null)
+    param([Parameter(Mandatory = $true)]$Sender, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [string]$HordeHome = "", $Now = $null, [int]$PerHour = 0)
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $fail = { param([string]$Why) return [pscustomobject]@{ outcome = "failed"; reason = $Why; notice = $null } }
     if ($null -eq $Sender -or -not $Sender.ok -or "$($Sender.sessionId)" -ceq "" -or "$($Sender.label)" -ceq "") { return (& $fail "no notice was sent: the sender is not proven") }
@@ -109,15 +109,17 @@ function Submit-HordeNotify {
     $from = Get-HordeNoticeText -Text $Sender.label -Chars 40
     $fromWords = $(if ($from.refused) { "a session" } else { $from.text })
     $said = Get-HordeNoticeText -Text $Text -Chars ([int]$st.settings.textChars)
+    # -PerHour: the cap the caller names (a service has its own, notices/Services.ps1); none: the sessions'.
+    $cap = $(if ($PerHour -gt 0) { $PerHour } else { [int]$st.settings.perHour })
     $answer = Use-HordeNoticeLock -Store $st.store -Body {
         $state = Read-HordeNoticeState -Store $st.store
         if ($state.state -cne "known") { return (& $fail ("no notice was sent: " + $state.reason)) }
         $s = $state.value
         $mine = $(if ($s.sessions.ContainsKey($Sender.sessionId)) { $s.sessions[$Sender.sessionId] } else { $null })
         if ($null -eq $mine -or $mine.hour -cne $hour) { $mine = [pscustomobject]@{ hour = $hour; count = 0; told = $false }; $s.sessions[$Sender.sessionId] = $mine }
-        if ($mine.count -ge [int]$st.settings.perHour) {
+        if ($mine.count -ge $cap) {
             $until = $Now.ToUniversalTime().Date.AddHours($Now.ToUniversalTime().Hour + 1).ToString("HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
-            $why = "no notice was sent: this session has sent " + $mine.count + " notices this hour, the most one session may (the setting perHour), so it is cut off until " + $until + " UTC"
+            $why = "no notice was sent: this session has sent " + $mine.count + " notices this hour, the most one session may (the setting perHour; a service's is servicePerHour), so it is cut off until " + $until + " UTC"
             if ($mine.told) { return [pscustomobject]@{ outcome = "held"; reason = $why; notice = $null } }
             # CUT OFF, AND THE FOUNDER TOLD ONCE (the header).
             $cut = [pscustomobject]@{ id = (New-HordeNoticeId); ts = (Get-HordeNoticeTime -Now $Now); kind = "cutoff"; from = "Horde"

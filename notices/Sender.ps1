@@ -63,6 +63,12 @@ function Test-HordeNoticeAncestor {
     return [pscustomobject]@{ ok = $false; reason = ("the session's process is not within " + $script:HordeNoticeAncestorSteps + " processes above this one") }
 }
 
+function Test-HordeNoticeServiceForm {
+    # Does -Label read as a service's ("service: ...", any case or spacing)? Only a registered service is shown so.
+    param([AllowEmptyString()][string]$Label)
+    return ($Label -imatch '\A\s*service\s*[:\uFF1A\uFE13\uFE55]')
+}
+
 function Resolve-HordeNoticeSender {
     # The proven sender of a notice: { ok; reason; sessionId; label }. ok $false with the reason in words
     # whenever any step of the header does not hold - never a guess and never another session's name.
@@ -100,6 +106,9 @@ function Resolve-HordeNoticeSender {
     }
     $label = [regex]::Replace($label, '\p{Cc}', ' ')
     if ($label -ceq "") { return (& $no ("no notice was sent: session " + $sid + " has no label in the fleet's registry and no name of its own, so the founder could not tell who it is from. Give the session a name first.")) }
+    # A SERVICE'S LABEL IS NOT A SESSION'S TO TAKE (notices/Services.ps1): a session labelled "service: x"
+    # would look to the founder like the service x.
+    if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " is labelled like a service ('service: ...'), a form only a registered service may be shown as")) }
     if ($label.Length -gt 40) { $label = $label.Substring(0, 40).TrimEnd() }
     return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $sid; label = $label }
 }

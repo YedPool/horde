@@ -13,7 +13,7 @@
            Find = '    $whole = ([regex]::Replace($Text, ''\p{Cc}'', '' '')).Trim()'
            Replace = '    $whole = ([regex]::Replace($Text, ''\p{Cc}'', '' '')).Trim(); if ($whole.Length -gt $Chars) { $whole = $whole.Substring(0, $Chars - 3) }' }
         @{ Name = "no-hourly-cap"
-           Find = 'if ($mine.count -ge [int]$st.settings.perHour) {'
+           Find = 'if ($mine.count -ge $cap) {'
            Replace = 'if ($false) {' }
         @{ Name = "the-founder-is-told-every-time"
            Find = 'if ($mine.told) { return [pscustomobject]@{ outcome = "held"; reason = $why; notice = $null } }'
