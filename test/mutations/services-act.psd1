@@ -80,8 +80,8 @@
            Find = '-or ($handle -isnot [int] -and $handle -isnot [long]) -or $handle -le 0) { return (New-HordeUnknown -Reason "its report file names no process and window") }'
            Replace = ') { return (New-HordeUnknown -Reason "its report file names no process and window") }' }
         @{ Name = "command-failure-is-ok"
-           Find = '    if ($r.code -ne 0) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit "'
-           Replace = '    if ($false) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit "' }
+           Find = '    if ($r.code -ne 0) { return [pscustomobject]@{ ok = $false; transient = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit "'
+           Replace = '    if ($false) { return [pscustomobject]@{ ok = $false; transient = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit "' }
         @{ Name = "command-loses-its-home"
            Find = '-WorkingDirectory $Checkout -Environment @{ HORDE_HOME = $HordeHome } -TimeoutSeconds $TimeoutSeconds'
            Replace = '-WorkingDirectory $Checkout -Environment @{} -TimeoutSeconds $TimeoutSeconds' }

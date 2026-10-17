@@ -86,6 +86,44 @@ try {
     Check ((Horde $bad @("rollout")).code -eq 1) "and rollout fails the same way"
 
     Write-Host ""
+    Write-Host "--- the installed CLI follows main through the real command (cli/ServicesBin.ps1) ---" -ForegroundColor Cyan
+    # ONLY THROWAWAY REPOSITORIES UNDER THIS SUITE'S TEMP FOLDER ARE REACHED: the home names its clone with
+    # installedCliFolder, and a home with none set is refused by the follower before any path is read.
+    $gitEnv = @{ GIT_AUTHOR_NAME = "t"; GIT_AUTHOR_EMAIL = "t@example.invalid"; GIT_COMMITTER_NAME = "t"; GIT_COMMITTER_EMAIL = "t@example.invalid" }
+    function G {
+        param([string]$Dir, [string[]]$A)
+        $r = Invoke-HordeServiceProgram -Program (Get-HordeServiceGitProgram) -Arguments (@("-C", $Dir) + $A) -Environment $gitEnv -TimeoutSeconds 60
+        if ($r.code -ne 0) { throw ("git " + ($A -join " ") + " failed: " + $r.err) }
+        return $r.out.Trim()
+    }
+    $okScript = 'if ($args[0] -ne "version") { exit 9 }; exit 0'
+    $origin = Join-Path $work "cli-origin"; $seed = Join-Path $work "cli-seed"; $binClone = Join-Path $work "cli-bin"
+    foreach ($d in @($origin, $seed)) { [void][System.IO.Directory]::CreateDirectory($d) }
+    $null = G $origin @("init", "--bare", "--quiet"); $null = G $origin @("symbolic-ref", "HEAD", "refs/heads/main")
+    $null = G $seed @("init", "--quiet"); $null = G $seed @("symbolic-ref", "HEAD", "refs/heads/main"); $null = G $seed @("remote", "add", "origin", $origin)
+    foreach ($n in 1, 2) {
+        [System.IO.File]::WriteAllText((Join-Path $seed "horde.ps1"), ($okScript + "`r`n")); [System.IO.File]::WriteAllText((Join-Path $seed "n.txt"), ("" + $n))
+        $null = G $seed @("add", "-A"); $null = G $seed @("commit", "--quiet", "-m", ("c" + $n))
+        if ($n -eq 1) { $null = G $seed @("push", "--quiet", "origin", "main"); $c = Invoke-HordeServiceProgram -Program (Get-HordeServiceGitProgram) -Arguments @("clone", "--quiet", $origin, $binClone) -Environment $gitEnv -TimeoutSeconds 60; if ($c.code -ne 0) { throw $c.err } }
+    }
+    $null = G $seed @("push", "--quiet", "origin", "main")
+    $wantedTip = G $seed @("rev-parse", "HEAD")
+    $cliHome = New-Home "cli-follow"
+    [System.IO.File]::WriteAllText((Join-Path $cliHome "settings\services.json"), ('{ "schemaVersion": 1, "settings": { "tellWarchief": false, "installedCliFolder": "' + (Esc $binClone) + '" } }'))
+    Check ((G $binClone @("rev-parse", "HEAD")) -cne $wantedTip) "the throwaway clone starts one commit behind"
+    $st = Horde $cliHome @("services", "status")
+    Check ($st.code -eq 0 -and $st.out -like "*installed CLI: *" + $binClone + "*") "status, through the real command, names the installed CLI it follows"
+    $t = Horde $cliHome @("services", "tend")
+    Check ($t.code -eq 0 -and $t.out -like "*installed CLI: moved * -> " + $wantedTip.Substring(0, 9) + " and it loads*") ("the real tend moves the clone to origin/main and says so (" + $t.out.Trim() + ")")
+    Check ((G $binClone @("rev-parse", "HEAD")) -ceq $wantedTip) "and the clone is on origin/main"
+    $st = Horde $cliHome @("services", "status", "-Json")
+    $rec = $null
+    try { $rec = $st.out | ConvertFrom-Json } catch { $rec = $null }
+    Check ((Get-HordeTestMember $rec "installedCli.state") -ceq "current" -and (Get-HordeTestMember $rec "installedCli.sha") -ceq $wantedTip -and (Get-HordeTestMember $rec "installedCli.isBehind") -eq $false) "status -Json then says current, with the sha, and not behind"
+    $t = Horde $empty @("services", "tend")
+    Check ($t.code -eq 0 -and $t.out -notlike "*installed CLI*") "a temp home with no installedCliFolder prints no installed-CLI line: the default clone is never reached"
+
+    Write-Host ""
     Write-Host "--- a service the supervisor starts, sees alive, and notices dying ---" -ForegroundColor Cyan
     $stubCo = Join-Path $work "stub checkout"
     [void][System.IO.Directory]::CreateDirectory($stubCo)

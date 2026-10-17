@@ -2,7 +2,7 @@ $HordeCommand = @{
     name    = "services"
     group   = "services"
     usage   = "services tend | services status [-Json] | services stop <name> | services start <name> | services schedule [status] [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled] | services unschedule [-TaskName <name>] [-TaskFolder Horde|HordeTest]"
-    summary = "the long-lived pieces of Horde on this machine, kept running and kept current. Each service is defined as data in <HORDE_HOME>\settings\service-definitions.json: how it is started and asked to stop, how to tell it is alive (a heartbeat file, and the process), and which revision it follows. tend: one pass over every service - start what is not running, restart what is hung, take a verified update when it may be restarted, roll a failed update back - journaled, and telling the warchief once when something needs a person; and keep the hosted phone page current, deploying it when the page changed since the recorded deploy and the relay's Worker did not, checking the hosted bytes, and otherwise telling the warchief why not (cli/RelayPublish.ps1); stop <name>: ask that service to stop, the way its definition says, and HOLD it - the supervisor then leaves it exactly as it is, not started, not updated, until start <name> lets it go and tends it at once; schedule: run tend in two jobs, each every minute - one from start-up, whether or not anyone is signed in, and one in the person's own session from sign-in, for the services that need their desktop - installing or updating both (it needs an elevated prompt, signed in as the account the jobs run as: only an administrator may register a job that runs at start-up; schedule status shows both; -Disabled installs them without letting them run); unschedule: remove both, stopping nothing; status: each service - alive or not and why, heartbeat age, running against wanted revision, last action, failures in a row, whether an escalation is outstanding - and, first, whether tend itself is still coming round; -Json prints one line of data. horde rollout does an update now"
+    summary = "the long-lived pieces of Horde on this machine, kept running and kept current. Each service is defined as data in <HORDE_HOME>\settings\service-definitions.json: how it is started and asked to stop, how to tell it is alive (a heartbeat file, and the process), and which revision it follows. tend: one pass over every service - start what is not running, restart what is hung, take a verified update when it may be restarted, roll a failed update back - journaled, and telling the warchief once when something needs a person; and keep the hosted phone page current, deploying it when the page changed since the recorded deploy and the relay's Worker did not, checking the hosted bytes, and otherwise telling the warchief why not (cli/RelayPublish.ps1); and keep the installed CLI (the bin clone every session runs horde from) on origin/main - fast-forwarded only when its tree is clean, on main and not diverged, proved to load with horde version and put back if it does not, otherwise told once (cli/ServicesBin.ps1; status shows its revision and whether it is behind); stop <name>: ask that service to stop, the way its definition says, and HOLD it - the supervisor then leaves it exactly as it is, not started, not updated, until start <name> lets it go and tends it at once; schedule: run tend in two jobs, each every minute - one from start-up, whether or not anyone is signed in, and one in the person's own session from sign-in, for the services that need their desktop - installing or updating both (it needs an elevated prompt, signed in as the account the jobs run as: only an administrator may register a job that runs at start-up; schedule status shows both; -Disabled installs them without letting them run); unschedule: remove both, stopping nothing; status: each service - alive or not and why, heartbeat age, running against wanted revision, last action, failures in a row, whether an escalation is outstanding - and, first, whether tend itself is still coming round; -Json prints one line of data. horde rollout does an update now"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("tend", "status", "stop", "start", "schedule", "unschedule")][string]$Verb,
@@ -30,6 +30,7 @@ $HordeCommand = @{
         }
         foreach ($f in @(Get-HordeServiceHostFiles)) { . $f }
         $tools = New-HordeServiceTools
+        $tools["CliStatus"] = { param($HordeHome, $Policy) return (Get-HordeInstalledCliStatus -HordeHome $HordeHome -Policy $Policy) }
         if ($Verb -eq "status") {
             $report = Get-HordeServiceStatusReport -Tools $tools
             if ($Json) { ConvertTo-Json -InputObject (ConvertTo-HordeServiceStatusRecord -Report $report) -Depth 8 -Compress; return }
@@ -66,6 +67,11 @@ $HordeCommand = @{
             . (Join-Path $root "cli\RelayDeploy.ps1")
             . (Join-Path $root "cli\RelayPublish.ps1")
             return (Invoke-HordeRelayPublishFromTend -HordeHome $HordeHome -Policy $Policy -Teller $Teller -Root $root)
+        }
+        # THE INSTALLED CLI (cli/ServicesBin.ps1), once a whole pass: made here, as the page's is.
+        $tools["CliFollow"] = {
+            param($HordeHome, $Policy, $Teller, $Now)
+            return (Invoke-HordeInstalledCliFollow -HordeHome $HordeHome -Policy $Policy -Now $Now -Tell $Teller)
         }
         $done = Invoke-HordeServiceSupervisor -Tools $tools
         foreach ($l in @($done.lines)) { Write-Output $l }
