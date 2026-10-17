@@ -22,6 +22,7 @@
     "messages": {"type": "array", "items": {"$ref": "#/definitions/inboxItem"}, "description": "What an inbox hands back: what others said that the reader had not read, under every question, oldest first."},
     "upTo": {"type": "integer", "minimum": 0, "description": "For an inbox: the sequence number of the last message handed back, or 0 when there is none; a caller that then marks names this. For a marking: the record it marked up to."},
     "marked": {"type": "integer", "minimum": 0, "description": "For a marking only: how many messages it marked as read. 0 when the reader had already read that far, in which case nothing was written."},
+    "unclosed": {"type": "array", "items": {"$ref": "#/definitions/unclosed"}, "description": "For a list: every open question the founder answered longer ago than the setting decisions.answers.unclosedMinutes that nobody has closed, in number order, whatever the list was filtered to (decisions/Rules.ps1, Get-HordeDecisionUnclosed)."},
     "kinds": {"type": "object", "description": "The table of question kinds, as the kinds operation gives it: by kind name, each with label (how a list names it), means (one sentence) and list (which list of a question it needs: options, parts, or none). It is decisions/question-kinds.json's table, handed out here so that no caller needs the file."},
     "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a known kind with data that is not that kind's, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
     "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."},
@@ -160,6 +161,41 @@
         "note": {"type": "string", "description": "What the record did to the question, in a few words."}
       }
     },
+    "route": {
+      "type": "object",
+      "description": "One answer-routed record that applied to the question: where one answer of the founder's was sent, or the seat reminded once.",
+      "required": ["sequence", "at", "answer", "purpose", "seat", "label", "sessionId", "resolved", "notice", "note", "analyst"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1, "description": "The answer-routed record."},
+        "at": {"type": "string"},
+        "answer": {"type": "integer", "minimum": 1, "description": "The record of the founder's answer that was sent."},
+        "purpose": {"type": "string", "description": "answer or nudge."},
+        "seat": {"type": "string", "description": "orc or warchief."},
+        "label": {"type": "string"},
+        "sessionId": {"type": "string"},
+        "resolved": {"type": "boolean", "description": "False when askedBy could not be resolved to a seat and it went to the warchief instead."},
+        "notice": {"type": "string"},
+        "note": {"type": "string"},
+        "analyst": {"type": "string"}
+      }
+    },
+    "unclosed": {
+      "type": "object",
+      "description": "An open question the founder answered long enough ago that it should have been closed.",
+      "required": ["number", "askedBy", "asker", "answer", "answeredAt", "minutes", "reminded", "line"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "askedBy": {"type": "string"},
+        "asker": {"type": "string", "description": "Who asked, as askedBy is read: Orc X, the warchief, or askedBy quoted when it names nobody."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The record of the answer that stands."},
+        "answeredAt": {"type": "string"},
+        "minutes": {"type": "integer", "minimum": 0, "description": "How long ago he answered, in whole minutes."},
+        "reminded": {"type": "boolean", "description": "Whether the asker was reminded once for this answer."},
+        "line": {"type": "string", "description": "The flag in words: question N: answered 1 h ago, not closed by Orc X."}
+      }
+    },
     "view": {
       "type": "object",
       "description": "One question as it stands now: its words (schema/decision-question.v1, every field present) and what the records say has happened to it.",
@@ -195,7 +231,9 @@
         "blocks": {"type": "string", "description": "How much of that task's work stands still until the question is answered: a label of decisions/Rules.ps1's blockings, part for a question that was given none."},
         "blocksShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
         "needsPasskey": {"type": "boolean", "enum": [true], "description": "Present, and true, only for a question its asker marked as needing a passkey: from the phone it is answered only with a fresh passkey. Absent for every other question."},
-        "followsUp": {"$ref": "#/definitions/followsUp"}
+        "followsUp": {"$ref": "#/definitions/followsUp"},
+        "routes": {"type": "array", "items": {"$ref": "#/definitions/route"}, "description": "Where the founder's answers to it were sent, by code, in order. Absent when none was."},
+        "closedBy": {"type": "string", "description": "The Orc that closed it by acknowledging the founder's answer, as Orc X. Absent when no acknowledgement closed it."}
       }
     }
   }
