@@ -42,7 +42,7 @@ function New-Home {
     return $h
 }
 function Get-Notices { param([string]$HordeHome) $r = Read-HordeNoticeLog -Store (Join-Path $HordeHome "notices"); if ($r.state -cne "known") { throw $r.reason }; return @($r.value) }
-function Proven { param([string]$Sid, [string]$Label) return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $Sid; label = $Label } }
+function Proven { param([string]$Sid, [string]$Label) return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $Sid; label = $Label; labelSource = "registry" } }
 function Secret-Path { param([string]$Leaf) return (Join-Path $work ("secrets\" + $Leaf + "-" + [guid]::NewGuid().ToString("N") + ".txt")) }
 function Register {
     param($Home_, [string]$Name, [string]$File, $By = $null)
@@ -77,11 +77,36 @@ try {
     $r3 = Register $H "other-service" $f1
     Check (-not $r3.ok -and $r3.reason -like "*exists*" -and ([System.IO.File]::ReadAllText($f1)).Trim() -ceq $secret) "an existing file is never overwritten with a new secret"
     $r4 = Register $H "orc-builder" (Secret-Path "x") (Proven (Sid 2) "E3")
-    Check (-not $r4.ok -and $r4.reason -like "*only a session labelled M*") "AN ORC CANNOT REGISTER A SERVICE"
+    Check (-not $r4.ok -and $r4.reason -like "*only a session whose fleet label is M*") "AN ORC CANNOT REGISTER A SERVICE"
     $r5 = Register $H "orc-builder" (Secret-Path "x") ([pscustomobject]@{ ok = $false; reason = "x"; sessionId = ""; label = "M" })
     Check (-not $r5.ok -and $r5.reason -like "*not a proven session*") "an unproven caller claiming the label M cannot register"
     $r5b = Register $H "other-service" (Secret-Path "x") (Proven (Sid 3) "service: postmerge-net")
-    Check (-not $r5b.ok) "a service cannot register another service"
+    Check (-not $r5b.ok) "a sender labelled like a service is not a registrar"
+    # S3: the agent's own name for a session is no fleet label, so "M" from it registers nothing and revokes nothing.
+    $byName = [pscustomobject]@{ ok = $true; reason = ""; sessionId = (Sid 4); label = "M"; labelSource = "agent-name" }
+    $noSrc = [pscustomobject]@{ ok = $true; reason = ""; sessionId = (Sid 4); label = "M" }
+    Check (-not (Register $H "stray-service" (Secret-Path "x") $byName).ok -and -not (Register $H "stray-service" (Secret-Path "x") $noSrc).ok) "A SESSION NAMED M BY ITSELF (NO FLEET LABEL) CANNOT REGISTER"
+    Check (-not (Remove-HordeNoticeService -Registrar $byName -Name "postmerge-net" -HordeHome $H).ok -and (Read-HordeNoticeServices -Store (Join-Path $H "notices")).value.ContainsKey("postmerge-net")) "...nor revoke"
+    # N8: not inside the repository.
+    $inRepo = Join-Path $root "scratch-secret\net.txt"
+    $rr = Register $H "repo-service" $inRepo
+    Check (-not $rr.ok -and $rr.reason -like "*inside Horde's own folder*" -and -not (Test-Path (Split-Path $inRepo))) "a secret file inside the checkout is refused, and nothing is made there"
+    # M1: a name that trips the secret finder would be shown as a bare word.
+    foreach ($sk in @("sk-abcdefghijklmnopqrstu", "xoxb-1234567890", "glpat-abcdefghijklmnop")) {
+        Check ((Find-HordeSecretKind -Text ("service: " + $sk)) -cne "") ("CONTROL: the finder flags service: " + $sk)
+        $rk = Register $H $sk (Secret-Path "sk")
+        Check (-not $rk.ok -and $rk.reason -like "*looks like a secret*") ("the name " + $sk + " is refused at registration, so it is never shown as a session (" + $rk.reason + ")")
+        Check ((Test-HordeServiceName -Name $sk -RegistryRoot $fleetPin.path -FleetLabels @()) -like "*looks like a secret*") ("...and is refused as a name at every send, too: " + $sk)
+    }
+    $fb = Submit-HordeNotify -Sender ([pscustomobject]@{ ok = $true; reason = ""; sessionId = "service:legacy"; label = "service: sk-abcdefghijklmnopqrstu" }) -Text "x" -HordeHome (New-Home) -Now $now
+    Check ($fb.outcome -ceq "sent" -and $fb.notice.from -ceq "a service") ("THE FALLBACK SAYS a service, never a session (" + $fb.notice.from + ")")
+    # S1: the file is locked from the instant it exists.
+    $pf = Secret-Path "probe"; New-Item -ItemType Directory -Path (Split-Path $pf) -Force | Out-Null
+    $seen = @{ rules = @(); length = -1 }
+    New-HordeLockedSecretFile -Path $pf -Text "abc" -Probe { $seen.rules = @((Get-HordeFileAcl -Path $pf).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])); $seen.length = (New-Object System.IO.FileInfo -ArgumentList $pf).Length }
+    Check ($seen.rules.Count -eq 2 -and @($seen.rules | Where-Object { $_.IsInherited }).Count -eq 0 -and $seen.length -eq 0) "THE SECRET FILE IS LOCKED WHEN IT FIRST EXISTS: two entries, none inherited, with nothing yet written"
+    Check (([System.IO.File]::ReadAllText($pf)) -ceq "abc" -and (Test-HordeSecretFileOpen -Path $pf) -ceq "") "...and what was written through that handle is there"
+    Check (Throws { New-HordeLockedSecretFile -Path $pf -Text "other" }) "a file that exists is never taken over"
     $script:labels = @("buildmaster")
     foreach ($bad in @("m", "thrall", "founder-bot", "horde-notes", "orc-e3", "orcs-pool", "wezfleet", "E3", "abcd", "Bad_Name", "build-master", ("a" * 40), "-lead-dash", "trail-dash-", "e-3-x-y", "a-b-c-d")) {
         $rb = Register $H $bad (Secret-Path "bad")
@@ -101,10 +126,10 @@ try {
     $wrongFile = Secret-Path "wrong"
     $flipChar = "a"; if ($secret[0] -ceq "a") { $flipChar = "b" }
     $short = Secret-Path "short"; $empty = Secret-Path "empty"; $flip = Secret-Path "flip"
-    [System.IO.File]::WriteAllText($wrongFile, ("0" * 64), $utf8)
-    [System.IO.File]::WriteAllText($short, $secret.Substring(0, 40), $utf8)
-    [System.IO.File]::WriteAllText($empty, "", $utf8)
-    [System.IO.File]::WriteAllText($flip, ($flipChar + $secret.Substring(1)), $utf8)
+    New-HordeLockedSecretFile -Path $wrongFile -Text (("0" * 64))
+    New-HordeLockedSecretFile -Path $short -Text ($secret.Substring(0, 40))
+    New-HordeLockedSecretFile -Path $empty -Text ("")
+    New-HordeLockedSecretFile -Path $flip -Text (($flipChar + $secret.Substring(1)))
     $g = @(
         (Send $H "postmerge-net" $wrongFile), (Send $H "postmerge-net" $short), (Send $H "postmerge-net" $empty), (Send $H "postmerge-net" $flip),
         (Send $H "postmerge-net" $f2), (Send $H "never-registered" $f1), (Send $H "postmerge-net" (Join-Path $work "secrets\no-such-file.txt")), (Send $H "postmerge-net" "")
@@ -113,12 +138,21 @@ try {
     Check (@(Get-Notices $H).Count -eq 1) "none of the refused sends wrote a notice"
     Check ((Send $H "docs-watcher" $f1).outcome -ceq "refused") "the secret of one service does not send as another"
     $hash = ((Read-HordeNoticeServices -Store (Join-Path $H "notices")).value["postmerge-net"]).hash
-    $hf = Secret-Path "hash"; [System.IO.File]::WriteAllText($hf, $hash, $utf8)
+    $hf = Secret-Path "hash"; New-HordeLockedSecretFile -Path $hf -Text $hash
     Check ((Send $H "postmerge-net" $hf).outcome -ceq "refused") "READING THE STORE GIVES NO WAY TO SEND: the stored hash is refused as a secret"
     $open = Secret-Path "open"; [System.IO.File]::WriteAllText($open, $secret, $utf8)
     $null = & icacls.exe $open /grant "*S-1-5-32-545:(R)"
     $o = Send $H "postmerge-net" $open
-    Check ($o.outcome -ceq "refused" -and $o.reason -like "*broad group*") ("a copy of the right secret that Users can read is refused (" + $o.reason + ")")
+    Check ($o.outcome -ceq "refused" -and $o.reason -like "*can be read by*") ("a copy of the right secret that Users can read is refused (" + $o.reason + ")")
+    # S4: only this user and SYSTEM. Guests, NETWORK and Administrators are refused too (the old list named broad groups only).
+    foreach ($grant in @("S-1-5-32-546", "S-1-5-2", "S-1-5-32-544")) {
+        $cp = Secret-Path "grant"; New-Item -ItemType Directory -Path (Split-Path $cp) -Force | Out-Null
+        New-HordeLockedSecretFile -Path $cp -Text $secret
+        Check ((Send $H "postmerge-net" $cp "ok").outcome -ceq "sent") ("CONTROL: the locked copy is accepted before the grant to " + $grant)
+        $null = & icacls.exe $cp /grant ("*" + $grant + ":(R)")
+        $gr = Send $H "postmerge-net" $cp
+        Check ($gr.outcome -ceq "refused" -and $gr.reason -like ("*can be read by " + $grant + "*")) ("a copy that " + $grant + " can read is refused (" + $gr.reason + ")")
+    }
     $rv = Remove-HordeNoticeService -Registrar (Proven (Sid 2) "E3") -Name "postmerge-net" -HordeHome $H
     Check (-not $rv.ok -and (Send $H "postmerge-net" $f1).outcome -ceq "sent") "an Orc cannot revoke a service"
     $rv = Remove-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "postmerge-net" -HordeHome $H
@@ -145,6 +179,7 @@ try {
     $o3 = Send $H "net-watcher" $fa "three" $now.AddMinutes(1)
     $o4 = Send $H "net-watcher" $fa "four" $now.AddMinutes(2)
     $all = @(Get-Notices $H)
+    Check ($o3.reason -like "*this service has sent 2 notices*" -and $o3.reason -notlike "*this session*") ("the cutoff says service, not session (" + $o3.reason + ")")
     Check ($o1.outcome -ceq "sent" -and $o2.outcome -ceq "sent" -and $o3.outcome -ceq "cut-off" -and $o4.outcome -ceq "held" -and $all.Count -eq 3 -and $all[-1].kind -ceq "cutoff") "servicePerHour (2) cuts the third off, the founder is told once, the fourth is held"
     Check ($all[-1].text -like "service: net-watcher sent more than 2 notices*") ("the cutoff names the service (" + $all[-1].text + ")")
     Check ((Send $H "disk-watcher" $fb "mine" $now.AddMinutes(3)).outcome -ceq "sent") "another service has its own count"
@@ -162,7 +197,7 @@ try {
 
     Write-Host ""
     Write-Host "--- 4. the session rule: no session takes a service's form, and the registry's labels are really read ---" -ForegroundColor Cyan
-    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", ("service" + [char]0xFF1A + "z"))) {
+    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", ("service" + [char]0xFF1A + "z"), "services: x", ([string][char]0x200B + "service: x"), ("s" + [char]0x0435 + "rvice: x"), ("service" + [char]0x2236 + " x"))) {
         Check (Test-HordeNoticeServiceForm -Label $lbl) ("a session label '" + $lbl.Trim() + "' reads as a service's, so Resolve-HordeNoticeSender refuses it")
     }
     foreach ($lbl in @("M", "E3", "Thrall", "the service desk", "servicer")) { Check (-not (Test-HordeNoticeServiceForm -Label $lbl)) ("CONTROL: the ordinary label '" + $lbl + "' is not refused") }
@@ -194,7 +229,7 @@ try {
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "from the service", "-Service", "cli-service", "-SecretFile", $cf) -Env $envNone
     $all = @(Get-Notices $H)
     Check ($r.code -eq 0 -and $r.out -like "*from service: cli-service*" -and $all.Count -eq 1 -and $all[0].from -ceq "service: cli-service") ("a service sends with no session at all (" + $r.code + ": " + $r.out.Trim() + ")")
-    $wrong = Secret-Path "cliwrong"; New-Item -ItemType Directory -Path (Split-Path $wrong) -Force | Out-Null; [System.IO.File]::WriteAllText($wrong, ("1" * 64), $utf8)
+    $wrong = Secret-Path "cliwrong"; New-Item -ItemType Directory -Path (Split-Path $wrong) -Force | Out-Null; New-HordeLockedSecretFile -Path $wrong -Text ("1" * 64)
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "bad", "-Service", "cli-service", "-SecretFile", $wrong) -Env $envNone
     Check ($r.code -eq 1 -and $r.out -like "*not right*" -and @(Get-Notices $H).Count -eq 1) ("a wrong secret exits 1, nothing is sent (" + $r.out.Trim() + ")")
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "bad", "-Service", "cli-service") -Env $envNone
@@ -208,6 +243,14 @@ try {
     $null = Remove-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "cli-service" -HordeHome $H
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "after revoke", "-Service", "cli-service", "-SecretFile", $cf) -Env $envNone
     Check ($r.code -eq 1 -and @(Get-Notices $H).Count -eq 2) "after revoking, the service's secret sends nothing"
+    # N5: the service cap, with a value that is not the default, through the shipped command.
+    $H2 = New-Home -Settings '{"perHour": 5, "servicePerHour": 1}'
+    $c2 = Secret-Path "cap"
+    Check ((Register $H2 "cap-service" $c2).ok) "CONTROL: a service for the cap check"
+    $envCap = @{ HORDE_HOME = $H2; USERPROFILE = $profileDir }
+    $r1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "one", "-Service", "cap-service", "-SecretFile", $c2) -Env $envCap
+    $r2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("notify", "-Text", "two", "-Service", "cap-service", "-SecretFile", $c2) -Env $envCap
+    Check ($r1.code -eq 0 -and $r2.code -eq 1 -and $r2.out -like "*cut off*" -and @(Get-Notices $H2).Count -eq 2 -and @(Get-Notices $H2)[-1].kind -ceq "cutoff") ("THE SERVICE CAP REACHES THE SHIPPED COMMAND: servicePerHour 1 sends one, cuts the second off (" + $r2.out.Trim() + ")")
     $r = Invoke-HordeCliProcess -Root $root -Shell "pwsh.exe" -HordeArgs @("help") -Env $envNone
     Check ($r.code -eq 0 -and $r.out -like "*notify-service*" -and $r.out.Contains("notify -Text <one line> [-Service")) "horde help lists both commands"} finally {
     $env:HORDE_HOME = $realHome

@@ -7,10 +7,10 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "anyone-may-register"
-           Find = 'if ($allowed -cnotcontains "$($Registrar.label)") { return (& $no ("no service was registered'
+           Find = 'if ($allowed -cnotcontains "$($Registrar.label)" -or -not (Test-HordeRegistrarLabel -Registrar $Registrar)) { return (& $no ("no service was registered'
            Replace = 'if ($false) { return (& $no ("no service was registered' }
         @{ Name = "anyone-may-revoke"
-           Find = 'if ($allowed -cnotcontains "$($Registrar.label)") { return (& $no ("no service was revoked'
+           Find = 'if ($allowed -cnotcontains "$($Registrar.label)" -or -not (Test-HordeRegistrarLabel -Registrar $Registrar)) { return (& $no ("no service was revoked'
            Replace = 'if ($false) { return (& $no ("no service was revoked' }
         @{ Name = "reserved-words-are-allowed"
            Find = 'if ($script:HordeServiceReservedWords -contains $bare -or $bare -match ''\A(orc|thrall|founder|horde)'') {'
@@ -30,8 +30,23 @@
         @{ Name = "an-open-secret-file-is-accepted"
            Find = 'if ($open -cne "") { return (& $no ("no notice was sent: " + $open)) }'
            Replace = '' }
-        @{ Name = "the-secret-file-is-left-open"
-           Find = '                Lock-HordeSecretFile -Path $SecretFile'
-           Replace = '' }
+        @{ Name = "the-secret-file-inherits-access"
+           Find = '    $sec.SetAccessRuleProtection($true, $false)'
+           Replace = '    $sec.SetAccessRuleProtection($false, $false)' }
+        @{ Name = "a-name-already-registered-is-registered-again"
+           Find = 'if ($cur.value.ContainsKey($Name)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-secret-looking-name-is-allowed"
+           Find = 'if ((Find-HordeSecretKind -Text (Get-HordeServiceLabel -Name $Name)) -cne "") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "any-other-reader-is-allowed"
+           Find = 'if ($allowed -ccontains $sid) { continue }'
+           Replace = 'continue' }
+        @{ Name = "the-agent-name-proves-a-registrar"
+           Find = 'return ($null -ne $p -and "$($p.Value)" -ceq "registry")'
+           Replace = 'return $true' }
+        @{ Name = "a-secret-file-in-the-repository-is-allowed"
+           Find = 'if ($SecretFile.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {' }
     )
 }

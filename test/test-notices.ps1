@@ -92,8 +92,26 @@ try {
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 2) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
     Check (-not $who.ok -and $who.label -ceq "" -and $who.reason -like "*does not run inside session*") ("A CALLER CLAIMING ANOTHER RUNNING SESSION is refused: that session's process is not above it (" + $who.reason + ")")
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 2) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 500
-    Check ($who.ok -and $who.label -ceq "the other one") ("CONTROL: the same claim from under session 2's own process is proven, named by the agent's own name with no label (" + $who.reason + ")")
-    # 300's parent pid 200 now belongs to a process started AFTER 300: a stranger, not its parent.
+    Check ($who.ok -and $who.label -ceq "the other one" -and $who.labelSource -ceq "agent-name") ("CONTROL: the same claim from under session 2's own process is proven, named by the agent's own name with no label (" + $who.reason + ")")
+    # A SESSION CANNOT TAKE A SERVICE'S FORM (PR 332 review, S2): a registry label that reads "service: x" - however it is
+    # dressed - is refused, so the phone's "service: <name>" is a registered service's alone.
+    $zw = [string][char]0x200B
+    $hostile = @("service: postmerge-net", ($zw + "service: x"), ([string][char]0x2060 + "service: x"), ("s" + [char]0x0435 + "rvice: x"), ("service" + [char]0x02D0 + " x"), ("service" + [char]0x2236 + " x"),
+        ("service" + [char]0xA789 + " x"), "services: x", ("service" + [char]0xFF1A + "x"), ("ser" + $zw + "vice: x"), ([string][char]0xFF53 + "ervice: x"), "  SERVICE : y")
+    foreach ($lbl in $hostile) {
+        Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
+        $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
+        Check (-not $who.ok -and $who.reason -like "*labelled like a service*") ("A SESSION LABELLED LIKE A SERVICE IS REFUSED: U+" + (([int][char]$lbl[0]).ToString("X4")) + " ... '" + ($lbl.Length) + "' characters (" + $who.reason + ")")
+    }
+    Write-Registry -Root $reg -SessionId (Sid 1) -Label ($zw + "E9")
+    $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
+    Check ($who.ok -and $who.label -ceq "E9" -and $who.labelSource -ceq "registry") "CONTROL: an invisible format character is not part of the label that is shown, and its source is the registry"
+    foreach ($lbl in @("the service desk", "servicer", "Thrall")) {
+        Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
+        $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
+        Check ($who.ok -and $who.label -ceq $lbl) ("CONTROL: the ordinary label '" + $lbl + "' is still proven")
+    }
+    Write-Registry -Root $reg -SessionId (Sid 1) -Label "E"    # 300's parent pid 200 now belongs to a process started AFTER 300: a stranger, not its parent.
     $reused = Table @(@(100, 1, $t0), @(200, 100, $t0.AddSeconds(9)), @(300, 200, $t0.AddSeconds(2)))
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $reused -RegistryRoot $reg -Self 300
     Check (-not $who.ok -and $who.reason -like "*started after*") ("a parent pid taken again by a later process is not a parent, and the walk ends there (" + $who.reason + ")")

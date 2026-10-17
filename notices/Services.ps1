@@ -69,6 +69,9 @@ function Test-HordeServiceName {
     # registry (its labels are reserved too).
     param([AllowEmptyString()][string]$Name, [string]$RegistryRoot = (Get-HordeWezfleetRoot), [string[]]$FleetLabels = $null)
     if ($Name -cnotmatch $script:HordeServiceNamePattern) { return "a service name is 6 to 30 characters of a-z, 0-9 and '-', starting with a letter and not ending in '-'" }
+    # IT IS SHOWN AS "service: <name>" AND THAT TEXT GOES THROUGH THE SECRET FINDER (notices/Decide.ps1): a name that trips it
+    # (sk-..., xoxb-...) would be shown as a bare word, so it is no name.
+    if ((Find-HordeSecretKind -Text (Get-HordeServiceLabel -Name $Name)) -cne "") { return ("'" + $Name + "' looks like a secret, and a name is shown on the phone") }
     $bare = Get-HordeServiceBare -Text $Name
     if ($script:HordeServiceReservedWords -contains $bare -or $bare -match '\A(orc|thrall|founder|horde)') { return ("'" + $Name + "' is a name only the founder's side or the fleet may be shown as") }
     if ($bare -match '\A[a-z][a-z0-9]{0,3}\z') { return ("'" + $Name + "' has the shape of an Orc's label") }
@@ -154,30 +157,61 @@ function Set-HordeFileAcl {
     [System.IO.FileSystemAclExtensions]::SetAccessControl($fi, $Acl)
 }
 
-function Lock-HordeSecretFile {
-    # Make -Path readable by the current Windows user (and SYSTEM) alone: no inherited access. Throws.
-    param([Parameter(Mandatory = $true)][string]$Path)
+function New-HordeSecretFileSecurity {
+    # The access a secret file is made with: the current Windows user and SYSTEM, nothing inherited, nobody else.
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $sys = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    $acl = Get-HordeFileAcl -Path $Path
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($r in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) { [void]$acl.RemoveAccessRule($r) }
-    foreach ($sid in @($me, $sys)) { $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))) }
-    Set-HordeFileAcl -Path $Path -Acl $acl
+    $sec = New-Object System.Security.AccessControl.FileSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @($me, $sys)) { $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))) }
+    return $sec
+}
+
+function New-HordeLockedSecretFile {
+    # Make the NEW file -Path with -Text in it, ALREADY locked: the access is part of the creation (the security descriptor
+    # is handed to the create call), and the text is written through the same handle. Windows checks access only when a
+    # handle is opened, so a file made open and locked after would keep a handle opened in between (PR 332 review, S1).
+    # -Probe (a test seam) runs with the handle open, before anything is written. Throws if the file exists.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [scriptblock]$Probe = $null)
+    $sec = New-HordeSecretFileSecurity
+    $rights = [System.Security.AccessControl.FileSystemRights]::Write
+    if ($PSVersionTable.PSEdition -ceq "Desktop") {
+        $fs = New-Object System.IO.FileStream -ArgumentList $Path, ([System.IO.FileMode]::CreateNew), $rights, ([System.IO.FileShare]::None), 4096, ([System.IO.FileOptions]::None), $sec
+    } else {
+        $fs = [System.IO.FileSystemAclExtensions]::Create((New-Object System.IO.FileInfo -ArgumentList $Path), [System.IO.FileMode]::CreateNew, $rights, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::None, $sec)
+    }
+    try {
+        if ($null -ne $Probe) { & $Probe }
+        $b = [System.Text.Encoding]::ASCII.GetBytes($Text)
+        $fs.Write($b, 0, $b.Length); $fs.Flush($true)
+    } catch { $fs.Dispose(); try { [System.IO.File]::Delete($Path) } catch { }; throw }
+    $fs.Dispose()
 }
 
 function Test-HordeSecretFileOpen {
-    # Can any broad group read -Path? "" when not, else the reason. A file whose access cannot be read is open.
+    # Can anyone but the current Windows user and SYSTEM read -Path? "" when not, else the reason. ONLY those two may hold an
+    # allowing entry (S4): not Administrators, not Domain Users, not NETWORK, not a named other user. A file whose access
+    # cannot be read is open.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $broad = @("S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-4", "S-1-2-0")
+    $mine = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $allowed = @($mine, "S-1-5-18")
     try {
         foreach ($r in @((Get-HordeFileAcl -Path $Path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
             if ($r.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
             $sid = $r.IdentityReference.Value
-            if ($broad -contains $sid) { return ("the secret file can be read by " + $r.IdentityReference.Value + ", a broad group; it must be the service's user's alone") }
+            if ($allowed -ccontains $sid) { continue }
+            $read = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ExecuteFile
+            if (([int]$r.FileSystemRights -band [int]$read) -ne 0 -or ([int]$r.FileSystemRights -band 0x10000000) -ne 0 -or ([int]$r.FileSystemRights -band [int]::MinValue) -ne 0) { return ("the secret file can be read by " + $sid + ", not only by the current user and SYSTEM; it must be the service's user's alone") }
         }
     } catch { return ("the secret file's access could not be checked: " + $_.Exception.Message) }
     return ""
+}
+function Test-HordeRegistrarLabel {
+    # S3: a registrar's label must be its FLEET label (the registry's), never the agent's own name for the session, which
+    # any session can set to "M". A sender with no labelSource is not one.
+    param($Registrar)
+    $p = $Registrar.PSObject.Properties["labelSource"]
+    return ($null -ne $p -and "$($p.Value)" -ceq "registry")
 }
 
 function Register-HordeNoticeService {
@@ -191,11 +225,14 @@ function Register-HordeNoticeService {
     if (-not $st.ok) { return (& $no $st.reason) }
     if ($null -eq $Registrar -or -not $Registrar.ok -or "$($Registrar.label)" -ceq "") { return (& $no "no service was registered: the registrar is not a proven session") }
     $allowed = @("$($st.settings.serviceRegistrars)".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -cne "" })
-    if ($allowed -cnotcontains "$($Registrar.label)") { return (& $no ("no service was registered: only a session labelled " + ($allowed -join " or ") + " may register one (the setting serviceRegistrars), not '" + $Registrar.label + "'")) }
+    if ($allowed -cnotcontains "$($Registrar.label)" -or -not (Test-HordeRegistrarLabel -Registrar $Registrar)) { return (& $no ("no service was registered: only a session whose fleet label is " + ($allowed -join " or ") + " may register one (the setting serviceRegistrars), not '" + $Registrar.label + "'")) }
     $bad = Test-HordeServiceName -Name $Name -RegistryRoot $RegistryRoot -FleetLabels $FleetLabels
     if ($bad -cne "") { return (& $no ("no service was registered: " + $bad)) }
     if ($SecretFile.Trim() -ceq "" -or -not [System.IO.Path]::IsPathRooted($SecretFile)) { return (& $no "no service was registered: -SecretFile must be an absolute path of a file that does not exist yet") }
     $SecretFile = [System.IO.Path]::GetFullPath($SecretFile)
+    # N8: never inside this checkout, where a commit could carry it away.
+    $repo = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char]'\') + '\'
+    if ($SecretFile.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { return (& $no "no service was registered: -SecretFile is inside Horde's own folder; put it somewhere that is not in a repository") }
     try {
         return (Use-HordeNoticeLock -Store $st.store -Body {
             $cur = Read-HordeNoticeServices -Store $st.store
@@ -207,20 +244,15 @@ function Register-HordeNoticeService {
             [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($SecretFile))
             $made = $false
             try {
-                $fs = New-Object System.IO.FileStream -ArgumentList $SecretFile, ([System.IO.FileMode]::CreateNew), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::None)
+                # Made locked and filled through one handle (S1). The file exists from here on, so a later failure removes it.
+                New-HordeLockedSecretFile -Path $SecretFile -Text $secret
                 $made = $true
-                $fs.Dispose()
-                Lock-HordeSecretFile -Path $SecretFile
-                $open = Test-HordeSecretFileOpen -Path $SecretFile
-                if ($open -cne "") { throw $open }
-                [System.IO.File]::WriteAllText($SecretFile, $secret, [System.Text.Encoding]::ASCII)
                 $cur.value[$Name] = [pscustomobject]@{ salt = $salt; hash = (ConvertTo-HordeServiceHash -Salt $salt -Secret $secret); at = (Get-HordeNoticeTime -Now $Now); by = "$($Registrar.label)" }
                 Write-HordeNoticeServices -Store $st.store -Services $cur.value
             } catch {
                 if ($made) { try { [System.IO.File]::Delete($SecretFile) } catch { } }
                 return (& $no ("no service was registered: " + $_.Exception.Message))
-            }
-            return [pscustomobject]@{ ok = $true; reason = "" }
+            }            return [pscustomobject]@{ ok = $true; reason = "" }
         })
     } catch { return (& $no ("no service was registered: " + $_.Exception.Message)) }
 }
@@ -233,7 +265,7 @@ function Remove-HordeNoticeService {
     if (-not $st.ok) { return (& $no $st.reason) }
     if ($null -eq $Registrar -or -not $Registrar.ok -or "$($Registrar.label)" -ceq "") { return (& $no "no service was revoked: the registrar is not a proven session") }
     $allowed = @("$($st.settings.serviceRegistrars)".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -cne "" })
-    if ($allowed -cnotcontains "$($Registrar.label)") { return (& $no ("no service was revoked: only a session labelled " + ($allowed -join " or ") + " may revoke one, not '" + $Registrar.label + "'")) }
+    if ($allowed -cnotcontains "$($Registrar.label)" -or -not (Test-HordeRegistrarLabel -Registrar $Registrar)) { return (& $no ("no service was revoked: only a session whose fleet label is " + ($allowed -join " or ") + " may revoke one, not '" + $Registrar.label + "'")) }
     try {
         return (Use-HordeNoticeLock -Store $st.store -Body {
             $cur = Read-HordeNoticeServices -Store $st.store

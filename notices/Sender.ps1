@@ -64,11 +64,25 @@ function Test-HordeNoticeAncestor {
 }
 
 function Test-HordeNoticeServiceForm {
-    # Does -Label read as a service's ("service: ...", any case or spacing)? Only a registered service is shown so.
+    # Does -Label read as a service's ("service: ...", or "services: ...")? Only a registered service is shown so.
+    # THE LABEL IS FOLDED FIRST, because the phone shows it as written: format characters (zero-width spaces,
+    # word joiners) are dropped, NFKC is applied (full-width forms become plain ones), a colon lookalike counts as a colon,
+    # and a non-ASCII LETTER counts as a wildcard in the word itself, so a Cyrillic look-alike of one letter is no way round.
     param([AllowEmptyString()][string]$Label)
-    return ($Label -imatch '\A\s*service\s*[:\uFF1A\uFE13\uFE55]')
+    $t = [regex]::Replace($Label, '\p{Cf}', '')
+    try { $t = $t.Normalize([System.Text.NormalizationForm]::FormKC) } catch { }
+    $t = [regex]::Replace($t, '\p{Cf}', '')
+    $colons = @(0x003A, 0x02D0, 0x0589, 0x05C3, 0x1361, 0x16EC, 0x2236, 0xA789, 0xFE13, 0xFE30, 0xFE55, 0xFF1A, 0x2D0)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $t.ToCharArray()) {
+        $n = [int]$c
+        if ($colons -contains $n) { [void]$sb.Append(":") }
+        elseif ($n -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) }
+        elseif ([char]::IsLetter($c)) { [void]$sb.Append("?") }
+        else { [void]$sb.Append("~") }
+    }
+    return ($sb.ToString() -cmatch '\A\s*[s?][e?][r?][v?][i?][c?][e?][s?]?\s*:')
 }
-
 function Resolve-HordeNoticeSender {
     # The proven sender of a notice: { ok; reason; sessionId; label }. ok $false with the reason in words
     # whenever any step of the header does not hold - never a guess and never another session's name.
@@ -95,20 +109,23 @@ function Resolve-HordeNoticeSender {
     if (-not $up.ok) { return (& $no ("no notice was sent: this command does not run inside session " + $sid + " - " + $up.reason + ". A session sends notices only as itself.")) }
     # THE NAME (the header): the registry's label, else the agent's own name for the session.
     $label = ""
+    $labelSource = ""
     $reg = Read-HordeRegistry -Root $RegistryRoot
     if ($reg.records.ContainsKey($sid)) {
         $l = Get-HordeStoredField -Record $reg.records[$sid].record -Name "label"
-        if ($l.state -ceq "known" -and $l.value -is [string]) { $label = $l.value.Trim() }
+        if ($l.state -ceq "known" -and $l.value -is [string]) { $label = $l.value.Trim(); if ($label -cne "") { $labelSource = "registry" } }
     }
     if ($label -ceq "") {
         $n = $id.records[$sid].fields["name"]
-        if ($n.state -ceq "known" -and $n.value -is [string]) { $label = $n.value.Trim() }
+        if ($n.state -ceq "known" -and $n.value -is [string]) { $label = $n.value.Trim(); $labelSource = "agent-name" }
     }
-    $label = [regex]::Replace($label, '\p{Cc}', ' ')
+    # Format characters are not part of any name the founder reads (they are invisible): dropped from what is shown, too.
+    $label = [regex]::Replace([regex]::Replace($label, '\p{Cf}', ''), '\p{Cc}', ' ').Trim()
     if ($label -ceq "") { return (& $no ("no notice was sent: session " + $sid + " has no label in the fleet's registry and no name of its own, so the founder could not tell who it is from. Give the session a name first.")) }
     # A SERVICE'S LABEL IS NOT A SESSION'S TO TAKE (notices/Services.ps1): a session labelled "service: x"
     # would look to the founder like the service x.
     if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " is labelled like a service ('service: ...'), a form only a registered service may be shown as")) }
     if ($label.Length -gt 40) { $label = $label.Substring(0, 40).TrimEnd() }
-    return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $sid; label = $label }
+    # labelSource: "registry" (a fleet label) or "agent-name" (the agent's own name for the session). A registrar must have the first (notices/Services.ps1).
+    return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $sid; label = $label; labelSource = $labelSource }
 }

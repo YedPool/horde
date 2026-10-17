@@ -46,7 +46,7 @@
            Find = 'if ($null -ne $had -and ($had.at -gt $At -or'
            Replace = 'if ($null -ne $had -and ($false -or' }
         @{ Name = "a-secret-label-is-shown"
-           Find = '$fromWords = $(if ($from.refused) { "a session" } else { $from.text })'
+           Find = '$fromWords = $(if ($from.refused) { $(if ($isService) { "a service" } else { "a session" }) } else { $from.text })'
            Replace = '$fromWords = $Sender.label' }
     )
 }

@@ -107,7 +107,8 @@ function Submit-HordeNotify {
     $hour = Get-HordeNoticeHour -Now $Now
     # The sender's name is checked like the text: it goes to the phone too.
     $from = Get-HordeNoticeText -Text $Sender.label -Chars 40
-    $fromWords = $(if ($from.refused) { "a session" } else { $from.text })
+    $isService = ("$($Sender.sessionId)" -like "service:*")
+    $fromWords = $(if ($from.refused) { $(if ($isService) { "a service" } else { "a session" }) } else { $from.text })
     $said = Get-HordeNoticeText -Text $Text -Chars ([int]$st.settings.textChars)
     # -PerHour: the cap the caller names (a service has its own, notices/Services.ps1); none: the sessions'.
     $cap = $(if ($PerHour -gt 0) { $PerHour } else { [int]$st.settings.perHour })
@@ -119,7 +120,7 @@ function Submit-HordeNotify {
         if ($null -eq $mine -or $mine.hour -cne $hour) { $mine = [pscustomobject]@{ hour = $hour; count = 0; told = $false }; $s.sessions[$Sender.sessionId] = $mine }
         if ($mine.count -ge $cap) {
             $until = $Now.ToUniversalTime().Date.AddHours($Now.ToUniversalTime().Hour + 1).ToString("HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
-            $why = "no notice was sent: this session has sent " + $mine.count + " notices this hour, the most one session may (the setting perHour; a service's is servicePerHour), so it is cut off until " + $until + " UTC"
+            $why = "no notice was sent: this " + $(if ($isService) { "service" } else { "session" }) + " has sent " + $mine.count + " notices this hour, the most one session may (the setting perHour; a service's is servicePerHour), so it is cut off until " + $until + " UTC"
             if ($mine.told) { return [pscustomobject]@{ outcome = "held"; reason = $why; notice = $null } }
             # CUT OFF, AND THE FOUNDER TOLD ONCE (the header).
             $cut = [pscustomobject]@{ id = (New-HordeNoticeId); ts = (Get-HordeNoticeTime -Now $Now); kind = "cutoff"; from = "Horde"

@@ -15,8 +15,20 @@
         @{ Name = "a-process-not-verified-running-counts"
            Find = 'if (@($verified | Where-Object { "$_" -ieq $sid }).Count -eq 0) {'
            Replace = 'if ($false) {' }
+        @{ Name = "a-session-may-take-a-services-form"
+           Find = 'if (Test-HordeNoticeServiceForm -Label $label) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-look-alike-letter-is-no-way-round"
+           Find = 'elseif ([char]::IsLetter($c)) { [void]$sb.Append("?") }'
+           Replace = 'elseif ([char]::IsLetter($c)) { [void]$sb.Append("x") }' }
+        @{ Name = "a-colon-look-alike-is-no-colon"
+           Find = 'if ($colons -contains $n) { [void]$sb.Append(":") }'
+           Replace = 'if ($n -eq 58) { [void]$sb.Append(":") }' }
+        @{ Name = "an-invisible-character-is-part-of-the-label"
+           Find = '$label = [regex]::Replace([regex]::Replace($label, ''\p{Cf}'', ''''), ''\p{Cc}'', '' '').Trim()'
+           Replace = '$label = [regex]::Replace($label, ''\p{Cc}'', '' '')' }
         @{ Name = "the-registry-label-is-ignored"
-           Find = 'if ($l.state -ceq "known" -and $l.value -is [string]) { $label = $l.value.Trim() }'
+           Find = 'if ($l.state -ceq "known" -and $l.value -is [string]) { $label = $l.value.Trim(); if ($label -cne "") { $labelSource = "registry" } }'
            Replace = 'if ($false) { $label = $l.value.Trim() }' }
         @{ Name = "a-session-with-no-name-sends"
            Find = 'if ($label -ceq "") { return (& $no ('
