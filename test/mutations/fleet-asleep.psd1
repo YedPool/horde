@@ -10,9 +10,18 @@
         @{ Name = "exited-not-asleep"
            Find = 'if ($state -ceq "exited") { return $true }'
            Replace = 'if ($false) { return $true }' }
-        @{ Name = "unreadable-record-skipped"
-           Find = 'if ($read.state -cne "known") { return (New-HordeUnknown -Reason ("which sessions are asleep cannot be told: " + $read.reason)) }'
-           Replace = 'if ($read.state -cne "known") { continue }' }
+        @{ Name = "unreadable-record-stalls-the-watcher"
+           Find = 'if ($read.state -cne "known") { [void]$skipped.Add('
+           Replace = 'if ($read.state -cne "known") { return (New-HordeUnknown -Reason "a record is unreadable"); [void]$skipped.Add(' }
+        @{ Name = "unreadable-record-not-reported"
+           Find = 'if ($read.state -cne "known") { [void]$skipped.Add('
+           Replace = 'if ($read.state -cne "known") { $null = (' }
+        @{ Name = "running-session-still-asleep"
+           Find = 'if ("" + (Get-HordeFleetAsleepMember $v "state") -ceq "running") { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "unreadable-liveness-reads-as-asleep"
+           Find = 'if ("" + (Get-HordeFleetAsleepMember $v "kind") -ceq "reading") { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "older-record-wins"
            Find = 'Where-Object { $_ -cmatch $script:HordeFleetIdPattern } | Sort-Object)'
            Replace = 'Where-Object { $_ -cmatch $script:HordeFleetIdPattern } | Sort-Object -Descending)' }

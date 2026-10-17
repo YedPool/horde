@@ -8,10 +8,13 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "sleepers-not-read"
-           Find = 'if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") { $asleep = $sleepers.value }'
-           Replace = 'if ($false) { $asleep = $sleepers.value }' }
+           Find = 'if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") {'
+           Replace = 'if ($false) {' }
         @{ Name = "unknown-sleepers-ignored"
            Find = 'elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }'
            Replace = 'elseif (Test-HordeAnswer $sleepers) { }' }
+        @{ Name = "skipped-records-not-journaled"
+           Find = 'foreach ($line in @($skippedRecords.Value)) {'
+           Replace = 'foreach ($line in @()) {' }
     )
 }

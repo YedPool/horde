@@ -57,5 +57,23 @@
         @{ Name = "missing-role-guessed"
            Find = 'if ($r.role.state -ne "known") { return "other" }'
            Replace = 'if ($r.role.state -ne "known") { return "warg" }' }
+        @{ Name = "reason-cap-too-long"
+           Find = 'if ($Reason.Length -gt 600) {'
+           Replace = 'if ($Reason.Length -gt 601) {' }
+        @{ Name = "reason-cap-too-short"
+           Find = 'if ($Reason.Length -gt 600) {'
+           Replace = 'if ($Reason.Length -gt 599) {' }
+        @{ Name = "reason-cut-one-too-long"
+           Find = '$keep = 597;'
+           Replace = '$keep = 598;' }
+        @{ Name = "reason-cut-one-too-short"
+           Find = '$keep = 597;'
+           Replace = '$keep = 596;' }
+        @{ Name = "reason-cut-splits-surrogate-pair"
+           Find = 'if ([char]::IsHighSurrogate($Reason[596])) { $keep = 596 }'
+           Replace = 'if ($false) { $keep = 596 }' }
+        @{ Name = "reason-surrogate-checked-at-wrong-index"
+           Find = '[char]::IsHighSurrogate($Reason[596])'
+           Replace = '[char]::IsHighSurrogate($Reason[595])' }
     )
 }

@@ -91,5 +91,14 @@
         @{ Name = "ask-id-random"
            Find = 'return (ConvertTo-HordeTextUuid -Text ("horde-fleet-hibernate/" + $Id + "/" + $SessionId))'
            Replace = 'return ([guid]::NewGuid().ToString())' }
+        @{ Name = "no-restore-marker-never-asked"
+           Find = 'if ($null -ne $mark) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-restore-marker-wrong-reason"
+           Find = '$mk = & $mark $sid "hibernated" (& $Deps.Now)'
+           Replace = '$mk = & $mark $sid "parked" (& $Deps.Now)' }
+        @{ Name = "no-restore-marker-failure-unsaid"
+           Find = 'if ($null -eq $mk -or "" + $mk.state -cne "known") {'
+           Replace = 'if ($false) {' }
     )
 }
