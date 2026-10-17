@@ -109,6 +109,9 @@ $script:HordeDecisionEventKinds = [ordered]@{
     "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "rankers";  counts = @{} }
     "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
     "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
+    # AN ANSWER ROUTED, AND AN ANSWER ACKNOWLEDGED (below, THE ANSWER GOES TO THE ONE WHO ASKED).
+    "answer-routed"     = @{ data = "answer-routed";     words = "";         apply = "Step-HordeDecisionRouted";   about = "question"; actors = "keepers";  counts = @{ answer = "sequence" } }
+    "question-acked"    = @{ data = "question-acked";    words = "";         apply = "Step-HordeDecisionAcked";    about = "question"; actors = "ackers";   counts = @{ answer = "sequence" } }
 }
 
 # THE STATES a question can be in. A later slice adds to this list; nothing reads a state it does not
@@ -131,6 +134,40 @@ $script:HordeDecisionActors = @("warchief")
 # his passkey's signature first (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE). The
 # two words are his order of HIS list; nothing else of a question is his to change.
 $script:HordeDecisionRankers = @("warchief", "founder")
+# WHO MAY ACKNOWLEDGE AN ANSWER (below, THE ANSWER GOES TO THE ONE WHO ASKED): an Orc, the role that asks
+# the founder questions through the keeper. WHICH Orc is the request's own member, by, checked against
+# the question's askedBy where the question is known (Step-HordeDecisionAcked); that the caller IS that
+# Orc is the caller's to prove (decisions/Console.ps1 proves the session's own label).
+$script:HordeDecisionAckers = @("orc")
+
+# THE ANSWER GOES TO THE ONE WHO ASKED (the audit of 2026-10-16, findings 5, 6, 9 and 26). Until then a
+# founder's answer reached the asking Orc only when the warchief relayed it by hand, and an answered
+# question stayed open until the warchief remembered to close it: on 2026-10-13 the list showed about
+# ten questions settled long before as open. Two kinds of record close that, each a fact of its own:
+#   answer-routed   decisions/Route.ps1 sent one answer of the founder's - one message-said record of
+#                   his - to the seat of whoever asked, or reminded that seat once that the answered
+#                   question is still open (purpose answer or nudge). The record says to whom, whether
+#                   askedBy could be resolved to that seat, the notice's id, and what the analyst was
+#                   told. ONE PER ANSWER AND PURPOSE: a second is refused, so a router restarted, or an
+#                   answer the relay applied again (the same record, answered from its id), never mails
+#                   twice. It changes nothing else of the question: not its state, its turn, its
+#                   history or when it last changed. A routed answer authorizes nothing.
+#   question-acked  the Orc that asked has the answer and closes the question with it, as the closer.
+#                   Only an OPEN question waiting for the keeper - the founder has answered, and nobody
+#                   has asked him anything since - closes this way, and only by the Orc its askedBy
+#                   names, and only for the answer that stands now (an Orc that acknowledges an answer
+#                   the founder has since replaced is told to read the new one). A closed question is
+#                   never opened again by a late one.
+# WHO ASKED is askedBy, which is free text (decisions/question-kinds and the add schema say only that it
+# is one line). It is READ, NEVER GUESSED: "Orc " and one capital letter is that Orc's lane; a first word
+# M or Thrall is the warchief, who asked for itself; anything else names nobody this code can reach, and
+# the answer goes to the warchief with that said in the record (Get-HordeDecisionAsker). Measured
+# 2026-10-16 on the founder's store, read only: 81 questions, 67 asked as "Orc <letter>", 14 as M or
+# Thrall, none any other way.
+$script:HordeDecisionAskerOrcPattern = '\AOrc ([A-Z])\z'
+$script:HordeDecisionAskerWarchiefPattern = '\A(M|Thrall)(\z|[ ,(])'
+$script:HordeDecisionRoutePurposes = @("answer", "nudge")
+$script:HordeDecisionRouteSeats = @("orc", "warchief")
 
 # WHO MAY SPEAK UNDER A QUESTION: a closed list. The founder is not a session role of core/roles.json:
 # it is the person the list is kept for. shown: how a way of showing names the speaker. then: whose
@@ -337,6 +374,7 @@ function Get-HordeDecisionKindActors {
     $entry = $script:HordeDecisionEventKinds[$Kind]
     if ($null -ne $entry -and "$($entry.actors)" -ceq "speakers") { return [pscustomobject]@{ roles = @($script:HordeDecisionSpeakers.Keys); may = "speak under a question, or mark what was said there as read" } }
     if ($null -ne $entry -and "$($entry.actors)" -ceq "rankers") { return [pscustomobject]@{ roles = @($script:HordeDecisionRankers); may = "rank a question" } }
+    if ($null -ne $entry -and "$($entry.actors)" -ceq "ackers") { return [pscustomobject]@{ roles = @($script:HordeDecisionAckers); may = "acknowledge the founder's answer to a question it asked" } }
     return [pscustomobject]@{ roles = @($script:HordeDecisionActors); may = "change the list" }
 }
 
@@ -813,6 +851,10 @@ function Step-HordeDecisionAdded {
     $question["closedAt"] = ""
     $question["history"] = (New-Object System.Collections.ArrayList)
     $question["thread"] = (New-Object System.Collections.ArrayList)
+    # Every answer-routed record that applied to it, in order; and the Orc an acknowledgement closed it
+    # as, "" when none did (above, THE ANSWER GOES TO THE ONE WHO ASKED).
+    $question["routes"] = (New-Object System.Collections.ArrayList)
+    $question["closedBy"] = ""
     $question["turn"] = $script:HordeDecisionFirstTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "added"
     $State.questions[$number] = $question
@@ -880,6 +922,7 @@ function Step-HordeDecisionReopened {
     $question.state = "open"
     $question.outcome = ""
     $question.closedAt = ""
+    $question.closedBy = ""
     $question.reopenReason = "$($Ev.data.reason)"
     # A reopened question is asked again, of the same person: whatever was said while it was closed
     # is in its thread, and did not take a turn.
@@ -908,6 +951,121 @@ function Step-HordeDecisionRanked {
     }
     if ($changed.Count -eq 0) { return ("it changes nothing: question " + $question.number + " already has that importance and that blocking") }
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("ranked: " + ($changed -join ", "))
+    return ""
+}
+
+function Get-HordeDecisionAsker {
+    # Who asked a question, read from its askedBy (above, THE ANSWER GOES TO THE ONE WHO ASKED), as
+    # { seat; label; shown; why }: seat "orc" with the Orc's lane letter as label, "warchief" with no
+    # label, or "" when askedBy names nobody this code can reach - why then says so, in words for the
+    # record and the notice. Never a guess: "orc c", "Orc-C" or "C" name nobody.
+    param([AllowEmptyString()][string]$AskedBy)
+    if ($AskedBy -cmatch $script:HordeDecisionAskerOrcPattern) { return [pscustomobject]@{ seat = "orc"; label = $Matches[1]; shown = ("Orc " + $Matches[1]); why = "" } }
+    if ($AskedBy -cmatch $script:HordeDecisionAskerWarchiefPattern) { return [pscustomobject]@{ seat = "warchief"; label = ""; shown = "the warchief"; why = "" } }
+    return [pscustomobject]@{ seat = ""; label = ""; shown = ("'" + $AskedBy + "'"); why = ("its askedBy, '" + $AskedBy + "', is neither 'Orc' and one capital letter nor the warchief (M or Thrall), so it names no seat an answer can be sent to") }
+}
+
+function Get-HordeDecisionStandingAnswer {
+    # The founder's newest words under a question that answer it - an act of his (park, unpark)
+    # answers nothing - or $null when he has said none. Works on the list's question and on its view.
+    param($Question)
+    $standing = $null
+    $thread = $Question.thread
+    if ($null -ne $thread -and $null -ne $thread.PSObject.Properties["messages"]) { $thread = $thread.messages }
+    foreach ($message in @($thread)) {
+        if ($null -eq $message) { continue }
+        if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($message.act)" -eq "") { $standing = $message }
+    }
+    return $standing
+}
+
+function Test-HordeDecisionAwaitingClose {
+    # Is the question open and waiting for the keeper to close it: the founder has answered, and nobody
+    # has asked him anything since (it is the turn his words pass to)? The one test the acknowledgement,
+    # the list's flag and the router's reminder all ask, so the three cannot disagree. -Turn is the
+    # question's turn as the list or a view holds it.
+    param($Question, [string]$Turn)
+    if ("$($Question.state)" -cne "open") { return $false }
+    if ($Turn -cne "$($script:HordeDecisionSpeakers[$script:HordeDecisionFirstTurn].then)") { return $false }
+    return ($null -ne (Get-HordeDecisionStandingAnswer -Question $Question))
+}
+
+function Get-HordeDecisionUnclosed {
+    # THE FLAG (the audit of 2026-10-16, finding 6): every open question the founder answered longer ago
+    # than -Minutes that nobody has closed, as { number; askedBy; asker; answer; answeredAt; minutes;
+    # reminded; line }, in number order. PURE: -Now is handed in, as every other value here is.
+    # reminded: an answer-routed record of purpose nudge stands for that answer. A stored time that cannot
+    # be read, or is later than -Now, is not flagged: how long it has waited cannot be told.
+    param($State, [datetime]$Now, [int]$Minutes)
+    $out = New-Object System.Collections.ArrayList
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+    foreach ($question in $State.questions.Values) {
+        if (-not (Test-HordeDecisionAwaitingClose -Question $question -Turn "$($question.turn)")) { continue }
+        $standing = Get-HordeDecisionStandingAnswer -Question $question
+        $at = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$($standing.at)", [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$at)) { continue }
+        $waited = ($Now.ToUniversalTime() - $at).TotalMinutes
+        if ($waited -lt $Minutes) { continue }
+        $asker = Get-HordeDecisionAsker -AskedBy "$($question.askedBy)"
+        $reminded = (@($question.routes | Where-Object { [long]$_.answer -eq [long]$standing.sequence -and "$($_.purpose)" -ceq "nudge" }).Count -gt 0)
+        $whole = [int][Math]::Floor($waited)
+        $ago = $(if ($whole -ge 120) { "" + [int][Math]::Floor($whole / 60) + " h" } elseif ($whole -ge 60) { "1 h" } else { "" + $whole + " min" })
+        $by = $(if ($asker.seat -ceq "") { "the warchief (asked by " + $asker.shown + ")" } else { $asker.shown })
+        [void]$out.Add([pscustomobject]@{ number = [int]$question.number; askedBy = "$($question.askedBy)"; asker = $asker.shown; answer = [long]$standing.sequence; answeredAt = "$($standing.at)"; minutes = $whole; reminded = [bool]$reminded
+            line = ("question " + $question.number + ": answered " + $ago + " ago, not closed by " + $by) })
+    }
+    return @($out)
+}
+
+function Step-HordeDecisionRouted {
+    # One answer of the founder's was sent to the seat of whoever asked, or that seat was reminded once
+    # (above, THE ANSWER GOES TO THE ONE WHO ASKED). It names a message of his under this question, and
+    # one purpose; a second record for the same answer and purpose does not apply. It changes nothing
+    # else of the question.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    $answer = [long]$Ev.data.answer
+    $said = @($question.thread | Where-Object { [long]$_.sequence -eq $answer }) | Select-Object -First 1
+    if ($null -eq $said -or "$($said.speaker)" -cne $script:HordeDecisionFirstTurn -or "$($said.act)" -ne "") {
+        return ("it routes record " + $answer + ", which is not an answer of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " under question " + $question.number)
+    }
+    $purpose = "$($Ev.data.purpose)"
+    if ($script:HordeDecisionRoutePurposes -cnotcontains $purpose) { return ("its purpose '" + $purpose + "' is not one of: " + ($script:HordeDecisionRoutePurposes -join ", ")) }
+    $before = @($question.routes | Where-Object { [long]$_.answer -eq $answer -and "$($_.purpose)" -ceq $purpose }) | Select-Object -First 1
+    if ($null -ne $before) { return ("answer record " + $answer + " of question " + $question.number + " was already routed for its " + $purpose + " (record " + $before.sequence + "); an answer is routed once") }
+    [void]$question.routes.Add([pscustomobject]@{
+        sequence = [long]$Ev.sequence; at = "$($Ev.at)"; answer = $answer; purpose = $purpose
+        seat = "$($Ev.data.seat)"; label = "$(Get-HordeDecisionMember -Object $Ev.data -Name 'label')"; sessionId = "$(Get-HordeDecisionMember -Object $Ev.data -Name 'sessionId')"
+        resolved = [bool]$Ev.data.resolved; notice = "$($Ev.data.notice)"
+        note = "$(Get-HordeDecisionMember -Object $Ev.data -Name 'note')"; analyst = "$(Get-HordeDecisionMember -Object $Ev.data -Name 'analyst')"
+    })
+    return ""
+}
+
+function Step-HordeDecisionAcked {
+    # The Orc that asked has the founder's answer, and the question is closed with it as the closer
+    # (above, THE ANSWER GOES TO THE ONE WHO ASKED). Each condition is refused in words a person can act
+    # on, and the question is left as it was.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    $by = "$($Ev.data.by)"
+    if ($question.state -cne "open") { return ("question " + $question.number + " is already " + $question.state + ": an acknowledgement closes only an open question, and never opens a closed one again") }
+    $standing = Get-HordeDecisionStandingAnswer -Question $question
+    if ($null -eq $standing) { return ("question " + $question.number + " has no answer of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " to acknowledge: only an answered question is closed this way") }
+    if (-not (Test-HordeDecisionAwaitingClose -Question $question -Turn "$($question.turn)")) { return ("question " + $question.number + " is still waiting for " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " - a part of it is unanswered, or he was asked again after his answer - so it is not closed by an acknowledgement") }
+    if ([long]$Ev.data.answer -ne [long]$standing.sequence) { return ("it acknowledges record " + $Ev.data.answer + ", and the answer that stands under question " + $question.number + " is record " + $standing.sequence + ": read that one (horde decisions show " + $question.number + "), then acknowledge it") }
+    $asker = Get-HordeDecisionAsker -AskedBy "$($question.askedBy)"
+    if ($asker.seat -cne "orc" -or $asker.label -cne $by) { return ("question " + $question.number + " was asked by '" + $question.askedBy + "', not by Orc " + $by + ": only the Orc that asked it acknowledges its answer") }
+    $question.state = "closed"
+    $question.outcome = "Acknowledged by Orc " + $by + ": the founder's answer (record " + $standing.sequence + ") reached the Orc that asked."
+    $question.closedAt = "$($Ev.at)"
+    $question.closedBy = "Orc " + $by
+    $question["turn"] = $script:HordeDecisionNoTurn
+    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("closed: acknowledged by Orc " + $by)
     return ""
 }
 
@@ -1306,6 +1464,13 @@ function ConvertTo-HordeDecisionView {
     # what it was before the mark existed.
     if ((Test-HordeDecisionMember -Object $Question -Name "needsPasskey") -and [bool]$Question["needsPasskey"]) { $view["needsPasskey"] = $true }
     if ([int]$Question.followsUp -ge 1) { $view["followsUp"] = (ConvertTo-HordeDecisionFollowsUpView -State $State -Number ([int]$Question.followsUp)) }
+    # WHERE ITS ANSWERS WENT, and who closed it by acknowledging one (above, THE ANSWER GOES TO THE ONE WHO
+    # ASKED): handed out only when there is something to say, as needsPasskey is, so the view of every
+    # question no answer was routed for is what it was before.
+    if ((Test-HordeDecisionMember -Object $Question -Name "routes") -and @($Question.routes).Count -gt 0) {
+        $view["routes"] = @($Question.routes | ForEach-Object { [pscustomobject]@{ sequence = [long]$_.sequence; at = "$($_.at)"; answer = [long]$_.answer; purpose = "$($_.purpose)"; seat = "$($_.seat)"; label = "$($_.label)"; sessionId = "$($_.sessionId)"; resolved = [bool]$_.resolved; notice = "$($_.notice)"; note = "$($_.note)"; analyst = "$($_.analyst)" } })
+    }
+    if ((Test-HordeDecisionMember -Object $Question -Name "closedBy") -and "$($Question.closedBy)" -ne "") { $view["closedBy"] = "$($Question.closedBy)" }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view
