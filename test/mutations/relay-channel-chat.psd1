@@ -8,8 +8,8 @@
     Suite  = "test\test-relay-channel-chat.ps1"
     Mutations = @(
         @{ Name = "any-trusted-sender-speaks"
-           Find = '-Name "chat" -Kinds @("line") -Senders "founder"'
-           Replace = '-Name "chat" -Kinds @("line") -Senders "horde"' }
+           Find = '-Name "chat" -Kinds @("line", "photo") -Senders "founder"'
+           Replace = '-Name "chat" -Kinds @("line", "photo") -Senders "horde"' }
         @{ Name = "receipt-time-is-the-machines"
            Find = 'if ($null -ne $signedAt -and [long]$signedAt.Value -gt 0) { $sentAt = [long]$signedAt.Value }'
            Replace = '$sentAt = [long]([datetime]::UtcNow - (New-Object datetime -ArgumentList 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc))).TotalMilliseconds' }
