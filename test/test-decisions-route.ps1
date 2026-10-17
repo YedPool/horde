@@ -821,6 +821,23 @@ $threw2 = $false
 try { & $cmdBody -Verb "ack" -Number "$qKeep" -HordeHome $hordeHome | Out-Null } catch { $threw2 = $true }
 Check ($threw2 -and $null -eq $env:HORDE_HOME) "a call that throws leaves an unset HORDE_HOME unset"
 $env:HORDE_HOME = $hordeHome
+# THE NOTE NEEDS A WORDING HE STATED (N2 of the second review): words recorded from chat state none, so there is
+# no earlier wording to name; a reworded question must not make the notice say he answered "wording 0".
+$noteStated = "NOTE: the question was reworded after he answered (he answered wording 1, it is now wording 2). The title above is the CURRENT wording; the list does not keep the one he saw, so read his words as an answer to that earlier wording."
+$qN1 = Add-Question "Orc C" "Should the stated note step go ahead?"
+$sN1 = Say $qN1 "Yes, typed with a wording." -Route "window"
+$qN2 = Add-Question "Orc C" "Should the unstated note step go ahead?"
+$sN2 = Say $qN2 "Yes, said in chat with no wording." -Route "chat-recorded"
+Advance 1
+Reword $qN1 "Should the stated note step go ahead next week?"
+Reword $qN2 "Should the unstated note step go ahead next week?"
+Advance 1
+$p = Pass
+$bodyN1 = "$(@(PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qN1 + ':*') })[0].body)"
+$bodyN2 = "$(@(PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qN2 + ':*') })[0].body)"
+Check ($p.routed -ge 2 -and $bodyN1 -ne "" -and $bodyN2 -ne "") "CONTROL: both reworded answers are routed"
+Check (@($bodyN1 -split "\r\n|\r|\n" | Where-Object { $_ -ceq $noteStated }).Count -eq 1) "an answer that states its wording, to a question since reworded: the notice carries the exact note, naming both wordings"
+Check (-not $bodyN2.Contains("NOTE:") -and -not $bodyN2.Contains("wording 0") -and $bodyN2.Contains("Question " + $qN2 + ": Should the unstated note step go ahead next week?")) "an answer that states no wording (recorded from chat): no note, and never a wording 0"
 }
 finally {
     $env:HORDE_HOME = $keepHome
