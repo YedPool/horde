@@ -109,7 +109,7 @@ function Reset-World {
         exitAt = @{}; askedAt = @{}; polls = 0; postFail = @{}; caller = ""
         lane = $null
         tiers = $null          # label -> 1, 2 or $null (a table of its own); $null = every Orc is tier 2
-        tierState = "known"; typedAfterAsk = @{}; recheckUnreadable = @{}; recheck = @{}   # label -> the founder types after the ask; label -> times re-checked
+        tierState = "known"; typedInGap = @{}; gapSel = @{}; postCostSeconds = 0; typedAfterAsk = @{}; recheckUnreadable = @{}; recheck = @{}   # label -> the founder types after the ask; label -> times re-checked
         exitCostMinutes = 0    # what one exit command costs the clock
         dieOffset = @{}        # label -> seconds after its exit command that its process is gone
     }
@@ -131,6 +131,14 @@ function New-Deps {
             $t = $script:typedBy[$script:labelOf["" + $c.sessionId]]
             if ($t -is [string] -and $t -ceq "unreadable") { return (New-HordeUnknown -Reason "its transcript could not be read") }
             $turns = @(@($t) | Where-Object { $null -ne $_ } | ForEach-Object { [pscustomobject]@{ at = $script:clock.at.AddMinutes(-$_[0]); text = $_[1] } })
+            # TYPING IN THE GAP: the first look at a session is its selection; the founder types 5 s after it, which the
+            # selection cannot see, and before the ask is posted (a post costs postCostSeconds). Seen once the clock is past it.
+            $gl = $script:labelOf["" + $c.sessionId]
+            if ($script:w.typedInGap.ContainsKey($gl)) {
+                if (-not $script:w.gapSel.ContainsKey($gl)) { $script:w.gapSel[$gl] = $script:clock.at }
+                $gapAt = $script:w.gapSel[$gl].AddSeconds(5)
+                if ($script:clock.at -ge $gapAt) { $turns += [pscustomobject]@{ at = $gapAt; text = "no, leave this one running" } }
+            }
             # A RE-CHECK is a look since the ask (the since it is given is the ask's own time); the founder types after it.
             $lbl = $script:labelOf["" + $c.sessionId]
             if ($script:w.askedAt.ContainsKey($lbl) -and $since -ge $script:w.askedAt[$lbl]) {
@@ -154,6 +162,7 @@ function New-Deps {
             $when = $script:w.askedAt[$l].AddMinutes([double]$after)
             if ($script:clock.at -ge $when) { return $when } else { return $null } }
         Post = { param($sid, $label, $body, $mid)
+            $script:clock.at = $script:clock.at.AddSeconds($script:w.postCostSeconds)
             [void]$script:w.posts.Add([pscustomobject]@{ sid = $sid; label = $label; body = $body; mid = $mid })
             $script:w.askedAt[$label] = $script:clock.at
             if ($script:w.postFail.ContainsKey($label)) { return (New-HordeUnknown -Reason "the messenger held it") }
@@ -446,6 +455,17 @@ Seat-Mail @("K", "L")
 $run4 = New-HordeWakeRun -HordeHome $script:hh -Self ""
 $entries = @(Invoke-HordeWakeTick -Run $run4 -Now $t -Waker $standInWaker -Settings $settings -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $script:hh)
 Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["K"] }).Count -eq 1) "the watcher knocks on it, as on any awake session"
+# A SHADOW OR PROOF WATCHER CHANGES NOTHING (review of PR 326, nit): the same tick, K running again, and the
+# terminal is asked to remove no marker unless the watcher is a live one.
+foreach ($m in @("shadow", "proof", "live")) {
+    $script:unmarks.Clear()
+    Seat-Mail @("K", "L")
+    $runM = $(if ($m -ceq "proof") { New-HordeWakeRun -Mode "proof" -Target $script:sids["L"] -Self "" -HordeHome $script:hh } else { New-HordeWakeRun -Mode $m -Self "" -HordeHome $script:hh })
+    [void]@(Invoke-HordeWakeTick -Run $runM -Now $t -Waker $standInWaker -Settings $settings -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $script:hh)
+    $cleared = @($script:unmarks | Where-Object { $_.sid -ceq $script:sids["K"] -and $_.why -ceq "hibernated" }).Count
+    if ($m -ceq "live") { Check ($cleared -ge 1) "CONTROL: a LIVE watcher's tick asks the terminal to remove K's stale hibernated marker" }
+    else { Check ($cleared -eq 0) ("a " + $m.ToUpper() + " watcher's tick removes no marker (" + $cleared + " asked)") }
+}
 $script:world.error = "the control folder is empty"
 Check ((Get-HordeFleetAsleep -HordeHome $script:hh).state -ceq "unknown") "when which sessions run cannot be read, who sleeps is unknown and nobody is knocked"
 $script:world.error = ""
@@ -555,6 +575,21 @@ Reset-World
 foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
 $r = Hib -Names @("L") -WaitMinutes 3
 Check ((Outcome $r "L1") -ceq "exited" -and (Outcome $r "L") -ceq "exited" -and [int]$script:w.recheck["L1"] -ge 1) "CONTROL: with nobody typing, the same run exits both, after the same re-check"
+
+# THE GAP BETWEEN SELECTION AND THE ASK (review of PR 326): selection looks 30 minutes back from its own moment;
+# the record, the markers and the earlier asks come after it. He types into L1 in that gap - after the selection
+# looked, before its ask was posted - so the re-check must reach back to the selection's own look-back start.
+Reset-World
+foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
+$script:w.typedInGap["L1"] = $true; $script:w.postCostSeconds = 10
+$r = Hib -Names @("L") -WaitMinutes 3
+Check (@($script:w.exits | Where-Object { $_.label -ceq "L1" -or $_.label -ceq "L" }).Count -eq 0) "he typed into L1 between selection and its ask: it is never sent its exit command, and neither is its Orc"
+Check ((Outcome $r "L1") -ceq "still-awake" -and (Reason $r "L1") -like "*founder typed*") ("L1 is still-awake, saying why (" + (Outcome $r "L1") + ": " + (Reason $r "L1") + ")")
+Reset-World
+foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
+$script:w.postCostSeconds = 10
+$r = Hib -Names @("L") -WaitMinutes 3
+Check ((Outcome $r "L1") -ceq "exited" -and (Outcome $r "L") -ceq "exited") "CONTROL: with the same slow asks and nobody typing, both exit"
 
 Reset-World
 foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
