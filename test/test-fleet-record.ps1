@@ -225,6 +225,6 @@ Check ($cut -ceq (("a" * 596) + "...")) ("a cut that would fall between the halv
 $lone = @($cut.ToCharArray() | Where-Object { [char]::IsSurrogate($_) })
 Check ($lone.Count -eq 0) "so no lone surrogate is left"
 $cut = Test-ReasonOf (("a" * 595) + $pair + ("b" * 100))
-Check ($cut -ceq (("a" * 595) + $pair + "b" + "...")) "CONTROL: a pair wholly inside the kept part is kept"
+Check ($cut -ceq (("a" * 595) + $pair + "...")) "CONTROL: a pair wholly inside the kept part is kept"
 
 Complete-HordeSuite -Success "a hibernation record holds exactly the running, unretired sessions asked for, and nothing is written when that cannot be known"
