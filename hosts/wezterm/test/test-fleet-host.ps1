@@ -206,6 +206,11 @@ $bytes = [System.IO.File]::ReadAllBytes($mp)
 Check (-not ($bytes.Count -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB)) "it has no byte-order mark, which the restore plugin's JSON reader would trip on"
 $again = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at.AddMinutes(1) -Dir $nw
 Check ($again.state -ceq "known" -and ([System.IO.File]::ReadAllText($mp) | ConvertFrom-Json).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
+# A time given in local time is written as the same moment in UTC (the Z on the end says so).
+$localAt = [datetime]::new(2026, 10, 16, 7, 30, 5, [System.DateTimeKind]::Local)
+[void](Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "parked" -At $localAt -Dir $nw)
+$lj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+Check ($lj.at -ceq $localAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) -and $lj.reason -ceq "parked") ("a local time is written as UTC (" + $lj.at + ")")
 $rm = Remove-HordeWeztermFleetNoRestore -SessionId $sidW -Dir $nw
 Check ($rm.state -ceq "known" -and $rm.value -ceq "removed") "THE TWO MATCH: the wake's remover finds and removes exactly the marker the writer made"
 $bad = Write-HordeWeztermFleetNoRestore -SessionId "..\x" -Reason "hibernated" -At $at -Dir $nw
