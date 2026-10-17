@@ -153,9 +153,12 @@
         @{ Name = "photo-sent-again-any-image"
            Find = '$r.sha256 -cne $Sha256 -or '
            Replace = '' }
+        # Survives by design: a record is closed refused only from receiving (Photo.ps1 lines 876-885) or at accept, and a file is set only at stage saved (line 892), so a refused record never has a file and the next line already skips it.
         @{ Name = "photo-sent-again-refused-counts"
            Find = '            if ($r.code -cne "delivered" -and $r.code -cne "saved") { continue }'
-           Replace = '' }
+           Replace = ''
+           Expect = "survives"
+           Reason = "a refused record is closed from the receiving stage or at accept, before any file is saved, so it has no file and the file-exists line after it skips it already; this line is defence in depth." }
         # Second review of PR 285: the same photo is the same sender, session and image, sent within the window, with its file still there.
         @{ Name = "photo-sent-again-any-sender"
            Find = '$r.from -cne $From -or '
