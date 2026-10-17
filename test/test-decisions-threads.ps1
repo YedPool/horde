@@ -397,9 +397,9 @@ $asked = Reply $s 1 "the short one, or the long one?";               [void]$turn
 $null = Reply $s 1 "the short one" -Note;                            [void]$turns.Add((Get-Turn $s))   # it tells him, asking nothing: still its own turn
 $null = Say $s 1 "then yes";                                         [void]$turns.Add((Get-Turn $s))   # he speaks
 $null = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." };       [void]$turns.Add((Get-Turn $s))   # it closes instead of replying
-$null = Say $s 1 "thank you";                                        [void]$turns.Add((Get-Turn $s))   # he speaks under a closed question
+$null = Say $s 1 "thank you";                                        [void]$turns.Add((Get-Turn $s))   # he changes his answer under a closed question: REFUSED by name (T-0152), nothing changes
 $reopened = Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "it came back" }; [void]$turns.Add((Get-Turn $s))   # asked again: REFUSED too
-Check (($turns -join " ") -ceq "founder/0/0 warchief/1/1 warchief/1/0 warchief/1/0 warchief/2/0 warchief/3/1 nobody/3/1 nobody/4/2 nobody/4/2") ("turn, messages and unread after each step of an exchange: " + ($turns -join " "))
+Check (($turns -join " ") -ceq "founder/0/0 warchief/1/1 warchief/1/0 warchief/1/0 warchief/2/0 warchief/3/1 nobody/3/1 nobody/3/1 nobody/3/1") ("turn, messages and unread after each step of an exchange: " + ($turns -join " "))
 Check ((Show $s 1).value.question.thread.turnShown -ceq "nobody" -and (Show (New-TestStore) 1).state -ceq "absent") "and the turn is told to a person in words"
 
 Write-Host ""

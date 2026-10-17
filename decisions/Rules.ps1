@@ -112,6 +112,8 @@ $script:HordeDecisionEventKinds = [ordered]@{
     # AN ANSWER ROUTED, AND AN ANSWER ACKNOWLEDGED (below, THE ANSWER GOES TO THE ONE WHO ASKED).
     "answer-routed"     = @{ data = "answer-routed";     words = "";         apply = "Step-HordeDecisionRouted";   about = "question"; actors = "keepers";  counts = @{ answer = "sequence" } }
     "question-acked"    = @{ data = "question-acked";    words = "";         apply = "Step-HordeDecisionAcked";    about = "question"; actors = "ackers";   counts = @{ answer = "sequence" } }
+    # AN ORC'S REPLY TO A CHANGED ANSWER (below, THE FOUNDER CHANGES HIS ANSWER).
+    "answer-change-replied" = @{ data = "answer-change-replied"; words = ""; apply = "Step-HordeDecisionChangeReplied"; about = "question"; actors = "ackers"; counts = @{ answer = "sequence" } }
 }
 
 # THE STATES a question can be in. A later slice adds to this list; nothing reads a state it does not
@@ -166,6 +168,29 @@ $script:HordeDecisionAckers = @("orc")
 # Thrall, none any other way.
 $script:HordeDecisionAskerOrcPattern = '\AOrc ([A-Z])\z'
 $script:HordeDecisionAskerWarchiefPattern = '\A(M|Thrall)(\z|[ ,(])'
+# THE FOUNDER CHANGES HIS ANSWER (T-0152; his word on Q67, 2026-10-15: "On a phone it is easy to tap the wrong
+# option"; the design note of Orc F). A change is NOT a kind of record of its own: it is an ordinary answer of
+# his - the same signed message-said, by the same route, under the same proof rules - that comes when an
+# answer of his already stands to the same part. Newest wins, as it always did (the stale rule of
+# channels/decisions/Channel.ps1 and the edit rule of Step-HordeDecisionSaid); a question flagged
+# needsPasskey takes a fresh passkey for the change as for the first answer, because the channel asks that
+# of every answer. What this file adds is three things:
+#   - WHAT A CHANGE IS, derived each time from the order of the records and stored nowhere: the message
+#     says changedFrom, the record of the answer it replaces, and changedFromText, those words. The
+#     asking Orc is told both (decisions/Route.ps1), and so is the page.
+#   - WHEN A CHANGE IS REFUSED, at the moment of the request (Get-HordeDecisionChangeRefusal; stored records
+#     are facts and are not asked again): once the question is CLOSED. The work is finished, and a change
+#     would change only the record, not the work. The refusal names it, and says what to do instead.
+#   - THE ORC'S REPLY, a record of its own (answer-change-replied): the Orc that asked says what became of
+#     its work - not acted yet and using the new answer, already acted and undoing, or already acted and
+#     unable to undo, with why. Until it has, the page says it waits for that Orc. The newest reply to a
+#     change stands; a reply names the record of the change it answers. Only an Orc can reply, so a
+#     question that no Orc asked is never shown as waiting for one.
+$script:HordeDecisionChangeReplies = [ordered]@{
+    "not-acted"   = @{ shown = "not acted yet, using the new answer"; needsWhy = $false }
+    "undoing"     = @{ shown = "already acted, undoing"; needsWhy = $false }
+    "cannot-undo" = @{ shown = "already acted, cannot undo"; needsWhy = $true }
+}
 $script:HordeDecisionRoutePurposes = @("answer", "nudge")
 $script:HordeDecisionRouteSeats = @("orc", "warchief")
 
@@ -374,6 +399,7 @@ function Get-HordeDecisionKindActors {
     $entry = $script:HordeDecisionEventKinds[$Kind]
     if ($null -ne $entry -and "$($entry.actors)" -ceq "speakers") { return [pscustomobject]@{ roles = @($script:HordeDecisionSpeakers.Keys); may = "speak under a question, or mark what was said there as read" } }
     if ($null -ne $entry -and "$($entry.actors)" -ceq "rankers") { return [pscustomobject]@{ roles = @($script:HordeDecisionRankers); may = "rank a question" } }
+    if ($null -ne $entry -and "$($entry.actors)" -ceq "ackers" -and "$($Kind)" -ceq "answer-change-replied") { return [pscustomobject]@{ roles = @($script:HordeDecisionAckers); may = "say what became of its work when the founder changed his answer to a question it asked" } }
     if ($null -ne $entry -and "$($entry.actors)" -ceq "ackers") { return [pscustomobject]@{ roles = @($script:HordeDecisionAckers); may = "acknowledge the founder's answer to a question it asked" } }
     return [pscustomobject]@{ roles = @($script:HordeDecisionActors); may = "change the list" }
 }
@@ -854,6 +880,8 @@ function Step-HordeDecisionAdded {
     # Every answer-routed record that applied to it, in order; and the Orc an acknowledgement closed it
     # as, "" when none did (above, THE ANSWER GOES TO THE ONE WHO ASKED).
     $question["routes"] = (New-Object System.Collections.ArrayList)
+    # An Orc's replies to the founder's changed answers (answer-change-replied), in store order.
+    $question["changeReplies"] = (New-Object System.Collections.ArrayList)
     $question["closedBy"] = ""
     $question["turn"] = $script:HordeDecisionFirstTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "added"
@@ -965,6 +993,39 @@ function Get-HordeDecisionAsker {
     return [pscustomobject]@{ seat = ""; label = ""; shown = ("'" + $AskedBy + "'"); why = ("its askedBy, '" + $AskedBy + "', is neither 'Orc' and one capital letter nor the warchief (M or Thrall), so it names no seat an answer can be sent to") }
 }
 
+function Get-HordeDecisionActedBy {
+    # Who has acted on a CLOSED question, in words for the page and the refusal: the Orc that closed it,
+    # else the Orc askedBy names, else the warchief (who asked, or whom an unresolvable askedBy falls to).
+    param($Question)
+    $closer = ""
+    if ($Question -is [System.Collections.IDictionary]) { if ($Question.Contains("closedBy")) { $closer = "$($Question['closedBy'])" } }
+    elseif ($null -ne $Question.PSObject.Properties["closedBy"]) { $closer = "$($Question.closedBy)" }
+    if ($closer -ne "") { return $closer }
+    $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
+    if ($asker.seat -ceq "orc") { return $asker.shown }
+    return "the warchief"
+}
+
+function Get-HordeDecisionClosedChangeLine {
+    # THE ONE SENTENCE for a change to a closed question (header, THE FOUNDER CHANGES HIS ANSWER). The page
+    # draws the same words, from the view's actedBy.
+    param($Question)
+    return ("This question is closed - " + (Get-HordeDecisionActedBy -Question $Question) + " has acted on it. To change course, ask a follow-up.")
+}
+
+function Get-HordeDecisionChangeRefusal {
+    # Why words of -Speaker may not be said under -Question as a CHANGE of his answer, or "" when they may.
+    # A change is his words that answer (no act, not a note) when his words already answer the same -Part.
+    # Refused once the question is closed. Asked of a REQUEST by decisions/Operations.ps1; the fold never
+    # asks it, because a stored record is a fact.
+    param($Question, [string]$Speaker, [string]$Part = "", [bool]$Asks = $true, [string]$Act = "")
+    if ($Speaker -cne $script:HordeDecisionFirstTurn -or $Act -ne "" -or -not $Asks) { return "" }
+    if ("$($Question.state)" -ceq "open") { return "" }
+    $earlier = @($Question.thread | Where-Object { "$($_.speaker)" -ceq $Speaker -and "$($_.act)" -eq "" -and [bool]$_.asks -and "$($_.part)" -ceq $Part })
+    if ($earlier.Count -eq 0) { return "" }
+    return (Get-HordeDecisionClosedChangeLine -Question $Question)
+}
+
 function Get-HordeDecisionStandingAnswer {
     # The founder's newest words under a question that answer it - an act of his (park, unpark)
     # answers nothing - or $null when he has said none. Works on the list's question and on its view.
@@ -1015,6 +1076,34 @@ function Get-HordeDecisionUnclosed {
             line = ("question " + $question.number + ": answered " + $ago + " ago, not closed by " + $by) })
     }
     return @($out)
+}
+
+function Step-HordeDecisionChangeReplied {
+    # The Orc that asked says what became of its work when the founder changed his answer (header, THE
+    # FOUNDER CHANGES HIS ANSWER). Refused in words: by an Orc that did not ask; for a record that is not
+    # a changed answer of his under this question; for a reply that is none of the three; for a reason
+    # missing where one is needed, or given where none is. The question's state is not asked: an Orc may
+    # close it and then say what became of the change.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    $by = "$($Ev.data.by)"
+    $asker = Get-HordeDecisionAsker -AskedBy "$($question.askedBy)"
+    if ($asker.label -cne $by -or $asker.seat -cne "orc") { return ("question " + $question.number + " was asked by '" + $question.askedBy + "', not by Orc " + $by + ": only the Orc that asked it says what became of a changed answer") }
+    $answer = [long]$Ev.data.answer
+    $said = @($question.thread | Where-Object { [long]$_.sequence -eq $answer }) | Select-Object -First 1
+    if ($null -eq $said -or "$($said.speaker)" -cne $script:HordeDecisionFirstTurn -or "$($said.act)" -ne "" -or [long]$said.changedFrom -lt 1) {
+        return ("it replies to record " + $answer + ", which is not a changed answer of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " under question " + $question.number)
+    }
+    $reply = "$($Ev.data.reply)"
+    if (-not $script:HordeDecisionChangeReplies.Contains($reply)) { return ("its reply '" + $reply + "' is not one of: " + (@($script:HordeDecisionChangeReplies.Keys) -join ", ")) }
+    $why = "$(Get-HordeDecisionMember -Object $Ev.data -Name 'why')"
+    if ([bool]$script:HordeDecisionChangeReplies[$reply].needsWhy -and $why.Trim() -eq "") { return ("the reply '" + $reply + "' says why: an Orc that cannot undo its work tells him the reason") }
+    if (-not [bool]$script:HordeDecisionChangeReplies[$reply].needsWhy -and $why -ne "") { return ("a reason is given only with the reply 'cannot-undo', not with '" + $reply + "'") }
+    [void]$question.changeReplies.Add([pscustomobject]@{ sequence = [long]$Ev.sequence; at = "$($Ev.at)"; answer = $answer; by = $by; reply = $reply; why = $why })
+    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("answer change replied by Orc " + $by + ": " + $script:HordeDecisionChangeReplies[$reply].shown)
+    return ""
 }
 
 function Step-HordeDecisionRouted {
@@ -1188,6 +1277,22 @@ function Step-HordeDecisionSaid {
         }
     }
     Add-Member -InputObject $last -NotePropertyName replaces -NotePropertyValue ([bool]$replaces)
+    # A CHANGE OF HIS ANSWER (header, THE FOUNDER CHANGES HIS ANSWER): his words that answer, when words of
+    # his that answer the same part already stand. Derived here, at the record's place; never stored.
+    $changedFrom = [long]0
+    $changedFromText = ""
+    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn) {
+        for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
+            $before = $question.thread[$i]
+            if ("$($before.speaker)" -cne $speaker -or "$($before.act)" -ne "" -or -not [bool]$before.asks) { continue }
+            if ("$($before.part)" -cne $part) { continue }
+            $changedFrom = [long]$before.sequence
+            $changedFromText = [string]$before.text
+            break
+        }
+    }
+    Add-Member -InputObject $last -NotePropertyName changedFrom -NotePropertyValue $changedFrom
+    Add-Member -InputObject $last -NotePropertyName changedFromText -NotePropertyValue $changedFromText
     # The turn passes only under an open question, only for a speaker this version lists, and not on
     # words that ask nothing (a note) or that record an act.
     # AN ANSWER TO ONE PART PASSES THE TURN ONLY WHEN IT IS THE LAST PART LEFT (the founder, 2026-10-12:
@@ -1358,7 +1463,7 @@ function ConvertTo-HordeDecisionMessageView {
     foreach ($reader in @(Get-HordeDecisionReaders)) {
         if ($reader -cne $Message.speaker -and [long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }
     }
-    return [pscustomobject]@{
+    $messageView = [ordered]@{
         sequence = [long]$Message.sequence; at = "$($Message.at)"
         speaker = "$($Message.speaker)"; speakerShown = (Get-HordeDecisionSpeakerShown -Speaker "$($Message.speaker)")
         route = "$($Message.route)"; routeShown = (Get-HordeDecisionRouteShown -Route "$($Message.route)")
@@ -1378,6 +1483,34 @@ function ConvertTo-HordeDecisionMessageView {
         partWords = "$($Message.partWords)"
         signedBy = "$($Message.signedBy)"
     }
+    # A CHANGED ANSWER says which it replaces and what that said, handed out only when it is one, so the
+    # view of every other message is what it was (header, THE FOUNDER CHANGES HIS ANSWER).
+    if ($null -ne $Message.PSObject.Properties["changedFrom"] -and [long]$Message.changedFrom -ge 1) {
+        $messageView["changedFrom"] = [long]$Message.changedFrom
+        $messageView["changedFromText"] = [string]$Message.changedFromText
+    }
+    return [pscustomobject]$messageView
+}
+
+function Get-HordeDecisionAnswerChanges {
+    # EVERY CHANGE OF HIS ANSWER under a question, in store order, as the page and the Orc's notice tell it:
+    # the record, when, the record it replaced, the old and the new words, the part, who is to confirm, and
+    # the newest reply to it if there is one. orcShown is "" when no Orc asked the question: only an Orc
+    # replies, so nobody is waited for.
+    param($Question)
+    $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
+    $out = New-Object System.Collections.ArrayList
+    foreach ($m in @($Question.thread)) {
+        if ($null -eq $m.PSObject.Properties["changedFrom"] -or [long]$m.changedFrom -lt 1) { continue }
+        $one = [ordered]@{ answer = [long]$m.sequence; at = "$($m.at)"; from = [long]$m.changedFrom; oldText = [string]$m.changedFromText; newText = [string]$m.text; part = "$($m.part)"; orcShown = $(if ($asker.seat -ceq "orc") { $asker.shown } else { "" }) }
+        $reply = @($Question.changeReplies | Where-Object { [long]$_.answer -eq [long]$m.sequence }) | Select-Object -Last 1
+        if ($null -ne $reply) {
+            $entry = $script:HordeDecisionChangeReplies["$($reply.reply)"]
+            $one["reply"] = [pscustomobject]@{ sequence = [long]$reply.sequence; at = "$($reply.at)"; by = "$($reply.by)"; reply = "$($reply.reply)"; replyShown = $(if ($null -ne $entry) { "$($entry.shown)" } else { "$($reply.reply)" }); why = "$($reply.why)" }
+        }
+        [void]$out.Add([pscustomobject]$one)
+    }
+    return @($out)
 }
 
 function ConvertTo-HordeDecisionThreadView {
@@ -1471,6 +1604,11 @@ function ConvertTo-HordeDecisionView {
         $view["routes"] = @($Question.routes | ForEach-Object { [pscustomobject]@{ sequence = [long]$_.sequence; at = "$($_.at)"; answer = [long]$_.answer; purpose = "$($_.purpose)"; seat = "$($_.seat)"; label = "$($_.label)"; sessionId = "$($_.sessionId)"; resolved = [bool]$_.resolved; notice = "$($_.notice)"; note = "$($_.note)"; analyst = "$($_.analyst)" } })
     }
     if ((Test-HordeDecisionMember -Object $Question -Name "closedBy") -and "$($Question.closedBy)" -ne "") { $view["closedBy"] = "$($Question.closedBy)" }
+    # THE CHANGES OF HIS ANSWER and, for a closed question, who acted on it (header, THE FOUNDER CHANGES HIS
+    # ANSWER): handed out only when there is something to say.
+    $changes = @(Get-HordeDecisionAnswerChanges -Question $Question)
+    if ($changes.Count -gt 0) { $view["answerChanges"] = $changes }
+    if ("$($Question.state)" -cne "open") { $view["actedBy"] = (Get-HordeDecisionActedBy -Question $Question) }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view

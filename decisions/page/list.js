@@ -154,6 +154,20 @@
 // list and in every fold, in the order chosen; it is kept on this device beside the order, and a list
 // that arrives keeps it.
 //
+// CHANGE MY ANSWER (T-0152; the founder, Q67, 2026-10-15: "On a phone it is easy to tap the wrong option"). An
+// answered question that is not closed shows, in its row under With Thrall, a button: "Change my answer". A
+// tap brings the question back into the list with its answer box open, his current answer in it and
+// selected; "Keep my answer" puts it back as it was. What he sends is the ordinary save - the same signed
+// answer through the same host, the newest standing - so a question that needs a passkey asks for one again,
+// and the host's refusal stands under the box as for any answer. WHAT BECAME OF A CHANGE is drawn from the
+// question's answerChanges (decisions/Rules.ps1), always in plain words and never silent:
+//   no reply yet   "answer changed - waiting for Orc X to confirm"
+//   a reply        "You changed your answer at 14:02. Orc X had not acted yet and is using the new answer."
+//                  "... had already acted on the first one and is undoing it."
+//                  "... had already acted on the first one and says it cannot undo: <why>."
+// A question that is CLOSED has no button: "This question is closed - Orc X has acted on it. To change
+// course, ask a follow-up." (the view's actedBy names who).
+//
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
@@ -185,7 +199,8 @@
     you: "You", keeper: KEEPER, saving: "saving", saved: "saved", told: "told " + KEEPER, read: "read by " + KEEPER, draft: "draft",
     toldShort: "told", readShort: "read", edited: "edited", earlier: "You, earlier", isNew: "new", answered: "Answered",
     afterClosing: "the question is closed; kept, and it reopens nothing", earlierWording: "said to an earlier wording",
-    marks: "this message holds direction or invisible characters"
+    marks: "this message holds direction or invisible characters",
+    change: "Change my answer", keep: "Keep my answer"
   };
   // The receipt that says an answer has arrived for good: folded, it is just Answered.
   var RECEIPT_DONE = "applied";
@@ -557,6 +572,9 @@
     // His last act under the question: "park", "unpark" or "" - and what he did here since, not yet in
     // a list (acted, below).
     var acted = Object.create(null);
+    // CHANGE MY ANSWER: the questions he has asked to change, by number. Such a question stands in his list
+    // with its answer box open until what he sends is saved, or he keeps his answer.
+    var reopened = Object.create(null);
     function lastActOf(q) {
       var all = allMessagesOf(q);
       var mine = acted[q.number];
@@ -750,6 +768,7 @@
       var did = lastActOf(q);
       if (did === "park") { return "parked"; }
       if (did !== "unpark" && parked[textOf(q.group)] === true) { return "parked"; }
+      if (reopened[q.number] === true) { return "main"; }
       var st = stateOf(q);
       if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }
       var msgs = messagesOf(q);
@@ -912,7 +931,7 @@
       else if (isSaved) { words = textOf(saved.receipt) || WORDS.saved; }
       else if (field.value !== "" && field.value !== partBaseOf(q, { parts: line.parts }, i)) { words = WORDS.draft; }
       var green = isSaved && isGreen(key);
-      var folded = isSaved && !green && document.activeElement !== field && !(s && s.pending > 0);
+      var folded = isSaved && !green && document.activeElement !== field && !(s && s.pending > 0) && reopened[q.number] !== true;
       row.mark.textContent = folded ? foldedWords(saved) : words;
       row.mark.hidden = row.mark.textContent === "";
       row.el.classList.toggle("saved-now", green);
@@ -941,11 +960,12 @@
       var st = stateOf(q);
       var green = !line.parts && st.answered && isGreen(String(q.number));
       var partsBusy = !!line.parts && line.rows.some(function (r) { return !r.el.classList.contains("answered"); });
-      var folded = st.answered && !green && !partsBusy && drafts[q.number] === undefined && focusedLine() !== line && !(s && s.pending > 0);
+      var folded = st.answered && !green && !partsBusy && drafts[q.number] === undefined && focusedLine() !== line && !(s && s.pending > 0) && reopened[q.number] !== true;
       line.wrap.classList.toggle("saved-now", green);
       line.wrap.classList.toggle("answered", folded);
       line.done.hidden = !folded;
       line.done.textContent = line.parts ? WORDS.answered : foldedWords(standingOf(q));
+      line.keep.hidden = reopened[q.number] !== true;
     }
     // The word an answered question or part folds to: Answered, and while the host says the answer is
     // still on its way, what became of it so far (header, WHAT BECAME OF AN ANSWER).
@@ -1127,6 +1147,9 @@
       // What was said above the field may have changed with it: an answer he replaced is now kept
       // there, marked earlier (an edit).
       if (line && savedNow) { line.said = drawTalk(line.q, line.talk, line.ans); }
+      // A CHANGE SENT AND SAVED ends the reopening (CHANGE MY ANSWER): the question is answered again, and
+      // leaves the list as any answered question does - unless words he typed are still unsent.
+      if (savedNow && drafts[number] === undefined) { delete reopened[number]; }
       if (line) { refresh(line); fit(line); }
       onChange();
     }
@@ -1718,6 +1741,11 @@
       done.type = "button";
       done.tabIndex = -1;
       done.hidden = true;
+      // "Keep my answer" (CHANGE MY ANSWER): shown only while the question is reopened; what he typed and
+      // did not send is dropped with it, because it was a change he has decided against.
+      var keep = make("button", "hd-keep", WORDS.keep);
+      keep.type = "button";
+      keep.hidden = true;
       // ONE STAGE (header): the context stands in the one run of details, after what was said and
       // before the label and the box - never under the box, where it read as a second showing.
       var subBox = make("div", "hd-sub");
@@ -1725,10 +1753,21 @@
       var subs = drawSubs(q, subBox);
       if (!subBox.hidden) { ans.classList.add("wide"); }
       ans.appendChild(ansLabel);
-      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done);
+      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done); ans.appendChild(keep);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, keep: keep, said: said, subs: subs };
+      keep.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var n = drawn.q.number;
+        delete reopened[n];
+        delete drafts[n];
+        keepDrafts();
+        var sp = sent[sentKey(n, "")];
+        if (sp) { sp.refusal = ""; }
+        if (drawn.parts) { drawn.parts.forEach(function (p) { var spp = sent[sentKey(n, p.letter)]; if (spp) { spp.refusal = ""; } }); }
+        draw();
+      });
       done.addEventListener("click", function (e) { e.stopPropagation(); if (!drawn.parts) { unfold(drawn); } });
       rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });
       fields.forEach(function (f) {
@@ -1770,6 +1809,56 @@
     // outcome it was closed with. A press on it unfolds its context.
     var drawnRows = [];
     function rowOf(number) { for (var i = 0; i < drawnRows.length; i += 1) { if (drawnRows[i].q.number === number) { return drawnRows[i]; } } return null; }
+    // THE LOCAL TIME OF A STORED TIME, as 14:02, or "" when it is not one.
+    function timeOf(at) {
+      var d = new Date(textOf(at));
+      if (isNaN(d.getTime())) { return ""; }
+      function two(n) { return (n < 10 ? "0" : "") + n; }
+      return two(d.getHours()) + ":" + two(d.getMinutes());
+    }
+    // WHAT BECAME OF HIS LAST CHANGE (CHANGE MY ANSWER), from the question's answerChanges - { status, lines,
+    // button, closed }: status is "none", "waiting" or the Orc's reply word; lines the sentence(s) to draw,
+    // button whether "Change my answer" is offered, closed the line that says why it is not. -Answered: he has
+    // an answer that stands.
+    function changeOf(q, answeredNow) {
+      var out = { status: "none", lines: [], button: false, closed: "" };
+      var list = listOf(q.answerChanges);
+      var last = list.length ? list[list.length - 1] : null;
+      if (last) {
+        var when = timeOf(last.at);
+        var told = "You changed your answer" + (when ? " at " + when : "") + ".";
+        var reply = (last.reply && typeof last.reply === "object") ? last.reply : null;
+        var orc = textOf(last.orcShown);
+        if (reply) {
+          var by = "Orc " + textOf(reply.by);
+          var word = textOf(reply.reply);
+          out.status = word;
+          if (word === "not-acted") { out.lines.push(told + " " + by + " had not acted yet and is using the new answer."); }
+          else if (word === "undoing") { out.lines.push(told + " " + by + " had already acted on the first one and is undoing it."); }
+          else if (word === "cannot-undo") { out.lines.push(told + " " + by + " had already acted on the first one and says it cannot undo: " + textOf(reply.why) + "."); }
+          else { out.lines.push(told + " " + by + " answered: " + textOf(reply.replyShown) + "."); }
+        } else if (orc !== "" && textOf(q.state) === LISTED_STATE) {
+          out.status = "waiting";
+          out.lines.push("answer changed - waiting for " + orc + " to confirm");
+        } else { out.lines.push(told); }
+      }
+      if (textOf(q.state) === LISTED_STATE) { out.button = !!answeredNow && !reopened[q.number]; }
+      else if (answeredNow) { out.closed = "This question is closed - " + (textOf(q.actedBy) || "the warchief") + " has acted on it. To change course, ask a follow-up."; }
+      return out;
+    }
+    // A TAP ON "Change my answer": the question comes back into the list with its answer box open, his
+    // current answer in it and selected, the caret in it.
+    function reopen(q) {
+      reopened[q.number] = true;
+      delete drafts[q.number];
+      draw();
+      var line = lineOf(q.number);
+      if (!line) { return; }
+      enter(line, line.parts ? 0 : undefined);
+      var field = document.activeElement;
+      if (field && line.fields.indexOf(field) >= 0 && typeof field.select === "function") { field.select(); }
+      onChange();
+    }
     function drawDone(q, kind) {
       var open = isOpen(q, true);
       var wrap = make("div", "hd-q hd-done" + (open ? " open" : ""));
@@ -1808,6 +1897,22 @@
         o.appendChild(make("span", "hd-who", "Outcome:"));
         o.appendChild(make("span", "hd-said", said.outcome || "(none recorded)"));
         ans.appendChild(o);
+      }
+      // CHANGE MY ANSWER: what became of his last change, in plain words; the button while the question is
+      // open and answered; and, once it is closed, why there is none.
+      var change = changeOf(q, mine !== null && stateOf(q).answered);
+      said.change = change.status;
+      said.changeLines = change.lines;
+      said.button = change.button ? WORDS.change : "";
+      said.closed = change.closed;
+      change.lines.forEach(function (words) { ans.appendChild(make("div", "hd-change", words)); });
+      if (change.closed !== "") { ans.appendChild(make("div", "hd-change hd-closedline", change.closed)); }
+      if (change.button) {
+        var cb = make("button", "hd-changebtn", WORDS.change);
+        cb.type = "button";
+        cb.tabIndex = -1;
+        cb.addEventListener("click", function (e) { e.stopPropagation(); reopen(q); });
+        ans.appendChild(cb);
       }
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
@@ -2398,7 +2503,7 @@
         // The rows that are only read (With the keeper, History): number, text, which fold, and what
         // they show of his answer, the keeper's last words and the outcome.
         out.done = drawnRows.slice(0, limits.lines).map(function (r) {
-          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars), b: r.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }) };
+          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars), b: r.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }), cs: textOf(r.said.change), cl: (r.said.changeLines || []).map(function (s) { return cut(s, limits.lineChars); }), cb: textOf(r.said.button), cx: cut(r.said.closed, limits.lineChars) };
         });
         out.toast = (toast && !toast.hidden) ? cut(toast.textContent, limits.lineChars) : "";
         var has = focusedLine();

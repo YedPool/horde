@@ -116,6 +116,9 @@ $script:HordeDecisionOperations = [ordered]@{
     # (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED; decisions/Route.ps1 makes route).
     route  = @{ writes = $true;  kind = "answer-routed";     content = "Get-HordeDecisionRouteContent" }
     ack    = @{ writes = $true;  kind = "question-acked";    content = "Get-HordeDecisionAckContent";   complete = "Complete-HordeDecisionAckData" }
+    # change-reply: the Orc that asked says what became of its work when the founder changed his answer
+    # (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER).
+    "change-reply" = @{ writes = $true; kind = "answer-change-replied"; content = "Get-HordeDecisionChangeReplyContent" }
     say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData"; parts = "Get-HordeDecisionSayParts" }
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
@@ -308,6 +311,21 @@ function Complete-HordeDecisionAckData {
     return [pscustomobject]@{ why = ("an acknowledgement names the answer it acknowledges: the record the notice gave you (horde decisions ack " + $number + " -Answer <record>); nothing was written, because without it the question would be closed over whatever stands now"); write = $false; more = $null; data = $null }
 }
 
+function Get-HordeDecisionChangeReplyContent {
+    # A checked change-reply request as { body; findings }: which Orc, which changed answer, what became of
+    # its work and, for cannot-undo, why in one line. Whether the Orc asked and the record is a changed
+    # answer is the rules' (Step-HordeDecisionChangeReplied), asked when it is applied.
+    param($Request, $Definitions)
+    $body = [ordered]@{ by = [string]$Request.by; answer = [long]$Request.answer; reply = [string]$Request.reply }
+    $found = New-Object System.Collections.ArrayList
+    if (Test-HordeDecisionMember -Object $Request -Name "why") {
+        $line = [string](Get-HordeDecisionMember -Object $Request -Name "why")
+        foreach ($f in @(Test-HordeDecisionNote -Text $line -Name "why" -OneLine)) { [void]$found.Add($f) }
+        $body["why"] = $line
+    }
+    return [pscustomobject]@{ body = $body; findings = @($found) }
+}
+
 function Get-HordeDecisionReopenContent {
     param($Request, $Definitions)
     return [pscustomobject]@{ body = [ordered]@{ reason = [string]$Request.reason }; findings = @(Test-HordeDecisionNote -Text ([string]$Request.reason) -Name "reason" -OneLine) }
@@ -364,6 +382,16 @@ function Complete-HordeDecisionSayData {
     # question, which take no turn; and so is every word of his own.
     param($Request, $List, $Data)
     $number = [int]$Data["number"]
+    # A CHANGE OF HIS ANSWER TO A CLOSED QUESTION IS REFUSED BY NAME (decisions/Rules.ps1, THE FOUNDER
+    # CHANGES HIS ANSWER): the work is finished, and he asks a follow-up instead. The first answer to a
+    # closed question is not a change and is kept as it always was.
+    if ($List.questions.ContainsKey($number)) {
+        $changePart = $(if ($Data.Contains("part")) { "$($Data['part'])" } else { "" })
+        $changeAsks = (-not ($Data.Contains("asks") -and $Data["asks"] -eq $false))
+        $changeAct = $(if ($Data.Contains("act")) { "$($Data['act'])" } else { "" })
+        $closedChange = Get-HordeDecisionChangeRefusal -Question $List.questions[$number] -Speaker "$($Data['speaker'])" -Part $changePart -Asks $changeAsks -Act $changeAct
+        if ($closedChange -ne "") { return [pscustomobject]@{ why = $closedChange; write = $false; more = $null; data = $null } }
+    }
     $asking = (-not $Data.Contains("asks")) -and (-not $Data.Contains("act"))
     if ($asking -and (Get-HordeDecisionNoteSpeakers) -ccontains "$($Data['speaker'])" -and $List.questions.ContainsKey($number)) {
         $question = $List.questions[$number]

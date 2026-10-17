@@ -167,6 +167,14 @@
 .hd-rank-pick { flex: 1 1 100%; display: flex; flex-wrap: wrap; column-gap: 8px; padding: 2px 0 4px 0; }
 .hd-rank-opt { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 3px; margin: 0; padding: 2px 10px; min-height: 32px; cursor: pointer; }
 .hd-rank-opt.now { font-weight: 600; border-color: var(--accent); }
+/* CHANGE MY ANSWER (list.js, changeOf): the plain line of what became of his last change, the closed line,
+   and the two buttons. A button is at least 44 px tall so a thumb does not miss it. */
+.hd-change { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
+.hd-closedline { color: var(--ink); }
+.hd-changebtn, .hd-keep { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 3px; margin: 4px 0 0 0; padding: 4px 12px; min-height: 44px; cursor: pointer; }
+.hd-changebtn:focus-visible, .hd-keep:focus-visible { outline: 1px solid var(--accent); }
+.hd-keep[hidden] { display: none; }
+.hd-q.answered .hd-keep { display: none; }
 @media (max-width: 520px) {
   .hd-count { display: none; }
   .hd-ans { flex-basis: 100%; }

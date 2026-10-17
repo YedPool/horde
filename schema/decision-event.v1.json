@@ -114,6 +114,19 @@
         "analyst": {"type": "string", "description": "One line: what the fleet analyst was told of the answer (purpose answer), or empty."}
       }
     },
+    "answer-change-replied": {
+      "type": "object",
+      "description": "The Orc that asked a question says what became of its work when the founder changed his answer (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER): not acted yet and using the new answer, already acted and undoing, or already acted and unable to undo, with why. It names the record of the changed answer it replies to.",
+      "required": ["number", "by", "answer", "reply"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The lane letter of the Orc that replies, as its session's fleet label proves it. It must be the Orc the question's askedBy names."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's CHANGED answer that is replied to."},
+        "reply": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "not-acted, undoing or cannot-undo: the closed list is decisions/Rules.ps1's."},
+        "why": {"type": "string", "description": "One line: why the work cannot be undone. Present only with cannot-undo."}
+      }
+    },
     "question-acked": {
       "type": "object",
       "description": "The Orc that asked a question acknowledges the founder's answer to it, and the question is closed with that Orc as the closer. Only an open question whose answer stands and is waiting for the keeper closes this way, and only for the answer that stands now; a closed question is never opened again by it (decisions/Rules.ps1).",

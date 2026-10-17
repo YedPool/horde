@@ -288,14 +288,19 @@ function Format-HordeDecisionRouteNotice {
     $lines = New-Object System.Collections.ArrayList
     $part = $(if ("$($m.part)" -ne "") { " (part " + $m.part + ")" } else { "" })
     $mine = ($Target.seat -ceq "orc")
+    # A CHANGED ANSWER (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER) is routed like any answer of his,
+    # verified on the same terms; the notice says it is a change, with the OLD and the NEW words and the time,
+    # and gives the asking Orc the command that says what became of its work.
+    $changed = ($null -ne $m.PSObject.Properties["changedFrom"] -and [long]$m.changedFrom -ge 1)
+    $headWords = $(if ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })
     if ($Item.purpose -ceq "nudge") {
         [void]$lines.Add("UNCLOSED QUESTION " + $number + ": " + $Item.flag + ". This is the one reminder for this answer.")
     }
     elseif ($mine -or ($Target.resolved -and $Target.seat -ceq "warchief")) {
-        [void]$lines.Add("FOUNDER ANSWER to your question " + $number + $part + ", routed to you by Horde.")
+        [void]$lines.Add($headWords + " to your question " + $number + $part + ", routed to you by Horde.")
     }
     else {
-        [void]$lines.Add("FOUNDER ANSWER to question " + $number + $part + ", asked by '" + $q.askedBy + "', sent to you, the warchief: " + $Target.note + ".")
+        [void]$lines.Add($headWords + " to question " + $number + $part + ", asked by '" + $q.askedBy + "', sent to you, the warchief: " + $Target.note + ".")
     }
     $wording = Get-HordeDecisionRouteWording -Item $Item
     $reworded = ($wording.stated -and $wording.differs)
@@ -307,8 +312,23 @@ function Format-HordeDecisionRouteNotice {
     # HIS WORDS GO WITH EVERY NOTICE, THE REMINDER TOO (review of 2026-10-16, finding 2): the reminder's
     # target is found again when it is sent, and an Orc that never received the answer (it went to the
     # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
-    [void]$lines.Add("His words:")
+    if ($changed) {
+        [void]$lines.Add("He CHANGED his answer at " + $m.at + ": record " + $seq + " replaces record " + $m.changedFrom + ". If you already acted on the first one, it may need undoing.")
+        [void]$lines.Add("His OLD words (record " + $m.changedFrom + "):")
+        foreach ($l in @(([string]$m.changedFromText) -split "\r\n|\r|\n")) { [void]$lines.Add(("> " + $l)) }
+        [void]$lines.Add("His NEW words (record " + $seq + "):")
+    }
+    else { [void]$lines.Add("His words:") }
     foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }
+    if ($changed -and $mine) {
+        [void]$lines.Add("FIRST say what became of your work, with ONE of these (he is shown your reply in plain words, and sees 'waiting for Orc " + $Target.label + " to confirm' until you do). In PowerShell, with -HordeHome naming the founder's list:")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply not-acted") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had not acted yet and are using the new answer)")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply undoing") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had already acted on the first answer and are undoing it)")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply cannot-undo -Why 'why it cannot be undone, in one line'") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had already acted and cannot undo it; say why)")
+    }
     if ($mine) {
         [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
@@ -356,7 +376,8 @@ function Format-HordeDecisionRouteAnalystLine {
     $cut = { param([string]$Text) $first = @(([string]$Text) -split "\r\n|\r|\n")[0]; if ($first.Length -gt $script:HordeDecisionRouteAnalystChars) { $first = $first.Substring(0, $script:HordeDecisionRouteAnalystChars) + "..." }; return $first }
     $why = $(if ($Target.resolved) { "" } elseif ("$($Target.asker)" -ceq "orc") { " (askedBy '" + $Item.question.askedBy + "' is clear, but that Orc's seat was not found)" } else { " (askedBy '" + $Item.question.askedBy + "' could not be resolved)" })
     $to = $(if ($Target.seat -ceq "orc") { "Orc " + $Target.label } else { "the warchief" + $why })
-    return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder, " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
+    $changedNote = $(if ($null -ne $Item.answer.PSObject.Properties["changedFrom"] -and [long]$Item.answer.changedFrom -ge 1) { " CHANGED HIS ANSWER (was: " + (& $cut ([string]$Item.answer.changedFromText)) + "), now" } else { "" })
+    return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder," + $changedNote + " " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
 }
 
 function Invoke-HordeDecisionRoutePass {
