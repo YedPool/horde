@@ -65,7 +65,7 @@
 $script:HordeDecisionCommandVerbs = [ordered]@{
     add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "NeedsPasskey", "Id", "Json"); usage = "add -File <question.json> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-FollowsUp <question>] [-NeedsPasskey] [-Id <32 hex>] [-Json]" }
     update = @{ number = $true;  flags = @("File", "Id", "Json");                   usage = "update <number> -File <changes.json> [-Id <32 hex>] [-Json]" }
-    close  = @{ number = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json"); usage = "close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json]" }
+    close  = @{ number = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json", "HordeHome"); usage = "close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json] [-HordeHome <path>]" }
     # reopen IS KEPT AS A VERB SO THAT IT CAN SAY WHY IT IS REFUSED, and what to type instead
     # (decisions/Operations.ps1, A QUESTION IS NEVER PUT BACK): taken out, the command line would
     # answer only that there is no such verb.
@@ -73,7 +73,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # rank: correct the two words that stand beside a question, the ones add takes.
     rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Id", "Json");   usage = "rank <number> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-Id <32 hex>] [-Json]" }
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
-    show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
+    show   = @{ number = $true;  flags = @("Json", "HordeHome");                       usage = "show <number> [-Json] [-HordeHome <path>]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
     # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
     # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
@@ -88,7 +88,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # ack: THE ORC THAT ASKED acknowledges the founder's answer, and the question is closed with it as the
     # closer (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED). The one verb an Orc runs: which
     # Orc it is, is proven from the session it runs in (acks below), never taken from the command line.
-    ack    = @{ number = $true;  flags = @("Answer", "Id", "Json");                 usage = "ack <number> -Answer <record> [-Id <32 hex>] [-Json]"; acks = $true }
+    ack    = @{ number = $true;  flags = @("Answer", "Id", "Json", "HordeHome");       usage = "ack <number> -Answer <record> [-Id <32 hex>] [-Json] [-HordeHome <path>]"; acks = $true }
     # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
     # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
     route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
