@@ -40,8 +40,30 @@
 # by a label that only looks right. When even the warchief's seat cannot be had, nothing is sent and
 # nothing recorded, and the next pass tries again: the answer waits in the store.
 # ROUTING IS NOT AUTHORIZING. The notice is a copy of words already in the store, for the asker to act
-# on; it says that the list is the authority and that it authorizes nothing. It names no passkey, claims
-# no verified sender and touches no check of a question that needs a passkey.
+# on; it says that the list is the authority and that it authorizes nothing. It touches no check of a
+# question that needs a passkey.
+#
+# THE HOME IS NAMED IN THE COMMANDS (T-0263, live defect of 2026-10-17: Orcs B and D were routed answers 79,
+# 80 and 63, ran `horde decisions show 79` in their own default HORDE_HOME and were told the question
+# does not exist, so they refused to acknowledge). The store is <HORDE_HOME>\store\decisions, and the
+# relay runner's home is not an Orc's. So the notice carries the show and ack commands with the home of
+# the store that holds the question, set for that one command and put back after it
+# (Format-HordeDecisionRouteCommand): one line that pastes unchanged into PowerShell 5.1 and 7. WHY THIS
+# AND NOT A POINTER the router leaves in the default home: a pointer is state that outlives the thing it
+# points at and can send `show` to the wrong store without a word; the command in the notice is
+# stateless, names the store it came from, and is right for the notice it is in.
+#
+# THE FOUNDER, VERIFIED - OR ONLY HIS LABEL (T-0264, live defect of 2026-10-17: Orc D saw a routed answer
+# as "from OUTSIDE THE FLEET, sender calls itself F (not verified)"). The router is a service of the relay
+# runner, not a session: it posts through the wezfleet messenger as `mail post` (not `tell`), with
+# -FromSessionId only when from.sessionId is a session uuid (here it is the word horde-decisions-route, so
+# none) and -FromLabel F, and without -FromVerified because from.verified was never set. wezfleet shows a
+# mail with no verified sender and no session as from outside the fleet. The bell had the same defect and
+# fixed it on 2026-10-12 (decisions/Notify.ps1, THE FOUNDER, VERIFIED); routing now asks the same rule,
+# for the one answer a notice carries: from.verified = founder, passkey, key id ONLY when the answer's
+# record names the passkey the relay verified (route phone, evidence, signedBy) AND that passkey is
+# trusted now. An answer typed in the window or recorded from chat, a record from before records named
+# the passkey, a revoked key, a trust store that cannot say: the notice goes by label only, as before.
 #
 # HOW OLD AN ANSWER MAY BE and still be sent is the setting decisions.answers.routeWithinHours (48):
 # answers given before routing existed, or while nothing ran it, are not sent days late on its first
@@ -60,6 +82,9 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Device.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\TextUuid.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
+# The one rule for naming the founder as a verified sender (Get-HordeDecisionNotifyVerified) and the
+# trust store it asks: routing reuses the bell's rule and does not write a second one.
+. (Join-Path $PSScriptRoot "Notify.ps1")
 # Every messenger, at script level, as decisions/Notify.ps1 loads them; one already registered is not
 # loaded again, because a second registration is refused.
 foreach ($routeMessengerFile in @(Get-HordeMessengerFiles)) {
@@ -194,10 +219,34 @@ function Resolve-HordeDecisionRouteTarget {
     return [pscustomobject]@{ ok = $true; seat = "warchief"; label = ""; sessionId = "$($boss.value.sessionId)"; resolved = ($note -eq ""); note = $note; problem = ""; seatState = $seatState; seatWhy = $seatWhy; asker = $asker.seat }
 }
 
+function Format-HordeDecisionRouteCommand {
+    # One horde command as one line for PowerShell 5.1 and 7 alike (header, THE HOME IS NAMED IN THE
+    # COMMANDS): HORDE_HOME is set to the home of the store that holds the question for this command only
+    # and put back afterwards, in a try/finally. The home is single-quoted, a quote in it doubled; the
+    # variable is not named $home, which PowerShell owns. With no home the command is returned as it is.
+    param([Parameter(Mandatory = $true)][string]$Command, [string]$HordeHome = "")
+    if ($HordeHome -eq "") { return $Command }
+    $quoted = "'" + ($HordeHome -replace "'", "''") + "'"
+    return ('$wasHordeHome = $env:HORDE_HOME; try { $env:HORDE_HOME = ' + $quoted + '; ' + $Command + ' } finally { $env:HORDE_HOME = $wasHordeHome }')
+}
+
+function Get-HordeDecisionRouteStoreHome {
+    # The HORDE_HOME whose store is -StoreRoot (<home>\store\decisions), for the commands in a notice. A
+    # router given no store root reads the home's own, so the answer is -HordeHome; a root that is not of
+    # that shape cannot be named by a home, and -HordeHome is the nearest thing that can be said.
+    param([string]$StoreRoot = "", [Parameter(Mandatory = $true)][string]$HordeHome)
+    if ($StoreRoot -eq "") { return $HordeHome }
+    $full = [System.IO.Path]::GetFullPath($StoreRoot).TrimEnd('')
+    $store = Split-Path -Parent $full
+    if ($store -ne "" -and (Split-Path -Leaf $full) -ieq "decisions" -and (Split-Path -Leaf $store) -ieq "store") { return (Split-Path -Parent $store) }
+    return $HordeHome
+}
+
 function Format-HordeDecisionRouteNotice {
     # The notice's body: plain lines, the question's number and title, who answered and by what route,
     # his words whole, what to do, and that it authorizes nothing (header, ROUTING IS NOT AUTHORIZING).
-    param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)]$Target)
+    # -HordeHome is the home of the store that holds the question; the commands name it.
+    param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)]$Target, [string]$HordeHome = "")
     $q = $Item.question
     $m = $Item.answer
     $number = [int]$q.number
@@ -223,12 +272,15 @@ function Format-HordeDecisionRouteNotice {
     foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }
     if ($mine) {
         [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer:")
-        [void]$lines.Add("  horde decisions ack " + $number + " -Answer " + $seq)
+        [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
     }
     else {
-        [void]$lines.Add("When it is dealt with, close it: horde decisions close " + $number + " -Outcome <one line>")
+        [void]$lines.Add("When it is dealt with, close it:")
+        [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions close " + $number + " -Outcome <one line>") -HordeHome $HordeHome))
     }
-    [void]$lines.Add("The list is the authority (horde decisions show " + $number + "). This copy authorizes nothing: a question that needs a passkey is authorized only by its own check.")
+    [void]$lines.Add("The list is the authority. It is the founder's list, which is not necessarily your own HORDE_HOME, so read it with:")
+    [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions show " + $number) -HordeHome $HordeHome))
+    [void]$lines.Add("This copy authorizes nothing: a question that needs a passkey is authorized only by its own check.")
     return ($lines -join "`r`n")
 }
 
@@ -273,11 +325,12 @@ function Invoke-HordeDecisionRoutePass {
     # routed; pending }: outcome nothing, routed or pending; lines one plain line for each answer sent,
     # reminded or left pending; routed and pending how many. -Clock, -Seat and -Analyst are for a test
     # that hands in its own; -StoreRoot names a store that is not this home's own.
-    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "", [int]$SeatGraceSeconds = 300)
+    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "", [int]$SeatGraceSeconds = 300, [scriptblock]$Trust = $null)
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Seat) { $Seat = { param([string]$Role, [string]$Label) if ($Label -ceq "") { return (Get-HordeRoleSeat -Role $Role) }; return (Get-HordeLabelSeat -Label $Label -Role $Role) } }
     if ($null -eq $Analyst) { $Analyst = { param([string]$Text, [string]$Token, $Since) return (Send-HordeDecisionRouteAnalyst -Text $Text -Token $Token -HordeHome $HordeHome -Since $Since) } }
+    if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }
     if ($FromLabel -eq "") { $FromLabel = @($script:HordeDecisionRouteSettings.settings | Where-Object { $_.name -ceq "fromLabel" })[0].default }
     $result = { param([string]$Outcome, $Lines, [int]$Routed, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; lines = @($Lines); routed = $Routed; pending = $Pending } }
     $now = (& $Clock).ToUniversalTime()
@@ -323,7 +376,12 @@ function Invoke-HordeDecisionRoutePass {
         }
         if (-not $target.ok) { $pending++; [void]$lines.Add("pending: " + $what + " was not sent: " + $target.problem + ". It is tried again"); continue }
         $noticeId = Get-HordeDecisionRouteNoticeId -HordeHome $HordeHome -Purpose $item.purpose -Number $number -Answer $seq -SessionId $target.sessionId
-        $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $from; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
+        # The founder, verified, or only his label (header): asked as the notice is made, for this one answer.
+        $signer = @([pscustomobject]@{ question = $number; message = "" + $seq; at = "$($item.answer.at)"; route = "$($item.answer.route)"; evidence = "$($item.answer.evidence)"; signedBy = "$($item.answer.signedBy)" })
+        $who = Get-HordeDecisionNotifyVerified -Items $signer -Trust $Trust
+        $fromHere = [pscustomobject]@{ deviceId = $from.deviceId; sessionId = $from.sessionId; label = $from.label }
+        if ($null -ne $who.verified) { $fromHere | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }
+        $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $fromHere; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target -HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
             $pending++
@@ -347,6 +405,8 @@ function Invoke-HordeDecisionRoutePass {
         $to = $(if ($target.seat -ceq "orc") { "Orc " + $target.label } else { "the warchief" })
         $wake = Format-HordeMessengerWake -Answer $posted
         $how = "through messenger " + $messenger.name + " (" + $posted.value.stage + $(if ($wake -cne "") { "; " + $wake } else { "" }) + ")"
+        if ($null -ne $who.verified) { $how = $how + ", as the founder, verified by his passkey " + $who.verified.keyId }
+        elseif ($who.claimed) { $how = $how + ", by label only: " + $who.why }
         if ($wrote.state -ceq "known" -and @("done", "replayed") -ccontains "$($wrote.value.outcome)") {
             $routed++
             $verb = $(if ($item.purpose -ceq "nudge") { "reminded " + $to + " of question " + $number + " (answer record " + $seq + ", still open)" } else { "routed " + $what + " to " + $to })
@@ -391,7 +451,7 @@ function Invoke-HordeDecisionRouteTurn {
     # this turn holds the home's router mutex - another holder means outcome elsewhere, and nothing is
     # done. Returns { outcome; lines; againMs }: lines only those not said by the turn before, so a pending
     # line is said once and not every tick.
-    param([Parameter(Mandatory = $true)][hashtable]$Memory, [string]$HordeHome = "", [string]$StoreRoot = "", [switch]$Force, [scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null)
+    param([Parameter(Mandatory = $true)][hashtable]$Memory, [string]$HordeHome = "", [string]$StoreRoot = "", [switch]$Force, [scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [scriptblock]$Trust = $null)
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     $settings = Get-HordeDecisionRouteSettings -HordeHome $HordeHome
@@ -411,7 +471,7 @@ function Invoke-HordeDecisionRouteTurn {
     try { $mine = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mine = $true }
     if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; lines = @(); againMs = 0 } }
     $pass = $null
-    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" -SeatGraceSeconds ([int]$v.seatGraceSeconds) }
+    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" -SeatGraceSeconds ([int]$v.seatGraceSeconds) -Trust $Trust }
     finally { try { $mutex.ReleaseMutex() } catch { }; $mutex.Dispose() }
     # The mark AFTER the pass: the records this pass wrote itself are no change to read again for. A record
     # another writer made during the pass is read at the latest passSeconds later.

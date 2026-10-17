@@ -536,6 +536,105 @@ $sNeed = Say $qNeed "Yes, unnamed."
 Check (Throws { Invoke-HordeDecisionCommand -Verb "ack" -Given @{ Number = "$qNeed" } -Sender $asD -SeatProof $seatOk } "decisions ack needs -Answer <record>") "the command line refuses an ack that names no answer (finding 4)"
 Check ((Show $qNeed).state -ceq "open") "and writes nothing"
 
+Write-Host ""
+Write-Host "--- T-0263: the notice names the founder's home in the commands, and they run as pasted ---" -ForegroundColor Cyan
+$qHome = Add-Question "Orc C" "Should the home step go ahead?"
+$sHome = Say $qHome "Yes, from the home test."
+Advance 1
+$before = $script:posts.Count
+$p = Pass
+$bodyH = "$(@(PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qHome + ':*') })[0].body)"
+Check ($p.routed -ge 1 -and $script:posts.Count -ge ($before + 1) -and $null -ne (PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qHome + ':*') })) "CONTROL: the home test's answer is routed"
+$quotedHome = "'" + $hordeHome.Replace("'", "''") + "'"
+Check ($bodyH.Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions ack ' + $qHome + ' -Answer ' + $sHome + ' }')) "the ack line sets the store's home for that command"
+Check ($bodyH.Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions show ' + $qHome + ' }')) "the show line sets the store's home for that command"
+Check (-not ($bodyH -match '(?m)^\s*horde decisions (ack|show)')) "no bare horde decisions command is left in the notice, where a default home would be read"
+# THE LINES RUN AS PASTED, on whichever PowerShell runs this suite (the suite runs on 5.1 and on 7): parsed
+# by the language's own parser, then run with a stand-in horde that reports the home it was run in.
+$cmdLines = @($bodyH -split "\r?\n" | Where-Object { $_ -match '^\s+\$wasHordeHome' } | ForEach-Object { $_.Trim() })
+Check ($cmdLines.Count -eq 2) "the notice holds two commands to paste: ack and show"
+foreach ($cl in $cmdLines) {
+    $errs = $null; $toks = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($cl, [ref]$toks, [ref]$errs)
+    Check ($errs.Count -eq 0) ("a command line parses without errors: " + $cl.Substring(0, 60))
+}
+function horde { $script:ranIn = "$env:HORDE_HOME"; $script:ranArgs = ($args -join " ") }
+$env:HORDE_HOME = "C:\the\orcs\own\home"
+foreach ($cl in $cmdLines) {
+    $script:ranIn = ""; $script:ranArgs = ""
+    Invoke-Expression $cl
+    Check ($script:ranIn -ceq $hordeHome -and $script:ranArgs -like ("decisions * " + $qHome + "*") -and $env:HORDE_HOME -ceq "C:\the\orcs\own\home") ("run as pasted: horde sees the store's home, and the Orc's own HORDE_HOME is put back (" + $script:ranArgs + ")")
+}
+Remove-Item Env:\HORDE_HOME
+foreach ($cl in $cmdLines) { Invoke-Expression $cl; Check ($null -eq $env:HORDE_HOME) "and an unset HORDE_HOME is unset again afterwards" }
+$env:HORDE_HOME = $hordeHome
+$oddCmd = Format-HordeDecisionRouteCommand -Command "horde decisions show 7" -HordeHome "C:\O'Brien\home"
+Check ($oddCmd.Contains("'C:\O''Brien\home'")) "a quote in the home is doubled, so the line stays one string"
+Check ((Format-HordeDecisionRouteCommand -Command "horde decisions show 7") -ceq "horde decisions show 7") "with no home the command is as it was"
+Check ((Get-HordeDecisionRouteStoreHome -StoreRoot "C:\x\home\store\decisions" -HordeHome "C:\y") -ceq "C:\x\home" -and (Get-HordeDecisionRouteStoreHome -HordeHome "C:\y") -ceq "C:\y" -and (Get-HordeDecisionRouteStoreHome -StoreRoot "C:\somewhere\else" -HordeHome "C:\y") -ceq "C:\y") "the home named is the one the store root belongs to, else the router's home"
+# THE REMINDER and the warchief's notice name it too.
+$qNudgeH = Add-Question "Orc C" "Should the home reminder go ahead?"
+$sNudgeH = Say $qNudgeH "Yes, remind me."
+Advance 1
+[void](Pass)
+Advance 70
+[void](Pass)
+$nudgeH = @(PostsTo "orc-c-session" | Where-Object { "$($_.body)" -clike ("UNCLOSED QUESTION " + $qNudgeH + ": *") })
+Check ($nudgeH.Count -eq 1 -and "$($nudgeH[0].body)".Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions ack ' + $qNudgeH) -and "$($nudgeH[0].body)".Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions show ' + $qNudgeH)) "the one reminder carries the home in its ack and show lines"
+$qBossH = Add-Question "Mallory" "Should the unnamed home step go ahead?"
+$sBossH = Say $qBossH "Yes, boss."
+Advance 1
+[void](Pass)
+$bossH = "$(@(PostsTo "warchief-session-1" | Where-Object { $_.body -like ('*question ' + $qBossH + ':*') })[0].body)"
+Check ($bossH.Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions close ' + $qBossH + ' -Outcome') -and $bossH.Contains('$env:HORDE_HOME = ' + $quotedHome + '; horde decisions show ' + $qBossH)) "the warchief's notice names the home in close and show"
+
+Write-Host ""
+Write-Host "--- T-0264: a routed answer is from the verified founder when his passkey signed it and is trusted now ---" -ForegroundColor Cyan
+$keyV = "0123456789abcdef0123456789abcdef"
+$script:trustAsked = New-Object System.Collections.ArrayList
+$trustYes = { param([string]$KeyId) [void]$script:trustAsked.Add($KeyId); return (New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" })) }
+$trustNo = { param([string]$KeyId) [void]$script:trustAsked.Add($KeyId); return (New-HordeAbsent -Note "revoked") }
+$trustMachine = { param([string]$KeyId) return (New-HordeKnown -Value ([pscustomobject]@{ proof = "es256" })) }
+$trustBroken = { param([string]$KeyId) return (New-HordeUnknown -Reason "the trust store is damaged") }
+function PassTrust { param([scriptblock]$Trust) return (Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seat -Analyst $analyst -HordeHome $hordeHome -Trust $Trust) }
+function Last-Post { return $script:posts[$script:posts.Count - 1] }
+function Verified-Of { param($Message) $v = $Message.from.PSObject.Properties["verified"]; if ($null -eq $v) { return $null }; return $v.Value }
+$qV1 = Add-Question "Orc C" "Should the verified step go ahead?"
+$sV1 = Say $qV1 "Yes, signed." -Route "phone"
+Advance 1
+$p = PassTrust $trustYes
+$vv = Verified-Of (Last-Post)
+Check ($p.routed -eq 1 -and $null -ne $vv -and $vv.kind -ceq "founder" -and $vv.by -ceq "passkey" -and $vv.keyId -ceq $keyV -and (Last-Post).from.label -ceq "F" -and $script:trustAsked -ccontains $keyV) ("a phone answer by a trusted passkey: from the founder, verified by passkey, naming that key id, wearing label F (" + ($p.lines -join " | ") + ")")
+Check (@($p.lines | Where-Object { $_ -like "*as the founder, verified by his passkey $keyV*" }).Count -eq 1) "and the pass says so in its line"
+$qV2 = Add-Question "Orc C" "Should the typed step go ahead?"
+$sV2 = Say $qV2 "Yes, typed." -Route "window"
+Advance 1
+$script:trustAsked.Clear()
+$p = PassTrust $trustYes
+Check ($p.routed -eq 1 -and $null -eq (Verified-Of (Last-Post)) -and (Last-Post).from.label -ceq "F" -and $script:trustAsked.Count -eq 0) "an answer typed in the window: by label only, and the trust store is not asked"
+$qV3 = Add-Question "Orc C" "Should the chat-recorded step go ahead?"
+$sV3 = Say $qV3 "Yes, in chat." -Route "chat-recorded"
+Advance 1
+$p = PassTrust $trustYes
+Check ($p.routed -eq 1 -and $null -eq (Verified-Of (Last-Post))) "an answer the warchief recorded from chat: by label only"
+foreach ($case in @(@{ name = "revoked"; trust = $trustNo }, @{ name = "a machine's key"; trust = $trustMachine }, @{ name = "a trust store that cannot say"; trust = $trustBroken })) {
+    $qx = Add-Question "Orc C" ("Should the " + $case.name + " step go ahead?")
+    $sx = Say $qx "Yes, signed." -Route "phone"
+    Advance 1
+    $p = PassTrust $case.trust
+    Check ($p.routed -eq 1 -and $null -eq (Verified-Of (Last-Post)) -and (Last-Post).from.label -ceq "F" -and @($p.lines | Where-Object { $_ -like "*by label only: *" }).Count -eq 1) ("a passkey that is " + $case.name + ": by label only, the answer still goes, and the line says why")
+}
+$qV4 = Add-Question "Orc C" "Should the reminded verified step go ahead?"
+$sV4 = Say $qV4 "Yes, signed, and then left open." -Route "phone"
+Advance 1
+[void](PassTrust $trustYes)
+Advance 70
+[void](PassTrust $trustYes)
+$nudgeV = @($script:posts | Where-Object { "$($_.body)" -clike ("UNCLOSED QUESTION " + $qV4 + ": *") })
+Check ($nudgeV.Count -eq 1 -and $null -ne (Verified-Of $nudgeV[0]) -and (Verified-Of $nudgeV[0]).keyId -ceq $keyV) "the one reminder carries the same words, and the same verified founder"
+# NOTHING NEW IS CLAIMED: the sender is still the router's own name, and no session id is made up.
+Check ((Last-Post).from.sessionId -ceq "horde-decisions-route") "the sender is still the router, never a session it is not"
+
 }
 finally {
     $env:HORDE_HOME = $keepHome

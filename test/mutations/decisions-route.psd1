@@ -123,5 +123,27 @@
         @{ Name = "the-analyst-blames-the-asker-for-a-missing-seat"
            Find = 'elseif ("$($Target.asker)" -ceq "orc")'
            Replace = 'elseif ($false)' }
+        # --- the home is named in the commands, and the founder is named as verified (T-0263, T-0264)
+        @{ Name = "commands-do-not-name-the-home"
+           Find = 'if ($HordeHome -eq "") { return $Command }'
+           Replace = 'return $Command' }
+        @{ Name = "home-is-not-restored"
+           Find = ' } finally { $env:HORDE_HOME = $wasHordeHome }'
+           Replace = ' }' }
+        @{ Name = "home-quote-not-doubled"
+           Find = '$quoted = "''" + ($HordeHome -replace "''", "''''") + "''"'
+           Replace = '$quoted = "''" + $HordeHome + "''"' }
+        @{ Name = "the-store-root-home-is-ignored"
+           Find = 'if ($StoreRoot -eq "") { return $HordeHome }'
+           Replace = 'return $HordeHome' }
+        @{ Name = "verified-sender-never-set"
+           Find = 'if ($null -ne $who.verified) { $fromHere | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }'
+           Replace = '' }
+        @{ Name = "verified-sender-claimed-without-the-passkey-rule"
+           Find = '$who = Get-HordeDecisionNotifyVerified -Items $signer -Trust $Trust'
+           Replace = '$who = [pscustomobject]@{ verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = "0123456789abcdef0123456789abcdef" }; why = ""; claimed = $false }' }
+        @{ Name = "verified-sender-trust-answered-yes-without-asking-the-store"
+           Find = 'if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }'
+           Replace = 'if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" })) } }' }
     )
 }
