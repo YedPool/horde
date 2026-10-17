@@ -18,15 +18,15 @@
         @{ Name = "a-session-may-take-a-services-form"
            Find = 'if (Test-HordeNoticeServiceForm -Label $label) { return'
            Replace = 'if ($false) { return' }
-        @{ Name = "a-look-alike-letter-is-no-way-round"
-           Find = 'if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("?") }'
-           Replace = 'if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("x") }' }
-        @{ Name = "marks-and-punctuation-are-kept-in-the-skeleton"
-           Find = 'if ($isLetter) {'
-           Replace = 'if ($true) {' }
-        @{ Name = "a-word-of-another-script-is-refused"
-           Find = 'return ($head -cmatch ''\A[s?][e?][r?][v?][i?][c?][e?]\z'' -and $head -cmatch ''[a-z]'')'
-           Replace = 'return ($head -cmatch ''\A[s?][e?][r?][v?][i?][c?][e?]\z'')' }
+        @{ Name = "a-non-ascii-label-is-shown-as-itself"
+           Find = 'if ($Label -cmatch ''[^\x20-\x7E]'') { return "a session" }'
+           Replace = 'if ($false) { return "a session" }' }
+        @{ Name = "digits-do-not-stand-for-letters"
+           Find = '$t = $t.Replace(''0'', ''o'').Replace(''1'', ''i'').Replace(''3'', ''e'').Replace(''5'', ''s'')'
+           Replace = '' }
+        @{ Name = "a-mark-between-the-letters-hides-the-word"
+           Find = '$t = [regex]::Replace($t, ''[^a-z]'', '''')'
+           Replace = '$t = [regex]::Replace($t, ''[^a-z -]'', '''')' }
         @{ Name = "an-invisible-character-is-part-of-the-label"
            Find = '$label = (Remove-HordeNoticeInvisible -Text $label).Trim()'
            Replace = '$label = $label.Trim()' }

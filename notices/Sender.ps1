@@ -63,41 +63,27 @@ function Test-HordeNoticeAncestor {
     return [pscustomobject]@{ ok = $false; reason = ("the session's process is not within " + $script:HordeNoticeAncestorSteps + " processes above this one") }
 }
 
-function Get-HordeNoticeLetterSkeleton {
-    # The LETTERS of -Label, as a reader would see them, and nothing else: NFKC first (full-width and math forms become plain
-    # ones), then by code point (a surrogate pair is one character) every character that is not a letter is dropped - format
-    # characters, marks, variation selectors, tag characters, punctuation, spaces and digits - an ASCII letter is lower-cased, and
-    # any other letter becomes "?" (it may be a look-alike of one). No list of colons or invisible characters to keep up.
-    param([AllowEmptyString()][string]$Label)
-    $t = $Label
-    try { $t = $t.Normalize([System.Text.NormalizationForm]::FormKC) } catch { }
-    $sb = New-Object System.Text.StringBuilder
-    $i = 0
-    while ($i -lt $t.Length) {
-        $step = $(if ([char]::IsHighSurrogate($t[$i]) -and ($i + 1) -lt $t.Length -and [char]::IsLowSurrogate($t[$i + 1])) { 2 } else { 1 })
-        $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($t, $i)
-        $isLetter = @([System.Globalization.UnicodeCategory]::UppercaseLetter, [System.Globalization.UnicodeCategory]::LowercaseLetter, [System.Globalization.UnicodeCategory]::TitlecaseLetter,
-            [System.Globalization.UnicodeCategory]::ModifierLetter, [System.Globalization.UnicodeCategory]::OtherLetter) -contains $cat
-        if ($isLetter) {
-            $c = $t[$i]
-            if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("?") }
-        }
-        $i += $step
-    }
-    return $sb.ToString()
-}
-
 function Test-HordeNoticeServiceForm {
-    # Does -Label read as a service's ("service: ...", "services: ...", "service - ...", "service x")? Only a registered service
-    # is shown so. It does if its LETTER SKELETON (above) starts with "service", where a look-alike letter counts for any one.
-    # A label with no ASCII letter among those seven is a word of another script, not a disguised "service", and is left alone.
+    # Does -Label read as a service's? Labels that START WITH "service" are reserved for registered services, whatever follows
+    # ("service: x", "services", "service - x", "s-e-r-v-i-c-e", "5ervice", "serv1ce"). ASCII only - a label that is not printable
+    # ASCII is never shown as itself (Get-HordeNoticeShownLabel), so this has nothing else to handle. The label is lower-cased, the
+    # digits that stand for letters are mapped (0 o, 1 i, 3 e, 5 s), and everything that is not a letter - leading marks and anything
+    # between the letters - is dropped, so it is a wildcard.
     param([AllowEmptyString()][string]$Label)
-    $sk = Get-HordeNoticeLetterSkeleton -Label $Label
-    if ($sk.Length -lt 7) { return $false }
-    $head = $sk.Substring(0, 7)
-    return ($head -cmatch '\A[s?][e?][r?][v?][i?][c?][e?]\z' -and $head -cmatch '[a-z]')
+    $t = $Label.ToLowerInvariant()
+    $t = $t.Replace('0', 'o').Replace('1', 'i').Replace('3', 'e').Replace('5', 's')
+    $t = [regex]::Replace($t, '[^a-z]', '')
+    return $t.StartsWith("service", [System.StringComparison]::Ordinal)
 }
 
+function Get-HordeNoticeShownLabel {
+    # The label as the founder may see it: only if it is printable ASCII (0x20-0x7E) - every real fleet label is. Anything else (a
+    # look-alike script, a filler, another alphabet) is shown as the neutral "a session": the proof of WHICH session it is stays,
+    # only its text is not displayed (PR 332, third review: no end to Unicode look-alikes, so none is shown).
+    param([AllowEmptyString()][string]$Label)
+    if ($Label -cmatch '[^\x20-\x7E]') { return "a session" }
+    return $Label
+}
 function Remove-HordeNoticeInvisible {
     # -Text without what the founder cannot see: control and format characters, combining marks and variation selectors - by
     # code point, so the supplementary tag characters go too.
@@ -155,7 +141,8 @@ function Resolve-HordeNoticeSender {
     if ($label -ceq "") { return (& $no ("no notice was sent: session " + $sid + " has no label in the fleet's registry and no name of its own, so the founder could not tell who it is from. Give the session a name first.")) }
     # A SERVICE'S LABEL IS NOT A SESSION'S TO TAKE (notices/Services.ps1): a session labelled "service: x"
     # would look to the founder like the service x.
-    if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " is labelled like a service ('service: ...'), a form only a registered service may be shown as")) }
+    $label = Get-HordeNoticeShownLabel -Label $label
+    if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " has a label that starts with ''service'': labels starting with ''service'' are reserved for registered services, which are shown as ''service: <name>''")) }
     if ($label.Length -gt 40) { $label = $label.Substring(0, 40).TrimEnd() }
     # labelSource: "registry" (a fleet label) or "agent-name" (the agent's own name for the session). A registrar must have the first (notices/Services.ps1).
     return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $sid; label = $label; labelSource = $labelSource }

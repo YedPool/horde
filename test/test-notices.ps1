@@ -93,28 +93,37 @@ try {
     Check (-not $who.ok -and $who.label -ceq "" -and $who.reason -like "*does not run inside session*") ("A CALLER CLAIMING ANOTHER RUNNING SESSION is refused: that session's process is not above it (" + $who.reason + ")")
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 2) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 500
     Check ($who.ok -and $who.label -ceq "the other one" -and $who.labelSource -ceq "agent-name") ("CONTROL: the same claim from under session 2's own process is proven, named by the agent's own name with no label (" + $who.reason + ")")
-    # A SESSION CANNOT TAKE A SERVICE'S FORM (PR 332 review, S2): a registry label that reads "service: x" - however it is
-    # dressed - is refused, so the phone's "service: <name>" is a registered service's alone.
+    # A SESSION CANNOT TAKE A SERVICE'S FORM, AND NO NON-ASCII LABEL IS EVER SHOWN (PR 332 reviews). A label is shown only if it is
+    # printable ASCII after invisibles are stripped; any other is shown as "a session". The ASCII ones that start with "service"
+    # (however dressed) are refused.
     $zw = [string][char]0x200B
-    $hostile = @("service: postmerge-net", ($zw + "service: x"), ([string][char]0x2060 + "service: x"), ("s" + [char]0x0435 + "rvice: x"), ("service" + [char]0x02D0 + " x"), ("service" + [char]0x2236 + " x"),
-        ("service" + [char]0xA789 + " x"), "services: x", ("service" + [char]0xFF1A + "x"), ("ser" + $zw + "vice: x"), ([string][char]0xFF53 + "ervice: x"), "  SERVICE : y",
-        [string]::Concat("ser", [char]0x034F, "vice: x"), [string]::Concat("service", [char]0xFE0F, ": x"), [string]::Concat("ser", [char]::ConvertFromUtf32(0xE0020), "vice: x"), [string]::Concat("service", [char]::ConvertFromUtf32(0xE0100), ": x"),
-        [string]::Concat("service", [char]0xA4FD, " x"), "service; x", "service - x", "service x", "service", [string]::Concat("service", [char]0x205A, " x"))
-    foreach ($lbl in $hostile) {
-        Check (Test-HordeNoticeServiceForm -Label $lbl) ("the fold alone reads as a service: " + $lbl.Length + " characters, first U+" + ([int][char]$lbl[0]).ToString("X4") + ", whole " + (($lbl.ToCharArray() | ForEach-Object { ([int]$_).ToString("X4") }) -join " "))
+    $asciiHostile = @("service: postmerge-net", "services: x", "  SERVICE : y", "service; x", "service - x", "service x", "service", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", "s e r v i c e", "[service] x",
+        ($zw + "service: x"), ("ser" + $zw + "vice: x"), [string]::Concat("ser", [char]0x034F, "vice: x"), [string]::Concat("service", [char]0xFE0F, ": x"), [string]::Concat("ser", [char]::ConvertFromUtf32(0xE0020), "vice: x"))
+    foreach ($lbl in $asciiHostile) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
-        Check (-not $who.ok -and $who.reason -like "*labelled like a service*") ("A SESSION LABELLED LIKE A SERVICE IS REFUSED: U+" + (([int][char]$lbl[0]).ToString("X4")) + " ... '" + ($lbl.Length) + "' characters (" + $who.reason + ")")
+        Check (-not $who.ok -and $who.reason -like "*reserved for registered services*") ("A SESSION LABEL STARTING WITH SERVICE IS REFUSED: " + (($lbl.ToCharArray() | ForEach-Object { ([int]$_).ToString("X2") }) -join " "))
+    }
+    Check ((Test-HordeNoticeServiceForm -Label "5ervice") -and (Test-HordeNoticeServiceForm -Label "serv1ce") -and (Test-HordeNoticeServiceForm -Label "s-e-r-v-i-c-e") -and -not (Test-HordeNoticeServiceForm -Label "the service desk")) "the fold alone: the digit map and the wildcards, and a label that merely contains the word"
+    $lookalikes = @(
+        [string]::Concat([char]0x0455, [char]0x0435, [char]0x0433, [char]0x0475, [char]0x0456, [char]0x0441, [char]0x0435, ": x"),
+        [string]::Concat([char]0xA731, [char]0x1D07, [char]0x0280, [char]0x1D20, [char]0x026A, [char]0x1D04, [char]0x1D07, ": x"),
+        [string]::Concat([char]0x13DA, [char]0x13AC, [char]0x13A1, [char]0x13D9, [char]0x13A5, [char]0x13DF, [char]0x13AC, ": x"),
+        [string]::Concat("service", [char]0x3164, ": x"), [string]::Concat("s", [char]0x212E, "rvice: x"), [string]::Concat("ser", [char]0x0475, "ice: x"),
+        [string]::Concat([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD, ": x"))
+    foreach ($lbl in $lookalikes) {
+        Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
+        $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
+        Check ($who.ok -and $who.label -ceq "a session" -and $who.sessionId -ceq (Sid 1)) ("A NON-ASCII LABEL IS SHOWN AS a session, NEVER AS ITS OWN TEXT: U+" + ([int][char]$lbl[0]).ToString("X4") + " (" + $who.label + ")")
     }
     Write-Registry -Root $reg -SessionId (Sid 1) -Label ($zw + "E9")
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
     Check ($who.ok -and $who.label -ceq "E9" -and $who.labelSource -ceq "registry") "CONTROL: an invisible format character is not part of the label that is shown, and its source is the registry"
-    foreach ($lbl in @("the service desk", "Thrall", "Orc E3", [string]::Concat([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD, [char]0x05E9, [char]0x05DC, [char]0x05D5, ": x"))) {
+    foreach ($lbl in @("Orc E3", "C12", "the service desk", "Thrall", "M")) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
-        Check ($who.ok -and $who.label -ceq $lbl) ("CONTROL: the ordinary label (" + $lbl.Length + " characters, starting U+" + ([int][char]$lbl[0]).ToString("X4") + ") is still proven")
-    }
-    Write-Registry -Root $reg -SessionId (Sid 1) -Label "E"
+        Check ($who.ok -and $who.label -ceq $lbl) ("CONTROL: the ordinary label '" + $lbl + "' is still proven and shown as written")
+    }    Write-Registry -Root $reg -SessionId (Sid 1) -Label "E"
     # 300's parent pid 200 now belongs to a process started AFTER 300: a stranger, not its parent.
     $reused = Table @(@(100, 1, $t0), @(200, 100, $t0.AddSeconds(9)), @(300, 200, $t0.AddSeconds(2)))
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $reused -RegistryRoot $reg -Self 300

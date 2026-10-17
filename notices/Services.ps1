@@ -201,6 +201,11 @@ function Test-HordeSecretFileOpen {
     $mine = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $allowed = @($mine, "S-1-5-18")
     try {
+        # THE OWNER can re-permission the file whatever its entries say: it must be the current user (or, for an elevated process,
+        # the Administrators group, which owns what an elevated process creates).
+        $owner = (Get-HordeFileAcl -Path $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        $admin = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($owner -cne $mine -and -not ($admin -and $owner -ceq "S-1-5-32-544")) { return ("the secret file is owned by " + $owner + ", not by the current user; its owner could give himself access") }
         foreach ($r in @((Get-HordeFileAcl -Path $Path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
             if ($r.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
             $sid = $r.IdentityReference.Value
@@ -223,7 +228,7 @@ function Register-HordeNoticeService {
     # Register -Name for a PROVEN -Registrar (Resolve-HordeNoticeSender's answer), writing its new secret to the new file
     # -SecretFile. { ok; reason }. Nothing is kept unless the secret file was made and locked.
     param([Parameter(Mandatory = $true)]$Registrar, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SecretFile,
-        [string]$HordeHome = "", [string]$RegistryRoot = (Get-HordeWezfleetRoot), $Now = $null, [string[]]$FleetLabels = $null, [string]$RepoRoot = "")
+        [string]$HordeHome = "", [string]$RegistryRoot = (Get-HordeWezfleetRoot), $Now = $null, [string[]]$FleetLabels = $null, [string]$TestSeamRepoRoot = "")
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
     $st = Get-HordeNoticeStore -HordeHome $HordeHome
@@ -236,9 +241,9 @@ function Register-HordeNoticeService {
     if ($SecretFile.Trim() -ceq "" -or -not [System.IO.Path]::IsPathRooted($SecretFile)) { return (& $no "no service was registered: -SecretFile must be an absolute path of a file that does not exist yet") }
     $SecretFile = [System.IO.Path]::GetFullPath($SecretFile)
     # N8: never inside this checkout, where a commit could carry it away.
-    # -RepoRoot: a test seam, so a suite points the guard at a throwaway folder and never at the real checkout.
-    if ($RepoRoot -ceq "") { $RepoRoot = Split-Path -Parent $PSScriptRoot }
-    $repo = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([char]'\') + '\'
+    # -TestSeamRepoRoot: a TEST SEAM (the command line never passes it), so a suite points the guard at a throwaway folder and never at the real checkout.
+    if ($TestSeamRepoRoot -ceq "") { $TestSeamRepoRoot = Split-Path -Parent $PSScriptRoot }
+    $repo = [System.IO.Path]::GetFullPath($TestSeamRepoRoot).TrimEnd([char]'\') + '\'
     if ($SecretFile.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { return (& $no "no service was registered: -SecretFile is inside Horde's own folder; put it somewhere that is not in a repository") }
     try {
         return (Use-HordeNoticeLock -Store $st.store -Body {

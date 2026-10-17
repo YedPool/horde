@@ -33,6 +33,9 @@
         @{ Name = "the-secret-file-is-created-with-inherited-access"
            Find = '    $sec = New-HordeSecretFileSecurity'
            Replace = '    $sec = $null' }
+        @{ Name = "a-file-of-another-owner-is-accepted"
+           Find = 'if ($owner -cne $mine -and -not ($admin -and $owner -ceq "S-1-5-32-544")) {'
+           Replace = 'if ($false) {' }
         @{ Name = "writing-the-permissions-is-allowed"
            Find = '([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or'
            Replace = '' }
