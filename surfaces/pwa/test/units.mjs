@@ -879,7 +879,8 @@ const PH = await load("app/photo.js");
   await phone.refresh(a.paired.id);
   ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
   check(ph.length === 1 && ph[0].words === P.PHOTO_WORDS.accepted.delivered && ph[0].file === "photo-20261014-120000-0a1b2c3d.jpg", "the newest receipt's code is shown in the phone's own words, with the machine's file name; a code it does not know is not", JSON.stringify(ph));
-  check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), "work", m.keyId).value.file === "", "a file name that is not a plain name is not shown");
+  check(P.readPhotoReceipt(prBody("refused", "your-account-closed"), "work", m.keyId).ok === false && P.readPhotoReceipt(prBody("held", "receiving"), "work", m.keyId).ok === false, "a receipt whose code this phone does not know, or a known code under another status, is not read at all - the newest receipt winning is not what refuses it");
+  check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), "work", m.keyId).value.file ==="", "a file name that is not a plain name is not shown");
   // THE HOUR, in the timeline alone: sending, waiting, not delivered; any word from the PC outranks the clock.
   const ph0 = { photoId: "a".repeat(32), at: 1000, session: "s", expiresAt: 1000 + P.PHOTO_WINDOW_MS };
   const one = (p, now, rs = []) => P.chatTimeline({ photos: [p], photoReceipts: rs }, now).filter((x) => x.kind === "photo")[0];
