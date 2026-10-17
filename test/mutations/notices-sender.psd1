@@ -19,14 +19,17 @@
            Find = 'if (Test-HordeNoticeServiceForm -Label $label) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "a-look-alike-letter-is-no-way-round"
-           Find = 'elseif ([char]::IsLetter($c)) { [void]$sb.Append("?") }'
-           Replace = 'elseif ([char]::IsLetter($c)) { [void]$sb.Append("x") }' }
-        @{ Name = "a-colon-look-alike-is-no-colon"
-           Find = 'if ($colons -contains $n) { [void]$sb.Append(":") }'
-           Replace = 'if ($n -eq 58) { [void]$sb.Append(":") }' }
+           Find = 'if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("?") }'
+           Replace = 'if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("x") }' }
+        @{ Name = "marks-and-punctuation-are-kept-in-the-skeleton"
+           Find = 'if ($isLetter) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "a-word-of-another-script-is-refused"
+           Find = 'return ($head -cmatch ''\A[s?][e?][r?][v?][i?][c?][e?]\z'' -and $head -cmatch ''[a-z]'')'
+           Replace = 'return ($head -cmatch ''\A[s?][e?][r?][v?][i?][c?][e?]\z'')' }
         @{ Name = "an-invisible-character-is-part-of-the-label"
-           Find = '$label = [regex]::Replace([regex]::Replace($label, ''\p{Cf}'', ''''), ''\p{Cc}'', '' '').Trim()'
-           Replace = '$label = [regex]::Replace($label, ''\p{Cc}'', '' '')' }
+           Find = '$label = (Remove-HordeNoticeInvisible -Text $label).Trim()'
+           Replace = '$label = $label.Trim()' }
         @{ Name = "the-registry-label-is-ignored"
            Find = 'if ($l.state -ceq "known" -and $l.value -is [string]) { $label = $l.value.Trim(); if ($label -cne "") { $labelSource = "registry" } }'
            Replace = 'if ($false) { $label = $l.value.Trim() }' }

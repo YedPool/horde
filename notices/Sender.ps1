@@ -63,25 +63,56 @@ function Test-HordeNoticeAncestor {
     return [pscustomobject]@{ ok = $false; reason = ("the session's process is not within " + $script:HordeNoticeAncestorSteps + " processes above this one") }
 }
 
-function Test-HordeNoticeServiceForm {
-    # Does -Label read as a service's ("service: ...", or "services: ...")? Only a registered service is shown so.
-    # THE LABEL IS FOLDED FIRST, because the phone shows it as written: format characters (zero-width spaces,
-    # word joiners) are dropped, NFKC is applied (full-width forms become plain ones), a colon lookalike counts as a colon,
-    # and a non-ASCII LETTER counts as a wildcard in the word itself, so a Cyrillic look-alike of one letter is no way round.
+function Get-HordeNoticeLetterSkeleton {
+    # The LETTERS of -Label, as a reader would see them, and nothing else: NFKC first (full-width and math forms become plain
+    # ones), then by code point (a surrogate pair is one character) every character that is not a letter is dropped - format
+    # characters, marks, variation selectors, tag characters, punctuation, spaces and digits - an ASCII letter is lower-cased, and
+    # any other letter becomes "?" (it may be a look-alike of one). No list of colons or invisible characters to keep up.
     param([AllowEmptyString()][string]$Label)
-    $t = [regex]::Replace($Label, '\p{Cf}', '')
+    $t = $Label
     try { $t = $t.Normalize([System.Text.NormalizationForm]::FormKC) } catch { }
-    $t = [regex]::Replace($t, '\p{Cf}', '')
-    $colons = @(0x003A, 0x02D0, 0x0589, 0x05C3, 0x1361, 0x16EC, 0x2236, 0xA789, 0xFE13, 0xFE30, 0xFE55, 0xFF1A, 0x2D0)
     $sb = New-Object System.Text.StringBuilder
-    foreach ($c in $t.ToCharArray()) {
-        $n = [int]$c
-        if ($colons -contains $n) { [void]$sb.Append(":") }
-        elseif ($n -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) }
-        elseif ([char]::IsLetter($c)) { [void]$sb.Append("?") }
-        else { [void]$sb.Append("~") }
+    $i = 0
+    while ($i -lt $t.Length) {
+        $step = $(if ([char]::IsHighSurrogate($t[$i]) -and ($i + 1) -lt $t.Length -and [char]::IsLowSurrogate($t[$i + 1])) { 2 } else { 1 })
+        $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($t, $i)
+        $isLetter = @([System.Globalization.UnicodeCategory]::UppercaseLetter, [System.Globalization.UnicodeCategory]::LowercaseLetter, [System.Globalization.UnicodeCategory]::TitlecaseLetter,
+            [System.Globalization.UnicodeCategory]::ModifierLetter, [System.Globalization.UnicodeCategory]::OtherLetter) -contains $cat
+        if ($isLetter) {
+            $c = $t[$i]
+            if ($step -eq 1 -and [int]$c -lt 128) { [void]$sb.Append([char]::ToLowerInvariant($c)) } else { [void]$sb.Append("?") }
+        }
+        $i += $step
     }
-    return ($sb.ToString() -cmatch '\A\s*[s?][e?][r?][v?][i?][c?][e?][s?]?\s*:')
+    return $sb.ToString()
+}
+
+function Test-HordeNoticeServiceForm {
+    # Does -Label read as a service's ("service: ...", "services: ...", "service - ...", "service x")? Only a registered service
+    # is shown so. It does if its LETTER SKELETON (above) starts with "service", where a look-alike letter counts for any one.
+    # A label with no ASCII letter among those seven is a word of another script, not a disguised "service", and is left alone.
+    param([AllowEmptyString()][string]$Label)
+    $sk = Get-HordeNoticeLetterSkeleton -Label $Label
+    if ($sk.Length -lt 7) { return $false }
+    $head = $sk.Substring(0, 7)
+    return ($head -cmatch '\A[s?][e?][r?][v?][i?][c?][e?]\z' -and $head -cmatch '[a-z]')
+}
+
+function Remove-HordeNoticeInvisible {
+    # -Text without what the founder cannot see: control and format characters, combining marks and variation selectors - by
+    # code point, so the supplementary tag characters go too.
+    param([AllowEmptyString()][string]$Text)
+    $bad = @([System.Globalization.UnicodeCategory]::Control, [System.Globalization.UnicodeCategory]::Format, [System.Globalization.UnicodeCategory]::NonSpacingMark, [System.Globalization.UnicodeCategory]::EnclosingMark)
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $step = $(if ([char]::IsHighSurrogate($Text[$i]) -and ($i + 1) -lt $Text.Length -and [char]::IsLowSurrogate($Text[$i + 1])) { 2 } else { 1 })
+        $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($Text, $i)
+        if ($cat -eq [System.Globalization.UnicodeCategory]::Control) { [void]$sb.Append(" ") }
+        elseif ($bad -notcontains $cat) { [void]$sb.Append($Text.Substring($i, $step)) }
+        $i += $step
+    }
+    return $sb.ToString()
 }
 function Resolve-HordeNoticeSender {
     # The proven sender of a notice: { ok; reason; sessionId; label }. ok $false with the reason in words
@@ -120,7 +151,7 @@ function Resolve-HordeNoticeSender {
         if ($n.state -ceq "known" -and $n.value -is [string]) { $label = $n.value.Trim(); $labelSource = "agent-name" }
     }
     # Format characters are not part of any name the founder reads (they are invisible): dropped from what is shown, too.
-    $label = [regex]::Replace([regex]::Replace($label, '\p{Cf}', ''), '\p{Cc}', ' ').Trim()
+    $label = (Remove-HordeNoticeInvisible -Text $label).Trim()
     if ($label -ceq "") { return (& $no ("no notice was sent: session " + $sid + " has no label in the fleet's registry and no name of its own, so the founder could not tell who it is from. Give the session a name first.")) }
     # A SERVICE'S LABEL IS NOT A SESSION'S TO TAKE (notices/Services.ps1): a session labelled "service: x"
     # would look to the founder like the service x.

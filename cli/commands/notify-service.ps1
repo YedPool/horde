@@ -2,7 +2,7 @@ $HordeCommand = @{
     name    = "notify-service"
     group   = "relay"
     usage   = "notify-service register -Name <name> -SecretFile <new file> | revoke -Name <name> | list"
-    summary = "register, revoke or list the notice services: unattended programs (a scheduled task) that send the founder notices as ""service: <name>"" with `notify -Service`. register and revoke are run by a proven session whose label is in the setting serviceRegistrars (the founder's side, default M) - a service can never register itself. register makes the service's secret and writes it to a NEW file locked to this Windows user; the machine keeps only a hash of it. A name that collides with M, the Thrall, the founder, an Orc's label or any fleet label is refused. list shows names, never secrets"
+    summary = "register, revoke or list the notice services: unattended programs (a scheduled task) that send the founder notices as ""service: <name>"" with `notify -Service`. register and revoke are run by a proven session whose label is in the setting serviceRegistrars (the founder's side, default M) - a service can never register itself. register makes the service's secret and writes it to a NEW file locked to this Windows user; the machine keeps only a hash of it. A name that collides with M, the Thrall, the founder, an Orc's label or any fleet label is refused. list shows names, never secrets. The secret file is readable by the user who registered it and SYSTEM only: a service run as another Windows account is refused (a message saying the file can be read by someone else is about the file, not an attack)"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("register", "revoke", "list")][string]$Verb,

@@ -30,9 +30,12 @@
         @{ Name = "an-open-secret-file-is-accepted"
            Find = 'if ($open -cne "") { return (& $no ("no notice was sent: " + $open)) }'
            Replace = '' }
-        @{ Name = "the-secret-file-gets-no-access-of-its-own"
+        @{ Name = "the-secret-file-is-created-with-inherited-access"
            Find = '    $sec = New-HordeSecretFileSecurity'
-           Replace = '    $sec = New-Object System.Security.AccessControl.FileSecurity' }
+           Replace = '    $sec = $null' }
+        @{ Name = "writing-the-permissions-is-allowed"
+           Find = '([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or'
+           Replace = '' }
         @{ Name = "a-name-already-registered-is-registered-again"
            Find = 'if ($cur.value.ContainsKey($Name)) {'
            Replace = 'if ($false) {' }

@@ -88,9 +88,15 @@ try {
     Check (-not (Register $H "stray-service" (Secret-Path "x") $byName).ok -and -not (Register $H "stray-service" (Secret-Path "x") $noSrc).ok) "A SESSION NAMED M BY ITSELF (NO FLEET LABEL) CANNOT REGISTER"
     Check (-not (Remove-HordeNoticeService -Registrar $byName -Name "postmerge-net" -HordeHome $H).ok -and (Read-HordeNoticeServices -Store (Join-Path $H "notices")).value.ContainsKey("postmerge-net")) "...nor revoke"
     # N8: not inside the repository.
-    $inRepo = Join-Path $root "scratch-secret\net.txt"
-    $rr = Register $H "repo-service" $inRepo
-    Check (-not $rr.ok -and $rr.reason -like "*inside Horde's own folder*" -and -not (Test-Path (Split-Path $inRepo))) "a secret file inside the checkout is refused, and nothing is made there"
+    # A THROWAWAY "checkout" under the suite's own work folder, never the real one: if the guard fails, the secret lands
+    # where the final clean-up removes it, and no later run is poisoned.
+    $fakeRepo = Join-Path $work "fake-checkout"
+    $inRepo = Join-Path $fakeRepo "keep\net.txt"
+    $rr = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile $inRepo -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -RepoRoot $fakeRepo
+    Check (-not $rr.ok -and $rr.reason -like "*inside Horde's own folder*" -and -not (Test-Path $fakeRepo)) "a secret file inside the checkout is refused, and nothing is made there"
+    $rr2 = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile (Join-Path $work "outside\net.txt") -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -RepoRoot $fakeRepo
+    Check ($rr2.ok) "CONTROL: a secret file beside the checkout, not in it, is accepted"
+    $null = Remove-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -HordeHome $H
     # M1: a name that trips the secret finder would be shown as a bare word.
     foreach ($sk in @("sk-abcdefghijklmnopqrstu", "xoxb-1234567890", "glpat-abcdefghijklmnop")) {
         Check ((Find-HordeSecretKind -Text ("service: " + $sk)) -cne "") ("CONTROL: the finder flags service: " + $sk)
@@ -145,6 +151,13 @@ try {
     $o = Send $H "postmerge-net" $open
     Check ($o.outcome -ceq "refused" -and $o.reason -like "*can be read by*") ("a copy of the right secret that Users can read is refused (" + $o.reason + ")")
     # S4: only this user and SYSTEM. Guests, NETWORK and Administrators are refused too (the old list named broad groups only).
+    foreach ($right in @("WDAC", "WO")) {
+        $cp = Secret-Path "wdac"; New-Item -ItemType Directory -Path (Split-Path $cp) -Force | Out-Null
+        New-HordeLockedSecretFile -Path $cp -Text $secret
+        $null = & icacls.exe $cp /grant ("*S-1-5-32-545:(" + $right + ")")
+        $gr = Send $H "postmerge-net" $cp
+        Check ($gr.outcome -ceq "refused" -and $gr.reason -like "*can be read by S-1-5-32-545*") ("a copy where Users may " + $right + " (and so grant themselves read) is refused (" + $gr.reason + ")")
+    }
     foreach ($grant in @("S-1-5-32-546", "S-1-5-2", "S-1-5-32-544")) {
         $cp = Secret-Path "grant"; New-Item -ItemType Directory -Path (Split-Path $cp) -Force | Out-Null
         New-HordeLockedSecretFile -Path $cp -Text $secret
@@ -197,10 +210,12 @@ try {
 
     Write-Host ""
     Write-Host "--- 4. the session rule: no session takes a service's form, and the registry's labels are really read ---" -ForegroundColor Cyan
-    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", ("service" + [char]0xFF1A + "z"), "services: x", ([string][char]0x200B + "service: x"), ("s" + [char]0x0435 + "rvice: x"), ("service" + [char]0x2236 + " x"))) {
+    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", ("service" + [char]0xFF1A + "z"), "services: x", ([string][char]0x200B + "service: x"), ("s" + [char]0x0435 + "rvice: x"), ("service" + [char]0x2236 + " x"),
+        [string]::Concat("ser", [char]0x034F, "vice: x"), [string]::Concat("service", [char]0xFE0F, ": x"), [string]::Concat("ser", [char]::ConvertFromUtf32(0xE0020), "vice: x"), [string]::Concat("service", [char]::ConvertFromUtf32(0xE0100), ": x"),
+        [string]::Concat("service", [char]0xA4FD, " x"), "service; x", "service - x", "service x", "service", [string]::Concat("service", [char]0x205A, " x"))) {
         Check (Test-HordeNoticeServiceForm -Label $lbl) ("a session label '" + $lbl.Trim() + "' reads as a service's, so Resolve-HordeNoticeSender refuses it")
     }
-    foreach ($lbl in @("M", "E3", "Thrall", "the service desk", "servicer")) { Check (-not (Test-HordeNoticeServiceForm -Label $lbl)) ("CONTROL: the ordinary label '" + $lbl + "' is not refused") }
+    foreach ($lbl in @("M", "E3", "Thrall", "the service desk", [string]::Concat([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD, [char]0x05E9, [char]0x05DC, [char]0x05D5, ": x"))) { Check (-not (Test-HordeNoticeServiceForm -Label $lbl)) ("CONTROL: the ordinary label (" + $lbl.Length + " characters) is not refused") }
     $fixtureFleet = Join-Path $root "test\fixtures\projection\fleet\wezfleet"
     $real = @(Get-HordeFleetLabels -RegistryRoot $fixtureFleet)
     Check ($real.Count -gt 5 -and $real -ccontains "M" -and $real -ccontains "A1") ("CONTROL: the fleet registry's labels are read from its records (" + $real.Count + " found)")

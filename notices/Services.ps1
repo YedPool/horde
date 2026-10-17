@@ -8,13 +8,14 @@
 # REGISTERED ONCE, BY THE FOUNDER'S SIDE. Register-HordeNoticeService is run by a PROVEN session (the same proof
 # as `horde notify`) whose label is in the setting serviceRegistrars (default "M"). A service has no session,
 # so it can never register itself, another service or a bigger limit. Registering makes a secret of 32 random
-# bytes and writes it to -SecretFile, a NEW file made empty, locked to the current Windows user, THEN filled. The
+# bytes and writes it to -SecretFile, a NEW file CREATED ALREADY LOCKED to the current Windows user (the access is part of
+# the create call) and filled through that same handle. The
 # machine keeps only a salted SHA-256 of it in <store>\services.json, never the secret: reading the store
 # does not yield a way to send.
 #
 # WHAT PROVES A LATER CALL: the secret. Resolve-HordeServiceSender reads it from the file named by the caller
 # (never from the command line, where every process could list it), hashes it with the stored salt and compares in
-# constant time. A file that any broad group (Everyone, Users, Authenticated Users) can read is refused. The
+# constant time. A file that anyone but the current user and SYSTEM can read or re-permission is refused. The
 # scheduled task's own identity was weighed and NOT chosen: on this machine every program of the founder runs as
 # the same Windows user, so the identity proves no more than the file does, and the file can be revoked and
 # renewed alone. An unregistered name and a wrong secret get the SAME answer.
@@ -30,6 +31,10 @@
 #
 # REVOKING: Remove-HordeNoticeService, by a registrar, deletes the record at once; the old secret then proves
 # nothing and the name can be registered again with a new one. The old secret file is left for its owner to delete.
+#
+# THE REGISTRAR LABEL IS A FLEET LABEL, NOT A PROOF OF WHO SPAWNED THE SESSION: the registry takes the label from whoever
+# spawned the session, so an Orc that starts a child labelled M passes the registrar gate (the session rule has the same weakness).
+# A service run as ANOTHER Windows account (SYSTEM, a service account) is refused: its secret file must be readable by that account only.
 #
 # WHAT THIS DOES NOT STOP, said plainly: a program running as the same Windows user can read the secret file.
 # The secret keeps out other users, other programs that were not handed the file, and the fleet's sessions
@@ -201,7 +206,7 @@ function Test-HordeSecretFileOpen {
             $sid = $r.IdentityReference.Value
             if ($allowed -ccontains $sid) { continue }
             $read = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ExecuteFile
-            if (([int]$r.FileSystemRights -band [int]$read) -ne 0 -or ([int]$r.FileSystemRights -band 0x10000000) -ne 0 -or ([int]$r.FileSystemRights -band [int]::MinValue) -ne 0) { return ("the secret file can be read by " + $sid + ", not only by the current user and SYSTEM; it must be the service's user's alone") }
+            if (([int]$r.FileSystemRights -band [int]$read) -ne 0 -or ([int]$r.FileSystemRights -band 0x10000000) -ne 0 -or ([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or ([int]$r.FileSystemRights -band [int]::MinValue) -ne 0) { return ("the secret file can be read by " + $sid + ", not only by the current user and SYSTEM; it must be the service's user's alone") }
         }
     } catch { return ("the secret file's access could not be checked: " + $_.Exception.Message) }
     return ""
@@ -218,7 +223,7 @@ function Register-HordeNoticeService {
     # Register -Name for a PROVEN -Registrar (Resolve-HordeNoticeSender's answer), writing its new secret to the new file
     # -SecretFile. { ok; reason }. Nothing is kept unless the secret file was made and locked.
     param([Parameter(Mandatory = $true)]$Registrar, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SecretFile,
-        [string]$HordeHome = "", [string]$RegistryRoot = (Get-HordeWezfleetRoot), $Now = $null, [string[]]$FleetLabels = $null)
+        [string]$HordeHome = "", [string]$RegistryRoot = (Get-HordeWezfleetRoot), $Now = $null, [string[]]$FleetLabels = $null, [string]$RepoRoot = "")
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
     $st = Get-HordeNoticeStore -HordeHome $HordeHome
@@ -231,7 +236,9 @@ function Register-HordeNoticeService {
     if ($SecretFile.Trim() -ceq "" -or -not [System.IO.Path]::IsPathRooted($SecretFile)) { return (& $no "no service was registered: -SecretFile must be an absolute path of a file that does not exist yet") }
     $SecretFile = [System.IO.Path]::GetFullPath($SecretFile)
     # N8: never inside this checkout, where a commit could carry it away.
-    $repo = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char]'\') + '\'
+    # -RepoRoot: a test seam, so a suite points the guard at a throwaway folder and never at the real checkout.
+    if ($RepoRoot -ceq "") { $RepoRoot = Split-Path -Parent $PSScriptRoot }
+    $repo = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([char]'\') + '\'
     if ($SecretFile.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { return (& $no "no service was registered: -SecretFile is inside Horde's own folder; put it somewhere that is not in a repository") }
     try {
         return (Use-HordeNoticeLock -Store $st.store -Body {
@@ -252,7 +259,8 @@ function Register-HordeNoticeService {
             } catch {
                 if ($made) { try { [System.IO.File]::Delete($SecretFile) } catch { } }
                 return (& $no ("no service was registered: " + $_.Exception.Message))
-            }            return [pscustomobject]@{ ok = $true; reason = "" }
+            }
+            return [pscustomobject]@{ ok = $true; reason = "" }
         })
     } catch { return (& $no ("no service was registered: " + $_.Exception.Message)) }
 }
