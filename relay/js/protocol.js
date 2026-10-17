@@ -1006,7 +1006,10 @@ export function readChatTurns(bodyBytes, horde, machine) {
   // photoBytes: the machine takes photos up to that size (channels/chat/Photo.ps1); 0 from a machine
   // older than the member, which the phone offers no picture button.
   const photoBytes = Number.isSafeInteger(b.photoBytes) && b.photoBytes > 0 ? b.photoBytes : 0;
-  return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped, photoBytes } };
+  // photoWindowMs: the longest window this machine lets a photo name (its photoWindowSeconds); 0 when it
+  // says nothing, and the phone then names its own hour (photoWindowFor).
+  const photoWindowMs = Number.isSafeInteger(b.photoWindowMs) && b.photoWindowMs > 0 ? b.photoWindowMs : 0;
+  return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped, photoBytes, photoWindowMs } };
 }
 
 // A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text,
@@ -1107,6 +1110,15 @@ export const PHOTO_PARTS_MOST = 64;
 // (PHOTO_WAITING); past the hour with no word from the PC it says plainly it was not delivered
 // (PHOTO_NOT_DELIVERED) and offers to send it again.
 export const PHOTO_WINDOW_MS = 3600000;
+// The window a photo names: the hour, or less when the machine says its own is shorter (a machine set to
+// 600 s refuses a photo whose window ends more than 600 s after it was signed).
+export function photoWindowFor(machineWindowMs) {
+  return Number.isSafeInteger(machineWindowMs) && machineWindowMs > 0 ? Math.min(PHOTO_WINDOW_MS, machineWindowMs) : PHOTO_WINDOW_MS;
+}
+// How many photos a phone leaves unanswered at one machine: while the machine is off its mailbox fills
+// (20 MiB), and a full mailbox refuses chat lines and decision answers too.
+export const PHOTO_MOST_UNANSWERED = 3;
+export const PHOTO_TOO_MANY_UNANSWERED = "Wait: 3 photos are still waiting for your PC. Send another when it has taken one.";
 const PHOTO_PART_AAD = "horde-relay/chat/v1 photo part";
 
 // The relay key a part is put under: the sender, the kind, the photo, the number and the first 16 hex of
@@ -1184,7 +1196,7 @@ export const PHOTO_WORDS = {
 };
 export const PHOTO_SENDING = "Sending the photo...";
 export const PHOTO_WAITING = "Sent: waiting for your PC to take it (it waits up to an hour).";
-export const PHOTO_NOT_DELIVERED = "Not delivered: your PC did not take it within an hour. Send it again.";
+export const PHOTO_NOT_DELIVERED = "No receipt yet: your PC has not said it took the photo within an hour. If it is still off, Send again.";
 // The receipt codes after which a photo can only arrive by being sent again: the page offers Send again
 // for these, as for one that was not delivered in its hour.
 export const PHOTO_SEND_AGAIN = ["expired", "incomplete"];
@@ -1223,6 +1235,12 @@ function photoItems(photos, photoReceipts, now = 0) {
     byId.set(r.photoId, { kind: "photo", photoId: r.photoId, at, said: r.sentAt || (had ? had.said : 0), saidHow: "sent", session: r.session, status: r.status, code: r.code, words: PHOTO_WORDS[r.status][r.code], file: r.file, seq: r.seq, mine: !!(had && had.mine), sendAgain: r.status === "refused" && PHOTO_SEND_AGAIN.indexOf(r.code) >= 0, order: Number.MAX_SAFE_INTEGER });
   }
   return [...byId.values()];
+}
+
+// How many of this phone's photos have no word from the machine and are still within their window.
+export function photosUnanswered(photos, photoReceipts, now = 0) {
+  const answered = new Set(photoReceipts.map((r) => r.photoId));
+  return photos.filter((p) => !answered.has(p.photoId) && !(Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt)).length;
 }
 
 // --- the progress channel (channels/progress/Channel.ps1) ---

@@ -413,10 +413,11 @@ function ConvertTo-HordeChatChannelEntries {
 function New-HordeChatChannelPages {
     # The bodies of one batch of turns: as many as it needs, each within -Budget bytes. One body even
     # with no turn: the session is announced.
-    param($Context, [string]$Session, [bool]$Backfill, [object[]]$Turns, [long]$Budget, [long]$PhotoBytes = 0)
+    param($Context, [string]$Session, [bool]$Backfill, [object[]]$Turns, [long]$Budget, [long]$PhotoBytes = 0, [long]$PhotoWindowMs = 0)
     # photoBytes: this machine takes photos up to that many bytes (Photo.ps1). A phone offers its picture
     # button only to a machine that says so; a phone older than the member reads past it.
-    $front = '{"v":1,"kind":"chat-turns","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"backfill":' + $(if ($Backfill) { "true" } else { "false" }) + $(if ($PhotoBytes -gt 0) { ',"photoBytes":' + $PhotoBytes } else { '' }) + ',"turns":['
+    # photoWindowMs: the longest window a photo may name (photoWindowSeconds): the phone asks for no more.
+    $front = '{"v":1,"kind":"chat-turns","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"backfill":' + $(if ($Backfill) { "true" } else { "false" }) + $(if ($PhotoBytes -gt 0) { ',"photoBytes":' + $PhotoBytes + $(if ($PhotoWindowMs -gt 0) { ',"photoWindowMs":' + $PhotoWindowMs } else { '' }) } else { '' }) + ',"turns":['
     $back = ']}'
     $room = $Budget - $front.Length - $back.Length
     $pages = New-Object System.Collections.ArrayList
@@ -624,7 +625,7 @@ function Invoke-HordeChatChannelTurnsTick {
     $count = 0
     foreach ($b in $batches) {
         $budget = [long][System.Math]::Min([double]$set.pageBytes, [double](Get-HordeRelayChannelBodyBudget -Context $Context -Recipients @($b.phones).Count))
-        $bodies = New-HordeChatChannelPages -Context $Context -Session $source.session -Backfill $b.backfill -Turns @($b.turns) -Budget $budget -PhotoBytes $(if ((Get-HordeChatPhotoRuntimeRefusal) -ceq "") { [long]$set.photoMaxBytes } else { [long]0 })
+        $bodies = New-HordeChatChannelPages -Context $Context -Session $source.session -Backfill $b.backfill -Turns @($b.turns) -Budget $budget -PhotoBytes $(if ((Get-HordeChatPhotoRuntimeRefusal) -ceq "") { [long]$set.photoMaxBytes } else { [long]0 }) -PhotoWindowMs ([long]$set.photoWindowSeconds * 1000)
         $saved = Save-HordeChatChannelBodies -Context $Context -Kind "turns" -Bodies $bodies -Phones @($b.phones)
         foreach ($k in $saved.keys) { [void]$keys.Add($k) }
         if (-not $saved.ok) {

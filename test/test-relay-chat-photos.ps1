@@ -847,6 +847,68 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     Set-HordeChatChannelSource -Options @{} -Vendor ""
+    Write-Host "--- 12. review of PR 285: the machine tells its window; a photo sent twice is taken once; a closed record keeps no key ---" -ForegroundColor Cyan
+    # SHOULD-1: a machine set below an hour must be able to take the phone's photos, so it says its window
+    # in every turns body (photoWindowMs) and the phone names no longer one (relay/js/protocol.js, photoWindowFor).
+    $X = New-World -Settings '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 30, "photosPerDay": 1000, "photoWindowSeconds": 600}'
+    Add-HordeMemoryConversationTurn -Store $X.store -Fleet "work" -Role "assistant" -Text "ready"
+    $null = Invoke-Tick $X
+    $xTurns = @(Get-PhoneMail $X | Where-Object { $_.kind -ceq "chat-turns" })
+    $xWin = $(if ($xTurns.Count -ge 1 -and $null -ne $xTurns[0].PSObject.Properties["photoWindowMs"]) { [long]$xTurns[0].photoWindowMs } else { [long]0 })
+    Check ($xWin -eq 600000) ("WINDOW TOLD: a machine set to 600 s says so in its turns body (" + $xWin + ")")
+    $XA = New-Photo -World $X -Image (New-ImageBytes -Type "jpg" -Length 1000) -ExpiresInMs $xWin
+    $null = Send-Manifest $X $XA
+    $turn = Invoke-Turn $X
+    Check ($turn.Contains("accepted (receiving)") -and -not $turn.Contains("refused (expired)")) ("a photo naming the window the machine told (600 s) is taken (" + $turn + ")")
+    $XB = New-Photo -World $X -Image (New-ImageBytes -Type "jpg" -Length 1000) -ExpiresInMs 3600000
+    $null = Send-Manifest $X $XB
+    $turn = Invoke-Turn $X
+    Check ($turn.Contains("refused (expired)") -and $turn.Contains("more than 600 s")) ("TWIN: a photo naming the hour on that machine is refused, which is why the phone must name the machine's window (" + $turn + ")")
+    $Y = New-World
+    Add-HordeMemoryConversationTurn -Store $Y.store -Fleet "work" -Role "assistant" -Text "ready"
+    $null = Invoke-Tick $Y
+    $yTurns = @(Get-PhoneMail $Y | Where-Object { $_.kind -ceq "chat-turns" })
+    Check ($yTurns.Count -ge 1 -and [long]$yTurns[0].photoWindowMs -eq 3600000) "and a machine on the default says an hour"
+    # SHOULD-2: the same image sent again under a new id, because the first copy's receipt came late, is
+    # told as taken and is neither stored nor posted a second time.
+    $imgD = New-ImageBytes -Type "jpg" -Length 100000
+    $D1 = New-Photo -World $Y -Image $imgD
+    $null = Send-Manifest $Y $D1
+    $null = Invoke-Turn $Y
+    foreach ($p in $D1.parts) { $null = Send-Part $Y $p }
+    $null = Invoke-Tick $Y
+    $postsOf = { param($id) @($script:posts.Values | Where-Object { ([string]$_.message.body).Contains($id) }) }
+    $first = @(& $postsOf $D1.id)
+    Check (@(Get-InboxFiles $Y).Count -eq 1 -and $first.Count -eq 1 -and $first[0].count -eq 1) "the first copy is in the inbox and posted once"
+    $D2 = New-Photo -World $Y -Image $imgD
+    $null = Send-Manifest $Y $D2
+    $turn = Invoke-Turn $Y
+    $null = Invoke-Tick $Y
+    $r2 = @(Get-PhotoReceipts $Y | Where-Object { $_.photoId -ceq $D2.id })
+    Check ($turn.Contains("accepted (delivered)") -and $turn.Contains("not taken twice") -and $r2.Count -eq 1 -and $r2[0].code -ceq "delivered" -and $r2[0].file -ceq @(Get-InboxFiles $Y)[0].Name) ("SENT AGAIN: the same image under a new id is told as delivered, with the first copy's file name (" + $turn + ")")
+    Check (@(Get-InboxFiles $Y).Count -eq 1 -and @(& $postsOf $D2.id).Count -eq 0 -and @(& $postsOf $D1.id)[0].count -eq 1) "and it is not stored again and the Thrall is told nothing a second time"
+    $d2Closed = Join-Path $Y.home ("relay\chat\photos\closed\" + $D2.from + "-" + $D2.id + ".json")
+    Check ((Test-Path -LiteralPath $d2Closed) -and -not (Test-Path -LiteralPath (Join-Path $Y.home ("relay\chat\photos\open\" + $D2.from + "-" + $D2.id)))) "it leaves a closed record and no working folder"
+    $rp = Send-Part $Y $D2.parts[0]
+    Check ($rp.outcome -ceq "refused") ("its parts, which the phone still sends, are refused as closed, not kept waiting (" + $rp.outcome + ": " + $rp.reason + ")")
+    $D3 = New-Photo -World $Y -Image (New-ImageBytes -Type "jpg" -Length 100000)
+    $null = Send-Manifest $Y $D3
+    $turn = Invoke-Turn $Y
+    Check ($turn.Contains("accepted (receiving)") -and $turn.Contains($D3.id)) ("TWIN: another image from the same sender is taken as any other (" + $turn + ")")
+    $imgS = New-ImageBytes -Type "script" -Length 2000
+    $S1 = New-Photo -World $Y -Image $imgS
+    $null = Send-Manifest $Y $S1
+    $null = Invoke-Turn $Y
+    foreach ($p in $S1.parts) { $null = Send-Part $Y $p }
+    $t = Invoke-Tick $Y
+    $S2 = New-Photo -World $Y -Image $imgS
+    $null = Send-Manifest $Y $S2
+    $turn = Invoke-Turn $Y
+    Check ($t.Contains("refused (not-image)") -and $turn.Contains("accepted (receiving)") -and -not $turn.Contains("not taken twice")) ("TWIN: a photo that was refused is not told as delivered when its image comes again (" + $turn + ")")
+    # NIT: a closed record keeps what became of the photo, not the key to its parts.
+    $d1Closed = Join-Path $Y.home ("relay\chat\photos\closed\" + $D1.from + "-" + $D1.id + ".json")
+    $d1Rec = $(if (Test-Path -LiteralPath $d1Closed) { Read-HordeChatPhotoRecord -Path $d1Closed } else { $null })
+    Check ($null -ne $d1Rec -and $d1Rec.code -ceq "delivered" -and $d1Rec.key -ceq "") "THE KEY IS GONE: the closed record of a delivered photo has no part key"
     foreach ($w in $script:worlds) { Close-HordeRelayRunContext -Context $w.ctx }
     $keys = New-Object System.Collections.ArrayList
     foreach ($h in $script:homes) {

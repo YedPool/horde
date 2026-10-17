@@ -890,6 +890,35 @@ const PH = await load("app/photo.js");
   check(one({ ...ph0, sent: false }, ph0.expiresAt).sendAgain === true && one({ ...ph0, sent: true }, 0).words === P.PHOTO_WAITING, "a photo whose parts never all went is not delivered at its hour too; with no clock given nothing is late");
   check(one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).words === P.PHOTO_WORDS.accepted.receiving && !one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).sendAgain, "a word from the PC outranks the clock: taken after the hour, it says so and offers nothing");
   check(one({ ...ph0, sent: true }, 2000, [rcp("refused", "expired")]).sendAgain === true && one({ ...ph0, sent: true }, 2000, [rcp("refused", "incomplete")]).sendAgain === true && !one({ ...ph0, sent: true }, 2000, [rcp("refused", "damaged")]).sendAgain && !one({ ...ph0, sent: true }, 2000, [rcp("accepted", "delivered")]).sendAgain, "refused as too late or incomplete it may be sent again; damaged or delivered, not");
+  // REVIEW OF PR 285, SHOULD-1: the window a machine tells is the window the photo names - a machine set
+  // to 600 s refuses a photo that names the hour.
+  check(P.photoWindowFor(600000) === 600000 && P.photoWindowFor(7200000) === 3600000 && P.photoWindowFor(0) === 3600000 && P.photoWindowFor(undefined) === 3600000, "the phone names the machine's window when it is shorter than the hour, and the hour otherwise");
+  const photoBodyW = (photoWindowMs) => P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: m.horde, machine: m.keyId, session: "sess-1", backfill: false, photoBytes: 2097152, photoWindowMs, turns: [turn("p2", "assistant", "hi")] }));
+  check(P.readChatTurns(photoBodyW(600000), m.horde, m.keyId).value.photoWindowMs === 600000 && P.readChatTurns(photoBody(2097152), m.horde, m.keyId).value.photoWindowMs === 0, "a turns body says the machine's window; one that says none reads as 0");
+  await sendChat(t, m, a.phoneKey, photoBodyW(600000));
+  await phone.refresh(a.paired.id);
+  head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const w1id = P.hex(P.randomBytes(16));
+  await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: w1id });
+  const w1 = await machineOpens(m, (await t.get(m.mailbox, 0, 256)).value.items[head].text);
+  check(w1.body.expiresAt === w1.header.ts + 600000, "THE WINDOW TOLD: to a machine that says 600 s the manifest names 600 s after it was signed, not the hour", String(w1.body.expiresAt - w1.header.ts));
+  // SHOULD-3: while the PC is off its mailbox fills with photos, and a full one refuses chat lines and
+  // answers too; at most 3 photos wait for a word from the machine.
+  const waiting = [w1id];
+  for (let i = 0; i < 2; i++) { const nid = P.hex(P.randomBytes(16)); await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: nid }); waiting.push(nid); }
+  head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const capped = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(capped === P.PHOTO_TOO_MANY_UNANSWERED && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "THREE WAITING: a fourth photo is refused in plain words and nothing is put", capped);
+  const wordFor = async (id) => { await sendChat(t, m, a.phoneKey, P.utf8(JSON.stringify({ v: 1, kind: "chat-photo-receipt", horde: m.horde, machine: m.keyId, session: "sess-1", photoId: id, status: "accepted", code: "delivered", sentAt: w1.header.ts, file: "" })), "photo-receipt"); };
+  await wordFor(waiting[0]);
+  await phone.refresh(a.paired.id);
+  const nid4 = P.hex(P.randomBytes(16));
+  const fourth = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: nid4 }));
+  waiting.push(nid4);
+  check(fourth === "", "TWIN: a word from the PC about one frees a place for the next", String(fourth));
+  check(P.photosUnanswered([{ photoId: "a".repeat(32), expiresAt: 1000 }, { photoId: "b".repeat(32), expiresAt: 5000 }, { photoId: "c".repeat(32), expiresAt: 5000 }], [{ photoId: "c".repeat(32) }], 2000) === 1, "a photo past its window, or one with a word from the machine, is not waiting");
+  for (const id of waiting.slice(1)) await wordFor(id);
+  await phone.refresh(a.paired.id);
   // Through the bridge: the page's bytes and id.
   const br = createBridge(phone, { loadKinds: async () => ({}) });
   await br.request("pick", { id: a.paired.id });

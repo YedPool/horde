@@ -146,6 +146,19 @@
         @{ Name = "photo-inbox-folder-has-no-owner-rule"
            Find = '    $acl.AddAccessRule('
            Replace = '    $null = (' }
+        # Review of PR 285: the same image sent again is taken once; a closed record keeps no key.
+        @{ Name = "photo-sent-again-taken-twice"
+           Find = '    if ($null -ne $twin) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "photo-sent-again-any-image"
+           Find = '$r.sha256 -cne $Sha256 -or '
+           Replace = '' }
+        @{ Name = "photo-sent-again-refused-counts"
+           Find = 'if ($r.stage -cne "closed" -or $r.code -ceq "delivered" -or $r.code -ceq "saved") { return $r }'
+           Replace = 'return $r' }
+        @{ Name = "photo-closed-record-keeps-the-key"
+           Find = '    $Record.key = ""'
+           Replace = '' }
         @{ Name = "photo-file-not-owner-only"
            Find = '    $access.SetAccessRuleProtection($true, $false)'
            Replace = '    $access.SetAccessRuleProtection($false, $true)' }

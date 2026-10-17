@@ -258,7 +258,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
   const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map(), signer: null, sessionWords: "", oldPcSaid: false });
-  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0 });
+  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0, photoWindowMs: 0 });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
@@ -417,7 +417,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " turn(s) that do not hold together were left out");
       for (const t of r.value.turns) c.turns.push({ ...t, seq: h.seq });
       // What the newest turns body says of photos is what the machine takes now (THE PHOTOS, sendPhoto).
-      if (h.seq > c.sessionSeq) { c.session = r.value.session; c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; }
+      if (h.seq > c.sessionSeq) { c.session = r.value.session; c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; c.photoWindowMs = r.value.photoWindowMs; }
     } else if (h.kind === "receipt") {
       const r = P.readChatReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
@@ -1039,17 +1039,19 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (!/^[0-9a-f]{32}$/.test(photoId)) throw fail("the photo's id is 32 lower-case hex");
       if (!P.sniffImage(bytes)) throw fail(P.PHOTO_NOT_IMAGE);
       if (bytes.length > s.chat.photoBytes) throw fail("This photo is " + bytes.length + " bytes, and the PC takes at most " + s.chat.photoBytes + ".");
+      if (P.photosUnanswered(s.chat.photos, s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);
+      const windowMs = P.photoWindowFor(s.chat.photoWindowMs);
       const sealed = await P.sealPhotoParts(bytes, { from: e.deviceKeyId, photoId });
       const session = s.chat.session;
       const body = (seq, ts) => P.photoManifestBody({ photoId, horde: e.horde, machine: e.machine, mailbox: e.machineMailbox, from: e.deviceKeyId, phoneKey: e.phoneKeyId, seq, session,
-        expiresAt: ts + P.PHOTO_WINDOW_MS, bytes: bytes.length, sha256: sealed.sha256, key: sealed.key, parts: sealed.parts.map((p) => p.digest) });
+        expiresAt: ts + windowMs, bytes: bytes.length, sha256: sealed.sha256, key: sealed.key, parts: sealed.parts.map((p) => p.digest) });
       const env = await sealAndSign(e, "photo", "chat", body, assertWith(e));
       sealed.key.fill(0);
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send the photo again."); }
       // Kept with the window its manifest names, and marked sent once every part went (THE PHOTO WAITS
       // FOR THE PC: relay/js/protocol.js, photoItems).
-      const mine = { photoId, at: env.ts, session, expiresAt: env.ts + P.PHOTO_WINDOW_MS, sent: false };
+      const mine = { photoId, at: env.ts, session, expiresAt: env.ts + windowMs, sent: false };
       s.chat.photos.push(mine);
       let puts = 1;
       for (const p of sealed.parts) {

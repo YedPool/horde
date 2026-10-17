@@ -7,7 +7,10 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "chat-photos-not-offered"
-           Find = '$(if ($PhotoBytes -gt 0) { '',"photoBytes":'' + $PhotoBytes } else { '''' })'
+           Find = '$(if ($PhotoBytes -gt 0) { '',"photoBytes":'' + $PhotoBytes + $(if ($PhotoWindowMs -gt 0) { '',"photoWindowMs":'' + $PhotoWindowMs } else { '''' }) } else { '''' })'
+           Replace = "''" }
+        @{ Name = "photo-window-not-told"
+           Find = '$(if ($PhotoWindowMs -gt 0) { '',"photoWindowMs":'' + $PhotoWindowMs } else { '''' })'
            Replace = "''" }
         @{ Name = "chat-photo-kind-not-taken"
            Find = '-Name "chat" -Kinds @("line", "photo") -Senders "founder"'

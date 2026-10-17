@@ -26,7 +26,7 @@
            Find = '          const r = await relay.put(e.machineMailbox, p.key, p.text);'
            Replace = '          await assertWith(e)(new Uint8Array(32)); const r = await relay.put(e.machineMailbox, p.key, p.text);' }
         @{ Name = "photo-offer-not-learnt"
-           Find = 'c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; }'
+           Find = 'c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; c.photoWindowMs = r.value.photoWindowMs; }'
            Replace = 'c.sessionSeq = h.seq; }' }
         @{ Name = "photo-receipts-not-read"
            Find = '      c.photoReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });'
@@ -37,8 +37,18 @@
            Find = '      mine.sent = true;'
            Replace = '' }
         @{ Name = "photo-window-not-kept"
-           Find = 'expiresAt: env.ts + P.PHOTO_WINDOW_MS, sent: false };'
+           Find = 'expiresAt: env.ts + windowMs, sent: false };'
            Replace = 'sent: false };' }
+        # Review of PR 285: the machine's window is the photo's, and at most 3 photos wait for a word.
+        @{ Name = "photo-window-ignores-the-machine"
+           Find = 'const windowMs = P.photoWindowFor(s.chat.photoWindowMs);'
+           Replace = 'const windowMs = P.PHOTO_WINDOW_MS;' }
+        @{ Name = "photo-window-not-learnt"
+           Find = 'c.photoBytes = r.value.photoBytes; c.photoWindowMs = r.value.photoWindowMs; }'
+           Replace = 'c.photoBytes = r.value.photoBytes; }' }
+        @{ Name = "photos-waiting-not-capped"
+           Find = '      if (P.photosUnanswered(s.chat.photos, s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);'
+           Replace = '' }
         @{ Name = "chat-read-without-the-clock"
            Find = 'items: P.chatTimeline(s.chat, now()), mode'
            Replace = 'items: P.chatTimeline(s.chat), mode' }

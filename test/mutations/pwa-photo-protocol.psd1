@@ -20,6 +20,19 @@
         @{ Name = "part-aad-without-its-number"
            Find = 'utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + n), chunk);'
            Replace = 'utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + 1), chunk);' }
+        # Review of PR 285: the window a photo names, and how many wait for a word.
+        @{ Name = "photo-window-longer-than-the-machine"
+           Find = 'Math.min(PHOTO_WINDOW_MS, machineWindowMs)'
+           Replace = 'PHOTO_WINDOW_MS' }
+        @{ Name = "photo-window-not-read"
+           Find = 'const photoWindowMs = Number.isSafeInteger(b.photoWindowMs) && b.photoWindowMs > 0 ? b.photoWindowMs : 0;'
+           Replace = 'const photoWindowMs = 0;' }
+        @{ Name = "photos-waiting-counts-answered"
+           Find = '!answered.has(p.photoId) && '
+           Replace = '' }
+        @{ Name = "photos-waiting-counts-late"
+           Find = ' && !(Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt)).length;'
+           Replace = ').length;' }
         @{ Name = "photo-receipt-takes-any-code"
            Find = '  if (!Object.prototype.hasOwnProperty.call(PHOTO_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(PHOTO_WORDS[b.status], b.code)) return { ok: false, reason: "the photo receipt''s status or code is not one this phone knows", value: null };'
            Replace = '' }

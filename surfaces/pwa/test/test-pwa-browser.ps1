@@ -575,7 +575,7 @@ try {
     $null = Invoke-Browser @{ cmd = "clock"; ms = 0 }
     Check ($late.ok -and $late.value.put -ge 2 -and $wt1.ok -and $wt1.value.found) ("PC OFF: a photo sent and not yet taken says it waits for the PC, up to an hour (" + $(if ($late.ok) { "" + $late.value.put + " put(s)" } else { $late.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "chatRefresh" }
-    $nd = Invoke-Browser @{ cmd = "chatWait"; text = "Not delivered: your PC did not take it within an hour. Send it again."; timeoutMs = 10000 }
+    $nd = Invoke-Browser @{ cmd = "chatWait"; text = "No receipt yet: your PC has not said it took the photo within an hour. If it is still off, Send again."; timeoutMs = 10000 }
     Check ($nd.ok -and $nd.value.found) "PAST THE HOUR with no word from the PC, it says plainly it was not delivered"
     $sa = Invoke-Browser @{ cmd = "chatSendAgain"; mailbox = $mailbox }
     Check ($sa0.ok -and $sa0.value.shown -eq 0 -and $sa.ok -and $sa.value.shown -eq 1 -and $sa.value.put -ge 2 -and $sa.value.left -eq 0) ("and offers Send again - not while it still waits - which sends it again, and is then offered no more (" + $(if ($sa.ok) { ConvertTo-Json $sa.value -Compress } else { $sa.reason }) + "; while waiting: " + $(if ($sa0.ok) { $sa0.value.shown } else { $sa0.reason }) + ")")
