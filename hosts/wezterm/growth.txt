@@ -1,3 +1,4 @@
 agents/claude-code/allowlist.txt | 0 -> 3 | 2026-09-30 | the new harness allowlist lists this host's own files by path, and each path names the host
 agents/codex/allowlist.txt | 0 -> 3 | 2026-09-30 | the new harness allowlist lists this host's own files by path, and each path names the host
 core/json-parse-allowlist.txt | 0 -> 2 | 2026-10-14 | the raw JSON parse list of PR 279 is data naming repository paths, and two of its files sit in this host folder
+test/e2e/e2e-fleet.ps1 | 0 -> 21 | 2026-10-16 | horde's own fleet record and wake scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance, and naming the terminal's socket, its settings and its restore markers; it shrinks when spawn and read-text reach it through a host-neutral port

@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/fleet-hibernation.v1",
+  "title": "fleet hibernation record v1",
+  "description": "ONE HIBERNATION: the sessions that were running when it was recorded, where each sat, and what has happened to each since. <HORDE_HOME>/fleet/hibernations/<id>/record.json, written whole and renamed into place by fleet/Hibernation.ps1, and read by fleet/Wake.ps1. Horde's own record: a wake reads this, never a terminal plugin's saved layouts. A SESSION IS KEYED BY ITS SESSION ID, never by its pane number, which a terminal reuses after a restart. Every optional member is left out when it is not known; nothing is written as null. What the schema cannot say is checked in fleet/Hibernation.ps1: each session id appears once, and the id is the folder's name.",
+  "type": "object",
+  "required": ["schemaVersion", "id", "createdAt", "agent", "host", "selection", "sessions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "id": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}$", "description": "The UTC time the hibernation was recorded, yyyymmdd-hhmmss; also its folder's name." },
+    "createdAt": { "$ref": "#/definitions/utc" },
+    "agent": { "$ref": "#/definitions/adapter", "description": "The harness adapter (agents/<name>/Fleet.ps1) whose liveness rule chose the sessions and whose resume line wakes them." },
+    "host": { "$ref": "#/definitions/adapter", "description": "The terminal adapter (hosts/<name>/Fleet.ps1) that read the placement and spawns the woken panes." },
+    "selection": {
+      "type": "object",
+      "required": ["kind", "labels", "exclude"],
+      "additionalProperties": false,
+      "description": "How the sessions were chosen, so a reader can tell 'all' from 'these'.",
+      "properties": {
+        "kind": { "type": "string", "enum": ["all", "labels"], "description": "all: every running, unretired session but the master. labels: exactly the sessions named." },
+        "labels": { "type": "array", "items": { "$ref": "#/definitions/label" }, "description": "The labels asked for; empty for all." },
+        "exclude": { "type": "array", "items": { "$ref": "#/definitions/label" }, "description": "The labels left out on purpose." }
+      }
+    },
+    "sessions": { "type": "array", "items": { "$ref": "#/definitions/session" }, "description": "At least one: an empty hibernation is never written." },
+    "expectedStarts": {
+      "type": "object",
+      "required": ["hibernationId", "from", "to", "ids"],
+      "additionalProperties": false,
+      "description": "Written by a wake BEFORE it starts anything: the sessions it is about to start, and the window in which they will. Horde's restore source can read this to treat those starts as expected rather than as a restore it did not make (not read by it yet).",
+      "properties": {
+        "hibernationId": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}$" },
+        "from": { "$ref": "#/definitions/utc" },
+        "to": { "$ref": "#/definitions/utc" },
+        "ids": { "type": "array", "items": { "$ref": "#/definitions/sessionId" } }
+      }
+    }
+  },
+  "definitions": {
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "description": "A UTC time to the second." },
+    "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The harness's own session id, a lower-case uuid." },
+    "label": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$", "description": "A session's fleet label (K, K1)." },
+    "path": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,1024}$", "description": "A path on this machine, one line." },
+    "count": { "type": "integer", "minimum": 0 },
+    "state": { "type": "string", "enum": ["recorded", "asked", "parked", "exited", "still-awake", "waking", "woken", "failed"], "description": "recorded: in the record, still running when it was taken. asked: asked to park. parked: its PARKED file is written. exited: its process has ended. still-awake: a wake found it running (or could not prove it was not) and left it alone. waking: its pane was spawned and it has not yet been seen running. woken: seen running again, and told so. failed: the wake tried and it did not come up, or could not be told." },
+    "placement": {
+      "type": "object",
+      "required": ["windowKey", "tabIndex", "left", "top", "cols", "rows", "tabCols", "tabRows"],
+      "additionalProperties": false,
+      "description": "Where the session's pane sat when it was recorded, from the terminal's own pane list. windowKey groups the panes of one window; it is the terminal's own text and means nothing after that terminal restarts except 'these sat together'.",
+      "properties": {
+        "windowKey": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,128}$" },
+        "tabIndex": { "$ref": "#/definitions/count", "description": "The tab's place in its window's tab bar, from 0." },
+        "left": { "$ref": "#/definitions/count", "description": "The pane's left column within its tab." },
+        "top": { "$ref": "#/definitions/count", "description": "The pane's top row within its tab." },
+        "cols": { "$ref": "#/definitions/count" },
+        "rows": { "$ref": "#/definitions/count" },
+        "tabCols": { "$ref": "#/definitions/count", "description": "The width of the whole tab, so a split's share can be computed." },
+        "tabRows": { "$ref": "#/definitions/count" }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "required": ["state", "at"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "$ref": "#/definitions/state" },
+        "at": { "$ref": "#/definitions/utc" },
+        "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,600}$", "description": "Why, in plain words, when the move needs one (a refusal, a failure)." },
+        "pane": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The pane a wake started for it, when it failed after that: a later wake holds it until -Retry, since it may still be loading there." }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": ["sessionId", "role", "cwd", "state", "history"],
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/sessionId" },
+        "label": { "$ref": "#/definitions/label" },
+        "role": { "type": "string", "enum": ["orc", "warg", "other"], "description": "Read from the fleet registry through core/Roles.ps1. A missing or unknown role is other, never guessed." },
+        "parent": { "$ref": "#/definitions/sessionId", "description": "The session that owns it, as the fleet registry says. A wake puts a session in the window of its nearest owning orc in the same record." },
+        "cwd": { "$ref": "#/definitions/path" },
+        "transcriptPath": { "$ref": "#/definitions/path" },
+        "placement": { "$ref": "#/definitions/placement" },
+        "process": {
+          "type": "object",
+          "required": ["pid", "start"],
+          "additionalProperties": false,
+          "description": "The process that ran it when it was recorded, as the harness adapter names it: its pid and its start time (FILETIME ticks). A wake treats that very process still running, under any id, as this session running. Left out when the harness could not name it; a wake then does not narrow its check of the session's folder.",
+          "properties": {
+            "pid": { "type": "string", "pattern": "^[0-9]{1,10}$" },
+            "start": { "type": "string", "pattern": "^[0-9]{1,19}$" }
+          }
+        },
+        "parkedFile": { "$ref": "#/definitions/path", "description": "Its PARKED-<label>.md, when the file was there." },
+        "state": { "$ref": "#/definitions/state" },
+        "history": { "type": "array", "items": { "$ref": "#/definitions/historyEntry" }, "description": "Every state it has been in, oldest first; the last is state." },
+        "wokenAs": { "$ref": "#/definitions/sessionId", "description": "The id it came back under, when the harness gave the resumed conversation a new one." }
+      }
+    }
+  }
+}
