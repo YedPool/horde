@@ -578,7 +578,7 @@ $env:HORDE_HOME = $elsewhere
 $showLine = $runH[1] -replace '\Ahorde ', ("& " + (Esc (Join-Path $root "horde.ps1")) + " ")
 # A child is run through System.Diagnostics.Process and its two streams are read: under Windows PowerShell 5.1
 # a native command's stderr wrapped in 2>&1 becomes error records, and a failing horde (the control below)
-# would reach this suite's trap as an unexpected error (CLAUDE.md: no 2>&1 around a native command on 5.1).
+# would reach this suite's trap as an unexpected error (the repository rule: no 2>&1 around a native command on 5.1).
 function Run-Child {
     param([string]$Command)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
