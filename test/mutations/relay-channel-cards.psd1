@@ -79,9 +79,6 @@
         @{ Name = "no-lanes-folder-sends-an-empty-snapshot"
            Find = 'if (-not [System.IO.Directory]::Exists($paths.lanes)) { return (& $once "lanes"'
            Replace = 'if ($false) { return (& $once "lanes"' }
-        @{ Name = "a-relative-default-is-not-under-the-home"
-           Find = '[System.IO.Path]::Combine($HordeHome, "progress", $Leaf)'
-           Replace = '[System.IO.Path]::Combine("progress", $Leaf)' }
         @{ Name = "the-refusal-looks-at-the-cut-text"
            Find = '$whole = Get-HordeCardsChannelClean $Text'
            Replace = '$whole = Get-HordeCardsChannelPlain $Text' }

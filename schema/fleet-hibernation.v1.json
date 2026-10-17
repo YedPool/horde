@@ -81,7 +81,8 @@
       "properties": {
         "state": { "$ref": "#/definitions/state" },
         "at": { "$ref": "#/definitions/utc" },
-        "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,600}$", "description": "Why, in plain words, when the move needs one (a refusal, a failure)." }
+        "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,600}$", "description": "Why, in plain words, when the move needs one (a refusal, a failure)." },
+        "pane": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The pane a wake started for it, when it failed after that: a later wake holds it until -Retry, since it may still be loading there." }
       }
     },
     "session": {
@@ -96,6 +97,16 @@
         "cwd": { "$ref": "#/definitions/path" },
         "transcriptPath": { "$ref": "#/definitions/path" },
         "placement": { "$ref": "#/definitions/placement" },
+        "process": {
+          "type": "object",
+          "required": ["pid", "start"],
+          "additionalProperties": false,
+          "description": "The process that ran it when it was recorded, as the harness adapter names it: its pid and its start time (FILETIME ticks). A wake treats that very process still running, under any id, as this session running. Left out when the harness could not name it; a wake then does not narrow its check of the session's folder.",
+          "properties": {
+            "pid": { "type": "string", "pattern": "^[0-9]{1,10}$" },
+            "start": { "type": "string", "pattern": "^[0-9]{1,19}$" }
+          }
+        },
         "parkedFile": { "$ref": "#/definitions/path", "description": "Its PARKED-<label>.md, when the file was there." },
         "state": { "$ref": "#/definitions/state" },
         "history": { "type": "array", "items": { "$ref": "#/definitions/historyEntry" }, "description": "Every state it has been in, oldest first; the last is state." },

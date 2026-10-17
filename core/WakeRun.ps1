@@ -336,7 +336,7 @@ function Invoke-HordeWakeTick {
             elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }
             else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
         } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -Asleep $asleep -AsleepUnknown $asleepUnknown
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown
         if ($asleepUnknown -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("nobody is knocked while which sessions are asleep in a hibernation cannot be told: " + $asleepUnknown))) }
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
@@ -383,7 +383,7 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }
         if ($silence.declared -or $silence.moved) {
             if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }
-            if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }
+            if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger -Risen (Get-HordeWakeEntryValue $silence "risen") }
             try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }

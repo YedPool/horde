@@ -7,11 +7,14 @@
 #
 #   agents/<name>/Fleet.ps1  Register-HordeFleetAgent
 #     Snapshot   ()                          one fresh reading of which of its sessions run now (opaque)
-#     Verdict    ($snapshot, $id, $cwd, $ignore, $since)  { state: running | stopped | unknown; kind; reason;
-#                                            pid }; $ignore: ids that cannot be the session under a new id;
-#                                            $since: a [datetime] or $null - a session whose process began
-#                                            at or before it cannot be either
-#     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd } each
+#     Verdict    ($snapshot, $id, $cwd, $ignore, $since, $process)  { state: running | stopped | unknown;
+#                                            kind; reason; pid }; $ignore: ids that cannot be the session
+#                                            under a new id; $process: the session's own process as recorded,
+#                                            { pid; start } or $null - that process running under any id is
+#                                            the session running; $since: a [datetime] or $null - another
+#                                            process that began at or before it cannot be the session under
+#                                            a new id (used only with $process)
+#     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd; start } each
 #     ResumeLine ($id)                       the one shell line that resumes session $id
 #     Scrub      ()                          environment map for the woken pane: name -> $null removes it
 #     LastTyped  ($transcriptPath, $since)   OPTIONAL (hibernate, slice 2): the turns a person typed into
@@ -27,12 +30,20 @@
 #                                            tabCols; tabRows }, a session it cannot place left out
 #     Open       ()                          the terminal a wake spawns into, as an answer: known
 #                                            { spawn; paneOf; describe }, each a script block bound to it
-#                                            spawn ($request) -> answer known { pane; window }, where
+#                                            spawn ($request) -> answer known { pane; window }; ABSENT only
+#                                              when the request was refused before any call to the terminal
+#                                              (nothing started); any other answer that is not known (a
+#                                              timeout, a failed call) means a pane MAY have started, and
+#                                              the wake holds the session until -Retry; where
 #                                              $request is { mode: window | tab | split; cwd; line;
 #                                              environment; window; pane; direction: right | bottom;
 #                                              percent }
 #                                            paneOf ($pid) -> answer known pane id of that process
 #     Describe   ($request)                  the exact command a spawn would run, as text, for -DryRun
+#     Release    ($sessionId)                optional: remove the terminal restore's "do not restore" marker
+#                                            of that one session, as an answer: known "removed" or "none",
+#                                            unknown with the reason. A wake calls it just before the
+#                                            session's spawn, after its last liveness check.
 #
 # ONE OF EACH. The fleet registry holds one harness's sessions and one terminal's panes; when more than
 # one adapter of a kind is loaded, which one a session belongs to cannot be told from the record, so
@@ -69,11 +80,12 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Placement,
         [Parameter(Mandatory = $true)][scriptblock]$Open,
-        [Parameter(Mandatory = $true)][scriptblock]$Describe
+        [Parameter(Mandatory = $true)][scriptblock]$Describe,
+        [scriptblock]$Release = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release })
 }
 
 function Resolve-HordeFleetAdapter {

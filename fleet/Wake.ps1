@@ -11,10 +11,21 @@
 #      and the next wake takes it over and says so. A lock whose owner runs, or may (a start time that
 #      cannot be read, a lock that names no owner), still refuses (review of PR 318). A dry run takes
 #      no lock, refuses while a live one is held, and says when it would take over a stale one.
+#   1b. THE RECORD IS READ AGAIN UNDER THE LOCK (second review of PR 318): a record read before the lock
+#      may since have been changed by a wake that held it, and acting on - and writing back - the older
+#      copy would start a session that wake already woke and drop its wokenAs and history.
 #   2. NOTHING RUNNING IS STARTED AGAIN. Each session is checked by the harness adapter's liveness rule
 #      (agents/<name>/Fleet.ps1, the restore guard's port): running is refused, and so is UNKNOWN - a
 #      session nobody can prove is stopped is treated as running, because a conversation started twice
 #      writes one transcript from two processes. Refused sessions become still-awake, with the reason.
+#      The verdict is given the session's recorded process ({ pid; start }), so that very process still
+#      running under another id counts as the session running (second review of PR 318, P1). And it is
+#      asked AGAIN, from a fresh reading, right before each spawn (first review, finding 1): the first
+#      reading can be minutes old by a late spawn.
+#      HELD UNTIL -Retry (second review, finding 2): a session an earlier wake left waking (stopped part
+#      way), or failed after its pane was started (a resume slower than the wait), may be loading in that
+#      pane right now. It is not started again, and its state is left as it is, unless the run says
+#      -Retry - and even then only once the liveness check finds it stopped.
 #   3. ONE NEW WINDOW PER ORC, its wargs as tabs, laid out as saved (decided by M and F, 2026-10-16). A
 #      session joins the window of its nearest owning orc in this record (its parent chain); one with
 #      none gets a window of its own. Within a window, a session that shared a saved tab with one
@@ -23,11 +34,20 @@
 #   4. FREE MEMORY BEFORE EVERY SPAWN. At least 15 percent of physical memory must be free (the fleet's
 #      rule for this machine, 2026-10-14: it sat at 6 to 12 percent free with several heavy runs, and
 #      runs were reaped). Below it the wake STOPS: every session not yet started stays asleep and is
-#      reported, and nothing is retried later on its own.
+#      reported, and nothing is retried later on its own. A reading that FAILS (the query throws) stops
+#      the wake the same way, said in words (first review, finding b), and what was printed is kept.
 #   5. WAIT, BOUNDED, FOR EACH STARTED SESSION TO RUN. When its own id comes up, it is woken. When it
 #      does not but a NEW running session sits in the same folder AND in the very pane this wake
 #      spawned, the harness gave the resumed conversation a new id: that id is recorded as wokenAs.
-#      Neither within the bound is failed.
+#      Neither within the bound is failed. A pane that started but whose window could not be read back
+#      is not failed (it runs, and is waited for), but the rest of its group is left asleep: without the
+#      window, the next warg's tab would open a stray window of its own (second review of PR 318).
+#   5b. THE REGISTRY ROW NAMES THE NEW PANE, or it is said (live finding of 2026-10-16: after a mass resume
+#      the fleet registry still named the OLD pane of resumed sessions, so mail could be posted but could
+#      not knock them). Within the same bounded wait, the woken id's row must name the pane this wake
+#      spawned (Deps.RegistryPane, read only); if it does not, the session is still woken, noted
+#      registry-stale, and the wake says mail will not knock it until its next turn. Nothing is written
+#      to the registry.
 #   6. ONE MAIL, through the messenger port (messengers/Port.ps1), never typed into the pane: "You were
 #      woken from hibernation <id>. Read your PARKED-<label>.md and carry on." Its message id is made
 #      from the hibernation and the session (core/TextUuid.ps1), so a repeated wake posts it once.
@@ -43,10 +63,13 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\TextUuid.ps1")
 
 $script:HordeFleetWakeMinFreePercent = 15
-# How long a started session has to show up running. NOT MEASURED YET: no real wake has run (slice 1's
-# proof is a dry run). 90 s is a deliberately loose bound - a resume reads its whole transcript before it
-# writes its control file - that still keeps one stuck pane from holding the wake for minutes. The first
-# real wake should measure it and set it from that.
+# How long a started session has to show up running. MEASURED 2026-10-16, read only, on this machine's 13
+# running sessions: each one's control file was created 1.4 to 23.4 s after its process started (median
+# 7.6 s; the 23.4 s one was resumed while a dozen others started at once). The isolated end-to-end scenario
+# (test/e2e/e2e-fleet.ps1) measures the spawn-to-running time of its stand-in, which is a
+# lower bound: a stand-in does not read a transcript. 90 s stays, about four times the slowest real start
+# seen, so one stuck pane still cannot hold the wake for minutes; a slower resume is failed and then held
+# (HELD UNTIL -Retry, above), never started twice.
 $script:HordeFleetWakeWaitSeconds = 90
 $script:HordeFleetWakePollMs = 1500
 $script:HordeFleetWakeMailTtlSeconds = 86400
@@ -82,7 +105,9 @@ function Get-HordeFleetLockOwner {
 
 function Get-HordeFleetSince {
     # From when a running session could be -Session under a new id: its last exit in the history, or,
-    # with none, when the hibernation was taken - a session already running then ran beside it.
+    # with none, when the hibernation was taken - a session already running then ran beside it. NO CODE
+    # WRITES "exited" YET: hibernate (slice 2), which parks and stops sessions, will. Until then this is
+    # always the time the hibernation was taken.
     param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)]$Record)
     $exits = @(@($Session.history) | Where-Object { "" + $_.state -ceq "exited" })
     $text = $(if ($exits.Count -gt 0) { "" + $exits[-1].at } else { "" + $Record.createdAt })
@@ -95,6 +120,17 @@ function Get-HordeFleetWakeBody {
     # The mail a woken session gets.
     param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$Label)
     return ("You were woken from hibernation " + $Id + ". Read your PARKED-" + $Label + ".md and carry on.")
+}
+
+function New-HordeFleetWakeSender {
+    # Who a wake's mail is from: the session that ran the wake, when it knows its own id (-SelfSessionId, an
+    # answer of core/Identity.ps1's Get-HordeSelfSessionId); else the reserved system sender "horde"
+    # (messengers/Port.ps1, from.system). Never the master's label M: a wake started from the phone or a
+    # service is not M's act, and nothing sends as M unless M's own session ran the command (third review of
+    # PR 318). The sessionId member is required by the port; a system sender's is never shown or passed on.
+    param([Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$SelfSessionId)
+    if ($SelfSessionId.state -ceq "known") { return [pscustomobject]@{ deviceId = $DeviceId; sessionId = "" + $SelfSessionId.value } }
+    return [pscustomobject]@{ deviceId = $DeviceId; sessionId = "horde-fleet-wake"; system = "horde" }
 }
 
 function Get-HordeFleetWakeMessageId {
@@ -251,11 +287,13 @@ function Find-HordeFleetWokenId {
 function Invoke-HordeFleetWake {
     # The whole of `horde fleet wake`. Returns { id; lines; outcomes }, lines being what is printed, and
     # outcomes each { sessionId; label; outcome; reason } with outcome still-awake, woken, failed, asleep
-    # (left by the memory gate) or planned (-DryRun). Throws, changing nothing, when the record cannot be
+    # (left by the memory gate, or after a window that could not be read back), held (an earlier wake's
+    # pane may be loading it; -Retry) or planned (-DryRun). Throws, changing nothing, when the record cannot be
     # read, another wake holds it, or -Only names a label it does not hold.
     # -Deps: Now (), Sleep (ms), FreePercent () -> number, Agent, Host (fleet/Port.ps1), Post ($sessionId,
-    # $label, $body, $messageId) -> answer, and optionally WaitSeconds and PollMs.
-    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Deps, [switch]$DryRun, [string[]]$Only = @(), [string]$HordeHome = (Get-HordeHome))
+    # $label, $body, $messageId) -> answer, and optionally WaitSeconds, PollMs and RegistryPane ($sessionId)
+    # -> answer known pane id text of that session's fleet registry row.
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Deps, [switch]$DryRun, [string[]]$Only = @(), [string]$HordeHome = (Get-HordeHome), [switch]$Retry)
     $read = Read-HordeFleetRecord -Id $Id -HordeHome $HordeHome
     if ($read.state -ne "known") { throw $read.reason }
     $record = $read.value
@@ -272,6 +310,9 @@ function Invoke-HordeFleetWake {
 
     $procStart = $(if ($null -ne $Deps.PSObject.Properties["ProcessStart"]) { $Deps.ProcessStart } else { { param($p) Get-HordeFleetProcessStart -ProcessId $p } })
     $self = $(if ($null -ne $Deps.PSObject.Properties["Self"]) { & $Deps.Self } else { [pscustomobject]@{ pid = $PID; start = (Get-HordeFleetProcessStart -ProcessId $PID) } })
+    # A LOCK THAT COULD NEVER BE TAKEN OVER is not taken (first review of PR 318, finding c): without its
+    # own start time this wake would write "start ?", which every later wake must read as a live owner.
+    if (-not $DryRun -and "" + $self.start -cnotmatch '\A[0-9]{1,19}\z') { throw ("this wake cannot read its own start time (pid " + $self.pid + "), so a lock it took could never be told stale; nothing was started") }
     # 1. THE LOCK names its owner; a stale one (owner gone, or its pid reused) is taken over and said.
     $staleNote = ""
     if (Test-Path -LiteralPath $lockPath) {
@@ -280,14 +321,20 @@ function Invoke-HordeFleetWake {
         $owner = Get-HordeFleetLockOwner -Text $lockText -ProcessStart $procStart
         if (-not $owner.stale) { throw ("hibernation " + $Id + " is being woken already: " + $lockPath + " is held and " + $owner.reason) }
         $staleNote = $(if ($DryRun) { "would take over" } else { "took over" }) + " a stale waking lock of pid " + $owner.owner + ": " + $owner.reason
+        # THIS DELETE RELIES ON WINDOWS REFUSING to delete a file another process holds open with
+        # FileShare.Read, as every live wake holds its lock (probed on PowerShell 5.1 by the review of PR
+        # 318: Remove-Item of a held lock threw). So a lock wrongly judged stale cannot be removed from
+        # under a wake that still runs; the CreateNew below is the gate either way.
         if (-not $DryRun) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop }
     }
     $onlyLabels = @($Only | Where-Object { "" + $_ -ne "" })
-    $sessions = @($record.sessions)
-    if ($onlyLabels.Count -gt 0) {
-        foreach ($l in $onlyLabels) { if (@($sessions | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session labelled " + $l + ", so nothing was woken") } }
-        $sessions = @($sessions | Where-Object { $onlyLabels -ccontains ("" + (Get-HordeFleetMember $_ "label")) })
+    $choose = { param($rec)
+        $all = @($rec.sessions)
+        if ($onlyLabels.Count -eq 0) { return $all }
+        foreach ($l in $onlyLabels) { if (@($all | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session labelled " + $l + ", so nothing was woken") } }
+        return @($all | Where-Object { $onlyLabels -ccontains ("" + (Get-HordeFleetMember $_ "label")) })
     }
+    $sessions = @(& $choose $record)
     $lockStream = $null
     if (-not $DryRun) {
         try { $lockStream = New-Object System.IO.FileStream($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) }
@@ -297,6 +344,11 @@ function Invoke-HordeFleetWake {
         if ($null -ne $lockStream) {
             $b = [System.Text.Encoding]::ASCII.GetBytes("pid " + $self.pid + " start " + $self.start + " at " + (Format-HordeFleetTime -At (& $Deps.Now)) + "`n")
             $lockStream.Write($b, 0, $b.Length); $lockStream.Flush($true)
+            # 1b. Read again, under the lock.
+            $again = Read-HordeFleetRecord -Id $Id -HordeHome $HordeHome
+            if ($again.state -ne "known") { throw $again.reason }
+            $record = $again.value
+            $sessions = @(& $choose $record)
         }
         $agent = $Deps.Agent
         $snapshot = & $agent.snapshot
@@ -307,18 +359,29 @@ function Invoke-HordeFleetWake {
         # 2. Nothing running is started again.
         $spawnable = New-Object System.Collections.ArrayList
         $refused = New-Object System.Collections.ArrayList
+        $heldBack = New-Object System.Collections.ArrayList
         foreach ($s in $sessions) {
+            # HELD UNTIL -Retry (header, 2): its state is left as it is, so the next wake holds it too.
+            $last = @($s.history)[-1]
+            $holdWhy = ""
+            if ("" + $s.state -ceq "waking") { $holdWhy = "an earlier wake was starting it and never saw it come up (it may have been stopped part way), so a pane may be loading it now" }
+            elseif ("" + $s.state -ceq "failed" -and "" + (Get-HordeFleetMember $last "pane") -ne "") { $holdWhy = "an earlier wake started it in pane " + (Get-HordeFleetMember $last "pane") + " and did not see it come up, so it may still be loading there" }
+            if ($holdWhy -ne "" -and -not $Retry) { [void]$heldBack.Add([pscustomobject]@{ session = $s; reason = $holdWhy }); continue }
             # Every id of this record is passed as one that cannot be this sleeper's new id (orcs and their
             # wargs share folders), with the moment before which nothing running can be either.
-            $v = & $agent.verdict $snapshot (Get-HordeFleetCurrentId -Session $s) ("" + $s.cwd) $recordIds (Get-HordeFleetSince -Session $s -Record $record)
+            $v = & $agent.verdict $snapshot (Get-HordeFleetCurrentId -Session $s) ("" + $s.cwd) $recordIds (Get-HordeFleetSince -Session $s -Record $record) (Get-HordeFleetMember $s "process")
             if ("" + $v.state -ceq "stopped") { [void]$spawnable.Add($s) }
             else {
                 $why = $(if ("" + $v.state -ceq "running") { "still running: " + $v.reason } else { "may be running, so it is left alone: " + $v.reason })
                 [void]$refused.Add([pscustomobject]@{ session = $s; reason = $why })
             }
         }
-        & $say ("hibernation " + $Id + ": " + @($sessions).Count + " session(s); " + $spawnable.Count + " to wake, " + $refused.Count + " refused" + $(if ($DryRun) { " (dry run: nothing is changed)" } else { "" }))
+        & $say ("hibernation " + $Id + ": " + @($sessions).Count + " session(s); " + $spawnable.Count + " to wake, " + $refused.Count + " refused" + $(if ($heldBack.Count -gt 0) { ", " + $heldBack.Count + " held" } else { "" }) + $(if ($DryRun) { " (dry run: nothing is changed)" } else { "" }))
         if ($staleNote -ne "") { & $say ("  " + $staleNote) }
+        foreach ($hb in $heldBack) {
+            & $say ("  held " + (Get-HordeFleetSessionName -Session $hb.session) + ": " + $hb.reason + "; wake it again with -Retry once you know it is not running there")
+            & $tell $hb.session "held" $hb.reason
+        }
         foreach ($r in $refused) {
             & $say ("  refused " + (Get-HordeFleetSessionName -Session $r.session) + ": " + $r.reason)
             if (-not $DryRun) { Add-HordeFleetState -Session $r.session -State "still-awake" -At $now -Reason $r.reason }
@@ -343,8 +406,9 @@ function Invoke-HordeFleetWake {
                     & $tell $s "planned" ""
                 }
             }
-            $free = & $Deps.FreePercent
-            & $say ("  free memory now " + [Math]::Round([double]$free, 1) + " percent; each spawn needs at least " + $script:HordeFleetWakeMinFreePercent)
+            $free = $null
+            try { $free = [double](& $Deps.FreePercent) } catch { $free = $null; & $say ("  free memory could not be read (" + $_.Exception.Message + "); a wake would stop at its first spawn") }
+            if ($null -ne $free) { & $say ("  free memory now " + [Math]::Round($free, 1) + " percent; each spawn needs at least " + $script:HordeFleetWakeMinFreePercent) }
             return [pscustomobject]@{ id = $Id; lines = @($lines); outcomes = @($outcomes) }
         }
 
@@ -364,33 +428,73 @@ function Invoke-HordeFleetWake {
         $stopped = $false
         $startedIds = New-Object System.Collections.ArrayList
         foreach ($g in $groups) {
-            $window = ""; $started = @{}
+            $window = ""; $started = @{}; $groupStop = ""
             & $say ("  window for " + (Get-HordeFleetSessionName -Session $g.head) + ":")
             foreach ($s in $g.sessions) {
                 $name = Get-HordeFleetSessionName -Session $s
                 if ($stopped) { & $say ("    " + $name + ": left asleep (the wake stopped on free memory)"); & $tell $s "asleep" "the wake stopped on free memory"; continue }
-                # 4. Free memory before every spawn.
-                $free = [double](& $Deps.FreePercent)
-                if ($free -lt $script:HordeFleetWakeMinFreePercent) {
+                if ($groupStop -ne "") { & $say ("    " + $name + ": left asleep - " + $groupStop); & $tell $s "asleep" $groupStop; continue }
+                # 4. Free memory before every spawn; a reading that fails stops the wake the same way.
+                $free = $null; $readFailed = ""
+                try { $free = [double](& $Deps.FreePercent) } catch { $readFailed = "" + $_.Exception.Message }
+                if ($readFailed -ne "" -or ($null -ne $free -and $free -lt $script:HordeFleetWakeMinFreePercent)) {
                     $stopped = $true
-                    $why = "free memory is " + [Math]::Round($free, 1) + " percent, under " + $script:HordeFleetWakeMinFreePercent + "; the wake stopped here and the rest stay asleep"
+                    $why = $(if ($readFailed -ne "") { "free memory could not be read (" + $readFailed + ")" } else { "free memory is " + [Math]::Round($free, 1) + " percent, under " + $script:HordeFleetWakeMinFreePercent }) + "; the wake stopped here and the rest stay asleep"
                     & $say ("    " + $name + ": left asleep - " + $why)
                     & $tell $s "asleep" $why
                     continue
                 }
                 $cur = Get-HordeFleetCurrentId -Session $s
+                # 2, AGAIN: A FRESH READING RIGHT BEFORE THIS SPAWN (review of PR 318, finding 1). Every
+                # earlier session of the wake was waited for, up to the wake wait each, so the first reading
+                # can be minutes old; a sleeper resumed by hand meanwhile would be started a second time.
+                # The ids this wake has already started cannot be this sleeper under a new id either.
+                $fresh = & $agent.snapshot
+                $recheck = & $agent.verdict $fresh $cur ("" + $s.cwd) @($recordIds + @($startedIds)) (Get-HordeFleetSince -Session $s -Record $record) (Get-HordeFleetMember $s "process")
+                if ("" + $recheck.state -cne "stopped") {
+                    $why = $(if ("" + $recheck.state -ceq "running") { "still running: " + $recheck.reason } else { "may be running, so it is left alone: " + $recheck.reason })
+                    Add-HordeFleetState -Session $s -State "still-awake" -At (& $Deps.Now) -Reason $why
+                    [void](Write-HordeFleetRecord -Dir $dir -Record $record)
+                    & $say ("    " + $name + ": refused on a fresh reading before its spawn - " + $why); & $tell $s "still-awake" $why
+                    continue
+                }
                 $req = New-HordeFleetWakeStep -Session $s -Line (& $agent.resumeLine $cur) -Environment $scrub -Window $window -Started $started
                 Add-HordeFleetState -Session $s -State "waking" -At (& $Deps.Now)
                 [void](Write-HordeFleetRecord -Dir $dir -Record $record)
+                # THE TERMINAL RESTORE'S MARKER GOES NOW, after the last liveness check and just before
+                # the spawn (the host's Release; fleet/Port.ps1): a session started again must not stay
+                # barred from the next restore. Only this session's. A marker that will not go does not stop
+                # the wake - the restore would refuse the session, the safe side - but it is said.
+                $hostRelease = $(if ($null -ne $Deps.Host.PSObject.Properties["release"]) { $Deps.Host.release } else { $null })
+                if ($null -ne $hostRelease) {
+                    foreach ($rid in @(@(("" + $s.sessionId), $cur) | Select-Object -Unique)) {
+                        $rel = $null
+                        try { $rel = & $hostRelease $rid } catch { $rel = New-HordeUnknown -Reason ("" + $_.Exception.Message) }
+                        if ($null -eq $rel -or $rel.state -ne "known") { & $say ("    " + $name + ": its no-restore marker could not be removed (" + $(if ($null -ne $rel) { $rel.reason } else { "the terminal answered nothing" }) + "); the wake goes on, and a terminal restore may still refuse it") }
+                    }
+                }
                 $sp = & $term.spawn $req
                 if ($null -eq $sp -or $sp.state -ne "known") {
-                    $why = "its pane was not started: " + $(if ($null -ne $sp) { $sp.reason } else { "the terminal answered nothing" })
-                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    # ONLY A REQUEST REFUSED BEFORE ANY CALL TO THE TERMINAL (the host answers absent) is "not
+                    # started". Every other answer - a 20 s cli timeout (exit -1, process killed), a failed
+                    # call, a reply that is not a pane id - may have made the pane (third review of PR 318, P1:
+                    # the next wake started the session a second time), so it is held like a pane that started
+                    # and was not seen: failed with the pane "?", until -Retry, which still runs the liveness check.
+                    if ($null -ne $sp -and $sp.state -ceq "absent") {
+                        $why = "its pane was not started: " + $sp.reason
+                        Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    } else {
+                        $why = "its pane may have started, so it is held until -Retry: " + $(if ($null -ne $sp) { $sp.reason } else { "the terminal answered nothing" })
+                        Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why -Pane "?"
+                    }
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("    " + $name + ": failed - " + $why); & $tell $s "failed" $why
                     continue
                 }
                 if ($window -eq "") { $window = "" + $sp.value.window }
+                # The pane runs, but without its window the next warg's tab would open a window of its own:
+                # this one is still waited for, and the rest of its group stays asleep (header, 5).
+                if ($window -eq "") { $groupStop = "the window of " + $name + "'s pane " + $sp.value.pane + " could not be read back, so the rest of its group was not placed" }
                 $pl = Get-HordeFleetMember $s "placement"
                 if ($null -ne $pl) { $k = "" + $pl.windowKey + "#" + $pl.tabIndex; if (-not $started.ContainsKey($k)) { $started[$k] = [pscustomobject]@{ session = $s; pane = "" + $sp.value.pane } } }
                 # 5. Wait, bounded, for it to run.
@@ -404,13 +508,27 @@ function Invoke-HordeFleetWake {
                 }
                 if (-not $found.found) {
                     $why = "its pane " + $sp.value.pane + " was started, but it was not seen running within " + $waitSeconds + " s"
-                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why -Pane ("" + $sp.value.pane)
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("    " + $name + ": failed - " + $why); & $tell $s "failed" $why
                     continue
                 }
                 [void]$startedIds.Add($found.id)
                 if ($found.rotated) { $s | Add-Member -NotePropertyName "wokenAs" -NotePropertyValue $found.id -Force }
+                # 5b. The registry row of the woken id names the spawned pane, within the same bound.
+                $regNote = ""
+                $regRead = $(if ($null -ne $Deps.PSObject.Properties["RegistryPane"]) { $Deps.RegistryPane } else { $null })
+                if ($null -ne $regRead) {
+                    $rowPane = ""
+                    while ($true) {
+                        $rp = $null
+                        try { $rp = & $regRead $found.id } catch { $rp = $null }
+                        $rowPane = $(if ($null -ne $rp -and $rp.state -eq "known") { "" + $rp.value } else { "" })
+                        if ($rowPane -ceq ("" + $sp.value.pane) -or (& $Deps.Now) -ge $deadline) { break }
+                        & $Deps.Sleep $pollMs
+                    }
+                    if ($rowPane -cne ("" + $sp.value.pane)) { $regNote = "registry-stale: the fleet registry still names " + $(if ($rowPane -ne "") { "pane " + $rowPane } else { "no pane" }) + " for it, not pane " + $sp.value.pane + " it was woken in, so its mail is posted but will not knock it until its next turn" }
+                }
                 # 6. One mail.
                 $label = "" + (Get-HordeFleetMember $s "label")
                 if ($label -eq "") { $label = ("" + $s.sessionId).Substring(0, 8) }
@@ -418,15 +536,16 @@ function Invoke-HordeFleetWake {
                 $as = $(if ($found.rotated) { " as " + $found.id } else { "" })
                 if ($null -eq $posted -or $posted.state -ne "known") {
                     $why = "it runs again" + $as + ", but its wake mail was not posted: " + $(if ($null -ne $posted) { $posted.reason } else { "the messenger answered nothing" })
-                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why -Pane ("" + $sp.value.pane)
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("    " + $name + ": failed - " + $why); & $tell $s "failed" $why
                     continue
                 }
                 $note = $(if ($found.rotated) { "it came back under a new id, " + $found.id } else { "" })
+                if ($regNote -ne "") { $note = $regNote + $(if ($note -ne "") { "; " + $note } else { "" }) }
                 Add-HordeFleetState -Session $s -State "woken" -At (& $Deps.Now) -Reason $note
                 [void](Write-HordeFleetRecord -Dir $dir -Record $record)
-                & $say ("    " + $name + ": woken in pane " + $sp.value.pane + $as + ", and told")
+                & $say ("    " + $name + ": woken in pane " + $sp.value.pane + $as + ", and told" + $(if ($regNote -ne "") { "; " + $regNote } else { "" }))
                 & $tell $s "woken" $note
             }
         }

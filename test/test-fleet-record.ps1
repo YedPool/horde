@@ -62,7 +62,10 @@ Register-HordeFleetAgent -Name "stand-in" `
         $st = $snap.state[$id]; if ($null -eq $st) { $st = "stopped" }
         $kind = $(if ($st -ceq "running") { "live" } elseif ($st -ceq "unknown") { "unconfirmed" } else { "" })
         [pscustomobject]@{ state = $st; kind = $kind; reason = ("stand-in says " + $st); pid = "" } } `
-    -Running { param($snap) @() } -ResumeLine { param($id) "resume " + $id } -Scrub { @{} }
+    -Running { param($snap) @(@($world.procs.Keys) | Where-Object { $snap.state[$_] -ceq "running" } | ForEach-Object { [pscustomobject]@{ sessionId = $_; pid = $world.procs[$_].pid; cwd = ""; start = $world.procs[$_].start } }) }.GetNewClosure() `
+    -ResumeLine { param($id) "resume " + $id } -Scrub { @{} }
+# The processes the stand-in harness can name: K's, and none for the others.
+$world.procs = @{ $ids["K"] = @{ pid = "100"; start = "134000000000000000" } }
 $placementAsked = New-Object System.Collections.ArrayList
 $hostAnswer = @{ mode = "known" }
 Register-HordeFleetHost -Name "stand-in" `
@@ -108,6 +111,8 @@ Check ((Get-HordeTestMember $k1 "parent") -ceq $ids["K"]) "a warg keeps its pare
 Check ($k.state -ceq "recorded" -and @($k.history).Count -eq 1 -and $k.history[0].state -ceq "recorded" -and $k.history[0].at -ceq "2026-10-16T09:15:00Z") "each session starts recorded, with its history stamped"
 Check ((Get-HordeTestMember $k "parkedFile") -ceq (Join-Path $cwdK "PARKED-K.md")) "a PARKED file that is there is recorded"
 Check (-not (Test-HordeTestMember $k1 "parkedFile")) "CONTROL: one that is not there is left out, never guessed"
+Check ((Get-HordeTestMember $k "process.pid") -ceq "100" -and (Get-HordeTestMember $k "process.start") -ceq "134000000000000000") "each session keeps the pid and start time of the process that ran it, as the harness names them (second review of PR 318, P1)"
+Check (-not (Test-HordeTestMember $k1 "process")) "CONTROL: one whose process the harness cannot name is recorded without it, never guessed"
 Check ((Get-HordeTestMember $k1 "placement.left") -eq 60 -and (Get-HordeTestMember $k1 "placement.windowKey") -ceq "inst-1:1") "placement is what the terminal adapter answered"
 Check (-not (Test-HordeTestMember $t "placement") -and @($r.notes | Where-Object { $_ -like "*placement unknown*" }).Count -ge 1) "a session the terminal cannot place is recorded without placement, and said"
 Check (@($placementAsked | Where-Object { $_.sessionId -ceq $ids["K"] -and $_.instance -ceq "inst-1" -and $_.pane -ceq "7" }).Count -eq 1) "the terminal is asked by the registry's own instance and pane"
@@ -155,6 +160,25 @@ Check ((Count-Records) -eq $before + 1) "CONTROL: only the one good record was a
 $before = Count-Records
 Check (Throws { Invoke-HordeFleetRecord -Deps $deps -Selector (New-HordeFleetSelectorAll) -Selection (All-Selection) -HordeHome $hh } "already recorded at") "a second record in the same second is refused, never merged"
 Check ((Count-Records) -eq $before) "and writes nothing"
+# TWO RECORDS IN ONE SECOND, AT ONCE: the second is let in after the first has checked that the folder is
+# free and before it has written anything (its check of the PARKED files is the moment). One of the two
+# must be refused whole, and the record on disk must be one of them, not the two merged (review of PR
+# 318, finding a: a check then New-Item -Force is not one step).
+Next-Second
+$race = @{ ran = $false; inner = "" }
+$racing = [pscustomobject]@{ Now = $deps.Now; Agent = $deps.Agent; Host = $deps.Host; Registry = $deps.Registry
+    ParkedExists = { param($p)
+        if (-not $race.ran) {
+            $race.ran = $true
+            try { $in = Invoke-HordeFleetRecord -Deps $deps -Selector (New-HordeFleetSelectorLabels -Labels @("L")) -Selection (Label-Selection @("L")) -HordeHome $hh; $race.inner = "recorded " + (Labels-Of $in.record) } catch { $race.inner = $_.Exception.Message }
+        }
+        $false }.GetNewClosure() }
+$outer = ""
+try { $o = Invoke-HordeFleetRecord -Deps $racing -Selector (New-HordeFleetSelectorLabels -Labels @("K")) -Selection (Label-Selection @("K")) -HordeHome $hh; $outer = "recorded " + (Labels-Of $o.record) } catch { $outer = $_.Exception.Message }
+$onDisk = Read-HordeFleetRecord -Id (New-HordeFleetHibernationId -At $clock.at) -HordeHome $hh
+$refusals = @(@($outer, $race.inner) | Where-Object { $_ -like "*already recorded at*" }).Count
+Check ($race.ran -and $refusals -eq 1) ("of two records started in the same second, exactly one is refused (outer: " + $outer + "; inner: " + $race.inner + ")")
+Check ($onDisk.state -ceq "known" -and @($onDisk.value.sessions).Count -eq 1) ("and the record on disk is the other one, whole, not the two merged (" + $(if ($onDisk.state -ceq "known") { Labels-Of $onDisk.value } else { $onDisk.reason }) + ")")
 $hostAnswer.mode = "unknown"
 Next-Second
 $r = Invoke-HordeFleetRecord -Deps $deps -Selector (New-HordeFleetSelectorAll) -Selection (All-Selection) -HordeHome $hh

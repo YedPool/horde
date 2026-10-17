@@ -37,8 +37,11 @@
            Find = '$chosen = @($chosen | Where-Object { $drop -cnotcontains ("" + $_.label) })'
            Replace = '$chosen = @($chosen)' }
         @{ Name = "same-second-merged"
-           Find = 'if (Test-Path -LiteralPath $dir) { throw ('
-           Replace = 'if ($false) { throw (' }
+           Find = '[System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None'
+           Replace = '[System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None' }
+        @{ Name = "process-not-kept"
+           Find = '{ $s["process"] = [pscustomobject][ordered]@{'
+           Replace = '{ $null = [pscustomobject][ordered]@{' }
         @{ Name = "non-ascii-written"
            Find = 'if ([int]$ch -gt 126) {'
            Replace = 'if ($false) {' }
