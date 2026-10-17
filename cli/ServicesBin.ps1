@@ -188,12 +188,12 @@ function Test-HordeInstalledCliTip {
     $zip = $dir + ".zip"
     try {
         $made = Invoke-HordeServiceGit -Checkout $Path -Arguments @("archive", "--format=zip", "-o", $zip, $Tip) -TimeoutSeconds ([System.Math]::Max([int]$Policy.gitSeconds, 60))
-        if (-not $made.ok) { return [pscustomobject]@{ ok = $false; exported = $false; detail = ("the new revision could not be exported to try it (" + $made.detail + ")") } }
+        if (-not $made.ok) { return [pscustomobject]@{ ok = $false; exported = $false; transient = $false; detail = ("the new revision could not be exported to try it (" + $made.detail + ")") } }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $dir)
         $proof = Invoke-HordeInstalledCliProbe -Folder $dir -Policy $Policy -Tools $Tools
-        return [pscustomobject]@{ ok = $proof.ok; exported = $true; detail = $proof.detail }
-    } catch { return [pscustomobject]@{ ok = $false; exported = $false; detail = ("the new revision could not be tried (" + (Protect-HordeServiceText $_.Exception.Message) + ")") } }
+        return [pscustomobject]@{ ok = $proof.ok; exported = $true; transient = $proof.transient; detail = $proof.detail }
+    } catch { return [pscustomobject]@{ ok = $false; exported = $false; transient = $false; detail = ("the new revision could not be tried (" + (Protect-HordeServiceText $_.Exception.Message) + ")") } }
     finally {
         try { if ([System.IO.File]::Exists($zip)) { [System.IO.File]::Delete($zip) } } catch { }
         try { if ([System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::Delete($dir, $true) } } catch { }
@@ -205,8 +205,9 @@ function Invoke-HordeInstalledCliProbe {
     param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)]$Tools)
     $proof = $null
     try { $proof = @(& $Tools["Probe"] $Folder $Policy) | Select-Object -Last 1 } catch { $proof = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
-    if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["ok"] -and $proof.ok -eq $true) { return [pscustomobject]@{ ok = $true; detail = "" } }
-    return [pscustomobject]@{ ok = $false; detail = $(if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["detail"]) { Protect-HordeServiceText ("" + $proof.detail) } else { "the probe did not answer" }) }
+    if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["ok"] -and $proof.ok -eq $true) { return [pscustomobject]@{ ok = $true; transient = $false; detail = "" } }
+    # transient: the probe did not run to an end (timed out, not started): not a verdict on the revision.
+    return [pscustomobject]@{ ok = $false; transient = [bool]($null -ne $proof -and $null -ne $proof.PSObject.Properties["transient"] -and $proof.transient -eq $true); detail = $(if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["detail"]) { Protect-HordeServiceText ("" + $proof.detail) } else { "the probe did not answer" }) }
 }
 
 function Undo-HordeInstalledCliMove {
@@ -273,13 +274,14 @@ function Invoke-HordeInstalledCliFollow {
             }
             # 3. TRY IT BESIDE THE CLONE FIRST: an Orc starting horde never meets a tree that does not load.
             $pre = Test-HordeInstalledCliTip -Path $path -Tip $read.tip -Policy $Policy -Tools $Tools
-            if (-not $pre.ok -and $pre.exported) {
+            if (-not $pre.ok -and $pre.exported -and -not $pre.transient) {
                 $code = "failed"; $tellWhat = "failed"; $reason = $script:HordeInstalledCliSentences["failed"]
                 $state.failedTip = $read.tip; $dirty = $true
                 [void]$lines.Add("installed CLI: " + (& $short $read.tip) + " did not load when tried (" + $pre.detail + "); the clone was not moved")
                 & $journal "failed" "failed" ((& $short $read.tip) + " did not load when tried: " + $pre.detail)
             } elseif (-not $pre.ok) {
-                # Not the revision's fault: tried again next pass, nothing pinned.
+                # Not the revision's fault (an export that could not be made, a probe that timed out or did not
+                # start): tried again next pass, nothing pinned.
                 $code = "apply"; $tellWhat = "apply"; $reason = $script:HordeInstalledCliSentences["apply"]
                 if ($state.said -cne "apply") { [void]$lines.Add("installed CLI: not moved - " + $pre.detail) }
             } else {
@@ -295,9 +297,10 @@ function Invoke-HordeInstalledCliFollow {
                 } else {
                     # THE BACKSTOP: proved again where it now is.
                     $proof = Invoke-HordeInstalledCliProbe -Folder $path -Policy $Policy -Tools $Tools
-                    if ($proof.ok) {
+                    if ($proof.ok -or $proof.transient) {
+                        # A backstop that merely did not finish proves nothing against a revision that loaded when tried.
                         $code = "updated"
-                        [void]$lines.Add("installed CLI: moved " + (& $short $read.head) + " -> " + (& $short $read.tip) + " and it loads")
+                        [void]$lines.Add("installed CLI: moved " + (& $short $read.head) + " -> " + (& $short $read.tip) + $(if ($proof.ok) { " and it loads" } else { "; the proof in the clone did not finish (" + $proof.detail + "), it loaded when tried first" }))
                         & $journal "updated" "done" ("moved " + (& $short $read.head) + " -> " + (& $short $read.tip))
                         $state.said = ""; $state.told = ""; $state.failedTip = ""; $state.broken = ""; $dirty = $true
                     } else {

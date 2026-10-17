@@ -93,5 +93,20 @@
         @{ Name = "test-home-reaches-real-cli"
            Find = 'if ("" + $Policy.installedCliFolder -eq "" -and (Test-HordeServiceHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "export-failure-pins-revision"
+           Find = 'if (-not $pre.ok -and $pre.exported -and -not $pre.transient) {'
+           Replace = 'if (-not $pre.ok) {' }
+        @{ Name = "timed-out-probe-pins-revision"
+           Find = 'if (-not $pre.ok -and $pre.exported -and -not $pre.transient) {'
+           Replace = 'if (-not $pre.ok -and $pre.exported) {' }
+        @{ Name = "export-failure-ignored-flag"
+           Find = 'if (-not $pre.ok -and $pre.exported -and -not $pre.transient) {'
+           Replace = 'if (-not $pre.ok -and -not $pre.transient) {' }
+        @{ Name = "probe-transient-flag-dropped"
+           Find = 'transient = [bool]($null -ne $proof -and $null -ne $proof.PSObject.Properties["transient"] -and $proof.transient -eq $true);'
+           Replace = 'transient = $false;' }
+        @{ Name = "slow-backstop-rolls-back"
+           Find = 'if ($proof.ok -or $proof.transient) {'
+           Replace = 'if ($proof.ok) {' }
     )
 }

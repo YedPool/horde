@@ -319,6 +319,61 @@ try {
     Check ((Head $w) -ceq $tipV) "and with the lock gone the next pass moves the clone"
 
     Write-Host ""
+    Write-Host "--- VI-f. a proof that did not run to an end is not a verdict on the revision ---" -ForegroundColor Cyan
+    $w = New-World "x"
+    $pol = New-Policy $w
+    $told = New-Told
+    $good = Head $w
+    $tipX = Push-Commit $w $okScript
+    $slow = { param($Path, $Policy) return [pscustomobject]@{ ok = $false; transient = $true; detail = "it did not finish within 30 s and was ended" } }
+    $null = Follow $w $pol $t0 $told $slow
+    Check ((Head $w) -ceq $good -and (Read-HordeInstalledCliState -HordeHome $w.home).failedTip -ceq "") "a probe that timed out leaves the clone alone and pins nothing"
+    Check ($told.notices.Count -eq 1 -and (Get-HordeTestMember $told.notices[0] "what") -ceq "apply") "and is told as a move that did not complete, not as a revision that did not load"
+    $null = Follow $w $pol $t0.AddSeconds(120) $told $probe -NoFetch
+    Check ((Head $w) -ceq $tipX) "and the next pass tries again, and moves"
+    $w = New-World "x2"
+    $pol = New-Policy $w
+    $told = New-Told
+    $null = Push-Commit $w $okScript
+    $bin = $w.bin
+    $backstopSlow = { param($Path, $Policy) if ($Path -ceq $bin) { return [pscustomobject]@{ ok = $false; transient = $true; detail = "ended at the time limit" } }; return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    $lines = Follow $w $pol $t0 $told $backstopSlow
+    Check ((Head $w) -ceq (G $w.origin @("rev-parse", "main")) -and $told.notices.Count -eq 0 -and (Said $lines) -like "*did not finish*loaded when tried first*") "a backstop that timed out does not undo a revision that loaded when tried: it stays, unpinned, and nobody is told"
+    # the real command tool: only a command that RAN to a non-zero exit is a verdict
+    $slowCo = Join-Path $work "slow-co"
+    [void][System.IO.Directory]::CreateDirectory($slowCo)
+    [System.IO.File]::WriteAllText((Join-Path $slowCo "horde.ps1"), "Start-Sleep -Seconds 20`r`n")
+    $ran = Invoke-HordeServiceHordeCommand -Checkout $slowCo -HordeHome $work -Words @("version") -TimeoutSeconds 2
+    Check ($ran.ok -eq $false -and (Get-HordeTestMember $ran "transient") -eq $true) "the real command runner marks a command ended at its time limit as transient"
+    [System.IO.File]::WriteAllText((Join-Path $slowCo "horde.ps1"), "exit 3`r`n")
+    $ran = Invoke-HordeServiceHordeCommand -Checkout $slowCo -HordeHome $work -Words @("version") -TimeoutSeconds 30
+    Check ($ran.ok -eq $false -and (Get-HordeTestMember $ran "transient") -eq $false) "and a command that ran and exited non-zero as not transient"
+
+    Write-Host ""
+    Write-Host "--- VI-g. a revision that cannot be exported is a trouble of this machine, not of the revision ---" -ForegroundColor Cyan
+    $w = New-World "y"
+    $pol = New-Policy $w
+    $told = New-Told
+    $good = Head $w
+    $tipY = Push-Commit $w $okScript
+    $tmpFile = Join-Path $work "not-a-folder.txt"
+    [System.IO.File]::WriteAllText($tmpFile, "x")
+    $savedTemp = @{ TEMP = $env:TEMP; TMP = $env:TMP }
+    $triesBefore = @(Get-ChildItem -LiteralPath $savedTemp.TEMP -Filter "horde-cli-try-*" -ErrorAction SilentlyContinue).Count
+    $probed = New-Object System.Collections.ArrayList
+    $watch = { param($Path, $Policy) [void]$probed.Add($Path); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    try {
+        $env:TEMP = $tmpFile; $env:TMP = $tmpFile
+        $lines = Follow $w $pol $t0 $told $watch
+    } finally { $env:TEMP = $savedTemp.TEMP; $env:TMP = $savedTemp.TMP }
+    Check ((Head $w) -ceq $good -and $probed.Count -eq 0) "when the revision cannot be exported the clone is not moved and nothing is probed"
+    Check ((Read-HordeInstalledCliState -HordeHome $w.home).failedTip -ceq "") "and the revision is not pinned as bad"
+    Check ($told.notices.Count -eq 1 -and (Get-HordeTestMember $told.notices[0] "what") -ceq "apply" -and (Said $lines) -like "*not moved - the new revision could not be exported*") "and the warchief is told as apply, with the reason said"
+    Check (@(Get-ChildItem -LiteralPath $savedTemp.TEMP -Filter "horde-cli-try-*" -ErrorAction SilentlyContinue).Count -eq $triesBefore) "and no try folder or zip is left behind"
+    $null = Follow $w $pol $t0.AddSeconds(120) $told $probe -NoFetch
+    Check ((Head $w) -ceq $tipY) "and with a working temp folder the next pass tries again, and moves"
+
+    Write-Host ""
     Write-Host "--- VII. telling that did not get through is tried again; off and absent are quiet ---" -ForegroundColor Cyan
     $w = New-World "g"
     $pol = New-Policy $w
