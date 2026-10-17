@@ -37,7 +37,7 @@ function Reset-World {
     $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null; $world.noWindow = @()
     # What the stand-in terminal was asked, in order: "release <id>" and "spawn <id>"; releaseFails holds
     # the ids whose no-restore marker cannot be removed.
-    $world.order = New-Object System.Collections.ArrayList; $world.releaseFails = @()
+    $world.order = New-Object System.Collections.ArrayList; $world.releaseFails = @(); $world.unmarks = New-Object System.Collections.ArrayList
     # The fleet registry's pane per session id, as its hook writes it when a session starts; staleRegistry
     # holds the ids whose row is never updated (the row still names the old pane). registryReads counts reads.
     $world.registry = @{}; $world.staleRegistry = @(); $world.registryReads = 0
@@ -204,6 +204,8 @@ $rec = Read-Rec $h
 Check ((State-Of $rec "K") -ceq "still-awake" -and (Get-Session $rec "K").history[-1].reason -like "still running*") "a running session is refused and left still-awake, with the reason"
 Check ((State-Of $rec "X") -ceq "still-awake" -and (Get-Session $rec "X").history[-1].reason -like "may be running*") "a session whose liveness is unknown is refused as if running"
 Check ($null -eq (Spawn-For "K") -and $null -eq (Spawn-For "X")) "neither is started"
+Check (@($world.unmarks | Where-Object { $_.id -ceq $ids["K"] -and $_.why -ceq "hibernated" }).Count -ge 1) "a session found RUNNING is asked to lose a hibernated no-restore marker that a hand restart outlived"
+Check (@($world.unmarks | Where-Object { $_.id -ceq $ids["X"] }).Count -eq 0) "one that only MAY be running is not: nothing is removed on a guess"
 Check ((Spawn-For "K1").mode -ceq "window" -and (Spawn-For "K2").mode -ceq "tab") "the orc's wargs still get the orc's window: the first one opens it"
 Check (@($r.outcomes | Where-Object { $_.outcome -ceq "still-awake" }).Count -eq 2) "the outcome lists both as still awake"
 Reset-World
@@ -226,6 +228,7 @@ $rec = Read-Rec $h
 Check ($null -eq (Spawn-For "K1")) ("the sleeper resumed by hand after the first reading is not spawned (" + ($r.lines -join " | ") + ")")
 Check ((State-Of $rec "K1") -ceq "still-awake" -and (Get-Session $rec "K1").history[-1].reason -like "still running*4711*") "it is left still-awake, with the fresh reading's reason"
 Check (@($r.lines | Where-Object { $_ -like "*K1 (22222222)*refused*still running*4711*" }).Count -eq 1) "and the wake says so, by name"
+Check (@($world.unmarks | Where-Object { $_.id -ceq $ids["K1"] -and $_.why -ceq "hibernated" }).Count -ge 1) "and the fresh reading, which found it running, asks for its hibernated marker to go"
 Check ((State-Of $rec "K") -ceq "woken" -and (State-Of $rec "K2") -ceq "woken" -and $null -ne (Spawn-For "K2")) "its twin K2, still stopped on the fresh reading, is spawned and woken, and so is the orc"
 $k2v = @($world.verdicts | Where-Object { $_.id -ceq $ids["K2"] -and $null -ne $_.since })
 Check ($k2v.Count -ge 2 -and @($k2v[-1].ignore) -ccontains $NEW) "the re-check passes the ids this wake already started - the orc came back as a new id - as ones that cannot be the sleeper"
