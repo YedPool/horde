@@ -154,8 +154,24 @@
            Find = '$r.sha256 -cne $Sha256 -or '
            Replace = '' }
         @{ Name = "photo-sent-again-refused-counts"
-           Find = 'if ($r.stage -cne "closed" -or $r.code -ceq "delivered" -or $r.code -ceq "saved") { return $r }'
-           Replace = 'return $r' }
+           Find = '            if ($r.code -cne "delivered" -and $r.code -cne "saved") { continue }'
+           Replace = '' }
+        # Second review of PR 285: the same photo is the same sender, session and image, sent within the window, with its file still there.
+        @{ Name = "photo-sent-again-any-sender"
+           Find = '$r.from -cne $From -or '
+           Replace = '' }
+        @{ Name = "photo-sent-again-any-session"
+           Find = '        if ("$($r.session)" -cne $Session) { continue }'
+           Replace = '' }
+        @{ Name = "photo-sent-again-any-age"
+           Find = '        if ([long]$r.sentAt + $WindowMs + $SkewMs -lt $SentAt) { continue }'
+           Replace = '' }
+        @{ Name = "photo-sent-again-file-gone-counts"
+           Find = '            if (-not $r.file -or -not [System.IO.File]::Exists("$($r.file)")) { continue }'
+           Replace = '' }
+        @{ Name = "photo-sent-again-unfinished-counts"
+           Find = '            if ($have -eq @($r.parts).Count) { return $r }'
+           Replace = '            return $r' }
         @{ Name = "photo-closed-record-keeps-the-key"
            Find = '    $Record.key = ""'
            Replace = '' }

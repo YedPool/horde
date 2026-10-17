@@ -545,15 +545,34 @@ function Get-HordeChatPhotoRecordPaths {
 }
 
 function Find-HordeChatPhotoTaken {
-    # The record of a photo this machine already took from the same sender with the same image (its
-    # SHA-256) under ANOTHER photo id - a photo sent again because its receipt came late. Taken is one still
-    # being received or saved, or closed as delivered or saved; a refused one is not taken. $null when none.
-    param([string]$HordeHome, [string]$From, [string]$PhotoId, [string]$Sha256)
+    # The record of a photo this machine already took, for a photo sent AGAIN because its receipt came late:
+    # the same sender, the same Thrall session (the manifest's) and the same image (SHA-256), under ANOTHER
+    # photo id, and sent no longer ago than its window plus the clock skew before this one - anything else
+    # is a new photo the founder sent on purpose (another session, a later day). Taken is one whose file is
+    # still in the inbox (saved, or closed delivered or saved), or one still being received within its
+    # window with every part here; a refused or an unfinished one is not taken. $null when none.
+    param([string]$HordeHome, [string]$From, [string]$PhotoId, [string]$Sha256, [string]$Session, [long]$SentAt, [long]$WindowMs, [long]$SkewMs, [long]$NowMs)
     foreach ($f in @(Get-HordeChatPhotoRecordPaths -HordeHome $HordeHome)) {
         if (-not [System.IO.File]::Exists($f)) { continue }
         $r = Read-HordeChatPhotoRecord -Path $f
         if ($null -eq $r -or $r.from -cne $From -or $r.sha256 -cne $Sha256 -or $r.photoId -ceq $PhotoId) { continue }
-        if ($r.stage -cne "closed" -or $r.code -ceq "delivered" -or $r.code -ceq "saved") { return $r }
+        if ("$($r.session)" -cne $Session) { continue }
+        if ([long]$r.sentAt + $WindowMs + $SkewMs -lt $SentAt) { continue }
+        if ($r.stage -ceq "closed") {
+            if ($r.code -cne "delivered" -and $r.code -cne "saved") { continue }
+            if (-not $r.file -or -not [System.IO.File]::Exists("$($r.file)")) { continue }
+            return $r
+        }
+        if ($r.stage -ceq "saved") {
+            if ($r.file -and [System.IO.File]::Exists("$($r.file)")) { return $r }
+            continue
+        }
+        if ($r.stage -ceq "receiving" -and [long]$r.expiresAt -gt $NowMs) {
+            $folder = [System.IO.Path]::GetDirectoryName($f)
+            $have = 0
+            for ($n = 1; $n -le @($r.parts).Count; $n++) { if ([System.IO.File]::Exists([System.IO.Path]::Combine($folder, ("part-" + $n + ".bin")))) { $have++ } }
+            if ($have -eq @($r.parts).Count) { return $r }
+        }
     }
     return $null
 }
@@ -639,10 +658,20 @@ function Invoke-HordeChatPhotoAccept {
     # THE SAME PHOTO SENT AGAIN: the phone offers Send again when no receipt came in time, and the PC may have
     # taken the first copy by then. The same image from the same sender is told as taken, under the new id:
     # nothing is stored, the budget is not spent and the Thrall is told nothing a second time.
-    $twin = Find-HordeChatPhotoTaken -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -Sha256 $mf.sha256
+    $skewMs = [long]600000
+    try { if ($null -ne $Context.PSObject.Properties["settings"] -and $null -ne $Context.settings.PSObject.Properties["clockSkewSeconds"]) { $skewMs = [long]$Context.settings.clockSkewSeconds * 1000 } } catch { }
+    $twin = Find-HordeChatPhotoTaken -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -Sha256 $mf.sha256 -Session $mf.session -SentAt $sentAt -WindowMs $ps.windowMs -SkewMs $skewMs -NowMs $nowMs
+    if ($null -ne $twin -and $twin.stage -cne "closed") {
+        # The first copy is whole and about to be saved: this one waits a turn, and is then told what became of it,
+        # never told "receiving" for good.
+        return [pscustomobject]@{ outcome = "retry"; reason = ("photo " + $mf.photoId + ": the same image is being saved as photo " + $twin.photoId + "; asked again") }
+    }
     if ($null -ne $twin) {
+        # Whatever this manifest set aside while it waited is let go: it is told, not received.
+        $mine.heldSaid.Remove("photo/" + $mf.photoId)
+        try { [System.IO.File]::Delete([System.IO.Path]::Combine((Get-HordeChatPhotoRoot -HordeHome $homeDir), "signed", ($mf.from + "-" + $mf.photoId + ".json"))) } catch { }
         $twinFile = $(if ($twin.file) { [System.IO.Path]::GetFileName($twin.file) } else { "" })
-        $twinCode = $(if ($twin.stage -ceq "closed") { $twin.code } else { "receiving" })
+        $twinCode = $twin.code
         # A closed record under the new id (acceptedAt 0, so never counted) makes the parts the phone still
         # sends refused as closed, instead of waiting in the pending area for an hour.
         try {
@@ -655,7 +684,7 @@ function Invoke-HordeChatPhotoAccept {
         $sentTwin = Send-HordeChatPhotoReceipt -Context $Context -Mine $mine -PhotoId $mf.photoId -Status "accepted" -Code $twinCode -Session $mf.session -SentAt $sentAt -File $twinFile
         return [pscustomobject]@{ outcome = "done"; reason = ("photo " + $mf.photoId + ": accepted (" + $twinCode + ") - the same image was taken already as photo " + $twin.photoId + ", so it is not taken twice" + $(if ($sentTwin -cne "") { "; " + $sentTwin } else { "" })) }
     }
-    $counts =Get-HordeChatPhotoCounts -HordeHome $homeDir -Now $Now
+    $counts = Get-HordeChatPhotoCounts -HordeHome $homeDir -Now $Now
     if ($counts.day -ge $ps.perDay) { return (& $answer "refused" "refused" "over-budget" ("" + $counts.day + " photos were accepted in the last 24 hours; a day holds " + $ps.perDay)) }
     if ($counts.minute -ge $ps.perMinute) {
         $heldKey = "photo/" + $mf.photoId

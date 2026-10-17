@@ -263,6 +263,13 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
+  // The photos this phone has put at a machine and heard nothing of: the stored list and this session's, by id.
+  function waitingOf(e, s) {
+    const byId = new Map();
+    for (const w of (e.photosWaiting || [])) byId.set(w.photoId, { photoId: w.photoId, expiresAt: w.expiresAt });
+    for (const p of s.chat.photos) byId.set(p.photoId, p);
+    return [...byId.values()];
+  }
   async function entryOf(id) {
     const e = await store.get(ENTRY + id);
     if (!e) throw fail("there is no such horde on this phone");
@@ -1039,7 +1046,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (!/^[0-9a-f]{32}$/.test(photoId)) throw fail("the photo's id is 32 lower-case hex");
       if (!P.sniffImage(bytes)) throw fail(P.PHOTO_NOT_IMAGE);
       if (bytes.length > s.chat.photoBytes) throw fail("This photo is " + bytes.length + " bytes, and the PC takes at most " + s.chat.photoBytes + ".");
-      if (P.photosUnanswered(s.chat.photos, s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);
+      // The count survives a lock, an unlock and a restart: the unanswered set is kept on the stored entry (photosWaiting),
+      // not only in this session, so reopening the app does not hand back a fresh three.
+      if (P.photosUnanswered(waitingOf(e, s), s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);
       const windowMs = P.photoWindowFor(s.chat.photoWindowMs);
       const sealed = await P.sealPhotoParts(bytes, { from: e.deviceKeyId, photoId });
       const session = s.chat.session;
@@ -1053,6 +1062,12 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       // FOR THE PC: relay/js/protocol.js, photoItems).
       const mine = { photoId, at: env.ts, session, expiresAt: env.ts + windowMs, sent: false };
       s.chat.photos.push(mine);
+      await store.update(ENTRY + id, (held) => {
+        if (!held) return held;
+        const at = now();
+        const kept = (held.photosWaiting || []).filter((w) => w.photoId !== photoId && w.expiresAt > at);
+        return { ...held, photosWaiting: kept.concat([{ photoId, expiresAt: mine.expiresAt }]).slice(-50) };
+      });
       let puts = 1;
       for (const p of sealed.parts) {
         if (puts >= PHOTO_BURST) await sleep(PHOTO_PACE_MS);

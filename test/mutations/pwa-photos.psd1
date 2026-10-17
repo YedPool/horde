@@ -47,8 +47,15 @@
            Find = 'c.photoBytes = r.value.photoBytes; c.photoWindowMs = r.value.photoWindowMs; }'
            Replace = 'c.photoBytes = r.value.photoBytes; }' }
         @{ Name = "photos-waiting-not-capped"
-           Find = '      if (P.photosUnanswered(s.chat.photos, s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);'
+           Find = '      if (P.photosUnanswered(waitingOf(e, s), s.chat.photoReceipts, now()) >= P.PHOTO_MOST_UNANSWERED) throw fail(P.PHOTO_TOO_MANY_UNANSWERED);'
            Replace = '' }
+        # Second review of PR 285: the cap of waiting photos is kept on the stored entry, so it survives a lock and a restart.
+        @{ Name = "photos-waiting-forgotten-on-lock"
+           Find = 'P.photosUnanswered(waitingOf(e, s), '
+           Replace = 'P.photosUnanswered(s.chat.photos, ' }
+        @{ Name = "photos-waiting-not-stored"
+           Find = 'return { ...held, photosWaiting: kept.concat([{ photoId, expiresAt: mine.expiresAt }]).slice(-50) };'
+           Replace = 'return held;' }
         @{ Name = "chat-read-without-the-clock"
            Find = 'items: P.chatTimeline(s.chat, now()), mode'
            Replace = 'items: P.chatTimeline(s.chat), mode' }

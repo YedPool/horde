@@ -905,6 +905,47 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $null = Send-Manifest $Y $S2
     $turn = Invoke-Turn $Y
     Check ($t.Contains("refused (not-image)") -and $turn.Contains("accepted (receiving)") -and -not $turn.Contains("not taken twice")) ("TWIN: a photo that was refused is not told as delivered when its image comes again (" + $turn + ")")
+    # SECOND REVIEW OF PR 285: only a Send again after a late receipt is the same photo. The same image is a
+    # NEW photo, stored and posted, from another passkey, in another Thrall session, long after, after its file
+    # is gone, or when the first copy never got its parts.
+    $storeAndPost = {
+        param($World, $Photo)
+        $before = @(Get-InboxFiles $World).Count
+        $null = Send-Manifest $World $Photo
+        $tn = Invoke-Turn $World
+        foreach ($pp in $Photo.parts) { $null = Send-Part $World $pp }
+        $null = Invoke-Tick $World
+        return [pscustomobject]@{ turn = $tn; added = (@(Get-InboxFiles $World).Count - $before); posts = @(& $postsOf $Photo.id).Count }
+    }
+    $isNew = { param($o) $o.turn.Contains("accepted (receiving)") -and -not $o.turn.Contains("not taken twice") -and $o.added -eq 1 -and $o.posts -eq 1 }
+    $phone2 = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $Y.home -Phone $phone2)
+    Add-PhoneKey -HordeHome $Y.home -Phone $phone2
+    $o2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Phone $phone2)
+    Check (& $isNew $o2) ("ANOTHER PASSKEY: the founder's second trusted passkey sending the same image is stored and posted, not told as the first phone's (" + $o2.turn + ")")
+    $otherSession = $(if ((Get-ThrallSession $Y).StartsWith("a")) { "b" } else { "a" }) + (Get-ThrallSession $Y).Substring(1)
+    $o3 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Set @{ session = $otherSession })
+    Check (& $isNew $o3) ("ANOTHER SESSION: the same image for another Thrall session is stored and posted (" + $o3.turn + ")")
+    $imgL = New-ImageBytes -Type "jpg" -Length 20000
+    $L1 = New-Photo -World $Y -Image $imgL
+    $oL1 = & $storeAndPost $Y $L1
+    $lPath = Join-Path $Y.home ("relay\chat\photos\closed\" + $L1.from + "-" + $L1.id + ".json")
+    $lRec = Read-HordeChatPhotoRecord -Path $lPath
+    $lRec.sentAt = [long]$lRec.sentAt - 7200000
+    Write-HordeChatPhotoRecord -Path $lPath -Record $lRec
+    $oL2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgL)
+    Check ($oL1.posts -eq 1 -and (& $isNew $oL2)) ("TWO HOURS LATER: the same image sent two hours after the first copy is a new photo, stored and posted (" + $oL2.turn + ")")
+    $imgF = New-ImageBytes -Type "jpg" -Length 20000
+    $oF1 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgF)
+    foreach ($gone in @(Get-InboxFiles $Y | Where-Object { $_.Length -eq $imgF.Length })) { Remove-Item -LiteralPath $gone.FullName -Force }
+    $oF2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgF)
+    Check ($oF1.posts -eq 1 -and (& $isNew $oF2)) ("FILE GONE: when the first copy's file is no longer in the inbox the same image is taken anew, and no receipt names a missing file (" + $oF2.turn + ")")
+    $imgR = New-ImageBytes -Type "jpg" -Length 20000
+    $R1 = New-Photo -World $Y -Image $imgR
+    $null = Send-Manifest $Y $R1
+    $null = Invoke-Turn $Y
+    $oR2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgR)
+    Check ((& $isNew $oR2) -and -not $oR2.turn.Contains("asked again")) ("UNFINISHED FIRST COPY: a first copy with parts missing is not taken, so the second is handled as any photo (" + $oR2.turn + ")")
     # NIT: a closed record keeps what became of the photo, not the key to its parts.
     $d1Closed = Join-Path $Y.home ("relay\chat\photos\closed\" + $D1.from + "-" + $D1.id + ".json")
     $d1Rec = $(if (Test-Path -LiteralPath $d1Closed) { Read-HordeChatPhotoRecord -Path $d1Closed } else { $null })

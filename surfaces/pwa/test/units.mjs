@@ -909,6 +909,12 @@ const PH = await load("app/photo.js");
   head = (await t.get(m.mailbox, 0, 256)).value.items.length;
   const capped = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
   check(capped === P.PHOTO_TOO_MANY_UNANSWERED && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "THREE WAITING: a fourth photo is refused in plain words and nothing is put", capped);
+  // The cap survives a lock, an unlock and a restart: three photos waiting stay three after the app is reopened.
+  phone.lock(a.paired.id);
+  await phone.unlock(a.paired.id);
+  await phone.refresh(a.paired.id);
+  const cappedAfter = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(cappedAfter === P.PHOTO_TOO_MANY_UNANSWERED, "AFTER A LOCK AND AN UNLOCK the three photos still wait: the cap is not handed back by reopening the app", cappedAfter);
   const wordFor = async (id) => { await sendChat(t, m, a.phoneKey, P.utf8(JSON.stringify({ v: 1, kind: "chat-photo-receipt", horde: m.horde, machine: m.keyId, session: "sess-1", photoId: id, status: "accepted", code: "delivered", sentAt: w1.header.ts, file: "" })), "photo-receipt"); };
   await wordFor(waiting[0]);
   await phone.refresh(a.paired.id);
