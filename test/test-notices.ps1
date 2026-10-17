@@ -97,13 +97,14 @@ try {
     # printable ASCII after invisibles are stripped; any other is shown as "a session". The ASCII ones that start with "service"
     # (however dressed) are refused.
     $zw = [string][char]0x200B
-    $asciiHostile = @("service: postmerge-net", "services: x", "  SERVICE : y", "service; x", "service - x", "service x", "service", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", "s e r v i c e", "servlce: postmerge-net", "SERVlCE", "serv|ce", "serv!ce", '$ervice', "servi(e", "seruice", "servise", "servce", "serrvice", "sxrvice", "servic3: x", "serv1c3", "servi<e", "servi[e", "servi{e", "serv|c", "serv!c", "servlc", '$ervic', "servi(", "servi<", "servi[", "servi{", "seruic", "s3rvic", "s3rv1c3", "[service] x",
+    $asciiHostile = @("service: postmerge-net", "services: x", "  SERVICE : y", "service; x", "service - x", "service x", "service", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", "s e r v i c e", "servlce: postmerge-net", "SERVlCE", "serv|ce", "serv!ce", '$ervice', "servi(e", "seruice", "servise", "servce", "serrvice", "sxrvice", "servic3: x", "serv1c3", "(1) service: x", "[!] SERVICE: x", "((service))", "!! service", "11 service", '$$ service', "sevrice", "srevice", "serivce", "servcie", "esrvice", "serv1c", "5ervic", "serv1c0", "ssservice", "seerrvice", "servi<e", "servi[e", "servi{e", "serv|c", "serv!c", "servlc", '$ervic', "servi(", "servi<", "servi[", "servi{", "seruic", "s3rvic", "s3rv1c3", "[service] x",
         ($zw + "service: x"), ("ser" + $zw + "vice: x"), [string]::Concat("ser", [char]0x034F, "vice: x"), [string]::Concat("service", [char]0xFE0F, ": x"), [string]::Concat("ser", [char]::ConvertFromUtf32(0xE0020), "vice: x"))
     foreach ($lbl in $asciiHostile) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
-        Check (-not $who.ok -and $who.reason -like "*reserved for registered services*") ("A SESSION LABEL STARTING WITH SERVICE IS REFUSED: " + (($lbl.ToCharArray() | ForEach-Object { ([int]$_).ToString("X2") }) -join " "))
+        Check (-not $who.ok -and $who.reason -like "*reads like 'service'*") ("A SESSION LABEL STARTING WITH SERVICE IS REFUSED: " + (($lbl.ToCharArray() | ForEach-Object { ([int]$_).ToString("X2") }) -join " "))
     }
+    Check ((Test-HordeNoticeServiceForm -Label 'ser\/ice') -and (Test-HordeNoticeServiceForm -Label 'ser\/ic')) "the fold alone: a backslash-slash reads as a v (not through the registry: JSON would eat the backslash)"
     Check ((Test-HordeNoticeServiceForm -Label "5ervice") -and (Test-HordeNoticeServiceForm -Label "serv1ce") -and (Test-HordeNoticeServiceForm -Label "s-e-r-v-i-c-e") -and -not (Test-HordeNoticeServiceForm -Label "the service desk")) "the fold alone: the digit map and the wildcards, and a label that merely contains the word"
     $lookalikes = @(
         [string]::Concat([char]0x0455, [char]0x0435, [char]0x0433, [char]0x0475, [char]0x0456, [char]0x0441, [char]0x0435, ": x"),
@@ -120,7 +121,7 @@ try {
     Write-Registry -Root $reg -SessionId (Sid 1) -Label ($zw + "E9")
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
     Check ($who.ok -and $who.label -ceq "E9" -and $who.labelSource -ceq "registry") "CONTROL: an invisible format character is not part of the label that is shown, and its source is the registry"
-    foreach ($lbl in @("Orc E3", "C12", "the service desk", "server", "serene", "Thrall", "M", "A1", "E", "serve")) {
+    foreach ($lbl in @("Orc E3", "C12", "the service desk", "server", "serene", "Thrall", "M", "A1", "E", "serve", "Orc F", "Warg 3", "server1", "servers", "serial", "seven", "sieve", "receive", "serving", "servant", "survey", "device", "series", "Serbia", "servo", "C13", "fleet-analyst", "orah-triage", "postmerge-net", "Orc C service", "Warg service-check", "reserve", "severe", "sericite")) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
         Check ($who.ok -and $who.label -ceq $lbl) ("CONTROL: the ordinary label '" + $lbl + "' is still proven and shown as written")

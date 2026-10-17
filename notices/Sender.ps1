@@ -65,7 +65,8 @@ function Test-HordeNoticeAncestor {
 
 function Get-HordeNoticeConfusables {
     # THE ONE TABLE: what each printable ASCII character reads as when a label is skeletonised. Letters read as themselves
-    # (lower-cased); the look-alikes of letters read as the letter; every other printable ASCII character reads as nothing.
+    # (lower-cased); the look-alikes of letters read as the letter; every other printable ASCII character reads as nothing. There is no row
+    # for 0 (o) or 7 (t): "service" has neither letter, so a dropped 0 or 7 is one deletion, the same one edit as a substituted one.
     # A function, not a $script: variable, because this file is dot-sourced inside command blocks (core/Tristate.ps1).
     $map = @{}
     foreach ($code in 97..122) { $c = [string][char]$code; $map[$c] = $c }   # not 'a'..'z': Windows PowerShell 5.1 has no character ranges
@@ -73,44 +74,59 @@ function Get-HordeNoticeConfusables {
     foreach ($c in '$', '5') { $map["$c"] = 's' }
     foreach ($c in '(', '<', '[', '{') { $map["$c"] = 'c' }
     $map['u'] = 'v'
-    $map['0'] = 'o'
     $map['3'] = 'e'
-    $map['7'] = 't'
     return $map
 }
 
 function Test-HordeWithinOneEdit {
-    # Is -A within edit distance 1 of -B: equal, or one substitution, one insertion or one deletion?
+    # Is -A within ONE edit of -B (Damerau): equal, or one substitution, one insertion, one deletion, or two ADJACENT letters swapped?
     param([string]$A, [string]$B)
     if ($A -ceq $B) { return $true }
     if ([Math]::Abs($A.Length - $B.Length) -gt 1) { return $false }
     $i = 0
     while ($i -lt $A.Length -and $i -lt $B.Length -and $A[$i] -ceq $B[$i]) { $i++ }
-    if ($A.Length -eq $B.Length) { return ($A.Substring($i + 1) -ceq $B.Substring($i + 1)) }
+    if ($A.Length -eq $B.Length) {
+        if ($A.Substring($i + 1) -ceq $B.Substring($i + 1)) { return $true }
+        return ($i + 1 -lt $A.Length -and $A[$i] -ceq $B[$i + 1] -and $A[$i + 1] -ceq $B[$i] -and $A.Substring($i + 2) -ceq $B.Substring($i + 2))
+    }
     if ($A.Length -gt $B.Length) { return ($A.Substring($i + 1) -ceq $B.Substring($i)) }
     return ($A.Substring($i) -ceq $B.Substring($i + 1))
+}
+
+function Get-HordeNoticeSkeleton {
+    # -Text through the one table, then each run of one repeated letter collapsed to a single letter ("ssservice", "serrvice").
+    param([string]$Text)
+    $map = Get-HordeNoticeConfusables
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $Text.ToCharArray()) {
+        $k = "$c"
+        if ($map.ContainsKey($k)) { [void]$sb.Append($map[$k]) }
+    }
+    return [regex]::Replace($sb.ToString(), '(.)\1+', '$1')
 }
 
 function Test-HordeNoticeServiceForm {
     # Does -Label read as a service's? Labels that READ LIKE "service" at their start are reserved for registered services,
     # whatever follows. TWO LAYERS, because a list of spellings is never finished:
-    #   (a) the label is skeletonised through the one table above (look-alikes read as their letter, every other character is dropped);
+    #   (a) the label is skeletonised through the one table above (look-alikes read as their letter, every other character is dropped,
+    #       "\/" reads as v, a repeated letter counts once);
     #   (b) it is refused when a prefix of that skeleton of 6, 7 or 8 letters is within one edit of "service" (one letter changed,
-    #       added or missing: "servce", "serrvice", "sxrvice", "servise"). "server" and "serene" are more than one edit away.
+    #       added, missing, or two adjacent letters swapped: "servce", "serrvice", "sxrvice", "servise", "sevrice").
+    # Checked TWICE: as written, and with the leading non-letters stripped first, so look-alike brackets and bangs in front
+    # ("(1) service", "[!] SERVICE", "$$ service") cannot use up the one edit.
+    # "server" and "serene" are more than one edit away; "servlet" and "servile" are ONE edit away and are refused (accepted, PR 332).
     # ASCII only: a label that is not printable ASCII is never shown as itself (Get-HordeNoticeShownLabel).
     param([AllowEmptyString()][string]$Label)
-    $map = Get-HordeNoticeConfusables
-    $sb = New-Object System.Text.StringBuilder
-    foreach ($c in $Label.ToLowerInvariant().ToCharArray()) {
-        $k = "$c"
-        if ($map.ContainsKey($k)) { [void]$sb.Append($map[$k]) }
-    }
-    $sk = $sb.ToString()
-    foreach ($n in 6, 7, 8) {
-        if ($sk.Length -ge $n -and (Test-HordeWithinOneEdit -A $sk.Substring(0, $n) -B "service")) { return $true }
+    $low = $Label.ToLowerInvariant().Replace('\/', 'v')
+    foreach ($v in @($low, ($low -replace '^[^a-z]+', ''))) {
+        $sk = Get-HordeNoticeSkeleton -Text $v
+        foreach ($n in 6, 7, 8) {
+            if ($sk.Length -ge $n -and (Test-HordeWithinOneEdit -A $sk.Substring(0, $n) -B "service")) { return $true }
+        }
     }
     return $false
 }
+
 function Get-HordeNoticeShownLabel {
     # The label as the founder may see it: only if it is printable ASCII (0x20-0x7E) - every real fleet label is. Anything else (a
     # look-alike script, a filler, another alphabet) is shown as the neutral "a session": the proof of WHICH session it is stays,
@@ -177,7 +193,7 @@ function Resolve-HordeNoticeSender {
     # A SERVICE'S LABEL IS NOT A SESSION'S TO TAKE (notices/Services.ps1): a session labelled "service: x"
     # would look to the founder like the service x.
     $label = Get-HordeNoticeShownLabel -Label $label
-    if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " has a label that starts with ''service'': labels starting with ''service'' are reserved for registered services, which are shown as ''service: <name>''")) }
+    if (Test-HordeNoticeServiceForm -Label $label) { return (& $no ("no notice was sent: session " + $sid + " has a label that reads like 'service': a label that reads like 'service' is reserved for registered services, which are shown as 'service: <name>'")) }
     if ($label.Length -gt 40) { $label = $label.Substring(0, 40).TrimEnd() }
     # labelSource: "registry" (a fleet label) or "agent-name" (the agent's own name for the session). A registrar must have the first (notices/Services.ps1).
     return [pscustomobject]@{ ok = $true; reason = ""; sessionId = $sid; label = $label; labelSource = $labelSource }

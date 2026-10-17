@@ -30,6 +30,24 @@
         @{ Name = "l-pipe-and-bang-do-not-read-as-i"
            Find = 'foreach ($c in ''|'', ''!'', ''1'', ''l'') { $map["$c"] = ''i'' }'
            Replace = 'foreach ($c in ''1'') { $map["$c"] = ''i'' }' }
+        @{ Name = "one-does-not-read-as-i"
+           Find = 'foreach ($c in ''|'', ''!'', ''1'', ''l'') { $map["$c"] = ''i'' }'
+           Replace = 'foreach ($c in ''|'', ''!'', ''l'') { $map["$c"] = ''i'' }' }
+        @{ Name = "five-does-not-read-as-s"
+           Find = 'foreach ($c in ''$'', ''5'') { $map["$c"] = ''s'' }'
+           Replace = 'foreach ($c in ''$'') { $map["$c"] = ''s'' }' }
+        @{ Name = "leading-lookalikes-use-up-the-edit"
+           Find = 'foreach ($v in @($low, ($low -replace ''^[^a-z]+'', ''''))) {'
+           Replace = 'foreach ($v in @($low)) {' }
+        @{ Name = "repeated-letters-count-twice"
+           Find = 'return [regex]::Replace($sb.ToString(), ''(.)\1+'', ''$1'')'
+           Replace = 'return $sb.ToString()' }
+        @{ Name = "a-swap-of-two-letters-is-two-edits"
+           Find = '        return ($i + 1 -lt $A.Length -and $A[$i] -ceq $B[$i + 1] -and $A[$i + 1] -ceq $B[$i] -and $A.Substring($i + 2) -ceq $B.Substring($i + 2))'
+           Replace = '        return $false' }
+        @{ Name = "slash-v-does-not-read-as-v"
+           Find = '$low = $Label.ToLowerInvariant().Replace(''\/'', ''v'')'
+           Replace = '$low = $Label.ToLowerInvariant()' }
         @{ Name = "dollar-and-five-do-not-read-as-s"
            Find = 'foreach ($c in ''$'', ''5'') { $map["$c"] = ''s'' }'
            Replace = 'foreach ($c in ''5'') { $map["$c"] = ''s'' }' }
