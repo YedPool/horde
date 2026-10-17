@@ -658,8 +658,7 @@ function Invoke-HordeChatPhotoAccept {
     # THE SAME PHOTO SENT AGAIN: the phone offers Send again when no receipt came in time, and the PC may have
     # taken the first copy by then. The same image from the same sender is told as taken, under the new id:
     # nothing is stored, the budget is not spent and the Thrall is told nothing a second time.
-    $skewMs = [long]600000
-    try { if ($null -ne $Context.PSObject.Properties["settings"] -and $null -ne $Context.settings.PSObject.Properties["clockSkewSeconds"]) { $skewMs = [long]$Context.settings.clockSkewSeconds * 1000 } } catch { }
+    $skewMs = Get-HordeRelaySessionSkewMs -HordeHome $homeDir
     $twin = Find-HordeChatPhotoTaken -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -Sha256 $mf.sha256 -Session $mf.session -SentAt $sentAt -WindowMs $ps.windowMs -SkewMs $skewMs -NowMs $nowMs
     if ($null -ne $twin -and $twin.stage -cne "closed") {
         # The first copy is whole and about to be saved: this one waits a turn, and is then told what became of it,

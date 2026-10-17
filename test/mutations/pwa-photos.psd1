@@ -56,6 +56,13 @@
         @{ Name = "photos-waiting-not-stored"
            Find = 'return { ...held, photosWaiting: kept.concat([{ photoId, expiresAt: mine.expiresAt }]).slice(-50) };'
            Replace = 'return held;' }
+        # Review 3 of PR 285: a receipt read ends the wait for good (the stored list forgets it); a broken stored entry is not counted.
+        @{ Name = "photos-waiting-kept-after-its-receipt"
+           Find = '          await store.update(ENTRY + id, (x) => (x && x.photosWaiting ? { ...x, photosWaiting: x.photosWaiting.filter((w) => !gone.has(w.photoId)) } : x));'
+           Replace = '' }
+        @{ Name = "photos-waiting-broken-entry-counted"
+           Find = 'if (w && typeof w.photoId === "string" && /^[0-9a-f]{32}$/.test(w.photoId) && Number.isSafeInteger(w.expiresAt)) byId.set('
+           Replace = 'if (w) byId.set(' }
         @{ Name = "chat-read-without-the-clock"
            Find = 'items: P.chatTimeline(s.chat, now()), mode'
            Replace = 'items: P.chatTimeline(s.chat), mode' }

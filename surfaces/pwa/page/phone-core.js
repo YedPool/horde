@@ -258,7 +258,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
   const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map(), signer: null, sessionWords: "", oldPcSaid: false });
-  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0, photoWindowMs: 0 });
+  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0, photoWindowMs: 0, answeredNow: [] });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
@@ -266,7 +266,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   // The photos this phone has put at a machine and heard nothing of: the stored list and this session's, by id.
   function waitingOf(e, s) {
     const byId = new Map();
-    for (const w of (e.photosWaiting || [])) byId.set(w.photoId, { photoId: w.photoId, expiresAt: w.expiresAt });
+    // A stored entry that is not a photo id with a whole-number expiry is dropped, not counted for ever.
+    for (const w of (e.photosWaiting || [])) { if (w && typeof w.photoId === "string" && /^[0-9a-f]{32}$/.test(w.photoId) && Number.isSafeInteger(w.expiresAt)) byId.set(w.photoId, { photoId: w.photoId, expiresAt: w.expiresAt }); }
     for (const p of s.chat.photos) byId.set(p.photoId, p);
     return [...byId.values()];
   }
@@ -433,6 +434,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const r = P.readPhotoReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       c.photoReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });
+      // A word from the machine ends the wait for good: the stored list forgets it (refresh), so a mailbox that later trims the receipt does not hand the place back.
+      c.answeredNow.push(r.value.photoId);
     }
   }
 
@@ -934,6 +937,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           s.pages.push({ key: o.value.key, seq: o.value.header.seq, relaySeq: item.seq, ts: o.value.header.ts, page: page.value });
         }
         s.cursor = r.value.next;
+        if (s.chat.answeredNow.length) {
+          const gone = new Set(s.chat.answeredNow.splice(0));
+          await store.update(ENTRY + id, (x) => (x && x.photosWaiting ? { ...x, photosWaiting: x.photosWaiting.filter((w) => !gone.has(w.photoId)) } : x));
+        }
         if (r.value.items.length < 256) break;
       }
       const best = P.newestSnapshot(s.pages);
@@ -1065,7 +1072,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       await store.update(ENTRY + id, (held) => {
         if (!held) return held;
         const at = now();
-        const kept = (held.photosWaiting || []).filter((w) => w.photoId !== photoId && w.expiresAt > at);
+        const kept = (held.photosWaiting || []).filter((w) => w && w.photoId !== photoId && w.expiresAt > at);
         return { ...held, photosWaiting: kept.concat([{ photoId, expiresAt: mine.expiresAt }]).slice(-50) };
       });
       let puts = 1;

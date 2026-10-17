@@ -925,6 +925,19 @@ const PH = await load("app/photo.js");
   check(P.photosUnanswered([{ photoId: "a".repeat(32), expiresAt: 1000 }, { photoId: "b".repeat(32), expiresAt: 5000 }, { photoId: "c".repeat(32), expiresAt: 5000 }], [{ photoId: "c".repeat(32) }], 2000) === 1, "a photo past its window, or one with a word from the machine, is not waiting");
   for (const id of waiting.slice(1)) await wordFor(id);
   await phone.refresh(a.paired.id);
+  // REVIEW 3, SHOULD 1: a receipt read ends the wait for good. The stored list forgets it, so a mailbox that
+  // later trims the receipt away (and a page that reloads) does not give the place back or take it again.
+  const hide = new Set((await t.get(m.horde + "/phone", 0, 512)).value.items.map((i) => i.seq));
+  const hideSome = async (r) => (r.state === "known" ? { ...r, value: { ...r.value, items: r.value.items.filter((i) => !hide.has(i.seq)) } } : r);
+  const hidingT = { ...t, get: async (mb, since, max) => hideSome(await t.get(mb, since, max)), watch: async (mb, since, max, ms) => hideSome(await t.watch(mb, since, max, ms)) };
+  // REVIEW 3, NIT 7: entries stored that are not a photo id with a whole-number expiry are dropped, not counted for ever.
+  await a.store.update("horde/" + a.paired.id, (x) => ({ ...x, photosWaiting: [...(x.photosWaiting || []), { photoId: 1, expiresAt: 9e15 }, { photoId: "zz", expiresAt: 9e15 }, null] }));
+  const phone2 = createPhone({ store: a.store, authenticator: counting, relay: R.createRelayClient(hidingT), origin, now: () => Date.now() + shift, sleep: async () => {} });
+  await phone2.unlock(a.paired.id);
+  await sendChat(t, m, a.phoneKey, photoBodyW(600000));
+  await phone2.refresh(a.paired.id);
+  const afterTrim = await throwsAsync(() => phone2.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(afterTrim === "", "RECEIPTS TRIMMED: four photos were answered, the mailbox no longer holds their receipts, the app was reopened - a next photo is still allowed", afterTrim);
   // Through the bridge: the page's bytes and id.
   const br = createBridge(phone, { loadKinds: async () => ({}) });
   await br.request("pick", { id: a.paired.id });

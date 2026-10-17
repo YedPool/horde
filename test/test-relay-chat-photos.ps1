@@ -946,6 +946,31 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $null = Invoke-Turn $Y
     $oR2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgR)
     Check ((& $isNew $oR2) -and -not $oR2.turn.Contains("asked again")) ("UNFINISHED FIRST COPY: a first copy with parts missing is not taken, so the second is handled as any photo (" + $oR2.turn + ")")
+    # REVIEW 3, SHOULD 2: the first copy is whole but not yet saved (its Tick has not run): the second waits a
+    # turn, is not stored and is not told "receiving"; after the Tick it is told delivered with the first copy's
+    # file; and whatever it had set aside while it waited (its held mark, its signed mark) is let go.
+    $imgQ = New-ImageBytes -Type "jpg" -Length 20000
+    $beforeQ = @(Get-InboxFiles $Y).Count
+    $Q1 = New-Photo -World $Y -Image $imgQ
+    $null = Send-Manifest $Y $Q1
+    $null = Invoke-Turn $Y
+    foreach ($pp in $Q1.parts) { $null = Send-Part $Y $pp }
+    $Q2 = New-Photo -World $Y -Image $imgQ
+    $null = Send-Manifest $Y $Q2
+    $tq1 = Invoke-Turn $Y
+    Check ($tq1.Contains("being saved") -and -not $tq1.Contains("accepted") -and @(Get-InboxFiles $Y).Count -eq $beforeQ -and @(Get-PhotoReceipts $Y | Where-Object { $_.photoId -ceq $Q2.id }).Count -eq 0) ("WAIT A TURN: a second copy of a photo that is whole but not yet saved is neither stored nor told anything yet (" + $tq1 + ")")
+    $null = Invoke-Tick $Y
+    Use-World $Y
+    $memQ = Get-HordeChatChannelMemory -Context $Y.ctx
+    $memQ.mine.heldSaid["photo/" + $Q2.id] = $true
+    Set-HordeChatPhotoSigned -HordeHome $Y.home -From $Q2.from -PhotoId $Q2.id -ExpiresAt ((Get-HordeChatPhotoNow) + 600000)
+    $signedQ2 = Join-Path $Y.home ("relay\chat\photos\signed\" + $Q2.from + "-" + $Q2.id + ".json")
+    $signedSet = Test-Path -LiteralPath $signedQ2
+    $tq2 = Invoke-Turn $Y
+    $null = Invoke-Tick $Y
+    $rq2 = @(Get-PhotoReceipts $Y | Where-Object { $_.photoId -ceq $Q2.id })
+    Check ($signedSet -and $tq2.Contains("not taken twice") -and $rq2.Count -eq 1 -and $rq2[0].code -ceq "delivered" -and @(Get-InboxFiles $Y).Count -eq ($beforeQ + 1) -and @(& $postsOf $Q2.id).Count -eq 0 -and @(& $postsOf $Q1.id).Count -eq 1) ("then, saved, the first copy is told delivered and the second is told the same, with one file and one post (" + $tq2 + ")")
+    Check ((-not (Test-Path -LiteralPath $signedQ2)) -and -not (Get-HordeChatChannelMemory -Context $Y.ctx).mine.heldSaid.ContainsKey("photo/" + $Q2.id)) "and its held mark and its signed mark are let go"
     # NIT: a closed record keeps what became of the photo, not the key to its parts.
     $d1Closed = Join-Path $Y.home ("relay\chat\photos\closed\" + $D1.from + "-" + $D1.id + ".json")
     $d1Rec = $(if (Test-Path -LiteralPath $d1Closed) { Read-HordeChatPhotoRecord -Path $d1Closed } else { $null })

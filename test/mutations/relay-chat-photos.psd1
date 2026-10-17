@@ -172,6 +172,16 @@
         @{ Name = "photo-sent-again-unfinished-counts"
            Find = '            if ($have -eq @($r.parts).Count) { return $r }'
            Replace = '            return $r' }
+        # Review 3 of PR 285: a second copy of a photo that is whole but unsaved waits; a twin lets go of its held and signed marks.
+        @{ Name = "photo-sent-again-unsaved-told-receiving"
+           Find = 'outcome = "retry"; reason = ("photo " + $mf.photoId + ": the same image is being saved as photo "'
+           Replace = 'outcome = "done"; reason = ("photo " + $mf.photoId + ": the same image is being saved as photo "' }
+        @{ Name = "photo-sent-again-keeps-held-mark"
+           Find = '        $mine.heldSaid.Remove("photo/" + $mf.photoId)'
+           Replace = '' }
+        @{ Name = "photo-sent-again-keeps-signed-mark"
+           Find = '        try { [System.IO.File]::Delete([System.IO.Path]::Combine((Get-HordeChatPhotoRoot -HordeHome $homeDir), "signed", ($mf.from + "-" + $mf.photoId + ".json"))) } catch { }'
+           Replace = '' }
         @{ Name = "photo-closed-record-keeps-the-key"
            Find = '    $Record.key = ""'
            Replace = '' }
