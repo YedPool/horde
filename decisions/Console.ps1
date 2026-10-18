@@ -526,6 +526,9 @@ function Format-HordeDecisionAnswer {
     else {
         $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; ack = "Closed question "; "change-reply" = "Replied to the changed answer of question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
+        # S1 (review of PR 335, round 5): a close that was not proven from the warchief's seat says so, so the closer is
+        # never left believing the asking Orc was told.
+        if ($Verb -ceq "close" -and -not ($null -ne $value.question.PSObject.Properties["closedByWarchief"] -and [bool]$value.question.closedByWarchief)) { [void]$lines.Add("  NOTE: this session was not proven as the warchief's seat, so the Orc that asked will not be told of this close. Tell it yourself if it is waiting.") }
         if ($Verb -ceq "ack") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note + ". " + $value.question.outcome) }
         if ($Verb -ceq "change-reply") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
         if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }

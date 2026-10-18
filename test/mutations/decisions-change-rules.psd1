@@ -8,6 +8,9 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proven-warchief-close-is-said-to-be-the-askers-act"
+           Find = '    if ($seatProof -ceq "warchief") { return "the warchief" }'
+           Replace = '' }
         # --- what a change is
         @{ Name = "an-answer-to-another-part-counts-as-the-one-changed"
            Find = '            if ("$($before.part)" -cne $part) { continue }'

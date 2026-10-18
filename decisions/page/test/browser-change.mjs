@@ -56,7 +56,7 @@ const LIST = () => [
   // A QUESTION THAT NEEDS A PASSKEY, with only his chat words under it: not answered.
   question(23, { askedBy: "Orc F", needsPasskey: true, thread: { messages: [{ ...said(33, "Yes, from chat."), notPasskey: true }] } }),
   // CLOSED BY THE WARCHIEF OVER A CHANGE ITS ORC NEVER REPLIED TO: the page says the warchief closed it, with his words.
-  question(24, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", actedBy: "Orc F", warchiefClosedUnreplied: true, outcome: "Orc F is retired; <b>nothing</b> was deployed.", thread: { messages: [said(34, "Yes."), { ...said(44, "No."), changedFrom: 34, changedFromText: "Yes." }] }, answerChanges: [change(24, null)] }),
+  question(24, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", actedBy: "the warchief", warchiefClosedUnreplied: true, outcome: "Orc F is retired; <b>nothing</b> was deployed.", thread: { messages: [said(34, "Yes."), { ...said(44, "No."), changedFrom: 34, changedFromText: "Yes." }] }, answerChanges: [change(24, null)] }),
   // HIS WORDS THAT ARE NOT HIS ANSWER (S4): the answer is the signed one, never the chat words after it.
   question(25, { askedBy: "Orc F", needsPasskey: true, thread: { messages: [said(35, "Yes, signed."), { ...said(45, "No, roll it back."), notPasskey: true }] } }),
   question(26, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", closedBy: "Orc F", actedBy: "Orc F", outcome: "Done.", thread: { messages: [said(36, "Yes, before closing."), { ...said(46, "No, after closing."), arrivedAfterClosing: true }] } }),
@@ -133,6 +133,7 @@ try {
   check(!!r23 && !r23.done && r23.button === "", "CHAT WORDS UNDER A QUESTION THAT NEEDS A PASSKEY do not answer it: it is not in the answered fold and has no Change button", JSON.stringify(r23));
   const r24 = await row(24);
   check(!!r24 && r24.lines.length === 1 && r24.lines[0] === "You changed your answer at " + clock + ". The warchief closed it: \"Orc F is retired; <b>nothing</b> was deployed.\"", "S3: CLOSED BY THE WARCHIEF over a change its Orc never replied to: the page says so, with his outcome in quotes, as text", JSON.stringify(r24 && r24.lines));
+  check(!!r24 && r24.closed.length === 1 && r24.closed[0] === "This question is closed - the warchief has acted on it. To change course, ask a follow-up.", "S3 (round 5): after the warchief's close the closed line names the warchief, not the Orc that asked", JSON.stringify(r24 && r24.closed));
   const m24 = await evaluate(`(() => { const w = ${FIND_ROW(24)}; return w ? w.querySelectorAll('b').length : -1; })()`);
   check(m24 === 0, "S3: and the outcome makes no element", String(m24));
   const said25 = await evaluate(`(() => { const w = ${FIND_ROW(25)}; const a = w && w.querySelector('.rest'); return w ? { done: w.classList.contains('hd-done'), rest: a ? a.textContent : null } : null; })()`);

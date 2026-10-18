@@ -531,7 +531,34 @@ $qP = [int]$pqN.value.number
 Advance 1
 [void](PassTrust $trustYes)
 $nP = @(& $cNotice $qP)
-Check ($nP.Count -eq 1 -and "$($nP[0].body)".Contains("Some part of this question got only chat words")) "N3: one part signed and another only chat words, then the warchief's close: the asking Orc is told"
+Check ($nP.Count -eq 1 -and "$($nP[0].body)".Contains("Some part of this question has no passkey answer from him")) "N3: one part signed and another only chat words, then the warchief's close: the asking Orc is told (round 5 wording: no passkey answer, not 'only chat words')"
+# ROUND 5, N1: one part signed WITH a chat note on it, the other part no words at all: the notice still tells the Orc, and
+# does not say the unanswered part "got chat words".
+$pqN1 = Op "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Which two other steps go ahead?"; kind = "parts"; parts = @("(a) The first step", "(b) The second step"); whatItIs = "Two steps."; group = "A group"; askedBy = "Orc C"; waiting = @("Orc C") } }
+$qP1 = [int]$pqN1.value.number
+[void](Say $qP1 "a yes signed" -Route "phone" -Part "a")
+[void](Say $qP1 "about a: careful" -Route "chat-recorded" -Part "a")
+[void](Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qP1"; Outcome = "b never answered." } -Sender $asM -SeatProof $seatByRole)
+Advance 1
+[void](PassTrust $trustYes)
+$nP1 = @(& $cNotice $qP1)
+Check ($nP1.Count -eq 1 -and "$($nP1[0].body)".Contains("Some part of this question has no passkey answer from him") -and -not "$($nP1[0].body)".Contains("got only chat words")) "N1 (round 5): a part with no words at all is not said to have 'got chat words'"
+# ROUND 5, S2 MUST-REFUSE / MUST-ACCEPT: the founder signs ONE answer to the WHOLE question (no part named), adds a chat
+# note, and the warchief closes. A whole-question signed answer answers every part, so the "parts" notice (no passkey answer
+# came for that part) would be false: the Orc is told nothing. The twin above (a part signed, another not) still tells it.
+$pqW = Op "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Do both steps go ahead?"; kind = "parts"; parts = @("(a) The first step", "(b) The second step"); whatItIs = "Two steps."; group = "A group"; askedBy = "Orc C"; waiting = @("Orc C") } }
+$qPW = [int]$pqW.value.number
+[void](Say $qPW "Yes to both" -Route "phone")
+[void](Say $qPW "and be careful" -Route "chat-recorded")
+[void](Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qPW"; Outcome = "Done, both deployed." } -Sender $asM -SeatProof $seatByRole)
+Advance 1
+[void](PassTrust $trustYes)
+Check (@(& $cNotice $qPW).Count -eq 0 -and @(Routes $qPW | Where-Object { "$($_.purpose)" -ceq "closed" }).Count -eq 0) "S2 MUST-REFUSE (round 5): a whole-question signed answer plus a chat note, then the warchief's close: the Orc is NOT told that no passkey answer came"
+# S1 (round 5): the CLI says when the close was not proven from the warchief's seat, and says nothing of the kind when it was.
+Check (@($cliF.lines | Where-Object { "$_" -like "*was not proven as the warchief's seat*will not be told*" }).Count -eq 1) ("S1 MUST-REFUSE (round 5): an unproven close (Orc D) says plainly that the session was not proven as the warchief's seat and the Orc will not be told (" + ($cliF.lines -join " | ") + ")")
+Check (@($cliWords.lines | Where-Object { "$_" -like "*not proven*" }).Count -eq 0 -and @($cliM.lines | Where-Object { "$_" -like "*not proven*" }).Count -eq 0) "S1 MUST-ACCEPT (round 5): a close proven from the warchief's seat prints no such note"
+# S3 (round 5): the view says the warchief acted after a PROVEN warchief close, the Orc that asked after an unproven one.
+Check ("$((Show $qW).actedBy)" -ceq "the warchief" -and "$((Show $qWords).actedBy)" -ceq "the warchief" -and "$((Show $qF).actedBy)" -ceq "Orc C") "S3 (round 5): actedBy is 'the warchief' after a proven warchief close, and still the asking Orc after an unproven (Orc D) close"
 
 Write-Host ""
 Write-Host "--- N2: a change-reply after the warchief's close is taken and shown ---" -ForegroundColor Cyan
