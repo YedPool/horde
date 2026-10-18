@@ -50,8 +50,8 @@
            Find = '    if ($Speaker -cne $script:HordeDecisionFirstTurn -or $Act -ne "" -or -not $Asks) { return "" }'
            Replace = '    if ($Act -ne "" -or -not $Asks) { return "" }' }
         @{ Name = "a-change-to-one-part-is-judged-against-the-whole-question"
-           Find = '"$($_.act)" -eq "" -and [bool]$_.asks -and "$($_.part)" -ceq $Part })'
-           Replace = '"$($_.act)" -eq "" -and [bool]$_.asks })' }
+           Find = '-and (Test-HordeDecisionMessageAuthorizes -Message $_) -and "$($_.part)" -ceq $Part })'
+           Replace = '-and (Test-HordeDecisionMessageAuthorizes -Message $_) })' }
         @{ Name = "the-refusal-does-not-say-who-acted"
            Find = '    return ("This question is closed - " + (Get-HordeDecisionActedBy -Question $Question) + " has acted on it. To change course, ask a follow-up.")'
            Replace = '    return ("This question is closed - the work has been acted on. To change course, ask a follow-up.")' }
@@ -72,8 +72,8 @@
            Find = '    if ($asker.label -cne $by -or $asker.seat -cne "orc") { return ("question " + $question.number + " was asked by ''" + $question.askedBy + "'', not by Orc " + $by + ": only the Orc that asked it says what became of a changed answer") }'
            Replace = '' }
         @{ Name = "a-first-answer-takes-a-reply"
-           Find = 'or [long]$said.changedFrom -lt 1) {'
-           Replace = 'or $false) {' }
+           Find = 'or [long]$said.changedFrom -lt 1 -or'
+           Replace = 'or $false -or' }
         @{ Name = "cannot-undo-needs-no-reason"
            Find = '[bool]$script:HordeDecisionChangeReplies[$reply].needsWhy -and $why.Trim() -eq "")'
            Replace = '$false)' }

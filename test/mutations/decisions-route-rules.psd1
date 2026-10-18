@@ -27,8 +27,8 @@
            Replace = 'if ($false) {' }
         # --- the answer that stands, and the hour
         @{ Name = "an-act-stands-as-the-answer"
-           Find = 'if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($message.act)" -eq "") { $standing = $message }'
-           Replace = 'if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn) { $standing = $message }' }
+           Find = 'if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($message.act)" -eq "" -and (Test-HordeDecisionMessageAuthorizes -Message $message)) { $standing = $message }'
+           Replace = 'if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $message)) { $standing = $message }' }
         @{ Name = "waiting-to-close-whoever-s-turn"
            Find = 'if ($Turn -cne "$($script:HordeDecisionSpeakers[$script:HordeDecisionFirstTurn].then)") { return $false }'
            Replace = '' }

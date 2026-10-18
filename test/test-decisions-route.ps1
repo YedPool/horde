@@ -286,6 +286,15 @@ $sShut = Say $qShut "Too late."
 $p = Pass
 Check (@(Routes $qShut).Count -eq 0) "words under a closed question are not routed: nobody is waiting on them"
 # Every question so far is closed now, so the hour below is about its own.
+# An Orc's question he CHANGED his answer to is not closed over before that Orc says what became of its work (T-0152,
+# review M1), so this clearing says it first, as the Orc that asked.
+foreach ($n in @((Op "list" @{}).value.questions | ForEach-Object { [int]$_.number })) {
+    $shown = (Op "show" @{ number = $n }).value.question
+    $askerMatch = [regex]::Match("$($shown.askedBy)", '^Orc ([A-Z])$')
+    if ($null -eq $shown.PSObject.Properties["answerChanges"] -or -not $askerMatch.Success) { continue }
+    $orcLabel = $askerMatch.Groups[1].Value
+    foreach ($ch in @($shown.answerChanges)) { if ($null -eq $ch.PSObject.Properties["reply"]) { $null = Op "change-reply" @{ id = (New-Id); actor = "orc"; number = $n; by = $orcLabel; answer = [long]$ch.answer; reply = "not-acted" } } }
+}
 foreach ($n in @((Op "list" @{}).value.questions | ForEach-Object { [int]$_.number })) { $null = Op "close" @{ id = (New-Id); actor = "warchief"; number = $n; outcome = "Closed to clear the list." } }
 $null = Pass
 $script:posts.Clear()

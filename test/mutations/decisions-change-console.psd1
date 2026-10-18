@@ -36,7 +36,7 @@
            Find = '    if ((& $has "changedFrom") -and [long]$Message.changedFrom -ge 1) {'
            Replace = '    if ($false) {' }
         @{ Name = "show-leaves-out-the-words-a-change-replaced"
-           Find = '        foreach ($oldLine in @(([string]$Message.changedFromText) -split "\r?\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }'
+           Find = '        foreach ($oldLine in @(([string]$Message.changedFromText) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }'
            Replace = '' }
         @{ Name = "show-says-nothing-of-what-became-of-a-change"
            Find = '        foreach ($c in @($q.answerChanges)) {'
@@ -49,19 +49,13 @@
            Replace = '            $state = ""' }
         # --- N1: his words are cut at every kind of line break
         @{ Name = "show-cuts-the-old-words-at-lf-only"
-           Find = '-split "
-||
-")) { [void]$lines.Add($Indent + "      > " + $oldLine) }'
-           Replace = '-split "?
-")) { [void]$lines.Add($Indent + "      > " + $oldLine) }' }
+           Find = '-split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }'
+           Replace = '-split "\r?\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }' }
         @{ Name = "show-cuts-the-message-text-at-lf-only"
-           Find = '-split "
-||
-")) { [void]$lines.Add($Indent + "    " + $l) }'
-           Replace = '-split "?
-")) { [void]$lines.Add($Indent + "    " + $l) }' }
-    )
-}        @{ Name = "answer-does-not-say-chat-words-are-no-passkey-answer"
+           Find = '-split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l) }'
+           Replace = '-split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }' }
+        @{ Name = "answer-does-not-say-chat-words-are-no-passkey-answer"
            Find = '        if ($null -ne $value.message.PSObject.Properties["notPasskey"] -and [bool]$value.message.notPasskey) {'
            Replace = '        if ($false) {' }
-
+    )
+}
