@@ -202,7 +202,7 @@
         "sequence": {"type": "integer", "minimum": 1, "description": "The answer-routed record."},
         "at": {"type": "string"},
         "answer": {"type": "integer", "minimum": 1, "description": "The record of the founder's answer that was sent."},
-        "purpose": {"type": "string", "description": "answer or nudge."},
+        "purpose": {"type": "string", "description": "answer, nudge or closed (the warchief closed the Orc's question over a change it never replied to, or over chat words only)."},
         "seat": {"type": "string", "description": "orc or warchief."},
         "label": {"type": "string"},
         "sessionId": {"type": "string"},

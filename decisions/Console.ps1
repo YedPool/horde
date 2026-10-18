@@ -332,7 +332,7 @@ function Get-HordeDecisionAnsweredLine {
     param($Question)
     if ("$($Question.state)" -cne "open" -or "$($Question.thread.turn)" -ceq (Get-HordeDecisionFirstTurn)) { return "" }
     if ($null -eq $Question.thread.PSObject.Properties["messages"]) { return "" }
-    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" })
+    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" -and (Test-HordeDecisionMessageAuthorizes -Message $_) })
     if ($mine.Count -eq 0) { return "" }
     $last = $mine[$mine.Count - 1]
     $said = Get-HordeDecisionFirstLine -Text ([string]$last.text)
@@ -617,6 +617,33 @@ function Resolve-HordeDecisionOrcCaller {
     return $who
 }
 
+function Test-HordeDecisionWarchiefCaller {
+    # IS THIS COMMAND RUN INSIDE THE WARCHIEF'S OWN SESSION? Proven as an Orc's seat is (Resolve-HordeDecisionOrcCaller):
+    # the session this command runs inside (notices/Sender.ps1), held to the seat the fleet's records give the role
+    # warchief (core/SessionSeat.ps1, Get-HordeRoleSeat), which must be this very session. Never throws: no proof,
+    # an Orc's seat, a registry that cannot be read are all just "not proven", as { ok; reason }.
+    param([scriptblock]$Sender = $null, [hashtable]$SenderArgs = @{}, [scriptblock]$SeatProof = $null, [hashtable]$SeatArgs = @{})
+    try {
+        $who = $null
+        if ($null -ne $Sender) { $who = & $Sender }
+        else {
+            . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
+            $who = Resolve-HordeNoticeSender @SenderArgs
+        }
+        if ($null -eq $who -or -not [bool]$who.ok) { return [pscustomobject]@{ ok = $false; reason = "which session this is could not be proven" } }
+        $held = $null
+        if ($null -ne $SeatProof) { $held = & $SeatProof $who "warchief" }
+        else {
+            . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+            $seatFound = Get-HordeRoleSeat -Role "warchief" @SeatArgs
+            if ($seatFound.state -ceq "known" -and "$($who.sessionId)" -ieq "$($seatFound.value.sessionId)") { $held = [pscustomobject]@{ ok = $true; reason = "" } }
+            else { $held = [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief's seat" } }
+        }
+        if ($null -eq $held -or -not [bool]$held.ok) { return [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief's seat" } }
+        return [pscustomobject]@{ ok = $true; reason = "" }
+    } catch { return [pscustomobject]@{ ok = $false; reason = $_.Exception.Message } }
+}
+
 function Invoke-HordeDecisionCommand {
     # Run one `horde decisions <verb>`. -Given is the command's bound parameters, by name. Returns
     # { lines; failure; after; opens; notifies }: the lines to print; when the command must fail, the message
@@ -695,6 +722,10 @@ function Invoke-HordeDecisionCommand {
             if ($have.ContainsKey("Outcome") -eq $have.ContainsKey("OutcomeFile")) { throw ("decisions close needs the outcome exactly once: -Outcome <one line>, or -OutcomeFile <path> for more than a line" + $usageNote) }
             if ($have.ContainsKey("OutcomeFile")) { $request["outcome"] = Read-HordeDecisionTextFile -Path "$($have['OutcomeFile'])" -What "the outcome file" }
             else { $request["outcome"] = "$($have['Outcome'])" }
+            # THE SEAT IS PROVEN, NEVER TRUSTED: this command sends every write as the actor "warchief", whoever runs it.
+            # Only a session proven to hold the warchief's seat says so (callerSeat); the operation relies on that
+            # alone to let a close go over a change its Orc has not replied to (decisions/Operations.ps1).
+            if ("$($request['outcome'])".Trim() -ne "" -and (Test-HordeDecisionWarchiefCaller -Sender $Sender -SenderArgs $SenderArgs -SeatProof $SeatProof -SeatArgs $SeatArgs).ok) { $request["callerSeat"] = "warchief" }
         }
         "reopen" {
             if (-not $have.ContainsKey("Reason")) { throw ("decisions reopen needs -Reason <one line>: why the question is open again" + $usageNote) }

@@ -35,11 +35,11 @@
         @{ Name = "a-close-over-an-unreplied-change-is-taken"
            Find = 'if ($null -ne $closeUnreplied -and -not $warchiefCloses) {'
            Replace = 'if ($false) {' }
-        @{ Name = "the-warchief-closes-over-an-unreplied-change-with-no-words"
-           Find = '$warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "")'
-           Replace = '$warchiefCloses = ("$($Request.actor)" -ceq "warchief")' }
-        @{ Name = "nobody-may-close-over-an-unreplied-change-not-even-the-warchief"
-           Find = '$warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "")'
-           Replace = '$warchiefCloses = $false' }
+        @{ Name = "the-warchief-closes-over-an-unreplied-change-with-no-proof-of-the-seat"
+           Find = ' -and "$(Get-HordeDecisionMember -Object $Request -Name ''callerSeat'')" -ceq "warchief")'
+           Replace = ')' }
+        @{ Name = "nobody-may-close-over-an-unreplied-change-not-even-the-proven-warchief"
+           Find = '$warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and'
+           Replace = '$warchiefCloses = ($false -and' }
     )
 }

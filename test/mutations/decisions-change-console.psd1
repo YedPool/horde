@@ -8,6 +8,18 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "any-session-is-taken-for-the-warchief"
+           Find = '        if ($null -eq $held -or -not [bool]$held.ok) { return [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief''s seat" } }'
+           Replace = '' }
+        @{ Name = "a-session-that-cannot-be-proven-is-taken-for-the-warchief"
+           Find = '        if ($null -eq $who -or -not [bool]$who.ok) { return [pscustomobject]@{ ok = $false; reason = "which session this is could not be proven" } }'
+           Replace = '' }
+        @{ Name = "the-proven-seat-is-not-sent-to-the-operation"
+           Find = '{ $request["callerSeat"] = "warchief" }'
+           Replace = '{ }' }
+        @{ Name = "the-keepers-list-line-shows-his-chat-words-as-his-answer"
+           Find = ' -and (Test-HordeDecisionMessageAuthorizes -Message $_) })'
+           Replace = ' })' }
         @{ Name = "show-tells-chat-words-as-replacing-his-answer"
            Find = ' -and "$($Message.speaker)" -ceq "founder" -and (Test-HordeDecisionMessageAuthorizes -Message $Message)) {'
            Replace = ' -and "$($Message.speaker)" -ceq "founder") {' }

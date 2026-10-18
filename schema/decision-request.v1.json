@@ -41,7 +41,8 @@
         "id": {"$ref": "#/definitions/id"},
         "actor": {"$ref": "#/definitions/actor"},
         "number": {"$ref": "#/definitions/number"},
-        "outcome": {"type": "string", "description": "What was done, in plain words."}
+        "outcome": {"type": "string", "description": "What was done, in plain words."},
+        "callerSeat": {"type": "string", "enum": ["warchief"], "description": "Set only by the command line after it proved the calling session holds the warchief's seat; a close over a change its Orc never replied to is taken only with it."}
       }
     },
     "reopen": {
@@ -78,7 +79,7 @@
         "actor": {"$ref": "#/definitions/actor"},
         "number": {"$ref": "#/definitions/number"},
         "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's answer."},
-        "purpose": {"type": "string", "enum": ["answer", "nudge"]},
+        "purpose": {"type": "string", "enum": ["answer", "nudge", "closed"]},
         "seat": {"type": "string", "enum": ["orc", "warchief"]},
         "label": {"type": "string", "pattern": "^([A-Z]{1,2}([1-9][0-9]{0,3})?)?$"},
         "sessionId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},

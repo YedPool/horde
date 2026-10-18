@@ -191,7 +191,9 @@ $script:HordeDecisionChangeReplies = [ordered]@{
     "undoing"     = @{ shown = "already acted, undoing"; needsWhy = $false }
     "cannot-undo" = @{ shown = "already acted, cannot undo"; needsWhy = $true }
 }
-$script:HordeDecisionRoutePurposes = @("answer", "nudge")
+# "closed": the warchief closed an Orc's question over a change its Orc never replied to, or over chat words
+# only (no passkey answer), and the Orc is told once (decisions/Route.ps1, review of PR 335, S3).
+$script:HordeDecisionRoutePurposes = @("answer", "nudge", "closed")
 $script:HordeDecisionRouteSeats = @("orc", "warchief")
 
 # WHO MAY SPEAK UNDER A QUESTION: a closed list. The founder is not a session role of core/roles.json:
@@ -1062,7 +1064,7 @@ function Get-HordeDecisionUnrepliedChangeLine {
     # The refusal for an ack or a close over a change the Orc has not replied to, in words that name the command.
     param($Question, $Change)
     $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
-    return ("the founder changed his answer (record " + $Change.sequence + " replaces record " + $Change.changedFrom + ") and " + $asker.shown + " has not said what became of its work. First run: horde decisions change-reply " + $Question.number + " -Answer " + $Change.sequence + " -Reply <not-acted, undoing or cannot-undo> [-Why '<one line>'], then close the question")
+    return ("the founder changed his answer (record " + $Change.sequence + " replaces record " + $Change.changedFrom + ") and " + $asker.shown + " has not said what became of its work. Run change-reply first: horde decisions change-reply " + $Question.number + " -Answer " + $Change.sequence + " -Reply <not-acted, undoing or cannot-undo> [-Why '<one line>']")
 }
 
 function Get-HordeDecisionChangeRefusal {

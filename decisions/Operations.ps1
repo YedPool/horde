@@ -335,8 +335,11 @@ function Complete-HordeDecisionCloseData {
     if ($List.questions.ContainsKey($number) -and "$($List.questions[$number].state)" -ceq "open") {
         $closeUnreplied = Get-HordeDecisionUnrepliedChange -Question $List.questions[$number]
         $closeWords = $(if ($Data.Contains("outcome")) { "$($Data['outcome'])".Trim() } else { "" })
-        $warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "")
-        if ($null -ne $closeUnreplied -and -not $warchiefCloses) { return [pscustomobject]@{ why = ((Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied) + ". The warchief alone may close it without that reply, with an outcome that says why"); write = $false; more = $null; data = $null } }
+        # THE SEAT IS PROVEN, NEVER TRUSTED: the command line sends every write as the actor "warchief", so the
+        # actor proves nothing. Only a request that carries callerSeat = "warchief", which decisions/Console.ps1 sets
+        # after proving the calling session holds the warchief's seat in the fleet's records, may close over it.
+        $warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and "$(Get-HordeDecisionMember -Object $Request -Name 'callerSeat')" -ceq "warchief")
+        if ($null -ne $closeUnreplied -and -not $warchiefCloses) { return [pscustomobject]@{ why = ((Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied) + ". Only the warchief's own session, proven from the fleet's records, may close it without that reply, and only with an outcome that says why"); write = $false; more = $null; data = $null } }
     }
     return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
 }

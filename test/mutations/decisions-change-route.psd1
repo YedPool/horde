@@ -8,6 +8,30 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-orc-is-not-told-when-the-warchief-closes-its-question"
+           Find = '        if ($null -ne $told) { [void]$work.Add($told); continue }'
+           Replace = '' }
+        @{ Name = "the-orc-is-not-told-when-the-warchief-closes-over-chat-words-only"
+           Find = '    if (-not $unreplied -and -not $wordsOnly) { return $null }'
+           Replace = '    if (-not $unreplied) { return $null }' }
+        @{ Name = "the-orc-is-told-again-on-every-pass"
+           Find = '    if (Test-HordeDecisionRouted -Question $q -Answer ([long]$last.sequence) -Purpose "closed") { return $null }'
+           Replace = '' }
+        @{ Name = "the-closing-notice-is-sent-as-the-founder"
+           Find = '        if ($item.purpose -ceq "closed") { $who = [pscustomobject]@{ verified = $null; why = ""; claimed = $false } }'
+           Replace = '' }
+        @{ Name = "the-warchiefs-outcome-is-not-quoted-in-the-closing-notice"
+           Find = '    foreach ($l in @($outcome -split "\r\n|\r|\n")) { [void]$lines.Add($quote + $l) }'
+           Replace = '    [void]$lines.Add($outcome)' }
+        @{ Name = "the-warchiefs-and-his-words-wear-the-commands-marker-in-the-closing-notice"
+           Find = '    $quote = "> "'
+           Replace = '    $quote = "PS> "' }
+        @{ Name = "the-outcome-is-not-cut-to-one-line-in-the-closing-notice"
+           Find = '    [void]$lines.Add("The warchief closed question " + $number + ": " + (Get-HordeDecisionRouteOneLine -Text $outcome))'
+           Replace = '    [void]$lines.Add("The warchief closed question " + $number + ": " + $outcome)' }
+        @{ Name = "the-notice-text-says-a-close-is-refused-for-the-warchief-too"
+           Find = 'until then the Orc''s own close is refused. The warchief can close it without the reply, with an outcome that says why.'
+           Replace = 'a close before that is refused.' }
         @{ Name = "a-changed-answer-is-announced-as-a-plain-answer"
            Find = '    $headWords = $(if ($unsigned) { "FOUNDER''S CHAT WORDS, NOT A PASSKEY ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })'
            Replace = '    $headWords = $(if ($unsigned) { "FOUNDER''S CHAT WORDS, NOT A PASSKEY ANSWER" } else { "FOUNDER ANSWER" })' }

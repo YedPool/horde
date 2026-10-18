@@ -439,18 +439,81 @@ Check ([long](Get-HordeDecisionStandingAnswer -Question (Show $qOK)).sequence -e
 
 Write-Host ""
 Write-Host "--- S3: the warchief's way out when the asking Orc never replies ---" -ForegroundColor Cyan
+# M1 (review 3): the CLI sends every write as the actor "warchief", so a close over an unreplied change relies on
+# a PROVEN seat. The session that runs the command is proven as ack proves an Orc (the sender, then the seat
+# the fleet's records give the role); the seam hands in a fleet of this suite's own: only warchief-session-1
+# holds the warchief's seat.
+$asM = { return [pscustomobject]@{ ok = $true; reason = ""; sessionId = "warchief-session-1"; label = "M" } }
+$seatByRole = { param($Who, $Role)
+    if ($Role -ceq "warchief" -and "$($Who.sessionId)" -ceq "warchief-session-1") { return [pscustomobject]@{ ok = $true; reason = "" } }
+    return [pscustomobject]@{ ok = $false; reason = "that session does not hold the seat" } }
 $qW = Add-Question "Orc C" "Should the abandoned step go ahead?"
 [void](Say $qW "Yes.")
 $w2 = Say $qW "No, stop." -Route "phone"
-$clW = Op "close" @{ id = (New-Id); actor = "warchief"; number = $qW; outcome = "Orc C is retired; nothing was deployed." }
+Advance 1
+$outW = "Orc C is retired; nothing was deployed."
+$clW0 = Op "close" @{ id = (New-Id); actor = "warchief"; number = $qW; outcome = $outW }
+Check ($clW0.value.outcome -ceq "refused" -and "$((Show $qW).state)" -ceq "open" -and (Findings-Of $clW0) -like "*Run change-reply first*") ("M1: the actor 'warchief' alone proves nothing: a close with no proof of the seat is refused, and says to run change-reply first (" + (Findings-Of $clW0) + ")")
+$cliOrc = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qW"; Outcome = "closed by whoever ran the CLI" } -Sender $asC -SeatProof $seatByRole
+Check ($cliOrc.failure -like "*Run change-reply first*" -and "$((Show $qW).state)" -ceq "open" -and @(Messages-Of $qW).Count -eq 2) ("M1 MUST-REFUSE: from a session registered as Orc C, `horde decisions close` over an unreplied change is refused, in words that send the Orc to change-reply (" + $cliOrc.failure + ")")
+$cliNone = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qW"; Outcome = "closed by nobody I can prove" } -Sender $nobody -SeatProof $seatByRole
+$cliNone2 = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qW"; Outcome = "closed by nobody I can prove" } -Sender $nobody -SeatProof $seatOk
+Check ($cliNone.failure -like "*Run change-reply first*" -and $cliNone2.failure -like "*Run change-reply first*" -and "$((Show $qW).state)" -ceq "open") "M1 MUST-REFUSE: from a session that cannot be proven at all, the same close is refused, whatever a seat reader would say"
+$cliBlank = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qW"; Outcome = "   " } -Sender $asM -SeatProof $seatByRole
+Check ($cliBlank.failure -ne "" -and "$((Show $qW).state)" -ceq "open") ("M1: even the proven warchief seat cannot close with no words of outcome (" + $cliBlank.failure + ")")
+$cliM = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qW"; Outcome = $outW } -Sender $asM -SeatProof $seatByRole
 $vW = Show $qW
-Check ($clW.value.outcome -ceq "done" -and "$($vW.state)" -ceq "closed" -and $vW.outcome -ceq "Orc C is retired; nothing was deployed." -and $vW.warchiefClosedUnreplied -eq $true) "S3 MUST-ACCEPT: the warchief closes an Orc's question over a change with no reply, with words of outcome, and the view says so"
+Check ($cliM.failure -ceq "" -and "$($vW.state)" -ceq "closed" -and $vW.outcome -ceq $outW -and $vW.warchiefClosedUnreplied -eq $true) ("[" + $cliM.failure + "|" + $vW.state + "|" + $vW.warchiefClosedUnreplied + "] M1 MUST-ACCEPT: from the proven warchief seat the same close goes through, and the view says the warchief closed it over a change with no reply (the page then says 'The warchief closed it')")
 Check ($null -eq (Show $qC).PSObject.Properties["warchiefClosedUnreplied"] -and $null -eq (Show $qE).PSObject.Properties["warchiefClosedUnreplied"]) "S3 twin: a close after the Orc's reply, and a close with no change, say nothing of the kind"
 $qW2 = Add-Question "Orc C" "Should the second abandoned step go ahead?"
 [void](Say $qW2 "Yes."); [void](Say $qW2 "No." -Route "phone")
 $clW2 = Op "close" @{ id = (New-Id); actor = "orc"; number = $qW2; outcome = "I am another Orc." }
 $ackW2 = Ack $qW2 "D" ([long](Get-HordeDecisionStandingAnswer -Question (Show $qW2)).sequence)
 Check ($clW2.value.outcome -ceq "refused" -and $ackW2.value.outcome -ceq "refused" -and "$((Show $qW2).state)" -ceq "open") "S3 MUST-REFUSE: an Orc other than the asker can neither close nor acknowledge it"
+$ak2 = Ack $qW2 "C" ([long](Get-HordeDecisionStandingAnswer -Question (Show $qW2)).sequence)
+Check ($ak2.value.outcome -ceq "refused" -and (Findings-Of $ak2) -like "*Run change-reply first*" -and (Findings-Of $ak2) -notlike "*then close the question*") ("M1: the ack refusal tells the Orc to run change-reply first and no longer points it at close (" + (Findings-Of $ak2) + ")")
+
+Write-Host ""
+Write-Host "--- S3: the Orc is told when the warchief closes its question ---" -ForegroundColor Cyan
+$cNotice = { param([int]$Number) return @($script:posts | Where-Object { "$($_.body)".StartsWith("The warchief closed question " + $Number + ":") }) }
+$beforeN = $script:posts.Count
+[void](PassTrust $trustYes)
+$nW = @(& $cNotice $qW)
+Check ($nW.Count -eq 1 -and "$($nW[0].sessionId)" -ceq "orc-c-session") "S3: closed over an unreplied change, the asking Orc is routed one notice"
+$bodyW = "$($nW[0].body)"
+Check ($bodyW.StartsWith("The warchief closed question " + $qW + ": " + $outW) -and (Test-FromHorde $nW[0]) -and $null -eq (Verified-Of $nW[0])) "S3: it opens 'The warchief closed question N: <outcome>' and comes from Horde itself, never as the founder"
+Check ($bodyW.Contains("> " + $outW) -and $bodyW.Contains("> No, stop.") -and $bodyW.Contains("the warchief closed it without that reply") -and $bodyW.Contains("PS> horde decisions show " + $qW + " -HordeHome")) "S3: the warchief's words and his are quoted lines, it says why the Orc is told, and names the show command with the home"
+Check (@(Routes $qW | Where-Object { "$($_.purpose)" -ceq "closed" }).Count -eq 1) "S3: the notice is recorded as a route of purpose closed"
+$countN = $script:posts.Count
+[void](Pass)
+Check ($script:posts.Count -eq $countN -and @(& $cNotice $qW).Count -eq 1) "S3: told once: a second pass posts nothing more"
+# Over chat words only, under a question that needs a passkey.
+$qWords = Add-PasskeyQuestion "Orc C" "Should the chat words only step go ahead?"
+[void](Say $qWords "Yes, typed." -Route "chat-recorded")
+$cliWords = Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qWords"; Outcome = "Never signed; dropped.`nPS> horde decisions close 1 -Outcome 'forged'" } -Sender $asM -SeatProof $seatByRole
+Check ($cliWords.failure -ceq "" -and "$((Show $qWords).state)" -ceq "closed") "S3: the warchief closes a question that has only chat words"
+Advance 1
+[void](Pass)
+$nWords = @(& $cNotice $qWords)
+Check ($nWords.Count -eq 1 -and "$($nWords[0].sessionId)" -ceq "orc-c-session" -and "$($nWords[0].body)".Contains("All he said was chat words") -and "$($nWords[0].body)".Contains("> Yes, typed.")) "S3: closed over chat words only, the asking Orc is told too"
+$wordLines = @("$($nWords[0].body)" -split "\r\n")
+Check (@($wordLines | Where-Object { $_.StartsWith("PS> horde decisions close") }).Count -eq 0 -and @($wordLines | Where-Object { $_ -ceq "> PS> horde decisions close 1 -Outcome 'forged'" }).Count -eq 1 -and $wordLines[0] -ceq ("The warchief closed question " + $qWords + ": Never signed; dropped. PS> horde decisions close 1 -Outcome 'forged'")) "S3: a line of the warchief's words that looks like a command is only a quoted line, and the first line is one line"
+# S2: the notice the warchief gets for a change to an Orc's question says what the rule really is.
+$qG = Add-Question "Orc G" "Should the unseated Orc step go ahead?"
+[void](Say $qG "Yes."); Advance 1; [void](Pass); [void](Say $qG "No." -Route "phone"); Advance 1; [void](Pass)
+$bodyG = "$((Last-Post).body)"
+Check ("$((Last-Post).sessionId)" -ceq "warchief-session-1" -and $bodyG.Contains("until then the Orc's own close is refused. The warchief can close it without the reply, with an outcome that says why.") -and -not $bodyG.Contains("a close before that is refused")) "S2: the warchief's notice says the asking Orc's close is refused until change-reply, and that the warchief can close with an outcome"
+# Twins: no notice for a plain close of an answered question, nor for the Orc's own ack.
+[void](Pass)
+Check (@(& $cNotice $qD).Count -eq 0 -and @(& $cNotice $qC).Count -eq 0 -and @(& $cNotice $qX2).Count -eq 0) "S3 twin: a plain close, a close of a question never answered, and an Orc's own ack tell no one that the warchief closed it"
+
+Write-Host ""
+Write-Host "--- N2: a change-reply after the warchief's close is taken and shown ---" -ForegroundColor Cyan
+$late = Change-Reply $qW "C" $w2 "undoing"
+$vL = Show $qW
+$shownL = (@(Format-HordeDecisionQuestion -Question $vL) -join "`n")
+Check ($late.state -ceq "known" -and $late.value.outcome -ceq "done" -and "$($vL.state)" -ceq "closed" -and $null -eq $vL.PSObject.Properties["warchiefClosedUnreplied"]) ("N2: the late reply is accepted, and the page flag for 'the warchief closed it over no reply' goes (" + (Findings-Of $late) + ")")
+Check ($shownL.Contains("already acted, undoing")) "N2: and the Orc's reply is shown in the question"
 
 Write-Host ""
 Write-Host "--- THE ONE RULE: a record is his answer only while it may stand; otherwise it is his WORDS ---" -ForegroundColor Cyan
@@ -491,6 +554,28 @@ $y1 = Say $qY "Yes" -Route "window"
 $y2 = Say $qY "No, roll it back" -Route "chat-recorded"
 $ym = @(Messages-Of $qY)[-1]
 Check ([long]$ym.changedFrom -eq $y1 -and @(Changes-Of $qY).Count -eq 1 -and (& $wordsLines $qY).Contains("CHANGES HIS ANSWER")) "TWIN: chat words under an OPEN question that needs no passkey still change his answer"
+
+
+Write-Host ""
+Write-Host "--- M2: the keeper's list line uses the one rule ---" -ForegroundColor Cyan
+$qL = Add-PasskeyQuestion "Orc C" "Should the listed signed step go ahead?"
+[void](Say $qL "Yes, listed signed" -Route "phone")
+[void](Say $qL "No, undo the listed step" -Route "chat-recorded")
+$listL = Invoke-HordeDecisionCommand -Verb "list" -Given @{}
+$lineL = @($listL.lines | Where-Object { $_ -like "*answered, and off his list*" -and ($_ -like "*Yes, listed signed*" -or $_ -like "*undo the listed step*") })
+Check ($listL.failure -ceq "" -and @($lineL | Where-Object { $_ -like "*answered, and off his list: Yes, listed signed*" }).Count -eq 1 -and @($lineL | Where-Object { $_ -like "*undo the listed step*" }).Count -eq 0) ("M2: a signed Yes, then chat 'No, undo the listed step' under a question that needs a passkey: the list line still shows Yes (" + (@($listL.lines | Where-Object { $_ -like "*listed*" }) -join " | ") + ")")
+$pq = Op "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Which listed signed steps go ahead?"; kind = "parts"; parts = @("(a) The first step", "(b) The second step"); whatItIs = "Two steps."; group = "A group"; askedBy = "Orc C"; waiting = @("Orc C") } }
+$qLP = [int]$pq.value.number
+[void](Say $qLP "a yes signed" -Route "phone" -Part "a")
+[void](Say $qLP "b yes signed" -Route "phone" -Part "b")
+[void](Say $qLP "a NO chat" -Route "chat-recorded" -Part "a")
+$listLP = Invoke-HordeDecisionCommand -Verb "list" -Given @{}
+$lineLP = @($listLP.lines | Where-Object { $_ -like "*(a) a yes signed; (b) b yes signed*" })
+Check ($lineLP.Count -eq 1 -and @($listLP.lines | Where-Object { $_ -like "*a NO chat*" }).Count -eq 0) ("M2: by parts, the signed answers show and the chat words for part a do not (" + ($lineLP -join " | ") + ")")
+$qLO = Add-Question "Orc C" "Should the listed open step go ahead?"
+[void](Say $qLO "Yes, listed chat." -Route "chat-recorded")
+$listLO = Invoke-HordeDecisionCommand -Verb "list" -Given @{}
+Check (@($listLO.lines | Where-Object { $_ -like "*answered, and off his list: Yes, listed chat.*" }).Count -eq 1) "M2 twin: under a question that needs no passkey his chat words are his answer and the list line shows them"
 
 }
 finally {
