@@ -25,17 +25,30 @@
            Find = '            $changedFrom = [long]$before.sequence'
            Replace = '            $changedFrom = [long]$last.sequence' }
         @{ Name = "the-first-answer-is-marked-a-change"
-           Find = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn) {'
-           Replace = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn -and $false) {' }
+           Find = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $last)) {'
+           Replace = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $last) -and $false) {' }
         @{ Name = "the-keepers-reply-is-marked-a-change-of-his-answer"
-           Find = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn) {'
-           Replace = '    if ($last.act -eq "" -and $last.asks) {' }
+           Find = '    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $last)) {'
+           Replace = '    if ($last.act -eq "" -and $last.asks -and (Test-HordeDecisionMessageAuthorizes -Message $last)) {' }
         @{ Name = "the-message-view-drops-the-old-words"
            Find = '        $messageView["changedFromText"] = [string]$Message.changedFromText'
            Replace = '' }
         @{ Name = "the-message-view-drops-the-record-replaced"
            Find = '        $messageView["changedFrom"] = [long]$Message.changedFrom'
            Replace = '' }
+        # --- THE ONE RULE (review 2 of PR 335): a record is his answer only while it may stand, else it is his words
+        @{ Name = "words-after-closing-are-a-change-of-his-answer"
+           Find = '    if ($null -ne $Message.PSObject.Properties["arrivedAfterClosing"] -and [bool]$Message.arrivedAfterClosing) { return $false }'
+           Replace = '' }
+        @{ Name = "chat-words-on-a-passkey-question-are-a-change-of-his-answer"
+           Find = '    if ($null -ne $Message.PSObject.Properties["authorizes"]) { return [bool]$Message.authorizes }'
+           Replace = '' }
+        @{ Name = "a-change-is-derived-for-words-that-may-not-stand"
+           Find = '$speaker -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $last)) {'
+           Replace = '$speaker -ceq $script:HordeDecisionFirstTurn) {' }
+        @{ Name = "the-view-says-a-warchief-close-is-every-close"
+           Find = ' -and $null -ne (Get-HordeDecisionUnrepliedChange -Question $Question)) { $view["warchiefClosedUnreplied"] = $true }'
+           Replace = ') { $view["warchiefClosedUnreplied"] = $true }' }
         # --- refused once closed
         @{ Name = "a-closed-question-takes-the-change"
            Find = '    if ("$($Question.state)" -ceq "open") { return "" }'

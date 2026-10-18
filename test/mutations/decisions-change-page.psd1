@@ -96,7 +96,20 @@
            Find = 'change.lines.forEach(function (words) { ans.appendChild(make("div", "hd-change", words)); });'
            Replace = 'change.lines.forEach(function (words) { var d = make("div", "hd-change"); d.innerHTML = words; ans.appendChild(d); });' }
         @{ Name = "his-chat-words-on-a-passkey-question-answer-it-on-the-page"
-           Find = '        if (msgs[i].notPasskey === true) { continue; }'
+           Find = '        if (isWords(msgs[i])) { continue; }'
            Replace = '' }
+        # --- review 2 of PR 335: the one rule, and the warchief's way out
+        @{ Name = "chat-words-on-a-passkey-question-are-his-answer-in-the-history-row"
+           Find = '    function isWords(m) { return !!m && m.speaker === MINE && (m.notPasskey === true || m.arrivedAfterClosing === true); }'
+           Replace = '    function isWords(m) { return !!m && m.speaker === MINE && (m.arrivedAfterClosing === true); }' }
+        @{ Name = "words-after-closing-are-his-answer-in-the-history-row"
+           Find = '    function isWords(m) { return !!m && m.speaker === MINE && (m.notPasskey === true || m.arrivedAfterClosing === true); }'
+           Replace = '    function isWords(m) { return !!m && m.speaker === MINE && (m.notPasskey === true); }' }
+        @{ Name = "the-done-row-takes-the-last-words-of-his-as-his-answer"
+           Find = '        if (!mine && msgs[i].speaker === MINE && !isWords(msgs[i])) { mine = msgs[i]; }'
+           Replace = '        if (!mine && msgs[i].speaker === MINE) { mine = msgs[i]; }' }
+        @{ Name = "a-warchief-close-is-told-as-the-orcs"
+           Find = '        } else if (orc !== "" && q.warchiefClosedUnreplied === true && textOf(q.outcome) !== "") {'
+           Replace = '        } else if (false) {' }
     )
 }

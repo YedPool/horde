@@ -574,6 +574,10 @@
     // WHAT WAS SAID, his acts left out (park and unpark are records of what he did, not words; the
     // operation say keeps them so that the keeper sees them - decisions/Rules.ps1).
     function messagesOf(q) { return allMessagesOf(q).filter(function (m) { return !textOf(m.act); }); }
+    // HIS WORDS THAT ARE NOT HIS ANSWER (decisions/Rules.ps1, Test-HordeDecisionMessageAuthorizes): chat words under a
+    // question that needs a passkey, and words that arrived after the question closed. Shown in the thread, marked;
+    // never the answer that stands, never a change, never "replaced". The one test, here, for every helper below.
+    function isWords(m) { return !!m && m.speaker === MINE && (m.notPasskey === true || m.arrivedAfterClosing === true); }
     // His last act under the question: "park", "unpark" or "" - and what he did here since, not yet in
     // a list (acted, below).
     var acted = Object.create(null);
@@ -599,9 +603,8 @@
         if (caught) { s.saved = null; } else { return s.saved; }
       }
       for (var i = msgs.length - 1; i >= 0; i -= 1) {
-        // HIS CHAT WORDS UNDER A QUESTION THAT NEEDS A PASSKEY ARE NOT HIS ANSWER (decisions/Rules.ps1): shown in the
-        // thread, but the question is not answered by them.
-        if (msgs[i].notPasskey === true) { continue; }
+        // HIS WORDS THAT ARE NOT HIS ANSWER (isWords): shown in the thread, but the question is not answered by them.
+        if (isWords(msgs[i])) { continue; }
         if (msgs[i].speaker !== MINE) { return null; }
         if (!textOf(msgs[i].part)) { return msgs[i]; }
       }
@@ -616,7 +619,7 @@
         if (caught) { s.saved = null; } else { return s.saved; }
       }
       var msgs = messagesOf(q);
-      for (var i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].speaker === MINE && msgs[i].notPasskey !== true && textOf(msgs[i].part) === letter) { return msgs[i]; } }
+      for (var i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].speaker === MINE && !isWords(msgs[i]) && textOf(msgs[i].part) === letter) { return msgs[i]; } }
       return null;
     }
     // HAS HE ANSWERED IT? { answered, local }: answered when an answer to the whole question stands,
@@ -666,7 +669,8 @@
       return out;
     }
     function replacedLater(q, m) {
-      var msgs = messagesOf(q);
+      if (isWords(m)) { return false; }
+      var msgs = messagesOf(q).filter(function (x) { return !isWords(x); });
       var at = msgs.indexOf(m);
       if (m.speaker !== MINE) { return false; }
       // An answer to one part is replaced only by a later answer to that part.
@@ -1858,6 +1862,9 @@
         } else if (orc !== "" && textOf(q.state) === LISTED_STATE) {
           out.status = "waiting";
           out.lines.push("answer changed - waiting for " + orc + " to confirm");
+        } else if (orc !== "" && q.warchiefClosedUnreplied === true && textOf(q.outcome) !== "") {
+          // THE WARCHIEF CLOSED IT OVER A CHANGE ITS ORC NEVER REPLIED TO (his way out): his words, quoted, as text.
+          out.lines.push(told + " The warchief closed it: \"" + textOf(q.outcome) + "\"");
         } else if (orc !== "") {
           // CLOSED WITHOUT A REPLY (a record from before the rule, or a close by another way): never silent.
           out.lines.push(told + " " + orc + " closed it without saying whether it had acted on your first answer.");
@@ -1903,7 +1910,7 @@
       var msgs = messagesOf(q);
       var mine = null, theirs = null;
       for (var i = msgs.length - 1; i >= 0; i -= 1) {
-        if (!mine && msgs[i].speaker === MINE) { mine = msgs[i]; }
+        if (!mine && msgs[i].speaker === MINE && !isWords(msgs[i])) { mine = msgs[i]; }
         if (!mine && !theirs && msgs[i].speaker !== MINE) { theirs = msgs[i]; }
       }
       var said = { mine: "", theirs: "", outcome: "" };

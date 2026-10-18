@@ -219,7 +219,7 @@ function Format-HordeDecisionMessage {
     # The marks (decisions/Rules.ps1): an edit, a note, an act. Read with care: a record written
     # before they existed has none of them.
     $has = { param([string]$Name) return ($null -ne $Message.PSObject.Properties[$Name]) }
-    if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder") { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
+    if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder" -and (Test-HordeDecisionMessageAuthorizes -Message $Message)) { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
     # A CHANGE OF HIS ANSWER says which answer it replaces and what that said (decisions/Rules.ps1).
     if ((& $has "changedFrom") -and [long]$Message.changedFrom -ge 1) {
         [void]$lines.Add($Indent + "  (CHANGES HIS ANSWER: replaces record " + $Message.changedFrom + ", which said:)")

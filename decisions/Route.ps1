@@ -325,7 +325,7 @@ function Format-HordeDecisionRouteNotice {
     else { [void]$lines.Add("His words:") }
     foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }
     if ($unsigned) {
-        [void]$lines.Add("You will be sent his passkey answer when he gives it. Until then there is nothing to acknowledge: an acknowledgement of these words is refused.")
+        [void]$lines.Add("A passkey answer, if he gives one before this question is closed, will be routed to you. Until then there is nothing to acknowledge: an acknowledgement of these words is refused.")
     }
     elseif ($changed -and $mine) {
         [void]$lines.Add("FIRST say what became of your work, with ONE of these (he is shown your reply in plain words, and sees 'waiting for Orc " + $Target.label + " to confirm' until you do). In PowerShell, with -HordeHome naming the founder's list:")

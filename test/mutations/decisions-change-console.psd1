@@ -8,6 +8,9 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "show-tells-chat-words-as-replacing-his-answer"
+           Find = ' -and "$($Message.speaker)" -ceq "founder" -and (Test-HordeDecisionMessageAuthorizes -Message $Message)) {'
+           Replace = ' -and "$($Message.speaker)" -ceq "founder") {' }
         @{ Name = "a-session-that-is-no-orc-may-reply"
            Find = '    if ("$($who.label)" -cnotmatch ''\A[A-Z]\z'') {'
            Replace = '    if ($false) {' }

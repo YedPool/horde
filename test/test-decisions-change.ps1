@@ -189,8 +189,10 @@ $p = Pass
 # M1: the Orc may not close over a change before it has said what became of its work. REFUSED without the reply...
 $ak0 = Ack $qC "C" $c2
 Check ($ak0.state -ceq "known" -and $ak0.value.outcome -ceq "refused" -and (Findings-Of $ak0) -like ("*horde decisions change-reply " + $qC + " -Answer " + $c2 + " -Reply <not-acted, undoing or cannot-undo>*") -and "$((Show $qC).state)" -ceq "open") ("M1: an ack of a changed answer is refused until the Orc has replied, naming the change-reply command (" + (Findings-Of $ak0) + ")")
-$cl0 = Op "close" @{ id = (New-Id); actor = "warchief"; number = $qC; outcome = "Closed by hand." }
-Check ($cl0.value.outcome -ceq "refused" -and (Findings-Of $cl0) -like "*horde decisions change-reply*" -and "$((Show $qC).state)" -ceq "open") ("M1: a close of an Orc's question over an unreplied change is refused the same way (" + (Findings-Of $cl0) + ")")
+$cl0 = Op "close" @{ id = (New-Id); actor = "orc"; number = $qC; outcome = "Closed by another Orc." }
+Check ($cl0.value.outcome -ceq "refused" -and "$((Show $qC).state)" -ceq "open") ("S3: an Orc cannot close it at all - only the warchief changes the list (" + (Findings-Of $cl0) + ")")
+$cl0 = Op "close" @{ id = (New-Id); actor = "warchief"; number = $qC; outcome = "   " }
+Check ($cl0.value.outcome -ceq "refused" -and "$((Show $qC).state)" -ceq "open") ("S3: the warchief's close with no words of outcome is refused too (" + (Findings-Of $cl0) + ")")
 # ...and ALLOWED after it.
 $rp0 = Change-Reply $qC "C" $c2 "not-acted"
 $ak = Ack $qC "C" $c2
@@ -434,6 +436,62 @@ Check ($cliAns.failure -ceq "" -and @($cliAns.lines | Where-Object { $_ -like ("
 $qOK = Add-Question "Orc C" "Should the ordinary chat step go ahead?"
 $o1 = Say $qOK "Yes, chat." -Route "chat-recorded"
 Check ([long](Get-HordeDecisionStandingAnswer -Question (Show $qOK)).sequence -eq $o1 -and (Show $qOK).thread.turn -ceq "warchief") "CONTROL: a question that does NOT need a passkey is still answered by his chat words, as it always was"
+
+Write-Host ""
+Write-Host "--- S3: the warchief's way out when the asking Orc never replies ---" -ForegroundColor Cyan
+$qW = Add-Question "Orc C" "Should the abandoned step go ahead?"
+[void](Say $qW "Yes.")
+$w2 = Say $qW "No, stop." -Route "phone"
+$clW = Op "close" @{ id = (New-Id); actor = "warchief"; number = $qW; outcome = "Orc C is retired; nothing was deployed." }
+$vW = Show $qW
+Check ($clW.value.outcome -ceq "done" -and "$($vW.state)" -ceq "closed" -and $vW.outcome -ceq "Orc C is retired; nothing was deployed." -and $vW.warchiefClosedUnreplied -eq $true) "S3 MUST-ACCEPT: the warchief closes an Orc's question over a change with no reply, with words of outcome, and the view says so"
+Check ($null -eq (Show $qC).PSObject.Properties["warchiefClosedUnreplied"] -and $null -eq (Show $qE).PSObject.Properties["warchiefClosedUnreplied"]) "S3 twin: a close after the Orc's reply, and a close with no change, say nothing of the kind"
+$qW2 = Add-Question "Orc C" "Should the second abandoned step go ahead?"
+[void](Say $qW2 "Yes."); [void](Say $qW2 "No." -Route "phone")
+$clW2 = Op "close" @{ id = (New-Id); actor = "orc"; number = $qW2; outcome = "I am another Orc." }
+$ackW2 = Ack $qW2 "D" ([long](Get-HordeDecisionStandingAnswer -Question (Show $qW2)).sequence)
+Check ($clW2.value.outcome -ceq "refused" -and $ackW2.value.outcome -ceq "refused" -and "$((Show $qW2).state)" -ceq "open") "S3 MUST-REFUSE: an Orc other than the asker can neither close nor acknowledge it"
+
+Write-Host ""
+Write-Host "--- THE ONE RULE: a record is his answer only while it may stand; otherwise it is his WORDS ---" -ForegroundColor Cyan
+$wordsLines = { param($Number) return (@(Format-HordeDecisionQuestion -Question (Show $Number)) -join "`n") }
+# (1) M1: chat words under a needsPasskey question, after a signed answer that was routed.
+$qN = Add-PasskeyQuestion "Orc C" "Should the signed step go ahead?"
+$n1 = Say $qN "Yes" -Route "phone"
+Advance 1
+[void](PassTrust $trustYes)
+$n2 = Say $qN "No, roll it back" -Route "chat-recorded"
+Advance 1
+[void](PassTrust $trustYes)
+$nb = "$((Last-Post).body)"
+$nm = @(Messages-Of $qN)[-1]
+Check ($nb.StartsWith("FOUNDER'S CHAT WORDS, NOT A PASSKEY ANSWER") -and -not $nb.Contains("He CHANGED") -and -not $nb.Contains("may need undoing") -and -not $nb.Contains("OLD words") -and $nb.Contains("> No, roll it back") -and $nb.Contains("A passkey answer, if he gives one before this question is closed, will be routed to you.") -and -not $nb.Contains("You will be sent his passkey answer")) "S2 + M1 MUST-REFUSE: the notice for chat words under a needsPasskey question tells the Orc nothing of a change and nothing of undoing, and still carries his words"
+$nShown = & $wordsLines $qN
+Check ($null -eq $nm.PSObject.Properties["changedFrom"] -and @(Changes-Of $qN).Count -eq 0 -and -not $nShown.Contains("CHANGES HIS ANSWER") -and -not $nShown.Contains("replaces his earlier answer") -and $nShown.Contains("NOT A PASSKEY ANSWER")) "M1: the message is no change, show prints no change and no replacement, and says it is not a passkey answer"
+Check ([long](Get-HordeDecisionStandingAnswer -Question (Show $qN)).sequence -eq $n1 -and (Ack $qN "C" $n1).value.outcome -ceq "done") "M1 twin: the signed answer stands and the Orc acknowledges it"
+# (2) M2: chat words after the question is closed.
+$qX = Add-Question "Orc C" "Should the closed step go ahead?"
+$x1 = Say $qX "Yes" -Route "window"
+Advance 1
+[void](Pass)
+[void](Ack $qX "C" $x1)
+$x2 = Say $qX "No, roll it back" -Route "chat-recorded"
+$xm = @(Messages-Of $qX)[-1]
+$xShown = & $wordsLines $qX
+Check ($xm.arrivedAfterClosing -eq $true -and $xm.text -ceq "No, roll it back" -and $null -eq $xm.PSObject.Properties["changedFrom"] -and @(Changes-Of $qX).Count -eq 0) "M2 MUST-ACCEPT: his chat words after close are kept verbatim, marked arrived after closing, and are no change"
+Check (-not $xShown.Contains("CHANGES HIS ANSWER") -and -not $xShown.Contains("replaces his earlier answer") -and $xShown.Contains("arrived after the question was closed")) "M2: show prints them as arrived after closing and never as a change"
+Check ([long](Get-HordeDecisionStandingAnswer -Question (Show $qX)).sequence -eq $x1) "M2: the answer that stands is still the one he gave while it was open"
+$qX2 = Add-Question "Orc C" "Should the never answered closed step go ahead?"
+[void](Op "close" @{ id = (New-Id); actor = "warchief"; number = $qX2; outcome = "Dropped." })
+[void](Say $qX2 "Yes, late." -Route "window")
+Check ($null -eq (Get-HordeDecisionStandingAnswer -Question (Show $qX2)) -and @(Changes-Of $qX2).Count -eq 0) "M2: a first answer that arrives after close is his words and not the answer that stands"
+# (3) The other direction: the same words while the question is open ARE a change.
+$qY = Add-Question "Orc C" "Should the open step go ahead?"
+$y1 = Say $qY "Yes" -Route "window"
+$y2 = Say $qY "No, roll it back" -Route "chat-recorded"
+$ym = @(Messages-Of $qY)[-1]
+Check ([long]$ym.changedFrom -eq $y1 -and @(Changes-Of $qY).Count -eq 1 -and (& $wordsLines $qY).Contains("CHANGES HIS ANSWER")) "TWIN: chat words under an OPEN question that needs no passkey still change his answer"
+
 }
 finally {
     $env:HORDE_HOME = $keepHome

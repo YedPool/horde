@@ -55,6 +55,11 @@ const LIST = () => [
   question(22, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", closedBy: "Orc F", actedBy: "Orc F", outcome: "Done.", thread: { messages: [said(32, "Yes."), { ...said(42, "No."), changedFrom: 32, changedFromText: "Yes." }] }, answerChanges: [change(22, null)] }),
   // A QUESTION THAT NEEDS A PASSKEY, with only his chat words under it: not answered.
   question(23, { askedBy: "Orc F", needsPasskey: true, thread: { messages: [{ ...said(33, "Yes, from chat."), notPasskey: true }] } }),
+  // CLOSED BY THE WARCHIEF OVER A CHANGE ITS ORC NEVER REPLIED TO: the page says the warchief closed it, with his words.
+  question(24, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", actedBy: "Orc F", warchiefClosedUnreplied: true, outcome: "Orc F is retired; <b>nothing</b> was deployed.", thread: { messages: [said(34, "Yes."), { ...said(44, "No."), changedFrom: 34, changedFromText: "Yes." }] }, answerChanges: [change(24, null)] }),
+  // HIS WORDS THAT ARE NOT HIS ANSWER (S4): the answer is the signed one, never the chat words after it.
+  question(25, { askedBy: "Orc F", needsPasskey: true, thread: { messages: [said(35, "Yes, signed."), { ...said(45, "No, roll it back."), notPasskey: true }] } }),
+  question(26, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", closedBy: "Orc F", actedBy: "Orc F", outcome: "Done.", thread: { messages: [said(36, "Yes, before closing."), { ...said(46, "No, after closing."), arrivedAfterClosing: true }] } }),
   changed(20, null, { answerChanges: [change(20, reply("not-acted", "not acted yet, using the new answer")), { ...change(20, null), answer: 41, from: 30, at: "2026-10-17T15:30:00.0000000Z" }] })
 ].map(withWording);
 const hostList = (qs) => evaluate("window.hostList(" + JSON.stringify(qs) + "), true");
@@ -126,6 +131,14 @@ try {
   check(!!r22 && r22.lines.length === 1 && r22.lines[0] === "You changed your answer at " + clock + ". Orc F closed it without saying whether it had acted on your first answer.", "CLOSED WITH NO REPLY: the page says the Orc closed it without saying whether it had acted", JSON.stringify(r22 && r22.lines));
   const r23 = await row(23);
   check(!!r23 && !r23.done && r23.button === "", "CHAT WORDS UNDER A QUESTION THAT NEEDS A PASSKEY do not answer it: it is not in the answered fold and has no Change button", JSON.stringify(r23));
+  const r24 = await row(24);
+  check(!!r24 && r24.lines.length === 1 && r24.lines[0] === "You changed your answer at " + clock + ". The warchief closed it: \"Orc F is retired; <b>nothing</b> was deployed.\"", "S3: CLOSED BY THE WARCHIEF over a change its Orc never replied to: the page says so, with his outcome in quotes, as text", JSON.stringify(r24 && r24.lines));
+  const m24 = await evaluate(`(() => { const w = ${FIND_ROW(24)}; return w ? w.querySelectorAll('b').length : -1; })()`);
+  check(m24 === 0, "S3: and the outcome makes no element", String(m24));
+  const said25 = await evaluate(`(() => { const w = ${FIND_ROW(25)}; const a = w && w.querySelector('.rest'); return w ? { done: w.classList.contains('hd-done'), rest: a ? a.textContent : null } : null; })()`);
+  check(!!said25 && said25.done && said25.rest !== null && said25.rest.indexOf("Yes, signed.") >= 0 && said25.rest.indexOf("roll it back") < 0, "S4: under a needsPasskey question the answer shown is the signed one, never his chat words after it", JSON.stringify(said25));
+  const said26 = await evaluate(`(() => { const w = ${FIND_ROW(26)}; const a = w && w.querySelector('.rest'); return w ? { rest: a ? a.textContent : null } : null; })()`);
+  check(!!said26 && said26.rest !== null && said26.rest.indexOf("Yes, before closing.") >= 0 && said26.rest.indexOf("after closing") < 0, "S4: under a closed question the answer shown is the one he gave while it was open, never words that arrived after", JSON.stringify(said26));
   check(!!r11 && r11.button === "Change my answer" && !!r14 && r14.button === "Change my answer", "a changed answer that is still open can be changed again", JSON.stringify([r11 && r11.button, r14 && r14.button]));
   check(!!r15 && r15.closed.length === 1 && r15.closed[0] === "This question is closed - Orc F has acted on it. To change course, ask a follow-up.", "CLOSED: one plain line says why there is no button, and what to do instead", JSON.stringify(r15 && r15.closed));
   check(!!r16 && r16.closed.length === 0, "a closed question he never answered says nothing of changing", JSON.stringify(r16 && r16.closed));

@@ -13,6 +13,9 @@
         @{ Name = "an-older-change-stands-over-a-newer-answer"
            Find = '    if ("$($older.value)" -cne "") { return [pscustomobject]@{ outcome = "refused"; reason = $older.value } }'
            Replace = '' }
+        @{ Name = "his-chat-words-or-words-after-closing-count-as-the-newest-answer"
+           Find = '        if (-not (Test-HordeDecisionMessageAuthorizes -Message $m)) { continue }'
+           Replace = '' }
         @{ Name = "a-needs-passkey-refusal-is-final-and-not-listed-apart"
            Find = '            return [pscustomobject]@{ outcome = "refused"; reason = ("needs-passkey: question " + $r.value.number + " is answered only with a fresh passkey'
            Replace = '            return [pscustomobject]@{ outcome = "refused"; reason = ("question " + $r.value.number + " is answered only with a fresh passkey' }

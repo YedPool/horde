@@ -235,6 +235,17 @@ try {
     $t = & $sendSession $U $sess (New-HordeTestPhoneAnswerBody -AnswerId (New-Id) -Text "Session change on an ordinary question." -Number 1 -Machine $U.id.sign.keyId -Snapshot (Get-SentKey $U))
     Check ((Has $t "done") -and -not (Has $t "needs-passkey") -and @(Get-Said $U 1).Count -eq 1) ("CONTROL TWIN: an unlocked session's answer to an ordinary question is still applied - the passkey is asked only where the question says so (" + $t.text + ")")
 
+    # M3 (review of PR 335): his chat words under a needsPasskey question are WORDS, not "the newest answer" - they
+    # never make a passkey answer signed before them superseded. The twin: the same words under an ordinary
+    # question are an answer and do supersede (above).
+    $np2 = Invoke-HordeDecision -Operation "add" -Root $U.store -Request @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Should the relay worker be rolled out to production?"; kind = "yes-no"; whatItIs = "A production rollout, for the change suite."; group = "relay"; askedBy = "Orc F" } }
+    $nNp2 = [int]$np2.value.number
+    $null = Invoke-HordeRelayChannelTicks -Context $U.ctx
+    $words = Invoke-HordeDecision -Operation "say" -Root $U.store -Request @{ id = (New-Id); actor = "warchief"; number = $nNp2; speaker = "founder"; route = "chat-recorded"; text = "yes go ahead" }
+    $t = Send-Answer $U "Signed before the chat words." -Number $nNp2 -Now ([datetime]::UtcNow.AddMinutes(-2))
+    $s = @(Get-Said $U $nNp2)
+    Check ($words.value.outcome -ceq "done" -and (Has $t "done") -and -not (Has $t "superseded") -and $s.Count -eq 2 -and $s[1].text -ceq "Signed before the chat words.") ("M3 MUST-ACCEPT: a passkey answer signed BEFORE his recorded chat words is applied - the words are not a newer answer (" + $t.text + ")")
+
     Write-Host ""
     Write-Host "--- refused by name once the question is closed ---" -ForegroundColor Cyan
     $C = New-World

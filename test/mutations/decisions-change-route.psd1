@@ -10,7 +10,13 @@
     Mutations = @(
         @{ Name = "a-changed-answer-is-announced-as-a-plain-answer"
            Find = '    $headWords = $(if ($unsigned) { "FOUNDER''S CHAT WORDS, NOT A PASSKEY ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })'
-           Replace = '    $headWords = "FOUNDER ANSWER"' }
+           Replace = '    $headWords = $(if ($unsigned) { "FOUNDER''S CHAT WORDS, NOT A PASSKEY ANSWER" } else { "FOUNDER ANSWER" })' }
+        @{ Name = "chat-words-are-announced-under-the-plain-answer-header"
+           Find = '    $headWords = $(if ($unsigned) { "FOUNDER''S CHAT WORDS, NOT A PASSKEY ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })'
+           Replace = '    $headWords = $(if ($unsigned) { "FOUNDER ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })' }
+        @{ Name = "the-passkey-notice-promises-a-routing-it-cannot-keep"
+           Find = 'A passkey answer, if he gives one before this question is closed, will be routed to you.'
+           Replace = 'You will be sent his passkey answer when he gives it.' }
         @{ Name = "the-old-words-are-left-out-of-the-notice"
            Find = '        [void]$lines.Add("His OLD words (record " + $m.changedFrom + "):")'
            Replace = '' }

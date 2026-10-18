@@ -1023,10 +1023,16 @@ $script:HordeDecisionAnswerRoutes = @("window", "phone")
 $script:HordeDecisionUnsignedRoutes = @("chat-recorded")
 
 function Test-HordeDecisionMessageAuthorizes {
-    # Does this message count as his answer? True for every message but the founder's words recorded by an
-    # unsigned route under a question that needs a passkey. Reads a message as the fold holds it and as a
-    # view hands it out (notPasskey is handed out only when true).
+    # THE ONE RULE OF WHAT IS HIS ANSWER (the coordinator, 2026-10-17): a record is his ANSWER only while it may
+    # stand - the question was open when it was said, and it is not the founder's chat words under a question that
+    # needs a passkey. Only then is it an answer, a change (answerChanges, the change notice, "may need undoing"),
+    # the standing answer or "the newest answer" the phone's superseded guard weighs. In every other case it is his
+    # WORDS: recorded as he said them and shown, marked "arrived after closing" or "not a passkey answer", never a
+    # change, never superseding a signed answer, never shown as his answer. Decided by the record's route and the
+    # question's state, never by its text. Reads a message as the fold holds it and as a view hands it out
+    # (notPasskey is handed out only when true).
     param($Message)
+    if ($null -ne $Message.PSObject.Properties["arrivedAfterClosing"] -and [bool]$Message.arrivedAfterClosing) { return $false }
     if ($null -ne $Message.PSObject.Properties["authorizes"]) { return [bool]$Message.authorizes }
     if ($null -ne $Message.PSObject.Properties["notPasskey"]) { return (-not [bool]$Message.notPasskey) }
     return $true
@@ -1064,7 +1070,7 @@ function Get-HordeDecisionChangeRefusal {
     # A change is his words that answer (no act, not a note) when his words already answer the same -Part.
     # Refused once the question is closed. Asked of a REQUEST by decisions/Operations.ps1; the fold never
     # asks it, because a stored record is a fact.
-    param($Question, [string]$Speaker, [string]$Part = "", [bool]$Asks = $true, [string]$Act = "", [string]$Route = "")
+    param($Question, [string]$Speaker, [string]$Part = "", [bool]$Asks = $true, [string]$Act = "", [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Route)
     if ($Speaker -cne $script:HordeDecisionFirstTurn -or $Act -ne "" -or -not $Asks) { return "" }
     if ("$($Question.state)" -ceq "open") { return "" }
     # WHAT A CHANGE IS, IS THE RECORD'S AND NOT THE TEXT'S (the coordinator, 2026-10-17): words that REPLACE his
@@ -1336,7 +1342,7 @@ function Step-HordeDecisionSaid {
     # his that answer the same part already stand. Derived here, at the record's place; never stored.
     $changedFrom = [long]0
     $changedFromText = ""
-    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn) {
+    if ($last.act -eq "" -and $last.asks -and $speaker -ceq $script:HordeDecisionFirstTurn -and (Test-HordeDecisionMessageAuthorizes -Message $last)) {
         for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
             $before = $question.thread[$i]
             if ("$($before.speaker)" -cne $speaker -or "$($before.act)" -ne "" -or -not [bool]$before.asks) { continue }
@@ -1669,6 +1675,9 @@ function ConvertTo-HordeDecisionView {
     $changes = @(Get-HordeDecisionAnswerChanges -Question $Question)
     if ($changes.Count -gt 0) { $view["answerChanges"] = $changes }
     if ("$($Question.state)" -cne "open") { $view["actedBy"] = (Get-HordeDecisionActedBy -Question $Question) }
+    # CLOSED BY THE WARCHIEF OVER A CHANGE ITS ORC NEVER REPLIED TO (the coordinator, 2026-10-17): handed out only
+    # when so, so the page says "The warchief closed it: <outcome>" and not that the Orc did.
+    if ("$($Question.state)" -cne "open" -and "$($Question.closedBy)" -eq "" -and $null -ne (Get-HordeDecisionUnrepliedChange -Question $Question)) { $view["warchiefClosedUnreplied"] = $true }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view

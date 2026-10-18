@@ -326,12 +326,17 @@ function Complete-HordeDecisionAckData {
 
 function Complete-HordeDecisionCloseData {
     # A question an Orc asked is not closed over a changed answer its Orc has not replied to (the same rule as the
-    # acknowledgement, above: review of PR 335, M1). Any other close goes through as it always did.
+    # acknowledgement, above: review of PR 335, M1). THE WARCHIEF'S WAY OUT (the coordinator, 2026-10-17): an Orc
+    # that never replies (parked, retired) leaves the question on his list for ever, so the warchief alone may
+    # close it, and only with an outcome in words; his page then says "The warchief closed it: <outcome>". Any
+    # other Orc, and a close with no words, stay refused. Any other close goes through as it always did.
     param($Request, $List, $Data)
     $number = [int]$Data["number"]
     if ($List.questions.ContainsKey($number) -and "$($List.questions[$number].state)" -ceq "open") {
         $closeUnreplied = Get-HordeDecisionUnrepliedChange -Question $List.questions[$number]
-        if ($null -ne $closeUnreplied) { return [pscustomobject]@{ why = (Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied); write = $false; more = $null; data = $null } }
+        $closeWords = $(if ($Data.Contains("outcome")) { "$($Data['outcome'])".Trim() } else { "" })
+        $warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "")
+        if ($null -ne $closeUnreplied -and -not $warchiefCloses) { return [pscustomobject]@{ why = ((Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied) + ". The warchief alone may close it without that reply, with an outcome that says why"); write = $false; more = $null; data = $null } }
     }
     return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
 }
