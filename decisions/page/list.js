@@ -599,6 +599,9 @@
         if (caught) { s.saved = null; } else { return s.saved; }
       }
       for (var i = msgs.length - 1; i >= 0; i -= 1) {
+        // HIS CHAT WORDS UNDER A QUESTION THAT NEEDS A PASSKEY ARE NOT HIS ANSWER (decisions/Rules.ps1): shown in the
+        // thread, but the question is not answered by them.
+        if (msgs[i].notPasskey === true) { continue; }
         if (msgs[i].speaker !== MINE) { return null; }
         if (!textOf(msgs[i].part)) { return msgs[i]; }
       }
@@ -613,7 +616,7 @@
         if (caught) { s.saved = null; } else { return s.saved; }
       }
       var msgs = messagesOf(q);
-      for (var i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].speaker === MINE && textOf(msgs[i].part) === letter) { return msgs[i]; } }
+      for (var i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].speaker === MINE && msgs[i].notPasskey !== true && textOf(msgs[i].part) === letter) { return msgs[i]; } }
       return null;
     }
     // HAS HE ANSWERED IT? { answered, local }: answered when an answer to the whole question stands,
@@ -1850,11 +1853,14 @@
           out.status = word;
           if (word === "not-acted") { out.lines.push(told + " " + by + " had not acted yet and is using the new answer."); }
           else if (word === "undoing") { out.lines.push(told + " " + by + " had already acted on the first one and is undoing it."); }
-          else if (word === "cannot-undo") { out.lines.push(told + " " + by + " had already acted on the first one and says it cannot undo: " + textOf(reply.why) + "."); }
+          else if (word === "cannot-undo") { out.lines.push(told + " " + by + " had already acted on the first one and says it cannot undo: \"" + textOf(reply.why) + "\"."); }
           else { out.lines.push(told + " " + by + " answered: " + textOf(reply.replyShown) + "."); }
         } else if (orc !== "" && textOf(q.state) === LISTED_STATE) {
           out.status = "waiting";
           out.lines.push("answer changed - waiting for " + orc + " to confirm");
+        } else if (orc !== "") {
+          // CLOSED WITHOUT A REPLY (a record from before the rule, or a close by another way): never silent.
+          out.lines.push(told + " " + orc + " closed it without saying whether it had acted on your first answer.");
         } else { out.lines.push(told); }
       }
       if (textOf(q.state) === LISTED_STATE) { out.button = !!answeredNow && !reopened[q.number]; }

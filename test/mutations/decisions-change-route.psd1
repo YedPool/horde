@@ -41,5 +41,30 @@
         @{ Name = "the-analyst-is-not-told-it-is-a-change"
            Find = '    $changedNote = $(if ($null -ne $Item.answer.PSObject.Properties["changedFrom"] -and [long]$Item.answer.changedFrom -ge 1) {'
            Replace = '    $changedNote = $(if ($false) {' }
+        # --- the old words get "> " on every line, for every kind of line break (review of PR 335, S2)
+        @{ Name = "the-old-words-are-cut-at-lf-only"
+           Find = '        foreach ($l in @(([string]$m.changedFromText) -split "
+||
+")) { [void]$lines.Add(("> " + $l)) }'
+           Replace = '        foreach ($l in @(([string]$m.changedFromText) -split "
+")) { [void]$lines.Add(("> " + $l)) }' }
+        @{ Name = "the-old-words-are-cut-at-crlf-and-lf-but-not-a-lone-cr"
+           Find = '        foreach ($l in @(([string]$m.changedFromText) -split "
+||
+")) { [void]$lines.Add(("> " + $l)) }'
+           Replace = '        foreach ($l in @(([string]$m.changedFromText) -split "
+|
+")) { [void]$lines.Add(("> " + $l)) }' }
+        @{ Name = "the-old-words-lose-their-prefix"
+           Find = '        foreach ($l in @(([string]$m.changedFromText) -split "
+||
+")) { [void]$lines.Add(("> " + $l)) }'
+           Replace = '        foreach ($l in @(([string]$m.changedFromText) -split "
+||
+")) { [void]$lines.Add($l) }' }
+        # --- chat words under a question that needs a passkey are said plainly not to be a passkey answer
+        @{ Name = "chat-words-on-a-passkey-question-are-announced-as-an-answer"
+           Find = '    $unsigned = ($null -ne $m.PSObject.Properties["notPasskey"] -and [bool]$m.notPasskey)'
+           Replace = '    $unsigned = $false' }
     )
 }

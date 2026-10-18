@@ -49,6 +49,12 @@ const LIST = () => [
   question(17, { askedBy: "Orc F", thread: { messages: [] } }),
   question(18, { askedBy: "Orc F", thread: { messages: [said(8, "Option two.")] } }),
   // Changed twice: the first change was replied to, the second is still waiting. The page tells the newest.
+  // MARKUP IN THE ORC'S WHY AND IN HIS WORDS is drawn as text, never as elements (S2 of the review of PR 335).
+  changed(21, reply("cannot-undo", "already acted, cannot undo", "<img src=x onerror=window.__x=1><b>bold</b>"), { thread: { messages: [said(31, "<b>first</b>"), { ...said(41, "<i>second</i><img src=y onerror=window.__y=1>"), changedFrom: 31, changedFromText: "<b>first</b>" }] }, answerChanges: [{ ...change(21, reply("cannot-undo", "already acted, cannot undo", "<img src=x onerror=window.__x=1><b>bold</b>")), oldText: "<b>first</b>", newText: "<i>second</i><img src=y onerror=window.__y=1>" }] }),
+  // CLOSED WITH NO REPLY: the page is never silent about it.
+  question(22, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", closedBy: "Orc F", actedBy: "Orc F", outcome: "Done.", thread: { messages: [said(32, "Yes."), { ...said(42, "No."), changedFrom: 32, changedFromText: "Yes." }] }, answerChanges: [change(22, null)] }),
+  // A QUESTION THAT NEEDS A PASSKEY, with only his chat words under it: not answered.
+  question(23, { askedBy: "Orc F", needsPasskey: true, thread: { messages: [{ ...said(33, "Yes, from chat."), notPasskey: true }] } }),
   changed(20, null, { answerChanges: [change(20, reply("not-acted", "not acted yet, using the new answer")), { ...change(20, null), answer: 41, from: 30, at: "2026-10-17T15:30:00.0000000Z" }] })
 ].map(withWording);
 const hostList = (qs) => evaluate("window.hostList(" + JSON.stringify(qs) + "), true");
@@ -109,9 +115,17 @@ try {
   check(!!r11 && r11.lines.length === 1 && r11.lines[0] === "answer changed - waiting for Orc F to confirm", "NO REPLY YET: 'answer changed - waiting for Orc F to confirm'", JSON.stringify(r11 && r11.lines));
   check(!!r12 && r12.lines.length === 1 && r12.lines[0] === "You changed your answer at " + clock + ". Orc F had not acted yet and is using the new answer.", "NOT ACTED: says so plainly, with the time he changed it", JSON.stringify(r12 && r12.lines));
   check(!!r13 && r13.lines.length === 1 && r13.lines[0] === "You changed your answer at " + clock + ". Orc F had already acted on the first one and is undoing it.", "UNDOING: says so plainly", JSON.stringify(r13 && r13.lines));
-  check(!!r14 && r14.lines.length === 1 && r14.lines[0] === "You changed your answer at " + clock + ". Orc F had already acted on the first one and says it cannot undo: the deploy already went out.", "CANNOT UNDO: says so, and why, in the Orc's words", JSON.stringify(r14 && r14.lines));
+  check(!!r14 && r14.lines.length === 1 && r14.lines[0] === "You changed your answer at " + clock + ". Orc F had already acted on the first one and says it cannot undo: \"the deploy already went out\".", "CANNOT UNDO: says so, and why, in the Orc's words", JSON.stringify(r14 && r14.lines));
   const r20 = await row(20);
   check(!!r20 && r20.lines.length === 1 && r20.lines[0] === "answer changed - waiting for Orc F to confirm", "CHANGED TWICE: the line tells the NEWEST change, still waiting, not the earlier one that was replied to", JSON.stringify(r20 && r20.lines));
+  const r21 = await row(21);
+  check(!!r21 && r21.lines.length === 1 && r21.lines[0] === "You changed your answer at " + clock + ". Orc F had already acted on the first one and says it cannot undo: \"<img src=x onerror=window.__x=1><b>bold</b>\".", "MARKUP IN THE ORC'S WHY is drawn as the Orc's own words, in quotes, as text", JSON.stringify(r21 && r21.lines));
+  const m21 = await evaluate(`(() => { const w = ${FIND_ROW(21)}; return w ? { tags: w.querySelectorAll('b, i, img, script').length, text: w.textContent.indexOf('<i>second</i>') >= 0, ran: window.__x === 1 || window.__y === 1 } : null; })()`);
+  check(!!m21 && m21.tags === 0 && m21.text && !m21.ran, "MARKUP IN HIS WORDS AND THE ORC'S WHY: no element is made of it, it reads as text, and nothing ran", JSON.stringify(m21));
+  const r22 = await row(22);
+  check(!!r22 && r22.lines.length === 1 && r22.lines[0] === "You changed your answer at " + clock + ". Orc F closed it without saying whether it had acted on your first answer.", "CLOSED WITH NO REPLY: the page says the Orc closed it without saying whether it had acted", JSON.stringify(r22 && r22.lines));
+  const r23 = await row(23);
+  check(!!r23 && !r23.done && r23.button === "", "CHAT WORDS UNDER A QUESTION THAT NEEDS A PASSKEY do not answer it: it is not in the answered fold and has no Change button", JSON.stringify(r23));
   check(!!r11 && r11.button === "Change my answer" && !!r14 && r14.button === "Change my answer", "a changed answer that is still open can be changed again", JSON.stringify([r11 && r11.button, r14 && r14.button]));
   check(!!r15 && r15.closed.length === 1 && r15.closed[0] === "This question is closed - Orc F has acted on it. To change course, ask a follow-up.", "CLOSED: one plain line says why there is no button, and what to do instead", JSON.stringify(r15 && r15.closed));
   check(!!r16 && r16.closed.length === 0, "a closed question he never answered says nothing of changing", JSON.stringify(r16 && r16.closed));

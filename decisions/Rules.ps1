@@ -1013,15 +1013,66 @@ function Get-HordeDecisionClosedChangeLine {
     return ("This question is closed - " + (Get-HordeDecisionActedBy -Question $Question) + " has acted on it. To change course, ask a follow-up.")
 }
 
+# THE ROUTES BY WHICH HE ANSWERS (a closed list): the window's answer box and the phone's. Words by these routes
+# are an answer, so words of his that come after an answer of his replace it.
+$script:HordeDecisionAnswerRoutes = @("window", "phone")
+# A QUESTION THAT NEEDS A PASSKEY IS AUTHORIZED ONLY BY A PASSKEY (the coordinator, 2026-10-17): words recorded
+# from chat (route chat-recorded: the keeper wrote down what he said, no passkey signed them) are kept and
+# shown, but they never count as his answer to such a question - not for its turn, not for the answer that
+# stands, not for the acknowledgement, not for a change. The question stays waiting for a passkey answer.
+$script:HordeDecisionUnsignedRoutes = @("chat-recorded")
+
+function Test-HordeDecisionMessageAuthorizes {
+    # Does this message count as his answer? True for every message but the founder's words recorded by an
+    # unsigned route under a question that needs a passkey. Reads a message as the fold holds it and as a
+    # view hands it out (notPasskey is handed out only when true).
+    param($Message)
+    if ($null -ne $Message.PSObject.Properties["authorizes"]) { return [bool]$Message.authorizes }
+    if ($null -ne $Message.PSObject.Properties["notPasskey"]) { return (-not [bool]$Message.notPasskey) }
+    return $true
+}
+
+function Get-HordeDecisionUnrepliedChange {
+    # The change of his answer the asking Orc has not yet said what became of its work for, or $null. Of the
+    # changes under the question, the newest to each part counts (a later change makes an earlier one moot);
+    # one with no reply naming it is unreplied. Only a question an Orc asked has one: nobody else replies.
+    param($Question)
+    $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
+    if ($asker.seat -cne "orc") { return $null }
+    $newest = [ordered]@{}
+    foreach ($m in @($Question.thread)) {
+        if ($null -eq $m -or $null -eq $m.PSObject.Properties["changedFrom"] -or [long]$m.changedFrom -lt 1) { continue }
+        if (-not (Test-HordeDecisionMessageAuthorizes -Message $m)) { continue }
+        $newest["" + $m.part] = $m
+    }
+    foreach ($m in @($newest.Values)) {
+        $replied = (@($Question.changeReplies | Where-Object { [long]$_.answer -eq [long]$m.sequence }).Count -gt 0)
+        if (-not $replied) { return $m }
+    }
+    return $null
+}
+
+function Get-HordeDecisionUnrepliedChangeLine {
+    # The refusal for an ack or a close over a change the Orc has not replied to, in words that name the command.
+    param($Question, $Change)
+    $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
+    return ("the founder changed his answer (record " + $Change.sequence + " replaces record " + $Change.changedFrom + ") and " + $asker.shown + " has not said what became of its work. First run: horde decisions change-reply " + $Question.number + " -Answer " + $Change.sequence + " -Reply <not-acted, undoing or cannot-undo> [-Why '<one line>'], then close the question")
+}
+
 function Get-HordeDecisionChangeRefusal {
     # Why words of -Speaker may not be said under -Question as a CHANGE of his answer, or "" when they may.
     # A change is his words that answer (no act, not a note) when his words already answer the same -Part.
     # Refused once the question is closed. Asked of a REQUEST by decisions/Operations.ps1; the fold never
     # asks it, because a stored record is a fact.
-    param($Question, [string]$Speaker, [string]$Part = "", [bool]$Asks = $true, [string]$Act = "")
+    param($Question, [string]$Speaker, [string]$Part = "", [bool]$Asks = $true, [string]$Act = "", [string]$Route = "")
     if ($Speaker -cne $script:HordeDecisionFirstTurn -or $Act -ne "" -or -not $Asks) { return "" }
     if ("$($Question.state)" -ceq "open") { return "" }
-    $earlier = @($Question.thread | Where-Object { "$($_.speaker)" -ceq $Speaker -and "$($_.act)" -eq "" -and [bool]$_.asks -and "$($_.part)" -ceq $Part })
+    # WHAT A CHANGE IS, IS THE RECORD'S AND NOT THE TEXT'S (the coordinator, 2026-10-17): words that REPLACE his
+    # answer come by a route where he answers - the window's box and the phone's. His other words (chat he
+    # said and the keeper wrote down) are kept under a closed question as they always were, marked as
+    # arrived after closing, and replace nothing.
+    if ($script:HordeDecisionAnswerRoutes -cnotcontains $Route) { return "" }
+    $earlier = @($Question.thread | Where-Object { "$($_.speaker)" -ceq $Speaker -and "$($_.act)" -eq "" -and [bool]$_.asks -and (Test-HordeDecisionMessageAuthorizes -Message $_) -and "$($_.part)" -ceq $Part })
     if ($earlier.Count -eq 0) { return "" }
     return (Get-HordeDecisionClosedChangeLine -Question $Question)
 }
@@ -1035,7 +1086,7 @@ function Get-HordeDecisionStandingAnswer {
     if ($null -ne $thread -and $null -ne $thread.PSObject.Properties["messages"]) { $thread = $thread.messages }
     foreach ($message in @($thread)) {
         if ($null -eq $message) { continue }
-        if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($message.act)" -eq "") { $standing = $message }
+        if ("$($message.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($message.act)" -eq "" -and (Test-HordeDecisionMessageAuthorizes -Message $message)) { $standing = $message }
     }
     return $standing
 }
@@ -1093,7 +1144,7 @@ function Step-HordeDecisionChangeReplied {
     if ($asker.label -cne $by -or $asker.seat -cne "orc") { return ("question " + $question.number + " was asked by '" + $question.askedBy + "', not by Orc " + $by + ": only the Orc that asked it says what became of a changed answer") }
     $answer = [long]$Ev.data.answer
     $said = @($question.thread | Where-Object { [long]$_.sequence -eq $answer }) | Select-Object -First 1
-    if ($null -eq $said -or "$($said.speaker)" -cne $script:HordeDecisionFirstTurn -or "$($said.act)" -ne "" -or [long]$said.changedFrom -lt 1) {
+    if ($null -eq $said -or "$($said.speaker)" -cne $script:HordeDecisionFirstTurn -or "$($said.act)" -ne "" -or [long]$said.changedFrom -lt 1 -or -not (Test-HordeDecisionMessageAuthorizes -Message $said)) {
         return ("it replies to record " + $answer + ", which is not a changed answer of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " under question " + $question.number)
     }
     $reply = "$($Ev.data.reply)"
@@ -1144,6 +1195,7 @@ function Step-HordeDecisionAcked {
     $by = "$($Ev.data.by)"
     if ($question.state -cne "open") { return ("question " + $question.number + " is already " + $question.state + ": an acknowledgement closes only an open question, and never opens a closed one again") }
     $standing = Get-HordeDecisionStandingAnswer -Question $question
+    if ($null -eq $standing -and $question["needsPasskey"] -eq $true -and @($question.thread | Where-Object { "$($_.speaker)" -ceq $script:HordeDecisionFirstTurn -and "$($_.act)" -eq "" }).Count -gt 0) { return ("question " + $question.number + " needs a passkey, and the words recorded from chat under it are not a passkey answer: it is still waiting for his answer on the phone, so it is not closed by an acknowledgement") }
     if ($null -eq $standing) { return ("question " + $question.number + " has no answer of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " to acknowledge: only an answered question is closed this way") }
     if (-not (Test-HordeDecisionAwaitingClose -Question $question -Turn "$($question.turn)")) { return ("question " + $question.number + " is still waiting for " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " - a part of it is unanswered, or he was asked again after his answer - so it is not closed by an acknowledgement") }
     if ([long]$Ev.data.answer -ne [long]$standing.sequence) { return ("it acknowledges record " + $Ev.data.answer + ", and the answer that stands under question " + $question.number + " is record " + $standing.sequence + ": read that one (horde decisions show " + $question.number + "), then acknowledge it") }
@@ -1259,6 +1311,9 @@ function Step-HordeDecisionSaid {
         # The key id of the passkey that signed (the route phone), as the record holds it; "" when it
         # names none - every record written before 2026-10-12, and every other route's.
         signedBy = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "signedBy") { [string]$Ev.data.signedBy } else { "" })
+        # False for the founder's words recorded from chat under a question that needs a passkey (above, A QUESTION
+        # THAT NEEDS A PASSKEY): kept and shown, never his answer.
+        authorizes = $(if ($speaker -ceq $script:HordeDecisionFirstTurn -and $script:HordeDecisionUnsignedRoutes -ccontains "$($Ev.data.route)" -and $question["needsPasskey"] -eq $true) { $false } else { $true })
     })
     $last = $question.thread[$question.thread.Count - 1]
     # AN EDIT (the owner, 2026-10-07): words of the same speaker straight after their own last
@@ -1285,6 +1340,7 @@ function Step-HordeDecisionSaid {
         for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
             $before = $question.thread[$i]
             if ("$($before.speaker)" -cne $speaker -or "$($before.act)" -ne "" -or -not [bool]$before.asks) { continue }
+            if (-not (Test-HordeDecisionMessageAuthorizes -Message $before)) { continue }
             if ("$($before.part)" -cne $part) { continue }
             $changedFrom = [long]$before.sequence
             $changedFromText = [string]$before.text
@@ -1298,7 +1354,7 @@ function Step-HordeDecisionSaid {
     # AN ANSWER TO ONE PART PASSES THE TURN ONLY WHEN IT IS THE LAST PART LEFT (the founder, 2026-10-12:
     # the question leaves his list when all its parts are answered). An answer that names no part is
     # an answer to the whole question, as it always was.
-    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") {
+    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "" -and $last.authorizes) {
         $passes = $true
         if ($part -ne "" -and $speaker -ceq $script:HordeDecisionFirstTurn) {
             if ($partStands) { $question.partsAnswered[$part] = [long]$Ev.sequence }
@@ -1489,6 +1545,9 @@ function ConvertTo-HordeDecisionMessageView {
         $messageView["changedFrom"] = [long]$Message.changedFrom
         $messageView["changedFromText"] = [string]$Message.changedFromText
     }
+    # WORDS THAT ARE NOT HIS ANSWER, handed out only when so (header, A QUESTION THAT NEEDS A PASSKEY): his words
+    # recorded from chat under a question that needs a passkey. The page and the notice read it.
+    if ($null -ne $Message.PSObject.Properties["authorizes"] -and -not [bool]$Message.authorizes) { $messageView["notPasskey"] = $true }
     return [pscustomobject]$messageView
 }
 
@@ -1502,6 +1561,7 @@ function Get-HordeDecisionAnswerChanges {
     $out = New-Object System.Collections.ArrayList
     foreach ($m in @($Question.thread)) {
         if ($null -eq $m.PSObject.Properties["changedFrom"] -or [long]$m.changedFrom -lt 1) { continue }
+        if (-not (Test-HordeDecisionMessageAuthorizes -Message $m)) { continue }
         $one = [ordered]@{ answer = [long]$m.sequence; at = "$($m.at)"; from = [long]$m.changedFrom; oldText = [string]$m.changedFromText; newText = [string]$m.text; part = "$($m.part)"; orcShown = $(if ($asker.seat -ceq "orc") { $asker.shown } else { "" }) }
         $reply = @($Question.changeReplies | Where-Object { [long]$_.answer -eq [long]$m.sequence }) | Select-Object -Last 1
         if ($null -ne $reply) {

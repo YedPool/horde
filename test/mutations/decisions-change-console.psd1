@@ -47,5 +47,21 @@
         @{ Name = "show-does-not-say-it-waits-for-the-orc"
            Find = '            $state = "no reply yet from " + $(if ("$($c.orcShown)" -ne "") { $c.orcShown } else { "anyone: no Orc asked this question" })'
            Replace = '            $state = ""' }
+        # --- N1: his words are cut at every kind of line break
+        @{ Name = "show-cuts-the-old-words-at-lf-only"
+           Find = '-split "
+||
+")) { [void]$lines.Add($Indent + "      > " + $oldLine) }'
+           Replace = '-split "?
+")) { [void]$lines.Add($Indent + "      > " + $oldLine) }' }
+        @{ Name = "show-cuts-the-message-text-at-lf-only"
+           Find = '-split "
+||
+")) { [void]$lines.Add($Indent + "    " + $l) }'
+           Replace = '-split "?
+")) { [void]$lines.Add($Indent + "    " + $l) }' }
     )
-}
+}        @{ Name = "answer-does-not-say-chat-words-are-no-passkey-answer"
+           Find = '        if ($null -ne $value.message.PSObject.Properties["notPasskey"] -and [bool]$value.message.notPasskey) {'
+           Replace = '        if ($false) {' }
+

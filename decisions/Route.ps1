@@ -292,7 +292,10 @@ function Format-HordeDecisionRouteNotice {
     # verified on the same terms; the notice says it is a change, with the OLD and the NEW words and the time,
     # and gives the asking Orc the command that says what became of its work.
     $changed = ($null -ne $m.PSObject.Properties["changedFrom"] -and [long]$m.changedFrom -ge 1)
-    $headWords = $(if ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })
+    # WORDS THAT ARE NOT A PASSKEY ANSWER (decisions/Rules.ps1, A QUESTION THAT NEEDS A PASSKEY): his words recorded
+    # from chat under a question that needs a passkey are routed and said plainly to be no answer to it.
+    $unsigned = ($null -ne $m.PSObject.Properties["notPasskey"] -and [bool]$m.notPasskey)
+    $headWords = $(if ($unsigned) { "FOUNDER'S CHAT WORDS, NOT A PASSKEY ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })
     if ($Item.purpose -ceq "nudge") {
         [void]$lines.Add("UNCLOSED QUESTION " + $number + ": " + $Item.flag + ". This is the one reminder for this answer.")
     }
@@ -309,6 +312,7 @@ function Format-HordeDecisionRouteNotice {
     # notice says so instead of letting the current title stand for it.
     if ($reworded) { [void]$lines.Add("NOTE: the question was reworded after he answered (he answered wording " + $wording.answered + ", it is now wording " + $wording.now + "). The title above is the CURRENT wording; the list does not keep the one he saw, so read his words as an answer to that earlier wording.") }
     [void]$lines.Add("Answered by the founder, " + "$($m.routeShown)" + " (record " + $seq + ", " + $m.at + ").")
+    if ($unsigned) { [void]$lines.Add("THIS IS NOT A PASSKEY ANSWER. Question " + $number + " needs a passkey, and these words were recorded from chat: no passkey signed them. They are kept and shown, but they do not answer the question. It stays waiting for his answer on the phone; do not act on these words as his answer.") }
     # HIS WORDS GO WITH EVERY NOTICE, THE REMINDER TOO (review of 2026-10-16, finding 2): the reminder's
     # target is found again when it is sent, and an Orc that never received the answer (it went to the
     # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
@@ -320,7 +324,10 @@ function Format-HordeDecisionRouteNotice {
     }
     else { [void]$lines.Add("His words:") }
     foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }
-    if ($changed -and $mine) {
+    if ($unsigned) {
+        [void]$lines.Add("You will be sent his passkey answer when he gives it. Until then there is nothing to acknowledge: an acknowledgement of these words is refused.")
+    }
+    elseif ($changed -and $mine) {
         [void]$lines.Add("FIRST say what became of your work, with ONE of these (he is shown your reply in plain words, and sees 'waiting for Orc " + $Target.label + " to confirm' until you do). In PowerShell, with -HordeHome naming the founder's list:")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply not-acted") -HordeHome $HordeHome))
         [void]$lines.Add("     (you had not acted yet and are using the new answer)")
@@ -329,11 +336,13 @@ function Format-HordeDecisionRouteNotice {
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply cannot-undo -Why 'why it cannot be undone, in one line'") -HordeHome $HordeHome))
         [void]$lines.Add("     (you had already acted and cannot undo it; say why)")
     }
-    if ($mine) {
-        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
+    if ($unsigned) { }
+    elseif ($mine) {
+        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer" + $(if ($changed) { " (an acknowledgement is refused until you have run the change-reply above)" } else { "" }) + ". In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
     }
     else {
+        if ($changed -and (Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").seat -ceq "orc") { [void]$lines.Add("A changed answer is closed over only after the Orc that asked has said what became of its work (horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply <not-acted, undoing or cannot-undo>); a close before that is refused.") }
         [void]$lines.Add("When it is dealt with, close it, with your own one line of outcome in place of the text in quotes. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions close " + $number + " -Outcome 'what was done, in one line'") -HordeHome $HordeHome))
     }

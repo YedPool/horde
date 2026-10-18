@@ -255,22 +255,14 @@ Check ($old.failure -eq "" -and (Test-Line $old "  NOTE: they were said to wordi
 $now = Run "answer" @{ Number = "1"; Text = "Yes to how it reads now." }
 Check ($now.failure -eq "" -and @($now.lines).Count -eq 1 -and $null -eq (Read-Record $store 4).data.PSObject.Properties["wordingVersion"]) "with no -Wording, the words are recorded with no wording at all - not stated, never guessed - and carry no note"
 $null = Run "close" @{ Number = "1"; Outcome = "Done: it plays at the end of every session." }
-# A CHANGE OF HIS ANSWER TO A CLOSED QUESTION IS REFUSED BY NAME (T-0152; decisions/Rules.ps1, THE FOUNDER
-# CHANGES HIS ANSWER): he had answered question 1 twice, so these words change that answer.
 $late = Run "answer" @{ Number = "1"; Text = "Wait - not on the first launch." }
-Check ($late.failure -like "*This question is closed - the warchief has acted on it. To change course, ask a follow-up.*" -and (Get-Kinds $store) -ceq "added,updated,said,said,closed") ("words that CHANGE his answer under a closed question are refused by name, and nothing is written (" + (Get-Kinds $store) + ")")
-# A FIRST ANSWER to a closed question is no change: it is recorded, not refused, and the command says the
-# question stays closed.
-$null = Add-Q
-$null = Run "close" @{ Number = "2"; Outcome = "Dropped." }
-$first = Run "answer" @{ Number = "2"; Text = "Wait - not on the first launch." }
-Check ($first.failure -eq "" -and (Test-Line $first "  NOTE: question 2 is closed. The words are kept under it, and it stays closed: saying something reopens nothing.") -and (Get-Kinds $store) -ceq "added,updated,said,said,closed,added,closed,said") ("a first answer to a closed question is recorded, not refused, and the command says the question stays closed (" + (Get-Kinds $store) + ")")
+Check ($late.failure -eq "" -and (Test-Line $late "  NOTE: question 1 is closed. The words are kept under it, and it stays closed: saying something reopens nothing.") -and (Get-Kinds $store) -ceq "added,updated,said,said,closed,said") ("words said under a closed question are recorded, not refused, and the command says the question stays closed (" + (Get-Kinds $store) + ")")
 $box = Run "inbox" @{ Peek = $true }
-Check (@($box.lines | Where-Object { $_ -ceq "Question 1: Should the closing sound play at the end of every session? [closed]" }).Count -eq 2 -and @($box.lines | Where-Object { $_ -ceq "Question 2: Should the closing sound play when the assistant closes? [closed]" }).Count -eq 1) "the inbox names the question as it reads now, and says it is closed"
-Check (@($box.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, 20* UTC (record 3, said to wording 1)" }).Count -eq 1 -and @($box.lines | Where-Object { $_ -like "*(record 4, wording not stated)" -or $_ -like "*(record 8, wording not stated)" }).Count -eq 2) "each message says which wording it was said to when that was stated, and 'wording not stated' when it was not"
+Check (@($box.lines | Where-Object { $_ -ceq "Question 1: Should the closing sound play at the end of every session? [closed]" }).Count -eq 3) "the inbox names the question as it reads now, and says it is closed"
+Check (@($box.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, 20* UTC (record 3, said to wording 1)" }).Count -eq 1 -and @($box.lines | Where-Object { $_ -like "*(record 4, wording not stated)" -or $_ -like "*(record 6, wording not stated)" }).Count -eq 2) "each message says which wording it was said to when that was stated, and 'wording not stated' when it was not"
 Check ((Test-Line $box "    NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.") -and (Test-Line $box "    NOTE: this was said to an earlier wording (wording 1). Check that it still answers the question as it reads now.")) "and carries both notes, each on the message it belongs to and on no other"
 $shown = Run "show" @{ Number = "1" }
-Check ((Test-Line $shown "Question 1 - closed (wording 2)") -and (Test-Line $shown "Conversation: 2 message(s); 2 not yet read by the warchief; turn: nobody") -and (Test-Line $shown "    NOTE: this was said to an earlier wording (wording 1; the question is now at wording 2). Check that it still answers the question as it reads now.")) "show says the same of the thread, with the wording the question is at now, and that it is nobody's turn"
+Check ((Test-Line $shown "Question 1 - closed (wording 2)") -and (Test-Line $shown "Conversation: 3 message(s); 3 not yet read by the warchief; turn: nobody") -and (Test-Line $shown "    NOTE: this was said to an earlier wording (wording 1; the question is now at wording 2). Check that it still answers the question as it reads now.")) "show says the same of the thread, with the wording the question is at now, and that it is nobody's turn"
 
 Write-Host ""
 Write-Host "--- a refusal says why, repeats nothing, and writes nothing ---" -ForegroundColor Cyan

@@ -104,5 +104,29 @@
         @{ Name = "the-reply-is-written-by-anyone"
            Find = '    "answer-change-replied" = @{ data = "answer-change-replied"; words = ""; apply = "Step-HordeDecisionChangeReplied"; about = "question"; actors = "ackers"; counts = @{ answer = "sequence" } }'
            Replace = '    "answer-change-replied" = @{ data = "answer-change-replied"; words = ""; apply = "Step-HordeDecisionChangeReplied"; about = "question"; actors = "keepers"; counts = @{ answer = "sequence" } }' }
+        # --- the coordinator's ruling of 2026-10-17: only a replacement of his answer is refused after close
+        @{ Name = "his-chat-words-are-refused-under-a-closed-question-as-a-change"
+           Find = '    if ($script:HordeDecisionAnswerRoutes -cnotcontains $Route) { return "" }'
+           Replace = '' }
+        # --- a question that needs a passkey is authorized only by a passkey
+        @{ Name = "chat-words-authorize-a-passkey-question"
+           Find = '-and $question["needsPasskey"] -eq $true) { $false } else { $true })'
+           Replace = '-and $question["needsPasskey"] -eq $true) { $true } else { $true })' }
+        @{ Name = "chat-words-stand-as-the-answer-to-a-passkey-question"
+           Find = ' -and (Test-HordeDecisionMessageAuthorizes -Message $message)) { $standing = $message }'
+           Replace = ') { $standing = $message }' }
+        @{ Name = "chat-words-pass-the-turn-on-a-passkey-question"
+           Find = ' -and $last.act -eq "" -and $last.authorizes) {'
+           Replace = ' -and $last.act -eq "") {' }
+        @{ Name = "the-view-does-not-say-the-words-are-not-a-passkey-answer"
+           Find = '$messageView["notPasskey"] = $true'
+           Replace = '' }
+        # --- M1: who is waited for, and what counts as a reply
+        @{ Name = "a-reply-never-counts-so-the-ack-is-never-allowed"
+           Find = '        $replied = (@($Question.changeReplies | Where-Object { [long]$_.answer -eq [long]$m.sequence }).Count -gt 0)'
+           Replace = '        $replied = $false' }
+        @{ Name = "a-question-no-orc-asked-waits-for-an-orc-reply"
+           Find = '    if ($asker.seat -cne "orc") { return $null }'
+           Replace = '' }
     )
 }

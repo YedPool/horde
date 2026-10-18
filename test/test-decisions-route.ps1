@@ -343,6 +343,8 @@ $wrong = Ack $qHour "D" $sHour2
 Check ($wrong.value.outcome -ceq "refused" -and $wrong.value.reason -ceq ("nothing was written: question " + $qHour + " was asked by 'Orc C', not by Orc D: only the Orc that asked it acknowledges its answer")) "another Orc's ack is refused, in words"
 $stale = Ack $qHour "C" $sHour
 Check ($stale.value.outcome -ceq "refused" -and $stale.value.reason -ceq ("nothing was written: it acknowledges record " + $sHour + ", and the answer that stands under question " + $qHour + " is record " + $sHour2 + ": read that one (horde decisions show " + $qHour + "), then acknowledge it")) "an ack of an answer he has since replaced is refused, naming the one that stands"
+# He changed this answer (record $sHour2 replaces $sHour), so the Orc says what became of its work first (T-0152, review M1).
+$null = Op "change-reply" @{ id = (New-Id); actor = "orc"; number = $qHour; by = "C"; answer = $sHour2; reply = "not-acted" }
 $ok = Ack $qHour "C" $sHour2
 Check ($ok.value.outcome -ceq "done" -and $ok.value.question.state -ceq "closed" -and $ok.value.question.closedBy -ceq "Orc C" -and $ok.value.question.outcome -ceq ("Acknowledged by Orc C: the founder's answer (record " + $sHour2 + ") reached the Orc that asked.") -and @($ok.value.question.history)[-1].actor -ceq "orc" -and @($ok.value.question.history)[-1].note -ceq "closed: acknowledged by Orc C" -and $ok.value.question.thread.turn -ceq "nobody") "the asking Orc's ack closes it, with that Orc as the closer, in the record and the history"
 Check (@((Op "list" @{}).value.unclosed | Where-Object { [int]$_.number -eq $qHour }).Count -eq 0) "and it is no longer flagged"

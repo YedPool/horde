@@ -28,5 +28,12 @@
         @{ Name = "the-reply-is-not-kept"
            Find = '    $body = [ordered]@{ by = [string]$Request.by; answer = [long]$Request.answer; reply = [string]$Request.reply }'
            Replace = '    $body = [ordered]@{ by = [string]$Request.by; answer = [long]$Request.answer; reply = "undoing" }' }
+        # --- the Orc says what became of its work before it closes (review of PR 335, M1)
+        @{ Name = "an-ack-over-an-unreplied-change-is-taken"
+           Find = 'if ($null -ne $ackUnreplied) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-close-over-an-unreplied-change-is-taken"
+           Find = 'if ($null -ne $closeUnreplied) {'
+           Replace = 'if ($false) {' }
     )
 }

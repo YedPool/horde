@@ -42,7 +42,7 @@
            Find = '" had already acted on the first one and is undoing it."'
            Replace = '" has replied."' }
         @{ Name = "cannot-undo-does-not-say-why"
-           Find = '" had already acted on the first one and says it cannot undo: " + textOf(reply.why) + ".");'
+           Find = '" had already acted on the first one and says it cannot undo: \"" + textOf(reply.why) + "\".");'
            Replace = '" had already acted on the first one and says it cannot undo.");' }
         @{ Name = "the-newest-change-is-not-the-one-told"
            Find = '      var last = list.length ? list[list.length - 1] : null;'
@@ -85,5 +85,18 @@
         @{ Name = "changing-one-part-sends-every-part"
            Find = '      if (text.trim() === "" || (saved && text === textOf(saved.text))) { return false; }'
            Replace = '      if (text.trim() === "") { return false; }' }
+        # --- review of PR 335: the Orc's why in quotes (N2), never silent when closed unreplied, markup as text (S2)
+        @{ Name = "the-orcs-why-is-not-quoted"
+           Find = 'says it cannot undo: \"" + textOf(reply.why) + "\".");'
+           Replace = 'says it cannot undo: " + textOf(reply.why) + ".");' }
+        @{ Name = "a-closed-question-with-no-reply-says-nothing"
+           Find = '        } else if (orc !== "") {'
+           Replace = '        } else if (false) {' }
+        @{ Name = "the-status-lines-are-drawn-as-markup"
+           Find = 'change.lines.forEach(function (words) { ans.appendChild(make("div", "hd-change", words)); });'
+           Replace = 'change.lines.forEach(function (words) { var d = make("div", "hd-change"); d.innerHTML = words; ans.appendChild(d); });' }
+        @{ Name = "his-chat-words-on-a-passkey-question-answer-it-on-the-page"
+           Find = '        if (msgs[i].notPasskey === true) { continue; }'
+           Replace = '' }
     )
 }

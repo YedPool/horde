@@ -90,6 +90,7 @@
         "partWords": {"type": "string", "description": "That part's words as they read when the answer was recorded; empty when no part is named, or the part was no longer in the question."},
         "changedFrom": {"type": "integer", "minimum": 1, "description": "Present only when these words are a CHANGE of his answer: the record of the answer of his to the same part that they replace. Worked out from the order of the records each time, stored nowhere."},
         "changedFromText": {"type": "string", "description": "Present with changedFrom: the words of the answer replaced."},
+        "notPasskey": {"type": "boolean", "enum": [true], "description": "Present, and true, only for the founder's words recorded from chat under a question that needs a passkey: they are kept and shown, and are never his answer to it. Absent for every other message."},
         "signedBy": {"type": "string", "description": "For words answered on the founder's phone: the key id of the passkey the relay channel verified them against, as the record holds it; empty for every other message, and for a record that names none. What the record says, not a verdict: whether that passkey is trusted now is relay's to answer."}
       }
     },

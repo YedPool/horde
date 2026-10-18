@@ -92,7 +92,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # change-reply: THE ORC THAT ASKED says what became of its work when the founder changed his answer
     # (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER): -Reply not-acted (using the new answer), undoing,
     # or cannot-undo with -Why. Which Orc it is, is proven from the session, as for ack.
-    "change-reply" = @{ number = $true; flags = @("Answer", "Reply", "Why", "Id", "Json", "HordeHome"); usage = "change-reply <number> -Answer <record> -Reply <not-acted, undoing or cannot-undo> [-Why <one line>] [-Id <32 hex>] [-Json] [-HordeHome <path>]"; acks = $true }
+    "change-reply" = @{ number = $true; flags = @("Answer", "Reply", "Why", "Id", "Json", "HordeHome"); usage = "change-reply <number> -Answer <record> -Reply <not-acted, undoing or cannot-undo> [-Why <one line>] [-Id <32 hex>] [-Json] [-HordeHome <path>]" }
     # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
     # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
     route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
@@ -223,8 +223,9 @@ function Format-HordeDecisionMessage {
     # A CHANGE OF HIS ANSWER says which answer it replaces and what that said (decisions/Rules.ps1).
     if ((& $has "changedFrom") -and [long]$Message.changedFrom -ge 1) {
         [void]$lines.Add($Indent + "  (CHANGES HIS ANSWER: replaces record " + $Message.changedFrom + ", which said:)")
-        foreach ($oldLine in @(([string]$Message.changedFromText) -split "\r?\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }
+        foreach ($oldLine in @(([string]$Message.changedFromText) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }
     }
+    if ((& $has "notPasskey") -and [bool]$Message.notPasskey) { [void]$lines.Add($Indent + "  (NOT A PASSKEY ANSWER: the question needs a passkey; these words were recorded from chat and do not answer it)") }
     if ((& $has "asks") -and $Message.asks -eq $false) { [void]$lines.Add($Indent + "  (a note: it asks him nothing, and the turn stayed the keeper's)") }
     # THE PART ANSWERED, by its letter and its words as they read when he answered: the keeper is told
     # which part these words are for, and does not have to work it out from them.
@@ -239,7 +240,7 @@ function Format-HordeDecisionMessage {
         if ($NowWording -gt 0) { $now = "; the question is now at wording " + $NowWording }
         [void]$lines.Add($Indent + "  NOTE: this was said to an earlier wording (wording " + $Message.wordingVersion + $now + "). Check that it still answers the question as it reads now.")
     }
-    foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }
+    foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l) }
     return @($lines)
 }
 
@@ -519,6 +520,7 @@ function Format-HordeDecisionAnswer {
         if ($Verb -ceq "answer") { $said = "Kept " + $value.message.speakerShown + "'s words, " + $value.message.routeShown + ", under question " }
         [void]$lines.Add($said + $value.number + " (record " + $value.sequence + "): " + $value.question.title)
         if ($value.message.arrivedAfterClosing) { [void]$lines.Add("  NOTE: question " + $value.number + " is " + $value.question.state + ". The words are kept under it, and it stays " + $value.question.state + ": saying something reopens nothing.") }
+        if ($null -ne $value.message.PSObject.Properties["notPasskey"] -and [bool]$value.message.notPasskey) { [void]$lines.Add("  NOTE: question " + $value.number + " needs a passkey. These words are kept and shown, but they are NOT a passkey answer: it is still waiting for his answer on the phone.") }
         if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
