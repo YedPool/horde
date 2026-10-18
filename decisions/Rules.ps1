@@ -885,6 +885,7 @@ function Step-HordeDecisionAdded {
     # An Orc's replies to the founder's changed answers (answer-change-replied), in store order.
     $question["changeReplies"] = (New-Object System.Collections.ArrayList)
     $question["closedBy"] = ""
+    $question["closedBySeat"] = ""
     $question["turn"] = $script:HordeDecisionFirstTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "added"
     $State.questions[$number] = $question
@@ -935,6 +936,7 @@ function Step-HordeDecisionClosed {
     $question.state = "closed"
     $question.outcome = "$($Ev.data.outcome)"
     $question.closedAt = "$($Ev.at)"
+    $question.closedBySeat = $(if ($null -ne $Ev.data -and $null -ne $Ev.data.PSObject.Properties["closedBySeat"]) { "$($Ev.data.closedBySeat)" } else { "" })
     # Closing ends whoever's turn it was: nothing is waited for under a closed question.
     $question.turn = $script:HordeDecisionNoTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "closed"
@@ -953,6 +955,7 @@ function Step-HordeDecisionReopened {
     $question.outcome = ""
     $question.closedAt = ""
     $question.closedBy = ""
+    $question.closedBySeat = ""
     $question.reopenReason = "$($Ev.data.reason)"
     # A reopened question is asked again, of the same person: whatever was said while it was closed
     # is in its thread, and did not take a turn.
@@ -1012,6 +1015,8 @@ function Get-HordeDecisionClosedChangeLine {
     # THE ONE SENTENCE for a change to a closed question (header, THE FOUNDER CHANGES HIS ANSWER). The page
     # draws the same words, from the view's actedBy.
     param($Question)
+    $by = $(if ($Question -is [System.Collections.IDictionary]) { "$($Question['closedBy'])|$($Question['closedBySeat'])" } else { "$($Question.closedBy)|$($Question.closedBySeat)" })
+    if ($by -ceq "|warchief") { return "This question is closed - the warchief closed it. To change course, ask a follow-up." }
     return ("This question is closed - " + (Get-HordeDecisionActedBy -Question $Question) + " has acted on it. To change course, ask a follow-up.")
 }
 
@@ -1680,6 +1685,8 @@ function ConvertTo-HordeDecisionView {
     # CLOSED BY THE WARCHIEF OVER A CHANGE ITS ORC NEVER REPLIED TO (the coordinator, 2026-10-17): handed out only
     # when so, so the page says "The warchief closed it: <outcome>" and not that the Orc did.
     if ("$($Question.state)" -cne "open" -and "$($Question.closedBy)" -eq "" -and $null -ne (Get-HordeDecisionUnrepliedChange -Question $Question)) { $view["warchiefClosedUnreplied"] = $true }
+    # CLOSED FROM THE WARCHIEF'S PROVEN SEAT: handed out only when the close record carries the proof.
+    if ("$($Question.state)" -ceq "closed" -and "$($Question.closedBy)" -eq "" -and "$($Question.closedBySeat)" -ceq "warchief") { $view["closedByWarchief"] = $true }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view

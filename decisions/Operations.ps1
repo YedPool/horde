@@ -332,13 +332,18 @@ function Complete-HordeDecisionCloseData {
     # other Orc, and a close with no words, stay refused. Any other close goes through as it always did.
     param($Request, $List, $Data)
     $number = [int]$Data["number"]
+    $closeWords = $(if ($Data.Contains("outcome")) { "$($Data['outcome'])".Trim() } else { "" })
+    # THE PROOF IS RECORDED ON THE CLOSE (review of PR 335, round 4, M1): closedBySeat = "warchief" is written only for
+    # a close that carries the proven callerSeat, so a later reader (the closing notice) can tell a close the warchief's
+    # own session made from one any other session made.
+    $provenWarchief = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and "$(Get-HordeDecisionMember -Object $Request -Name 'callerSeat')" -ceq "warchief")
+    if ($provenWarchief) { $Data["closedBySeat"] = "warchief" }
     if ($List.questions.ContainsKey($number) -and "$($List.questions[$number].state)" -ceq "open") {
         $closeUnreplied = Get-HordeDecisionUnrepliedChange -Question $List.questions[$number]
-        $closeWords = $(if ($Data.Contains("outcome")) { "$($Data['outcome'])".Trim() } else { "" })
         # THE SEAT IS PROVEN, NEVER TRUSTED: the command line sends every write as the actor "warchief", so the
         # actor proves nothing. Only a request that carries callerSeat = "warchief", which decisions/Console.ps1 sets
         # after proving the calling session holds the warchief's seat in the fleet's records, may close over it.
-        $warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and "$(Get-HordeDecisionMember -Object $Request -Name 'callerSeat')" -ceq "warchief")
+        $warchiefCloses = $provenWarchief
         if ($null -ne $closeUnreplied -and -not $warchiefCloses) { return [pscustomobject]@{ why = ((Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied) + ". Only the warchief's own session, proven from the fleet's records, may close it without that reply, and only with an outcome that says why"); write = $false; more = $null; data = $null } }
     }
     return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }

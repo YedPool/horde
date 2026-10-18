@@ -268,6 +268,7 @@
         "closedBy": {"type": "string", "description": "The Orc that closed it by acknowledging the founder's answer, as Orc X. Absent when no acknowledgement closed it."},
         "answerChanges": {"type": "array", "items": {"$ref": "#/definitions/answerChange"}, "description": "Every change of the founder's answer under the question, in order, with the asking Orc's newest reply to each. Absent when he changed none."},
         "actedBy": {"type": "string", "description": "For a question that is not open: who has acted on it - Orc X, or the warchief. What the page says when he asks to change his answer to it. Absent for an open question."},
+        "closedByWarchief": {"type": "boolean", "description": "True only when the question was closed by a session proven to hold the warchief's seat (the close record says so). Absent for any other close."},
         "warchiefClosedUnreplied": {"type": "boolean", "description": "True only when the warchief closed the question over a changed answer its asking Orc never replied to; the page then says the warchief closed it, with the outcome. Absent otherwise."}
       }
     }

@@ -39,7 +39,13 @@
            Find = ' -and "$(Get-HordeDecisionMember -Object $Request -Name ''callerSeat'')" -ceq "warchief")'
            Replace = ')' }
         @{ Name = "nobody-may-close-over-an-unreplied-change-not-even-the-proven-warchief"
-           Find = '$warchiefCloses = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and'
-           Replace = '$warchiefCloses = ($false -and' }
+           Find = '$provenWarchief = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and'
+           Replace = '$provenWarchief = ($false -and' }
+        @{ Name = "the-close-record-does-not-carry-the-proof-of-the-warchiefs-seat"
+           Find = '    if ($provenWarchief) { $Data["closedBySeat"] = "warchief" }'
+           Replace = '' }
+        @{ Name = "any-close-is-recorded-as-made-from-the-warchiefs-seat"
+           Find = '    if ($provenWarchief) { $Data["closedBySeat"] = "warchief" }'
+           Replace = '    $Data["closedBySeat"] = "warchief"' }
     )
 }

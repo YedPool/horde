@@ -45,7 +45,8 @@
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1},
-        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."}
+        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."},
+        "closedBySeat": {"type": "string", "enum": ["warchief"], "description": "Present only when the close was made by a session the command line PROVED holds the warchief's seat. Nothing else may make Horde say the warchief closed a question."}
       }
     },
     "question-reopened": {

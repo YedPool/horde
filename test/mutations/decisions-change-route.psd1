@@ -12,8 +12,14 @@
            Find = '        if ($null -ne $told) { [void]$work.Add($told); continue }'
            Replace = '' }
         @{ Name = "the-orc-is-not-told-when-the-warchief-closes-over-chat-words-only"
-           Find = '    if (-not $unreplied -and -not $wordsOnly) { return $null }'
-           Replace = '    if (-not $unreplied) { return $null }' }
+           Find = '    if (-not $unreplied -and -not $wordsOnly -and -not $partsUnsigned) { return $null }'
+           Replace = '    if (-not $unreplied -and -not $partsUnsigned) { return $null }' }
+        @{ Name = "the-orc-is-not-told-when-one-part-was-only-chat-words"
+           Find = '    if (-not $unreplied -and -not $wordsOnly -and -not $partsUnsigned) { return $null }'
+           Replace = '    if (-not $unreplied -and -not $wordsOnly) { return $null }' }
+        @{ Name = "the-notice-says-the-warchief-closed-without-the-proof-of-his-seat"
+           Find = '    if (-not ($null -ne $q.PSObject.Properties["closedByWarchief"] -and [bool]$q.closedByWarchief)) { return $null }'
+           Replace = '' }
         @{ Name = "the-orc-is-told-again-on-every-pass"
            Find = '    if (Test-HordeDecisionRouted -Question $q -Answer ([long]$last.sequence) -Purpose "closed") { return $null }'
            Replace = '' }

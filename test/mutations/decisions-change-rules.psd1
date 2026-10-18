@@ -141,5 +141,11 @@
         @{ Name = "a-question-no-orc-asked-waits-for-an-orc-reply"
            Find = '    if ($asker.seat -cne "orc") { return $null }'
            Replace = '' }
+        @{ Name = "the-view-says-the-warchief-closed-it-for-any-close"
+           Find = '"$($Question.closedBySeat)" -ceq "warchief") { $view["closedByWarchief"] = $true }'
+           Replace = '"$($Question.closedBySeat)" -cne "x") { $view["closedByWarchief"] = $true }' }
+        @{ Name = "the-refusal-after-the-warchiefs-close-says-the-orc-acted"
+           Find = '    if ($by -ceq "|warchief") { return "This question is closed - the warchief closed it. To change course, ask a follow-up." }'
+           Replace = '' }
     )
 }

@@ -170,11 +170,16 @@ function Get-HordeDecisionRouteClosedWork {
     # PURE. The one closing notice a question is due, as { purpose = "closed"; question; answer; why }, or $null. Due
     # when the warchief closed it (closed, and not by an acknowledgement), an Orc asked it, no closing notice was
     # recorded, it closed within -WithinHours, and either its Orc never replied to the founder's change
-    # (the view's warchiefClosedUnreplied) or all he said was chat words under a question that needs a passkey.
+    # (the view's warchiefClosedUnreplied) or all he said was chat words under a question that needs a passkey
+    # (or some part of it was only chat words). ONLY A CLOSE PROVEN FROM THE WARCHIEF'S SEAT IS TOLD AS HIS (review of
+    # PR 335, round 4, M1): the view's closedByWarchief must be set, which the close record carries only when the
+    # command line proved the seat. Any other session's close tells nobody that "the warchief closed" anything: the
+    # Orc is not sent a notice at all (the smallest honest choice; the list still shows the close and its outcome).
     # answer is the newest of his records made while it was open: the record the notice is kept against.
     param($Question, [datetime]$Now, [int]$WithinHours)
     $q = $Question
     if ("$($q.state)" -cne "closed" -or ($null -ne $q.PSObject.Properties["closedBy"] -and "$($q.closedBy)" -ne "") -or $null -eq $q.thread.PSObject.Properties["messages"]) { return $null }
+    if (-not ($null -ne $q.PSObject.Properties["closedByWarchief"] -and [bool]$q.closedByWarchief)) { return $null }
     if ((Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").seat -cne "orc") { return $null }
     $at = ConvertFrom-HordeDecisionRouteTime -Text "$($q.closedAt)"
     if ($null -eq $at -or $at -lt $Now.ToUniversalTime().AddHours(-$WithinHours)) { return $null }
@@ -182,10 +187,13 @@ function Get-HordeDecisionRouteClosedWork {
     if ($his.Count -eq 0) { return $null }
     $unreplied = ($null -ne $q.PSObject.Properties["warchiefClosedUnreplied"] -and [bool]$q.warchiefClosedUnreplied)
     $wordsOnly = ($null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and @($his | Where-Object { -not ($null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey) }).Count -eq 0)
-    if (-not $unreplied -and -not $wordsOnly) { return $null }
+    # N3: a question in parts where one part was signed and another got only chat words never completed: the Orc that
+    # waited on the unsigned part is told as well (why = "parts").
+    $partsUnsigned = (-not $wordsOnly -and $null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and $null -ne $q.thread.PSObject.Properties["parts"] -and @($q.thread.parts | Where-Object { -not [bool]$_.answered }).Count -gt 0 -and @($his | Where-Object { $null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey }).Count -gt 0)
+    if (-not $unreplied -and -not $wordsOnly -and -not $partsUnsigned) { return $null }
     $last = $his[$his.Count - 1]
     if (Test-HordeDecisionRouted -Question $q -Answer ([long]$last.sequence) -Purpose "closed") { return $null }
-    return [pscustomobject]@{ purpose = "closed"; question = $q; answer = $last; why = $(if ($unreplied) { "unreplied" } else { "words" }) }
+    return [pscustomobject]@{ purpose = "closed"; question = $q; answer = $last; why = $(if ($unreplied) { "unreplied" } elseif ($partsUnsigned) { "parts" } else { "words" }) }
 }
 
 function Get-HordeDecisionRouteWork {
@@ -316,6 +324,7 @@ function Format-HordeDecisionRouteClosedNotice {
     if (-not ($Target.seat -ceq "orc")) { [void]$lines.Add("This is for " + (Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").shown + ", who asked it; its seat could not be found, so it came to you.") }
     [void]$lines.Add("Question " + $number + ": " + $q.title)
     if ("$($Item.why)" -ceq "unreplied") { [void]$lines.Add("The founder changed his answer and you had not said what became of your work, so the warchief closed it without that reply. If you had acted on his first answer, ask the warchief whether it needs undoing.") }
+    elseif ("$($Item.why)" -ceq "parts") { [void]$lines.Add("Some part of this question got only chat words from him, and it needs a passkey: no passkey answer came for that part, and none will be routed now that it is closed. Read his words below, and the list, for which parts he signed.") }
     else { [void]$lines.Add("All he said was chat words, and this question needs a passkey: no passkey answer came, and none will be routed now that it is closed.") }
     [void]$lines.Add("The warchief's words (the outcome):")
     foreach ($l in @($outcome -split "\r\n|\r|\n")) { [void]$lines.Add($quote + $l) }
