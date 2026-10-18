@@ -340,6 +340,8 @@ Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Numbe
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2" } -Sender $asD -SeatProof $seatOk } "needs -Reply <not-acted, undoing or cannot-undo>") "no -Reply: refused, saying what to give"
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "cannot-undo"; Why = "a`nb" } -Sender $asD -SeatProof $seatOk } "-Why is one line") "a -Why of more than a line: refused"
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "undoing"; Peek = $true } -Sender $asD -SeatProof $seatOk } "does not belong to decisions change-reply") "a flag of another verb: refused"
+$waiting = @((Invoke-HordeDecisionCommand -Verb "show" -Given @{ Number = "$qCli" }).lines)
+Check (@($waiting | Where-Object { $_ -ceq ("Answer changed at record " + $k2 + " (replacing record " + $k1 + "): no reply yet from Orc D") }).Count -eq 1) "before the Orc replies, show says the change waits for it, naming the Orc"
 $wrongOrc = Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "undoing" } -Sender $asC -SeatProof $seatOk
 Check ($wrongOrc.failure -like "*was asked by 'Orc D', not by Orc C*") "an Orc that did not ask it is refused by the rules, in words"
 $noWhy = Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "cannot-undo" } -Sender $asD -SeatProof $seatOk
