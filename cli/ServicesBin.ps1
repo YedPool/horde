@@ -91,7 +91,7 @@ function Read-HordeInstalledCliState {
     $path = Get-HordeInstalledCliStatePath -HordeHome $HordeHome
     if (-not [System.IO.File]::Exists($path)) { return $s }
     try {
-        $r = (Read-HordeSharedText -Path $path) | ConvertFrom-Json
+        $r = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path)
         # Kept as ticks, a whole number: a date written as text is turned into a local date by pwsh 7's
         # ConvertFrom-Json and read back as another instant.
         if ($null -ne $r.PSObject.Properties["lastFetchTicks"] -and $r.lastFetchTicks -is [int64] -and $r.lastFetchTicks -gt 0) { $s.lastFetchAt = [datetime]::new([int64]$r.lastFetchTicks, [System.DateTimeKind]::Utc) }
