@@ -1,8 +1,8 @@
 $HordeCommand = @{
     name    = "fleet"
     group   = "fleet"
-    usage   = "fleet record [-All | -Labels <a,b>] [-Exclude <a,b>] | fleet wake <hibernation id> [-DryRun] [-Only <a,b>] [-Retry] | fleet hibernate -Tier 2 [-Orcs <orc labels or lane folders>] [-DryRun] [-WaitMinutes 15]"
-    summary = "hibernation, slice 1. record: write down the fleet's running sessions - every one not retired and running now (-All), or exactly the ones labelled (-Labels), less any -Exclude - with where each sits in the terminal, as one hibernation under Horde's home, and print its id; the master (M) is left out unless -Labels names it, and a registry that cannot be read whole, or a selection that comes to nothing, is refused with nothing written. wake: start a hibernation's sessions again, one new window per orc with its wargs as tabs laid out as saved, each resumed by its session id; a session that is running, or that may be, is refused and left alone; free memory is checked before every start and the wake stops below 15 percent, leaving the rest asleep; each woken session gets one mail telling it to read its PARKED-<label>.md. a session an earlier wake left waking, or that failed after its pane was started, may still be loading there and is held unless -Retry is given (the liveness check still runs). -DryRun prints the exact plan and changes nothing. -Only wakes just those labels. hibernate (slice 2): put the Orcs the Orc registry puts in tier 2 - all of them, or only those -Orcs names, by label or lane folder - and their Wargs to sleep; -Tier 2 is always asked for, and a tier 1 Orc, one with no tier set or one the registry does not know is NEVER hibernated, not even when named (a named one that is not tier 2 refuses the run), and a registry that cannot be read refuses it; never the master, the fleet analyst, a session the founder typed into in the last 30 minutes, or an Orc with an open question on his decisions list, and each left running is listed with its reason; the sessions are recorded, asked by mail (Wargs before their Orc) to write where they got to into the fleet's parked folder and stop, and each whose PARKED file is newer than its ask and whose box is idle and empty is sent its own exit command through the waker's checked path, never killed, an Orc only after its Wargs have exited; any not exited within -WaitMinutes is left running as still-awake. One hibernation at a time: another running is refused, retry. While a session is asleep the wake watcher does not knock on it and its mail queues. -DryRun prints the selection, the exclusions and the plan and changes nothing. Nothing here asks a question"
+    usage   = "fleet record [-All | -Labels <a,b>] [-Exclude <a,b>] | fleet wake <hibernation id> [-DryRun] [-Only <a,b>] [-Retry] | fleet wake -Lot <lot id> [-Members <sessions or labels>] [-DryRun] [-Retry] | fleet lots [-Json] | fleet lots backfill -File <json> | fleet hibernate -Tier 2 [-Orcs <orc labels or lane folders>] [-DryRun] [-WaitMinutes 15]"
+    summary = "hibernation, slice 1. record: write down the fleet's running sessions - every one not retired and running now (-All), or exactly the ones labelled (-Labels), less any -Exclude - with where each sits in the terminal, as one hibernation under Horde's home, and print its id; the master (M) is left out unless -Labels names it, and a registry that cannot be read whole, or a selection that comes to nothing, is refused with nothing written. wake: start a hibernation's sessions again, one new window per orc with its wargs as tabs laid out as saved, each resumed by its session id; a session that is running, or that may be, is refused and left alone; free memory is checked before every start and the wake stops below 15 percent, leaving the rest asleep; each woken session gets one mail telling it to read its PARKED-<label>.md. a session an earlier wake left waking, or that failed after its pane was started, may still be loading there and is held unless -Retry is given (the liveness check still runs). -DryRun prints the exact plan and changes nothing. -Only wakes just those labels. hibernate (slice 2): put the Orcs the Orc registry puts in tier 2 - all of them, or only those -Orcs names, by label or lane folder - and their Wargs to sleep; -Tier 2 is always asked for, and a tier 1 Orc, one with no tier set or one the registry does not know is NEVER hibernated, not even when named (a named one that is not tier 2 refuses the run), and a registry that cannot be read refuses it; never the master, the fleet analyst, a session the founder typed into in the last 30 minutes, or an Orc with an open question on his decisions list, and each left running is listed with its reason; the sessions are recorded, asked by mail (Wargs before their Orc) to write where they got to into the fleet's parked folder and stop, and each whose PARKED file is newer than its ask and whose box is idle and empty is sent its own exit command through the waker's checked path, never killed, an Orc only after its Wargs have exited; any not exited within -WaitMinutes is left running as still-awake. One hibernation at a time: another running is refused, retry. While a session is asleep the wake watcher does not knock on it and its mail queues. -DryRun prints the selection, the exclusions and the plan and changes nothing. Nothing here asks a question. PARKING LOTS (T-0216): every hibernation is one lot, with its time, who parked and why. lots lists them newest first with each member and its state - asleep (in the lot and not running), woken, still-awake or failed; -Json prints the same as JSON. wake -Lot <id> wakes the whole lot, or just -Members (session ids, unique id prefixes of eight characters or more, or labels), with every rule of wake. lots backfill -File writes the lots a file names that are not there yet (source backfill) and writes nothing the second time."
     run     = {
         [CmdletBinding()] param(
             [Parameter(Position = 0)][string]$Verb = "",
@@ -15,16 +15,28 @@ $HordeCommand = @{
             [string[]]$Orcs = @(),
             [int]$Tier = 0,
             [int]$WaitMinutes = 15,
-            [switch]$Retry
+            [switch]$Retry,
+            [string]$Lot = "",
+            [string[]]$Members = @(),
+            [string]$File = "",
+            [switch]$Json
         )
         # NOTHING IS DECLARED MANDATORY: a missing mandatory parameter is prompted for, and a horde started
         # with its input open waits there for ever (cli/Commands.ps1, New-HordeUsageError). So what must
         # be given is checked here, first, and refused as a usage error.
-        if (@("record", "wake", "hibernate") -cnotcontains $Verb) { throw (New-HordeUsageError -Message ("fleet needs a verb: record, wake or hibernate, not '" + $Verb + "'")) }
+        if (@("record", "wake", "hibernate", "lots") -cnotcontains $Verb) { throw (New-HordeUsageError -Message ("fleet needs a verb: record, wake, hibernate or lots, not '" + $Verb + "'")) }
         $split = { param($list) @(@($list) | ForEach-Object { ("" + $_).Split(",") } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
-        $labelList = & $split $Labels; $excludeList = & $split $Exclude; $onlyList = & $split $Only; $orcList = & $split $Orcs
+        $labelList = & $split $Labels; $excludeList = & $split $Exclude; $onlyList = & $split $Only; $orcList = & $split $Orcs; $memberList = & $split $Members
+        if ($Verb -cne "lots" -and ($Json -or $File -ne "")) { throw (New-HordeUsageError -Message "-Json and -File belong to fleet lots") }
+        if ($Verb -cne "wake" -and ($Lot -ne "" -or $memberList.Count -gt 0)) { throw (New-HordeUsageError -Message "-Lot and -Members belong to fleet wake") }
         if ($Verb -cne "hibernate" -and ($orcList.Count -gt 0 -or $PSBoundParameters.ContainsKey("WaitMinutes") -or $PSBoundParameters.ContainsKey("Tier"))) { throw (New-HordeUsageError -Message "-Orcs, -Tier and -WaitMinutes belong to fleet hibernate") }
-        if ($Verb -ceq "hibernate") {
+        if ($Verb -ceq "lots") {
+            # fleet lots [-Json]  |  fleet lots backfill -File <json>: nothing else is taken.
+            if ($All -or $labelList.Count -gt 0 -or $excludeList.Count -gt 0 -or $onlyList.Count -gt 0 -or $orcList.Count -gt 0 -or $DryRun -or $Retry -or $PSBoundParameters.ContainsKey("Tier") -or $PSBoundParameters.ContainsKey("WaitMinutes")) { throw (New-HordeUsageError -Message "fleet lots takes -Json, or backfill -File <json>, only") }
+            if ($Id -cne "" -and $Id -cne "backfill") { throw (New-HordeUsageError -Message ("fleet lots takes no argument but backfill, not '" + $Id + "'")) }
+            if ($Id -ceq "backfill" -and ($File -eq "" -or $Json)) { throw (New-HordeUsageError -Message "fleet lots backfill needs -File <json> and takes no -Json") }
+            if ($Id -ceq "" -and $File -ne "") { throw (New-HordeUsageError -Message "-File belongs to fleet lots backfill") }
+        } elseif ($Verb -ceq "hibernate") {
             if ($Id -ne "" -or $All -or $labelList.Count -gt 0 -or $excludeList.Count -gt 0 -or $onlyList.Count -gt 0 -or $Retry) { throw (New-HordeUsageError -Message "fleet hibernate takes -Tier, -Orcs, -DryRun and -WaitMinutes only") }
             # THE TIER GATE IS ALWAYS ASKED FOR: -Tier 2, the one tier that sleeps. -Orcs only narrows it.
             if ($Tier -ne 2) { throw (New-HordeUsageError -Message "fleet hibernate needs -Tier 2: only an Orc the Orc registry puts in tier 2 is ever hibernated (-Orcs <orc labels or lane folders> narrows it to those named)") }
@@ -33,14 +45,21 @@ $HordeCommand = @{
             if ($Id -ne "" -or $DryRun -or $Retry -or $onlyList.Count -gt 0) { throw (New-HordeUsageError -Message "fleet record takes -All or -Labels, and -Exclude; an id and -Only belong to fleet wake, -DryRun to wake and hibernate, -Retry to fleet wake") }
             if ($All -eq ($labelList.Count -gt 0)) { throw (New-HordeUsageError -Message "fleet record needs exactly one of -All or -Labels") }
         } else {
-            if ($Id -cnotmatch '\A[0-9]{8}-[0-9]{6}\z') { throw (New-HordeUsageError -Message ("fleet wake needs a hibernation id, yyyymmdd-hhmmss, not '" + $Id + "'")) }
+            if ($Lot -ne "") {
+                # A LOT ID IS A HIBERNATION ID (fleet/LotTables.ps1): -Lot is the same wake, named for what the founder sees.
+                if ($Id -ne "" -or $onlyList.Count -gt 0) { throw (New-HordeUsageError -Message "fleet wake takes a hibernation id or -Lot, not both, and -Only is for a hibernation id (-Members picks within a lot)") }
+                if ($Lot -cnotmatch '\A([0-9]{8}-[0-9]{6}|[0-7][0-9A-HJKMNP-TV-Z]{25})\z') { throw (New-HordeUsageError -Message ("fleet wake -Lot needs a lot id (a 26-character ULID as fleet lots lists it, or a hibernation id yyyymmdd-hhmmss), not '" + $Lot + "'")) }
+            } else {
+                if ($memberList.Count -gt 0) { throw (New-HordeUsageError -Message "-Members belongs to fleet wake -Lot") }
+                if ($Id -cnotmatch '\A[0-9]{8}-[0-9]{6}\z') { throw (New-HordeUsageError -Message ("fleet wake needs a hibernation id, yyyymmdd-hhmmss, not '" + $Id + "'")) }
+            }
             if ($All -or $labelList.Count -gt 0 -or $excludeList.Count -gt 0) { throw (New-HordeUsageError -Message "fleet wake takes -DryRun and -Only; -All, -Labels and -Exclude belong to fleet record") }
         }
         # Loaded here, in the command's own scope (cli/commands/metrics.ps1 says why). This block chooses
         # the real outside world - the clock, the registry, the adapters, free memory, the mail - in this
         # one place; what is recorded and woken is decided in fleet/.
         $root = Get-HordeRoot
-        . (Join-Path $root "fleet\Wake.ps1")
+        . (Join-Path $root "fleet\Lots.ps1")
         foreach ($f in @(Get-HordeFleetAdapterFiles -Root $root)) { . $f }
         $agent = Resolve-HordeFleetAdapter -Kind "agent"
         if ($agent.state -ne "known") { throw $agent.reason }
@@ -48,12 +67,44 @@ $HordeCommand = @{
         if ($hostAdapter.state -ne "known") { throw $hostAdapter.reason }
         $now = { [datetime]::UtcNow }
 
+        if ($Verb -ceq "lots") {
+            if ($Id -ceq "backfill") {
+                # A FILE CARRIES NO MACHINE PATH: the working directory, pane, parent and label a row leaves blank are read
+                # from the fleet registry (core/WezfleetState.ps1, read only), and a PARKED note is the one in the fleet's
+                # parked folder when it is there.
+                $reg = Read-HordeRegistry -Root (Get-HordeWezfleetRoot)
+                $enrich = { param($sid)
+                    $row = $reg.records["" + $sid]
+                    if ($null -eq $row) { return $null }
+                    $o = [ordered]@{}
+                    foreach ($n in @("label", "parent", "cwd", "pane")) { $f = Get-HordeStoredField -Record $row.record -Name $n; if ($f.state -eq "known") { $o[$n] = "" + $f.value } }
+                    return [pscustomobject]$o }
+                $bdeps = [pscustomobject]@{ AgentName = $agent.value.name; HostName = $hostAdapter.value.name; Enrich = $enrich; ParkedFolder = (Join-Path (Get-HordeWezfleetRoot) "_home\thrall\parked") }
+                $done = Invoke-HordeFleetLotBackfill -File $File -Deps $bdeps
+                foreach ($l in @($done.lines)) { Write-Output $l }
+                return
+            }
+            $got = Get-HordeFleetLots -Agent $agent.value
+            if ($got.state -cne "known") { throw ("the lots cannot be listed: " + $got.reason) }
+            if ($Json) { Write-Output (ConvertTo-HordeFleetAsciiJson -Value ([pscustomobject][ordered]@{ v = 1; lots = @($got.value.lots); skipped = @($got.value.skipped) })); return }
+            if (@($got.value.lots).Count -eq 0) { Write-Output "no parking lots yet" }
+            foreach ($l in @(Format-HordeFleetLotsText -Lots @($got.value.lots))) { Write-Output $l }
+            foreach ($n in @($got.value.skipped)) { Write-Output ("  note: " + $n) }
+            return
+        }
+
         if ($Verb -ceq "record") {
             $deps = [pscustomobject]@{ Now = $now; Agent = $agent.value; Host = $hostAdapter.value; Registry = { Read-HordeRegistry -Root (Get-HordeWezfleetRoot) } }
             $selector = $null; $selection = $null
             if ($All) { $selector = New-HordeFleetSelectorAll; $selection = [pscustomobject][ordered]@{ kind = "all"; labels = @(); exclude = @($excludeList) } }
             else { $selector = New-HordeFleetSelectorLabels -Labels $labelList; $selection = [pscustomobject][ordered]@{ kind = "labels"; labels = @($labelList); exclude = @($excludeList) } }
-            $done = Invoke-HordeFleetRecord -Deps $deps -Selector $selector -Selection $selection -Exclude $excludeList
+            # THE LOT'S BY is the session running this, when it has an id (fleet/Hibernation.ps1 turns it into a label).
+            . (Join-Path $root "core\Device.ps1")
+            . (Join-Path $root "core\Identity.ps1")
+            $recBy = ""
+            $me = Get-HordeSelfSessionId
+            if ($me.state -ceq "known") { $recBy = "" + $me.value }
+            $done = Invoke-HordeFleetRecord -Deps $deps -Selector $selector -Selection $selection -Exclude $excludeList -By $recBy -Why "fleet record"
             foreach ($s in @($done.record.sessions)) { Write-Output ("  " + (Get-HordeFleetSessionName -Session $s) + " " + $s.role + " " + $s.cwd) }
             foreach ($n in @($done.notes)) { Write-Output ("  note: " + $n) }
             Write-Output ("recorded hibernation " + $done.id + ": " + @($done.record.sessions).Count + " session(s), in " + $done.path)
@@ -178,7 +229,13 @@ $HordeCommand = @{
                 if ($pane.state -eq "known") { return (New-HordeKnown -Value ("" + $pane.value)) }
                 return (New-HordeUnknown -Reason "its registry row names no pane") }
         }
-        $done = Invoke-HordeFleetWake -Id $Id -Deps $deps -DryRun:$DryRun -Only $onlyList -Retry:$Retry
+        # EVERY WAKE GOES THROUGH THE LOT'S (T-0216): a hibernation id and a lot id name the same park, and a wake of either
+        # is recorded as a wake row with a row for each session it was asked to wake. -Only (labels) is -Members.
+        $wakeBy = ""
+        $me = Get-HordeSelfSessionId
+        if ($me.state -ceq "known") { $wakeBy = "" + $me.value }
+        $wakeMembers = @(@($memberList) + @($onlyList))
+        $done = Invoke-HordeFleetWakeLot -Lot $(if ($Lot -ne "") { $Lot } else { $Id }) -Members $wakeMembers -Deps $deps -DryRun:$DryRun -Retry:$Retry -By $wakeBy
         foreach ($l in @($done.lines)) { Write-Output $l }
     }
 }

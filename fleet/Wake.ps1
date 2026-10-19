@@ -310,7 +310,7 @@ function Invoke-HordeFleetWake {
     # -Deps: Now (), Sleep (ms), FreePercent () -> number, Agent, Host (fleet/Port.ps1), Post ($sessionId,
     # $label, $body, $messageId) -> answer, and optionally WaitSeconds, PollMs and RegistryPane ($sessionId)
     # -> answer known pane id text of that session's fleet registry row.
-    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Deps, [switch]$DryRun, [string[]]$Only = @(), [string]$HordeHome = (Get-HordeHome), [switch]$Retry)
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Deps, [switch]$DryRun, [string[]]$Only = @(), [string]$HordeHome = (Get-HordeHome), [switch]$Retry, [string[]]$OnlyIds = @())
     $read = Read-HordeFleetRecord -Id $Id -HordeHome $HordeHome
     if ($read.state -ne "known") { throw $read.reason }
     $record = $read.value
@@ -345,8 +345,14 @@ function Invoke-HordeFleetWake {
         if (-not $DryRun) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop }
     }
     $onlyLabels = @($Only | Where-Object { "" + $_ -ne "" })
+    # -OnlyIds (T-0216, wake -Lot -Members): exactly these sessions, by their recorded session id. An id the record
+    # does not hold is refused and nothing is woken, as a label is: a subset that quietly becomes a smaller one
+    # reads later as if the rest had been asked about. Every rule below still applies to each of them.
+    $onlyIds = @($OnlyIds | Where-Object { "" + $_ -ne "" })
     $choose = { param($rec)
         $all = @($rec.sessions)
+        foreach ($i in $onlyIds) { if (@($all | Where-Object { "" + $_.sessionId -ceq $i }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session " + $i + ", so nothing was woken") } }
+        if ($onlyIds.Count -gt 0) { $all = @($all | Where-Object { $onlyIds -ccontains ("" + $_.sessionId) }) }
         if ($onlyLabels.Count -eq 0) { return $all }
         foreach ($l in $onlyLabels) { if (@($all | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session labelled " + $l + ", so nothing was woken") } }
         return @($all | Where-Object { $onlyLabels -ccontains ("" + (Get-HordeFleetMember $_ "label")) })
