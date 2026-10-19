@@ -18,5 +18,11 @@
         @{ Name = "time-digits-reversed"
            Find = "out = CROCKFORD[t % 32] + out;"
            Replace = "out = out + CROCKFORD[t % 32];" }
+        @{ Name = "sparse-hole-dropped"
+           Find = "for (let i = 0; i < value.length; i++) parts.push("
+           Replace = "for (const i in value) parts.push(" }
+        @{ Name = "date-hashed-as-empty"
+           Find = "if (proto !== Object.prototype && proto !== null) throw"
+           Replace = "if (false) throw" }
     )
 }

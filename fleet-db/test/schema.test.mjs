@@ -7,7 +7,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, dbPathFor, inWrite, takeLabel } from '../store.mjs';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { openStore, dbPathFor, inWrite, takeLabel, migrate } from '../store.mjs';
 import { SCHEMA_VERSION } from '../schema.mjs';
 import { ulid, canonical, sha256 } from '../ids.mjs';
 
@@ -26,9 +28,10 @@ after(() => {
 
 function fresh() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-db-'));
-  const db = openStore(path.join(dir, 'fleet.db'));
-  opened.push({ db, dir });
-  return { db, file: path.join(dir, 'fleet.db') };
+  const entry = { db: { close() {} }, dir };
+  opened.push(entry); // before openStore: a store that throws (a mutant) must not leak its folder
+  entry.db = openStore(path.join(dir, 'fleet.db'));
+  return { db: entry.db, file: path.join(dir, 'fleet.db') };
 }
 
 // A small world: one PC, the Thrall, Orc F, one task, one question on that task.
@@ -264,14 +267,15 @@ test('one PR number in one repo is one row', () => {
   refuses(ins, /UNIQUE/);
 });
 
-test('a woken wake member must name its new session', () => {
+test('a woken wake member may keep its old session id', () => {
   const w = world();
   seat(w.db, uuid(1), w.f, w.node);
   const lot = id(), wk = id();
   w.db.prepare("INSERT INTO parking_lot (id, created_at, reason) VALUES (?, 1, 'night')").run(lot);
   w.db.prepare("INSERT INTO parking_lot_member (lot_id, session_id, orc_id, state) VALUES (?, ?, ?, 'parked')").run(lot, uuid(1), w.f);
   w.db.prepare('INSERT INTO wake (id, lot_id, requested_at) VALUES (?, ?, 2)').run(wk, lot);
-  refuses(() => w.db.prepare("INSERT INTO wake_member (wake_id, session_id, outcome) VALUES (?, ?, 'woken')").run(wk, uuid(1)), /CHECK/);
+  w.db.prepare("INSERT INTO wake_member (wake_id, session_id, outcome) VALUES (?, ?, 'woken')").run(wk, uuid(1));
+  refuses(() => w.db.prepare("INSERT INTO wake_member (wake_id, session_id, outcome) VALUES (?, ?, 'snoozed')").run(id(), uuid(1)), /CHECK|FOREIGN/);
 });
 
 test('two open panes with one number on one mux are refused', () => {
@@ -304,7 +308,7 @@ test('the same content written twice is refused by its hash', () => {
 test('every history table refuses updates and deletes', () => {
   const { db } = fresh();
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all().map((r) => r.name).sort();
-  for (const t of ['answer', 'answer_route', 'changelog_entry', 'deploy', 'question_event', 'task_event']) {
+  for (const t of ['answer', 'answer_route', 'answer_route_taken', 'changelog_entry', 'deploy', 'question_event', 'task_event']) {
     assert.ok(names.includes(t + '_no_update') && names.includes(t + '_no_delete'), t);
   }
 });
@@ -380,4 +384,137 @@ test('a retired Orc has no seat', () => {
   seat(w.db, uuid(1), w.f, w.node);
   w.db.prepare("UPDATE orc SET retired_at = 1, retired_reason = 'hand' WHERE id = ?").run(w.f);
   assert.equal(w.db.prepare("SELECT count(*) AS n FROM orc_seat WHERE letter = 'F'").get().n, 0);
+});
+
+// --- review of PR 339: holes found and closed --------------------------------------------------------
+
+test('INSERT OR REPLACE on a history row is refused, not a silent overwrite', () => {
+  const w = world();
+  const e = event(w.db, { task_id: w.task, kind: 'progress', proof: 'kept' });
+  refuses(() => w.db.prepare("INSERT OR REPLACE INTO task_event (id, task_id, at, kind, proof, sha256) VALUES (?, ?, 1, 'progress', 'gone', ?)")
+    .run(id(), w.task, e.sha256), /append-only/);
+  refuses(() => w.db.prepare("REPLACE INTO task_event (id, task_id, at, kind, proof, sha256) VALUES (?, ?, 1, 'progress', 'gone', ?)")
+    .run(e.id, w.task, sha256({ other: 1 })), /append-only/);
+  assert.equal(w.db.prepare('SELECT proof FROM task_event WHERE id = ?').get(e.id).proof, 'kept');
+});
+
+test('an upsert on a history row is refused', () => {
+  const w = world();
+  const e = event(w.db, { task_id: w.task, kind: 'progress', proof: 'kept' });
+  refuses(() => w.db.prepare("INSERT INTO task_event (id, task_id, at, kind, sha256) VALUES (?, ?, 1, 'progress', ?) ON CONFLICT (sha256) DO UPDATE SET proof = 'gone'")
+    .run(id(), w.task, e.sha256), /append-only/);
+});
+
+test('the same content written twice with INSERT OR IGNORE is a no-op', () => {
+  const w = world();
+  const e = event(w.db, { task_id: w.task, kind: 'progress', proof: 'once' });
+  const r = w.db.prepare("INSERT OR IGNORE INTO task_event (id, task_id, at, kind, proof, sha256) VALUES (?, ?, ?, 'progress', 'once', ?)")
+    .run(id(), w.task, e.at, e.sha256);
+  assert.equal(r.changes, 0);
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM task_event').get().n, 1);
+});
+
+test('recursive triggers are on for every connection', () => {
+  const { db } = fresh();
+  assert.equal(db.prepare('PRAGMA recursive_triggers').get().recursive_triggers, 1);
+});
+
+test('six processes opening a new file at once all succeed and migrate it once', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-db-'));
+  opened.push({ db: { close() {} }, dir });
+  const file = path.join(dir, 'fleet.db');
+  const store = pathToFileURL(path.join(import.meta.dirname, '..', 'store.mjs')).href;
+  const code = 'import { openStore } from ' + JSON.stringify(store) + '; openStore(' + JSON.stringify(file) + ').close();';
+  const one = () => new Promise((resolve) => {
+    const p = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (c) => resolve({ c, err }));
+  });
+  const results = await Promise.all([1, 2, 3, 4, 5, 6].map(one));
+  for (const r of results) assert.equal(r.c, 0, r.err.split('\n').find((l) => /Error/.test(l)) ?? r.err);
+  const db = openStore(file);
+  opened.push({ db, dir });
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+});
+
+test('a session id with dashes in the wrong places is refused', () => {
+  const w = world();
+  refuses(() => seat(w.db, '--------------------------------0000', w.f, w.node), /CHECK/);
+  refuses(() => seat(w.db, '000000000-000-4000-8000-000000000001', w.f, w.node), /CHECK/);
+});
+
+test('a home with no drive is refused on Windows', { skip: process.platform !== 'win32' }, () => {
+  const bs = String.fromCharCode(92);
+  refuses(() => dbPathFor(bs + 'horde'), /absolute/);
+  assert.equal(path.basename(dbPathFor(bs + bs + 'server' + bs + 'share' + bs + 'horde')), 'fleet.db');
+});
+
+test('opening a missing file read-only says it does not exist', () => {
+  refuses(() => openStore(path.join(os.tmpdir(), 'fleet-db-missing-' + process.pid, 'fleet.db'), { readOnly: true }), /does not exist yet/);
+});
+
+test('canonical text encodes a sparse array hole as null', () => {
+  const sparse = [1];
+  sparse[2] = 2;
+  assert.equal(canonical(sparse), '[1,null,2]');
+});
+
+test('canonical text refuses an object that is not plain', () => {
+  refuses(() => canonical({ d: new Date(0) }), /plain objects/);
+  assert.equal(canonical(Object.assign(Object.create(null), { a: 1 })), '{"a":1}');
+});
+
+test('a second Thrall row is refused', () => {
+  const w = world();
+  refuses(() => w.db.prepare("INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, 'T', 'thrall-2', 'x', 'thrall', 1)").run(id()), /UNIQUE/);
+});
+
+test('a session pid needs its process start time', () => {
+  const w = world();
+  refuses(() => w.db.prepare('INSERT INTO session (id, node_id, orc_id, rank, pid, first_seen, last_seen) VALUES (?, ?, ?, ?, 4242, 1, 1)')
+    .run(uuid(9), w.node, w.f, 'warg'), /CHECK/);
+});
+
+test('a route is taken once, and the taken row cannot change', () => {
+  const w = world();
+  const a = id(), r = id();
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, sha256) VALUES (?, ?, 5, 'founder', 'yes', ?)").run(a, w.q, sha256({ a }));
+  w.db.prepare("INSERT INTO answer_route (id, answer_id, at, seat, resolved, sha256) VALUES (?, ?, 6, 'none', 0, ?)").run(r, a, sha256({ r }));
+  w.db.prepare('INSERT INTO answer_route_taken (route_id, at) VALUES (?, 7)').run(r);
+  refuses(() => w.db.prepare('INSERT INTO answer_route_taken (route_id, at) VALUES (?, 8)').run(r), /UNIQUE|PRIMARY/);
+  refuses(() => w.db.prepare('UPDATE answer_route_taken SET at = 9 WHERE route_id = ?').run(r), /append-only/);
+});
+
+test('answer_now: an answer to a closed question does not authorize', () => {
+  const w = world();
+  w.db.prepare("INSERT INTO question_event (id, question_id, at, kind, sha256) VALUES (?, ?, 10, 'closed', ?)").run(id(), w.q, sha256({ c: 1 }));
+  const before = id(), afterClose = id();
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, sha256) VALUES (?, ?, 9, 'founder', 'yes', ?)").run(before, w.q, sha256({ before }));
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, sha256) VALUES (?, ?, 10, 'founder', 'no', ?)").run(afterClose, w.q, sha256({ afterClose }));
+  const get = (x) => ({ ...w.db.prepare('SELECT open_at_arrival, authorizes FROM answer_now WHERE id = ?').get(x) });
+  assert.deepEqual(get(before), { open_at_arrival: 1, authorizes: 1 });
+  assert.deepEqual(get(afterClose), { open_at_arrival: 0, authorizes: 0 });
+});
+
+test('answer_now: chat words never authorize a passkey question; a signed answer does', () => {
+  const w = world();
+  w.db.prepare('UPDATE question SET needs_passkey = 1 WHERE id = ?').run(w.q);
+  const chat = id(), signed = id();
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, sha256) VALUES (?, ?, 5, 'founder', 'yes', ?)").run(chat, w.q, sha256({ chat }));
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, signed_by, sha256) VALUES (?, ?, 6, 'founder', 'yes', 'cred-1', ?)").run(signed, w.q, sha256({ signed }));
+  const auth = (x) => w.db.prepare('SELECT authorizes FROM answer_now WHERE id = ?').get(x).authorizes;
+  assert.equal(auth(chat), 0);
+  assert.equal(auth(signed), 1);
+});
+
+test('a parts answer names one capital letter', () => {
+  const w = world();
+  refuses(() => w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, part, sha256) VALUES (?, ?, 5, 'founder', 'x', 'ab', ?)").run(id(), w.q, sha256({ p: 1 })), /CHECK/);
+});
+
+test('a migration seen as due before the lock but applied by another writer is skipped', () => {
+  const { db } = fresh();
+  migrate(db, 0);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
 });

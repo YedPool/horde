@@ -4,6 +4,9 @@
 // readers go on while one writer writes; busy_timeout 5000 makes a second writer wait instead of failing
 // (every write here holds the lock for milliseconds). foreign_keys is OFF by default in SQLite and per
 // connection, so it is set on every open and checked: a connection without it would write orphan rows.
+// recursive_triggers is set for the same reason: without it, INSERT OR REPLACE deletes the conflicting row
+// WITHOUT firing its DELETE trigger, so an append-only history row could be silently overwritten (review
+// of PR 339, blocker 1). With it on, the _no_delete trigger refuses the REPLACE.
 //
 // ONE WRITE PATH: other lanes write their tables through this module's functions, never with their own SQL
 // connection, so the pragmas, the transaction rule and the hash rule are the same for every writer.
@@ -19,11 +22,15 @@ export const DB_FILE = 'fleet.db';
 export function dbPathFor(home) {
   const h = String(home ?? '').trim();
   if (h === '') throw new Error('HORDE_HOME is not set, so fleet.db has no home');
-  if (!path.isAbsolute(h)) throw new Error("HORDE_HOME must be an absolute path, not '" + h + "'");
+  // On Windows path.isAbsolute('\\foo') is true, but a path with no drive still depends on the current
+  // drive; a home must name its drive or be a UNC path.
+  const rooted = process.platform === 'win32' ? /^([A-Za-z]:[\\/]|\\\\[^\\/])/.test(h) : path.isAbsolute(h);
+  if (!rooted) throw new Error("HORDE_HOME must be an absolute path, not '" + h + "'");
   return path.join(path.resolve(h), DB_FILE);
 }
 
 export function openStore(file, { readOnly = false } = {}) {
+  if (readOnly && !fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; open it for writing once');
   if (!readOnly) fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file, { readOnly, enableForeignKeyConstraints: true });
   db.exec('PRAGMA busy_timeout = 5000');
@@ -32,9 +39,11 @@ export function openStore(file, { readOnly = false } = {}) {
     db.exec('PRAGMA synchronous = NORMAL');
   }
   db.exec('PRAGMA foreign_keys = ON');
-  if (db.prepare('PRAGMA foreign_keys').get().foreign_keys !== 1) {
+  db.exec('PRAGMA recursive_triggers = ON');
+  const on = (p) => db.prepare('PRAGMA ' + p).get()[p] === 1;
+  if (!on('foreign_keys') || !on('recursive_triggers')) {
     db.close();
-    throw new Error('fleet.db: foreign keys could not be turned on');
+    throw new Error('fleet.db: foreign keys and recursive triggers could not be turned on');
   }
   const have = db.prepare('PRAGMA user_version').get().user_version;
   if (have > SCHEMA_VERSION) {
@@ -48,10 +57,13 @@ export function openStore(file, { readOnly = false } = {}) {
   return db;
 }
 
-function migrate(db, from) {
+// The version is read again inside the write lock: several hooks open a brand-new file at once, and each
+// saw version 0 before taking the lock, so the second would re-run migration 1 (review of PR 339, 2).
+export function migrate(db, from) {
   for (let v = from; v < MIGRATIONS.length; v++) {
     db.exec('BEGIN IMMEDIATE');
     try {
+      if (db.prepare('PRAGMA user_version').get().user_version > v) { db.exec('COMMIT'); continue; }
       db.exec(MIGRATIONS[v]);
       db.exec('PRAGMA user_version = ' + (v + 1));
       db.exec('COMMIT');

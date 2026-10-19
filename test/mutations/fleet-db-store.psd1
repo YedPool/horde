@@ -15,13 +15,25 @@
            Find = "if (have > SCHEMA_VERSION) {"
            Replace = "if (false) {" }
         @{ Name = "relative-home-resolved"
-           Find = "if (!path.isAbsolute(h)) throw"
+           Find = "if (!rooted) throw"
            Replace = "if (false) throw" }
+        @{ Name = "driveless-home-accepted"
+           Find = "process.platform === 'win32' ? /^"
+           Replace = "process.platform === 'never' ? /^" }
         @{ Name = "failed-write-kept"
            Find = "if (db.isTransaction) db.exec('ROLLBACK');"
            Replace = "if (db.isTransaction) db.exec('COMMIT');" }
         @{ Name = "no-wal"
            Find = "db.exec('PRAGMA journal_mode = WAL');"
            Replace = "" }
+        @{ Name = "replace-erases-history"
+           Find = "db.exec('PRAGMA recursive_triggers = ON');"
+           Replace = "db.exec('PRAGMA recursive_triggers = OFF');" }
+        @{ Name = "stale-migration-rerun"
+           Find = "user_version > v) { db.exec('COMMIT'); continue; }"
+           Replace = "user_version > 99) { db.exec('COMMIT'); continue; }" }
+        @{ Name = "missing-file-read-only-unexplained"
+           Find = "if (readOnly && !fs.existsSync(file)) throw"
+           Replace = "if (false) throw" }
     )
 }

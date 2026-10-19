@@ -36,5 +36,23 @@
         @{ Name = "tie-not-broken-by-id"
            Find = "ORDER BY e.at DESC, e.id DESC LIMIT 1) AS state,"
            Replace = "ORDER BY e.at DESC, e.id ASC LIMIT 1) AS state," }
+        @{ Name = "second-thrall-allowed"
+           Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';"
+           Replace = "" }
+        @{ Name = "pid-without-start-time"
+           Find = "CHECK ((pid IS NULL) = (process_started_at IS NULL))"
+           Replace = "CHECK (1)" }
+        @{ Name = "unsigned-passkey-answer-authorizes"
+           Find = "WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes"
+           Replace = "ELSE 1 END AS authorizes" }
+        @{ Name = "uuid-dashes-anywhere"
+           Find = 'AND substr(${col}, 9, 1) = ''-'' AND substr(${col}, 14, 1) = ''-'''
+           Replace = 'AND 1 = 1 AND 1 = 1' }
+        @{ Name = "part-any-text"
+           Find = "part TEXT CHECK (part GLOB '[A-Z]' AND length(part) = 1),"
+           Replace = "part TEXT," }
+        @{ Name = "taken-row-editable"
+           Find = '${appendOnly(''answer_route_taken'')}'
+           Replace = '' }
     )
 }

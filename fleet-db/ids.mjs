@@ -37,8 +37,16 @@ export function canonical(value) {
   if (typeof value === 'string') {
     return JSON.stringify(value).replace(/[\u007f-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
   }
-  if (Array.isArray(value)) return '[' + value.map((v) => (v === undefined ? 'null' : canonical(v))).join(',') + ']';
+  if (Array.isArray(value)) {
+    // A for loop, not map: map skips the holes of a sparse array and would emit "[1,,2]".
+    const parts = [];
+    for (let i = 0; i < value.length; i++) parts.push(value[i] === undefined ? 'null' : canonical(value[i]));
+    return '[' + parts.join(',') + ']';
+  }
   if (typeof value === 'object') {
+    // Only plain objects: a Date, Map or class instance has no own enumerable keys and would hash as {}.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new Error('canonical: only plain objects, not ' + (value.constructor?.name ?? 'an object'));
     const keys = Object.keys(value).filter((k) => value[k] !== undefined).sort();
     return '{' + keys.map((k) => canonical(k) + ':' + canonical(value[k])).join(',') + '}';
   }

@@ -6,7 +6,7 @@
 //     session uuid. Human labels (T-0284, question 67, Orc letter F) are UNIQUE columns, never keys, so a
 //     label can be corrected without rewriting every row that points at it;
 //   - STATE rows (orc, session, pr, parking_lot_member) are updated in place. HISTORY rows (task_event,
-//     question_event, answer, answer_route, changelog_entry, deploy) are append-only: a trigger refuses
+//     question_event, answer, answer_route, answer_route_taken, changelog_entry, deploy) are append-only: a trigger refuses
 //     UPDATE and DELETE, and each carries the sha256 of its canonical content as a UNIQUE column, so
 //     importing the same line twice, or a double send, is a no-op;
 //   - nothing derivable is stored. A task's state, priority and owner come from its events through the
@@ -31,7 +31,9 @@ export const TASK_EVENT_KINDS = ['opened', 'started', 'progress', 'waiting', 're
 export const WAITING_ON = ['founder', 'orc', 'external', 'other'];
 export const PR_STATES = ['open', 'closed', 'merged'];
 export const PR_LINKED_BY = ['branch', 'body', 'event', 'hand', 'backfill'];
-export const QUESTION_EVENT_KINDS = ['updated', 'closed', 'reopened', 'ranked', 'acked'];
+// change-reply: an Orc's reply to a changed answer (not-acted / undoing / cannot-undo, and why, in data_json).
+// A close carries closed_by_seat in data_json ('warchief' only when the seat was proven, decisions PR 335).
+export const QUESTION_EVENT_KINDS = ['updated', 'closed', 'reopened', 'ranked', 'acked', 'change-reply'];
 export const CHANGELOG_KINDS = ['decision', 'result', 'merged', 'blocked', 'waiting', 'started', 'progress',
   'done', 'note'];
 export const LOT_SELECTIONS = ['all', 'labels', 'orcs', 'backfill'];
@@ -42,7 +44,9 @@ export const LABEL_KINDS = ['task', 'question'];
 const q = (list) => list.map((s) => "'" + s + "'").join(', ');
 // Crockford base32, 26 characters: the same pattern as schema/fleet-parking-lot.v1.json.
 const ulid = (col) => `CHECK (length(${col}) = 26 AND ${col} NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*' AND substr(${col}, 1, 1) <= '7')`;
-const uuid = (col) => `CHECK (length(${col}) = 36 AND ${col} GLOB '????????-????-????-????-????????????' AND ${col} NOT GLOB '*[^0-9a-f-]*')`;
+// Dashes exactly at 9, 14, 19, 24 and lower-case hex everywhere else ('-----...0000' is not a uuid).
+const uuid = (col) => `CHECK (length(${col}) = 36 AND ${col} NOT GLOB '*[^0-9a-f-]*' AND length(replace(${col}, '-', '')) = 32
+    AND substr(${col}, 9, 1) = '-' AND substr(${col}, 14, 1) = '-' AND substr(${col}, 19, 1) = '-' AND substr(${col}, 24, 1) = '-')`;
 const sha = (col) => `CHECK (length(${col}) = 64 AND ${col} NOT GLOB '*[^0-9a-f]*')`;
 const flag = (col) => `CHECK (${col} IN (0, 1))`;
 const appendOnly = (table) => `
@@ -80,6 +84,7 @@ export const MIGRATIONS = [
     retired_reason TEXT CHECK (retired_reason IN ('hand', 'fleet')),
     CHECK ((retired_at IS NULL) = (retired_reason IS NULL))
   ) STRICT;
+  CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';
 
   -- One row per harness session, keyed by its session uuid. The current seat of an Orc is not a pointer
   -- on orc: it is the one live session of rank thrall/orc for that Orc on that PC, and the index below
@@ -91,16 +96,29 @@ export const MIGRATIONS = [
     rank TEXT NOT NULL CHECK (rank IN (${q(RANKS)})),
     parent_session_id TEXT REFERENCES session (id),
     resumed_from_id TEXT REFERENCES session (id),
+    -- The process that holds the session. One process can hold several session ids over time (a /clear
+    -- gives the same process a new id while its command line keeps the old --resume id), so seat binding
+    -- matches on (node, pid, process_started_at); a pid alone is reused by the OS.
+    pid INTEGER CHECK (pid > 0),
+    process_started_at INTEGER,
+    start_cwd TEXT,
     cwd TEXT,
     transcript_path TEXT,
+    -- What a wake needs to resume the session the same way (permission mode, settings file, remote control).
+    launch_flags_json TEXT CHECK (launch_flags_json IS NULL OR json_valid(launch_flags_json)),
+    origin TEXT CHECK (length(origin) <= 40),
+    fleet_session_id TEXT CHECK (length(fleet_session_id) <= 120),
+    fleet_run_dir TEXT,
     first_seen INTEGER NOT NULL,
     last_seen INTEGER NOT NULL,
     retired_at INTEGER,
     retired_reason TEXT CHECK (length(retired_reason) <= 200),
     CHECK (last_seen >= first_seen),
     CHECK (rank NOT IN ('thrall', 'orc') OR orc_id IS NOT NULL),
-    CHECK (resumed_from_id IS NULL OR resumed_from_id <> id)
+    CHECK (resumed_from_id IS NULL OR resumed_from_id <> id),
+    CHECK ((pid IS NULL) = (process_started_at IS NULL))
   ) STRICT;
+  CREATE INDEX session_process ON session (node_id, pid, process_started_at) WHERE pid IS NOT NULL;
   CREATE UNIQUE INDEX session_one_live_seat ON session (orc_id, node_id)
     WHERE retired_at IS NULL AND rank IN ('thrall', 'orc');
   CREATE INDEX session_orc ON session (orc_id, first_seen);
@@ -185,6 +203,8 @@ export const MIGRATIONS = [
     kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 40),
     title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 400),
     body TEXT,
+    -- Set when the question is added: chat words are never his answer to a passkey question.
+    needs_passkey INTEGER NOT NULL DEFAULT 0 ${flag('needs_passkey')},
     asked_at INTEGER NOT NULL,
     decisions_seq INTEGER UNIQUE,
     backfill INTEGER NOT NULL DEFAULT 0 ${flag('backfill')},
@@ -212,8 +232,17 @@ export const MIGRATIONS = [
     speaker TEXT NOT NULL CHECK (length(speaker) BETWEEN 1 AND 40),
     route TEXT CHECK (length(route) <= 40),
     text TEXT NOT NULL,
+    -- A parts question is answered part by part.
+    part TEXT CHECK (part GLOB '[A-Z]' AND length(part) = 1),
+    -- The passkey credential id that signed it; NULL for chat words.
+    signed_by TEXT CHECK (length(signed_by) BETWEEN 1 AND 200),
+    wording_version INTEGER CHECK (wording_version >= 1),
+    asks INTEGER NOT NULL DEFAULT 0 ${flag('asks')},
+    -- Change my answer (decisions PR 335): this answer replaces an earlier one to the same question.
+    replaces_answer_id TEXT REFERENCES answer (id),
     decisions_seq INTEGER UNIQUE,
-    sha256 TEXT NOT NULL UNIQUE ${sha('sha256')}
+    sha256 TEXT NOT NULL UNIQUE ${sha('sha256')},
+    CHECK (replaces_answer_id IS NULL OR replaces_answer_id <> id)
   ) STRICT;
   CREATE INDEX answer_question ON answer (question_id, at);
 
@@ -231,6 +260,15 @@ export const MIGRATIONS = [
     CHECK (resolved = 0 OR session_id IS NOT NULL)
   ) STRICT;
 
+  -- Routed is not delivered: a route is taken when the target session's own hook confirms it (TAKEN).
+  -- Its own write-once row, because answer_route is append-only; a route with no row here past its
+  -- deadline is the alarm (decisions T-0281). When the mail table lands this moves to mail delivery, the
+  -- one source for the meter's 'taken' hop too.
+  CREATE TABLE answer_route_taken (
+    route_id TEXT PRIMARY KEY REFERENCES answer_route (id),
+    at INTEGER NOT NULL
+  ) STRICT;
+
   -- The task's history. kind-specific columns are required by CHECKs so a row says everything it means.
   CREATE TABLE task_event (
     id TEXT PRIMARY KEY ${ulid('id')},
@@ -239,10 +277,14 @@ export const MIGRATIONS = [
     kind TEXT NOT NULL CHECK (kind IN (${q(TASK_EVENT_KINDS)})),
     by_orc_id TEXT REFERENCES orc (id),
     by_session_id TEXT REFERENCES session (id),
+    -- The writer as the ledger spelled it (analyst, analyst-backfill, C13), kept when it names no Orc row.
+    by_text TEXT CHECK (length(by_text) <= 64),
     prio INTEGER CHECK (prio BETWEEN 0 AND 9),
     to_orc_id TEXT REFERENCES orc (id),
     on_kind TEXT CHECK (on_kind IN (${q(WAITING_ON)})),
     on_orc_id TEXT REFERENCES orc (id),
+    -- What it waits on in words (device, merge, B's usage limit); on_kind is the class.
+    on_text TEXT CHECK (length(on_text) <= 400),
     question_id TEXT REFERENCES question (id),
     pr_id TEXT REFERENCES pr (id),
     superseded_by_id TEXT REFERENCES task (id),
@@ -319,7 +361,7 @@ export const MIGRATIONS = [
     orc_id TEXT REFERENCES orc (id),
     tier INTEGER CHECK (tier IN (1, 2)),
     state TEXT NOT NULL CHECK (state IN (${q(MEMBER_STATES)})),
-    note TEXT CHECK (length(note) <= 400),
+    note TEXT CHECK (length(note) <= 1024),
     PRIMARY KEY (lot_id, session_id)
   ) STRICT;
   CREATE INDEX parking_lot_member_parked ON parking_lot_member (session_id) WHERE state = 'parked';
@@ -335,9 +377,9 @@ export const MIGRATIONS = [
     wake_id TEXT NOT NULL REFERENCES wake (id),
     session_id TEXT NOT NULL REFERENCES session (id),
     outcome TEXT NOT NULL CHECK (outcome IN (${q(WAKE_OUTCOMES)})),
+    -- Only when the harness gave the resumed conversation a new id; a woken member may keep its old one.
     new_session_id TEXT REFERENCES session (id),
-    PRIMARY KEY (wake_id, session_id),
-    CHECK (outcome <> 'woken' OR new_session_id IS NOT NULL)
+    PRIMARY KEY (wake_id, session_id)
   ) STRICT;
 
   -- HISTORY IS APPEND-ONLY --------------------------------------------------------------------------
@@ -345,6 +387,7 @@ export const MIGRATIONS = [
   ${appendOnly('question_event')}
   ${appendOnly('answer')}
   ${appendOnly('answer_route')}
+  ${appendOnly('answer_route_taken')}
   ${appendOnly('changelog_entry')}
   ${appendOnly('deploy')}
 
@@ -377,6 +420,20 @@ export const MIGRATIONS = [
        AND e.kind IN ('closed', 'reopened') ORDER BY e.at DESC, e.id DESC LIMIT 1)
       WHEN 'closed' THEN 'closed' ELSE 'open' END AS state
   FROM question qn;
+
+  -- Whether an answer can be acted on (decisions/Rules.ps1 Test-HordeDecisionMessageAuthorizes): it is his
+  -- ANSWER only if the question was open when it arrived, and on a passkey question only if it is signed.
+  -- Open-at-arrival is derived, not stored: the close/reopen history is append-only, so it is a fixed fact.
+  -- A close in the same millisecond as the answer counts as before it.
+  CREATE VIEW answer_now AS
+  SELECT a.id, a.question_id, a.at, a.part, a.signed_by, a.replaces_answer_id,
+    CASE (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1)
+      WHEN 'closed' THEN 0 ELSE 1 END AS open_at_arrival,
+    CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) = 'closed' THEN 0
+      WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes
+  FROM answer a JOIN question qn ON qn.id = a.question_id;
   `,
 ];
 

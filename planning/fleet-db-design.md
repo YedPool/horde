@@ -22,8 +22,9 @@ with correct efficient and proper unique ids and relational structure." DDL: `fl
    same transaction as the insert, so two sessions never take the same T-number and a failed insert
    hands its number back (audit E8: task.py's max+1 had no lock).
 4. **State rows and history rows.** `orc`, `session`, `pane`, `pr`, `parking_lot_member` are state,
-   updated in place. `task_event`, `question_event`, `answer`, `answer_route`, `changelog_entry` and
-   `deploy` are history: triggers refuse UPDATE and DELETE, and each row carries the sha256 of its
+   updated in place. `task_event`, `question_event`, `answer`, `answer_route`, `answer_route_taken`,
+   `changelog_entry` and `deploy` are history: triggers refuse UPDATE and DELETE (and, with
+   `recursive_triggers` on for every connection, INSERT OR REPLACE, which would otherwise delete silently), and each row carries the sha256 of its
    canonical content (`fleet-db/ids.mjs`: sorted keys, ASCII, integers only) as a UNIQUE column, so an
    import replayed twice, or an event sent twice from another PC, is a no-op.
 5. **Nothing derivable is stored.** A task's state, priority and owner are the `task_now` view over its
@@ -55,7 +56,7 @@ with correct efficient and proper unique ids and relational structure." DDL: `fl
 | `orc` (registry: letter, name, domain, tier, order, retire) | F | `horde orcs` verbs calling the access layer |
 | `session`, `pane`, `session_pane` | K (SessionStart/SessionEnd hooks, resume binding) | `horde db seat bind` (one transaction) |
 | `parking_lot`, `parking_lot_member`, `wake`, `wake_member` | K | `horde fleet hibernate / wake` calling the access layer |
-| `question`, `question_event`, `answer`, `answer_route` | F (decisions verbs; routing reads `orc_seat`) | decisions store writes the DB in the same call |
+| `question`, `question_event`, `answer`, `answer_route`, `answer_route_taken` (TAKEN from the target's hook) | F (decisions verbs; routing reads `orc_seat`) | decisions store writes the DB in the same call |
 | `service`, `deploy` | F (relay tend), L (router) | `horde db deploy add` after verify |
 | meter tables (`tokens_*`, `mail_hops`) | L, in `metrics/fleet.sqlite` | ATTACH; ids from here |
 
@@ -73,6 +74,22 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
 | 4 | Views: status.txt facts, PROGRESS.md, PARKED-*.md, no-restore markers, a facts header in lane-state.md, and the jsonl files rendered from the DB, each marked "generated - do not edit". | N | No hand-typed copy of a DB fact left. |
 | 5 | Relay replica (hashed events pushed to the relay, read-only there) and the meter's `orc_id`. | F, L | The phone reads the replica. |
 | 6 | Retire hand copies: briefs and memory stop carrying state; the status-card format checker goes. | N | - |
+
+## Rules the importer keeps (phase 1; from the review of PR 339 and the lanes' answers)
+
+- Orc ids: K's parking JSON and the old registry name an Orc by lane folder or letter; the importer maps
+  both to `orc.id` through `orc.lane_dir` / `orc.letter`, and reports any name it cannot map.
+- Backfill ULIDs are minted from the event's own time (`ulid(atMs)`), so `task_now`'s same-millisecond
+  tie-break follows event time, not import order.
+- The ledger's free-text writer and waiting-on survive as `task_event.by_text` and `on_text`; `on_kind`
+  is the class. Its `merged: true` flag is not copied: merge state is `pr`, filled from pr-cache.json's
+  mergedAt (gh), never inferred.
+- A session's parent or resumed-from that is not in the registry gets a stub row first (rank unknown,
+  first_seen = the child's), so the immediate foreign key holds.
+- Every hash is recomputed from the row's content on import and compared with the source's own hash
+  where it has one (the decisions store's requestHash); the database cannot check a hash against its row.
+- The decisions store's recorded arrivedAfterClosing is compared with `answer_now.open_at_arrival` for
+  every answer; any difference is reported, never silently taken.
 
 ## Rules a writer must keep
 
