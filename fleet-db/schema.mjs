@@ -84,7 +84,7 @@ export const MIGRATIONS = [
     retired_reason TEXT CHECK (retired_reason IN ('hand', 'fleet')),
     CHECK ((retired_at IS NULL) = (retired_reason IS NULL))
   ) STRICT;
-  CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';
+  CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;
 
   -- One row per harness session, keyed by its session uuid. The current seat of an Orc is not a pointer
   -- on orc: it is the one live session of rank thrall/orc for that Orc on that PC, and the index below
@@ -100,7 +100,7 @@ export const MIGRATIONS = [
     -- gives the same process a new id while its command line keeps the old --resume id), so seat binding
     -- matches on (node, pid, process_started_at); a pid alone is reused by the OS.
     pid INTEGER CHECK (pid > 0),
-    process_started_at INTEGER,
+    process_started_at INTEGER CHECK (process_started_at >= 0),
     start_cwd TEXT,
     cwd TEXT,
     transcript_path TEXT,
@@ -245,6 +245,10 @@ export const MIGRATIONS = [
     CHECK (replaces_answer_id IS NULL OR replaces_answer_id <> id)
   ) STRICT;
   CREATE INDEX answer_question ON answer (question_id, at);
+  CREATE TRIGGER answer_replaces_same_question BEFORE INSERT ON answer
+    WHEN NEW.replaces_answer_id IS NOT NULL
+      AND (SELECT question_id FROM answer WHERE id = NEW.replaces_answer_id) IS NOT NEW.question_id
+  BEGIN SELECT RAISE(ABORT, 'an answer replaces an answer to the same question'); END;
 
   -- Where an answer was delivered. The seat is resolved from session_one_live_seat, never by label search.
   CREATE TABLE answer_route (
@@ -423,8 +427,10 @@ export const MIGRATIONS = [
 
   -- Whether an answer can be acted on (decisions/Rules.ps1 Test-HordeDecisionMessageAuthorizes): it is his
   -- ANSWER only if the question was open when it arrived, and on a passkey question only if it is signed.
-  -- Open-at-arrival is derived, not stored: the close/reopen history is append-only, so it is a fixed fact.
-  -- A close in the same millisecond as the answer counts as before it.
+  -- Open-at-arrival is derived, not stored: the close/reopen history is append-only, so it is a fixed fact
+  -- as long as writers stamp at with the time they write (the access layer does; only the importer
+  -- writes past times, from the source). A close in the same millisecond as the answer counts as before it;
+  -- a close and a reopen in one millisecond order by id, which the access layer mints in order.
   CREATE VIEW answer_now AS
   SELECT a.id, a.question_id, a.at, a.part, a.signed_by, a.replaces_answer_id,
     CASE (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id

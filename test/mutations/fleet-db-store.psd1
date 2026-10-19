@@ -23,6 +23,9 @@
         @{ Name = "failed-write-kept"
            Find = "if (db.isTransaction) db.exec('ROLLBACK');"
            Replace = "if (db.isTransaction) db.exec('COMMIT');" }
+        @{ Name = "write-with-triggers-off"
+           Find = "if (db.prepare('PRAGMA recursive_triggers').get().recursive_triggers !== 1) throw"
+           Replace = "if (false) throw" }
         @{ Name = "no-wal"
            Find = "db.exec('PRAGMA journal_mode = WAL');"
            Replace = "" }

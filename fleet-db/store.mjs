@@ -76,7 +76,11 @@ export function migrate(db, from) {
 
 // Run fn inside one write transaction. BEGIN IMMEDIATE takes the write lock at the start, so a read made
 // inside fn (the next label, the live seat) cannot be changed by another writer before fn's writes land.
+// The pragma is checked again on every write: SQLite lets any code holding the handle turn it off, and the
+// append-only rule would then fail open (review of PR 339, round 2). A raw connection that never came
+// through openStore is outside this guard; the one-write-path rule above is what keeps those out.
 export function inWrite(db, fn) {
+  if (db.prepare('PRAGMA recursive_triggers').get().recursive_triggers !== 1) throw new Error('fleet.db: recursive triggers are off on this connection; refusing to write');
   db.exec('BEGIN IMMEDIATE');
   try {
     const r = fn();

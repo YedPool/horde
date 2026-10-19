@@ -93,7 +93,11 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
 
 ## Rules a writer must keep
 
-- Open with `openStore` only; never `new DatabaseSync` on fleet.db in product code.
+- Open with `openStore` only; never `new DatabaseSync` on fleet.db in product code. The append-only
+  triggers hold only with `recursive_triggers` on, which is per connection: `openStore` sets it and
+  `inWrite` refuses to write when it is off, but a raw connection is outside both. SQLite cannot stop a
+  process that opens the file itself; the one write path is the guard, and the phase 3 nightly diff
+  (rows against their recomputed hashes) is the check.
 - Every multi-row write is one `inWrite` call. Take a label inside the write that uses it.
 - History rows are inserted with their sha256; on a UNIQUE conflict on sha256 the write is a no-op.
 - A new column or table is a new migration appended to `MIGRATIONS`; an old one is never edited.

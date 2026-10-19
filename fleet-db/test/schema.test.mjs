@@ -518,3 +518,67 @@ test('a migration seen as due before the lock but applied by another writer is s
   migrate(db, 0);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
 });
+
+// --- review of PR 339, round 2 -----------------------------------------------------------------------
+
+test('a new Thrall row may follow a retired one', () => {
+  const w = world();
+  w.db.prepare("UPDATE orc SET retired_at = 1, retired_reason = 'hand' WHERE id = ?").run(w.m);
+  w.db.prepare("INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, 'T', 'thrall-2', 'x', 'thrall', 2)").run(id());
+});
+
+test('a session with its pid and process start time is kept', () => {
+  const w = world();
+  w.db.prepare('INSERT INTO session (id, node_id, orc_id, rank, pid, process_started_at, first_seen, last_seen) VALUES (?, ?, ?, ?, 4242, 1000, 1, 1)')
+    .run(uuid(10), w.node, w.f, 'warg');
+  refuses(() => w.db.prepare('INSERT INTO session (id, node_id, orc_id, rank, pid, process_started_at, first_seen, last_seen) VALUES (?, ?, ?, ?, 4242, -5, 1, 1)')
+    .run(uuid(11), w.node, w.f, 'warg'), /CHECK/);
+});
+
+test('an answer replaces only an answer to the same question', () => {
+  const w = world();
+  const other = id();
+  w.db.prepare("INSERT INTO question (id, number, task_id, kind, title, asked_at) VALUES (?, 2, ?, 'yes-no', 'other?', 1)").run(other, w.task);
+  const first = id();
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, sha256) VALUES (?, ?, 5, 'founder', 'yes', ?)").run(first, w.q, sha256({ first }));
+  refuses(() => w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, replaces_answer_id, sha256) VALUES (?, ?, 6, 'founder', 'no', ?, ?)")
+    .run(id(), other, first, sha256({ wrong: 1 })), /same question/);
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, replaces_answer_id, sha256) VALUES (?, ?, 6, 'founder', 'no', ?, ?)")
+    .run(id(), w.q, first, sha256({ right: 1 }));
+});
+
+function closeOpen(w, kind, at) {
+  w.db.prepare('INSERT INTO question_event (id, question_id, at, kind, sha256) VALUES (?, ?, ?, ?, ?)').run(id(), w.q, at, kind, sha256({ kind, at }));
+}
+function answerAt(w, at, signedBy = null) {
+  const a = id();
+  w.db.prepare("INSERT INTO answer (id, question_id, at, speaker, text, signed_by, sha256) VALUES (?, ?, ?, 'founder', 'yes', ?, ?)").run(a, w.q, at, signedBy, sha256({ a }));
+  return { ...w.db.prepare('SELECT open_at_arrival, authorizes FROM answer_now WHERE id = ?').get(a) };
+}
+
+test('answer_now: closed then reopened before the answer counts as open', () => {
+  const w = world();
+  closeOpen(w, 'closed', 10);
+  closeOpen(w, 'reopened', 20);
+  assert.deepEqual(answerAt(w, 30), { open_at_arrival: 1, authorizes: 1 });
+});
+
+test('answer_now: a reopen in the same millisecond as the answer counts as before it', () => {
+  const w = world();
+  closeOpen(w, 'closed', 10);
+  closeOpen(w, 'reopened', 30);
+  assert.deepEqual(answerAt(w, 30), { open_at_arrival: 1, authorizes: 1 });
+});
+
+test('answer_now: a signed answer to a closed passkey question does not authorize', () => {
+  const w = world();
+  w.db.prepare('UPDATE question SET needs_passkey = 1 WHERE id = ?').run(w.q);
+  closeOpen(w, 'closed', 10);
+  assert.deepEqual(answerAt(w, 20, 'cred-1'), { open_at_arrival: 0, authorizes: 0 });
+});
+
+test('a write is refused on a connection whose recursive triggers were turned off', () => {
+  const { db } = fresh();
+  db.exec('PRAGMA recursive_triggers = OFF');
+  refuses(() => inWrite(db, () => takeLabel(db, 'task')), /recursive triggers are off/);
+});

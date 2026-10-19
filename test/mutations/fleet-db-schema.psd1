@@ -37,8 +37,20 @@
            Find = "ORDER BY e.at DESC, e.id DESC LIMIT 1) AS state,"
            Replace = "ORDER BY e.at DESC, e.id ASC LIMIT 1) AS state," }
         @{ Name = "second-thrall-allowed"
-           Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';"
+           Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;"
            Replace = "" }
+        @{ Name = "retired-thrall-blocks-a-new-one"
+           Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;"
+           Replace = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';" }
+        @{ Name = "answer-reopen-ignored"
+           Find = "WHEN 'closed' THEN 0 ELSE 1 END AS open_at_arrival,"
+           Replace = "WHEN 'reopened' THEN 0 ELSE (SELECT count(*) = 0 FROM question_event e WHERE e.question_id = a.question_id AND e.kind = 'closed' AND e.at <= a.at) END AS open_at_arrival," }
+        @{ Name = "replaces-any-question"
+           Find = "BEGIN SELECT RAISE(ABORT, 'an answer replaces an answer to the same question'); END;"
+           Replace = "BEGIN SELECT 1; END;" }
+        @{ Name = "negative-process-start"
+           Find = "process_started_at INTEGER CHECK (process_started_at >= 0),"
+           Replace = "process_started_at INTEGER," }
         @{ Name = "pid-without-start-time"
            Find = "CHECK ((pid IS NULL) = (process_started_at IS NULL))"
            Replace = "CHECK (1)" }
