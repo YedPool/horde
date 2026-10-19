@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/fleet-parking-lot.v1",
+  "title": "fleet parking_lot row v1",
+  "description": "ONE ROW OF THE parking_lot TABLE (work-data-ssot-audit-2026-10-19, target schema, parking): one park, with its own time; a later park is a new lot. The columns are the audit's, so the row moves into the future fleet.db unchanged. A column that is not known is left out, never null. The row is the one row of rows in <HORDE_HOME>/fleet/hibernations/<hid>/parking_lot.json (fleet/LotTables.ps1).",
+  "type": "object",
+  "required": ["id", "created_at", "reason"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$", "description": "A ULID whose time is created_at; the folder <hid> (yyyymmdd-hhmmss) is that same time." },
+    "created_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "description": "When it was parked, UTC to the second." },
+    "created_by_session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The session that parked, when it is known." },
+    "created_by_orc_id": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The Orc that parked, as the orc table's id, when it is known." },
+    "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,200}$", "description": "One line of plain words." },
+    "selection_kind": { "type": "string", "enum": ["all", "labels", "orcs", "backfill"], "description": "How the sessions were chosen: all (fleet record -All), labels (fleet record -Labels), orcs (fleet hibernate), backfill (written from a file for a park that happened before lots existed)." }
+  }
+}

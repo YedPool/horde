@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/fleet-wake.v1",
+  "title": "fleet wake row v1",
+  "description": "ONE ROW OF THE wake TABLE (work-data-ssot-audit-2026-10-19): one wake of a lot, whole or in part. <HORDE_HOME>/fleet/hibernations/<hid>/wakes/<id>/wake.json. A dry run is not a wake and writes none. A column that is not known is left out, never null.",
+  "type": "object",
+  "required": ["id", "lot_id", "requested_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
+    "lot_id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
+    "requested_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "requested_by_session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+  }
+}
