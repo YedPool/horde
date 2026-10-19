@@ -33,6 +33,10 @@
 # EACH SESSION KEEPS ITS PROCESS, { pid; start } as the harness names it, so a wake can tell that very
 # process still running under another id (second review of PR 318, P1).
 #
+# EVERY RUN IS ONE PARKING LOT (T-0216, fleet/LotTables.ps1): Invoke-HordeFleetRecord writes parking_lot.json and
+# parking_lot_member.json beside record.json, and Write-HordeFleetRecord keeps the members' copy of each state
+# current. A record from before lots is read as a lot and is not rewritten.
+#
 # WRITTEN WHOLE OR NOT AT ALL: to a temporary file beside it, then renamed over it in one step
 # (core/FileAtomic.ps1). The text is ASCII: any other character is written as a \u escape.
 #
@@ -45,6 +49,8 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\WezfleetState.ps1")
 . (Join-Path $PSScriptRoot "Port.ps1")
+# The parking lot's two tables (T-0216): every record is also a lot, and its members are rows.
+. (Join-Path $PSScriptRoot "LotTables.ps1")
 
 $script:HordeFleetIdPattern = '\A[0-9]{8}-[0-9]{6}\z'
 $script:HordeFleetSessionPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
@@ -107,6 +113,9 @@ function Write-HordeFleetRecord {
     [System.IO.File]::WriteAllText($tmp, (ConvertTo-HordeFleetAsciiJson -Value $Record), (New-Object System.Text.UTF8Encoding($false)))
     try { Move-HordeFileAtomic -From $tmp -To $path }
     catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }
+    # The members' copy of each state follows the record in the same call (fleet/LotTables.ps1). It is a copy:
+    # one that cannot be refreshed is refreshed by the next write, and never fails the record that is the authority.
+    try { Sync-HordeFleetLotMembers -Dir $Dir -Record $Record } catch { $null = $_ }
     return $path
 }
 
@@ -246,6 +255,7 @@ function New-HordeFleetRecord {
         if ($null -ne $Placed -and $Placed.ContainsKey("" + $c.sessionId)) { $s["placement"] = $Placed["" + $c.sessionId] }
         $pr = $c.PSObject.Properties["process"]
         if ($null -ne $pr -and $null -ne $pr.Value -and "" + $pr.Value.pid -cmatch '\A[0-9]{1,10}\z' -and "" + $pr.Value.start -cmatch '\A[0-9]{1,19}\z') { $s["process"] = [pscustomobject][ordered]@{ pid = "" + $pr.Value.pid; start = "" + $pr.Value.start } }
+        if ("" + $c.pane -cmatch '\A[^\x00-\x1F]{1,64}\z') { $s["pane"] = "" + $c.pane }
         if ("" + $c.label -ne "" -and "" + $c.cwd -ne "" -and [System.IO.Path]::IsPathRooted("" + $c.cwd)) {
             $pf = Join-Path ("" + $c.cwd) ("PARKED-" + $c.label + ".md")
             if ([bool](& $ParkedExists $pf)) { $s["parkedFile"] = $pf }
@@ -264,7 +274,8 @@ function Invoke-HordeFleetRecord {
     #   Agent, Host         the fleet adapters (fleet/Port.ps1)
     #   ParkedExists (path) optional, whether a PARKED file is there
     param([Parameter(Mandatory = $true)]$Deps, [Parameter(Mandatory = $true)][scriptblock]$Selector, [Parameter(Mandatory = $true)]$Selection,
-          [string[]]$Exclude = @(), [string]$HordeHome = (Get-HordeHome))
+          [string[]]$Exclude = @(), [string]$HordeHome = (Get-HordeHome),
+          [string]$By = "", [string]$Why = "fleet record", [int]$Tier = 0)
     $registry = & $Deps.Registry
     $snapshot = & $Deps.Agent.snapshot
     $found = Get-HordeFleetCandidates -Registry $registry -Agent $Deps.Agent -Snapshot $snapshot
@@ -308,8 +319,20 @@ function Invoke-HordeFleetRecord {
     try {
         $parked = $null
         if ($null -ne $Deps.PSObject.Properties["ParkedExists"]) { $parked = $Deps.ParkedExists }
+        # THE PARKING SESSION (T-0216): -By is a session id or a label; a registry row's label is the more readable word for who parked.
+        $byWord = $By
+        if ($By -cmatch $script:HordeFleetSessionPattern -and $registry.records.ContainsKey($By)) {
+            $byLabel = Get-HordeStoredField -Record $registry.records[$By].record -Name "label"
+            if ($byLabel.state -eq "known" -and "" + $byLabel.value -ne "") { $byWord = "" + $byLabel.value }
+        }
         $record = New-HordeFleetRecord -Id $id -At $at -Chosen $chosen -AgentName $Deps.Agent.name -HostName $Deps.Host.name -Selection $Selection -Placed $placed -ParkedExists $parked
+        if ($byWord -ne "" -and $byWord -cmatch '\A[^\x00-\x1F]{1,200}\z') { $record | Add-Member -NotePropertyName "parkedBy" -NotePropertyValue $byWord -Force }
         $path = Write-HordeFleetRecord -Dir $dir -Record $record
+        # THE LOT (T-0216): one parking_lot row for this run and a parking_lot_member row for each session in it, in the
+        # folder this run claimed. The lot's ULID is made for this second.
+        $lot = New-HordeFleetLot -At $at -ById $By -Reason $Why -Kind ("" + $Selection.kind)
+        $lotMembers = @(ConvertTo-HordeFleetLotMembers -LotId ("" + $lot.id) -Record $record -Tier $Tier)
+        [void](Write-HordeFleetLot -Dir $dir -Lot $lot -Members $lotMembers)
     } catch {
         if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-Item -LiteralPath $path).Length -eq 0) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         if (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue).Count -eq 0) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }

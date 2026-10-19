@@ -526,9 +526,11 @@ function Invoke-HordeFleetHibernate {
         $fixed = { param($cands) @(@($cands) | Where-Object { $ids -ccontains ("" + $_.sessionId) }) }.GetNewClosure()
         $selLabels = $(if ($Names.Count -gt 0) { @($Names) } else { @(@($chosen | Where-Object { "" + $_.role -ceq "orc" } | ForEach-Object { "" + $_.label }) | Sort-Object -Unique) })
         $selection = [pscustomobject][ordered]@{ kind = "orcs"; labels = @($selLabels); exclude = @() }
+        # THE LOT'S WHY (T-0216): what was asked, in one line - the tier, and the Orcs when the run was narrowed to some.
+        $lotWhy = "hibernate tier " + $Tier + $(if ($Names.Count -gt 0) { " (" + (@($Names) -join ", ") + ")" } else { "" })
         $candBySid = @{}
         foreach ($c in $chosen) { $candBySid["" + $c.sessionId] = $c }
-        $made = Invoke-HordeFleetRecord -Deps ([pscustomobject]@{ Now = $Deps.Now; Registry = $Deps.Registry; Agent = $Deps.Agent; Host = $Deps.Host }) -Selector $fixed -Selection $selection -HordeHome $HordeHome
+        $made = Invoke-HordeFleetRecord -Deps ([pscustomobject]@{ Now = $Deps.Now; Registry = $Deps.Registry; Agent = $Deps.Agent; Host = $Deps.Host }) -Selector $fixed -Selection $selection -HordeHome $HordeHome -By $caller -Why $lotWhy -Tier $Tier
         $record = $made.record; $id = $made.id; $dir = Split-Path -Parent $made.path
         foreach ($n in @($made.notes)) { & $say ("  note: " + $n) }
         $bySid = @{}
