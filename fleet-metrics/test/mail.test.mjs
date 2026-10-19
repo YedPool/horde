@@ -166,7 +166,7 @@ test('command line: collect reads a journal, latency prints the pairs', () => {
   r.done();
 });
 
-test('mail_hops carries orc_id from the Orc registry, NULL when it has no row', () => {
+test('mail_hops orc_id stays NULL until fleet.db links sessions to Orcs', () => {
   const r = rig();
   r.put({ from: FROM, channel: 'chat', seq: 1, ts: 1, recordedAt: 2 });
   r.collect();

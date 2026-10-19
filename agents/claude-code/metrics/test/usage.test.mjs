@@ -196,7 +196,7 @@ test('a database made at schema 2 walks forward and keeps its rows', async () =>
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('orc_id comes from the Orc registry when it has a row for the session, and is NULL otherwise', async () => {
+test('orc_id stays NULL until fleet.db links sessions: the registry folder name is a different kind of id', async () => {
   const r = rig();
   fx.writeProjects(r.projects, BASE);
   const reg = path.join(r.dir, 'home', 'orcs', 'registry');
@@ -206,8 +206,9 @@ test('orc_id comes from the Orc registry when it has a row for the session, and 
   fs.writeFileSync(path.join(reg, '0000000002.json'), '{ not json');
   fs.writeFileSync(path.join(reg, '0000000003.json'), JSON.stringify({ sequence: 3, kind: 'x', data: { id: 'orc-q', sessionId: fx.SID_ORC } }));
   await r.collect();
-  assert.equal(usageOf(r.store, fx.SID_ORC).orc_id, 'orc-q');
-  assert.equal(usageOf(r.store, fx.SID_ORC, fx.AGENT_ID).orc_id, 'orc-q'); // a subagent shares its parent session id, so its Orc
+  // Even a registry record that names this session gives no orc_id: its id is a lane folder, not fleet.db's ULID.
+  assert.equal(usageOf(r.store, fx.SID_ORC).orc_id, null);
+  assert.equal(usageOf(r.store, fx.SID_ORC, fx.AGENT_ID).orc_id, null);
   assert.equal(usageOf(r.store, fx.SID_STUCK).orc_id, null); // a label in the old attribution file ('Q') is not used
   r.done();
 });
