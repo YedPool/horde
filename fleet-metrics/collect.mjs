@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { openReaders } from './readers.mjs';
 import { METRIC_TABLES } from './store.mjs';
+import { collectMailHops } from './mail.mjs';
 
 // A chunk is capped so one huge transcript cannot need its whole size in memory at once. If a single
 // line is longer than the cap the chunk grows until it holds a newline.
@@ -87,7 +88,7 @@ export function collectFile({ store, reader, file, rows, ctx, acc = { skipped: 0
       const lines = text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l)).filter((l) => l.trim() !== '');
       const batch = reader.consume({ path: file, lines, store, ctx });
       const next = offset + nl + 1;
-      const counts = store.apply(batch, { path: file, size, mtime: Math.round(st.mtimeMs), offset: next, ident: identAt(next) });
+      const counts = store.apply(batch, { path: file, size, mtime: Math.round(st.mtimeMs), offset: next, ident: identAt(next) }, ctx && ctx.now ? ctx.now() : Date.now());
       for (const t of METRIC_TABLES) rows[t] += counts[t];
       acc.skipped += batch.skipped || 0;
       consumed += nl + 1;
@@ -114,6 +115,7 @@ export async function runCollect({ store, opts = {}, readers = null, ctx = {} })
   const sinceDays = opts.sinceDays == null ? DEFAULT_SINCE_DAYS : Number(opts.sinceDays);
   const maxMs = opts.maxMs == null ? DEFAULT_MAX_MS : Number(opts.maxMs);
   const list = readers || (await openReaders(opts));
+  store.reloadOrcRegistry();
   const rows = Object.fromEntries(METRIC_TABLES.map((t) => [t, 0]));
   let files = 0;
   let bytes = 0;
@@ -152,11 +154,80 @@ export async function runCollect({ store, opts = {}, readers = null, ctx = {} })
       failures.push({ file: todo[i].file, message: e && e.message ? e.message : String(e) });
     }
   }
-  return { files, bytes, rows, ms: clock() - t0, skippedOld, partial: left > 0, left, skipped: acc.skipped, errors: failures.length, failures };
+  // Rows that went quiet while nothing was written to them are closed here (a session that simply stopped).
+  store.settleUsage(ctx.now ? ctx.now() : Date.now());
+  // The relay journal's headers are read in the same pass (read-only; see mail.mjs).
+  const mail = collectMailHops({ store, home: opts.home, journal: opts.journal });
+  return { files, bytes, rows, ms: clock() - t0, skippedOld, partial: left > 0, left, skipped: acc.skipped, errors: failures.length, failures, mail };
+}
+
+// THE LIVE VIEW: refresh tokens_usage for one session (-Session) or for every session whose transcript
+// changed in the last LIVE_WINDOW_MS. It is runCollect's own per-file step (collectFile, from the stored
+// offset), so only the bytes written since the last pass are read and there is no second parser. A file
+// never collected before is read whole, exactly as collect would. Measured: see the PR description.
+export const LIVE_WINDOW_MS = 10 * 60 * 1000;
+
+export async function runLive({ store, opts = {}, readers = null, ctx = {}, session = null }) {
+  const clock = opts.clock || Date.now;
+  const t0 = clock();
+  const list = readers || (await openReaders(opts));
+  store.reloadOrcRegistry();
+  const rows = Object.fromEntries(METRIC_TABLES.map((t) => [t, 0]));
+  const acc = { skipped: 0 };
+  const failures = [];
+  const shared = { ...ctx, opts };
+  const sessions = new Set();
+  let files = 0;
+  let bytes = 0;
+  const now = shared.now ? shared.now() : Date.now();
+  const todo = [];
+  for (const reader of list) {
+    for (const root of reader.roots(opts)) {
+      if (session) {
+        // A reader that cannot find one session's files cheaply is asked for all of them and filtered.
+        const found = reader.sessionFiles ? reader.sessionFiles(root, session) : reader.listFiles(root).filter((f) => f.includes(session));
+        for (const file of found) todo.push({ reader, file });
+        continue;
+      }
+      for (const file of reader.listFiles(root)) {
+        let st;
+        try { st = fs.statSync(file); } catch { continue; }
+        if (now - st.mtimeMs <= LIVE_WINDOW_MS) todo.push({ reader, file });
+      }
+    }
+  }
+  for (const t of todo) {
+    files++;
+    try {
+      bytes += collectFile({ store, reader: t.reader, file: t.file, rows, ctx: shared, acc });
+    } catch (e) {
+      failures.push({ file: t.file, message: e && e.message ? e.message : String(e) });
+    }
+  }
+  store.settleUsage(now);
+  const usage = session ? store.usageOf(session) : store.usageSince(now - LIVE_WINDOW_MS);
+  for (const u of usage) sessions.add(u.session_id);
+  return { files, bytes, rows, ms: clock() - t0, errors: failures.length, failures, usage, sessions: sessions.size };
+}
+
+export function liveLines(r) {
+  const out = [];
+  const short = (id) => (id.length > 8 ? id.slice(0, 8) : id);
+  for (const u of r.usage) {
+    out.push((u.agent_id === '' ? 'session ' + short(u.session_id) : '  agent ' + short(u.agent_id) + ' of ' + short(u.session_id)) +
+      ' [' + (u.orc_id || '-') + '] ' + u.state + ' ' + u.model + ' context ' + u.context_tokens + '/' + u.context_limit + ' out ' + u.output_tokens +
+      ' minutes ' + u.minutes_running.toFixed(1));
+  }
+  out.push('live: sessions=' + r.sessions + ' files=' + r.files + ' new_bytes=' + r.bytes + ' usage_rows=' + r.rows.tokens_usage + ' ms=' + r.ms + ' errors=' + r.errors);
+  return out;
 }
 
 export function summaryLine(r) {
   const per = Object.keys(r.rows).map((t) => t + '=' + r.rows[t]).join(' ');
   return 'collect: ' + (r.partial ? 'partial (' + r.left + ' files left for the next pass) ' : '') + 'files=' + r.files + ' skipped_old=' + r.skippedOld +
     ' new_bytes=' + r.bytes + ' rows: ' + per + ' ms=' + r.ms + ' skipped=' + r.skipped + ' errors=' + r.errors;
+}
+
+export function mailLine(r) {
+  return 'mail: journal_records=' + r.mail.seen + ' hops_added=' + r.mail.added + ' skipped_headers=' + r.mail.skipped;
 }

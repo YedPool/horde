@@ -11,8 +11,8 @@
            Find = 'failures.push({ file: todo[i].file, message: e && e.message ? e.message : String(e) });'
            Replace = 'throw e;' }
         @{ Name = "a-bad-file-not-counted"
-           Find = 'errors: failures.length, failures };'
-           Replace = 'errors: 0, failures };' }
+           Find = 'errors: failures.length, failures, mail };'
+           Replace = 'errors: 0, failures, mail };' }
         @{ Name = "rewrite-at-equal-size-not-noticed"
            Find = ' && headOf(fd, headLen) === wantHead) offset = prev.offset;'
            Replace = ') offset = prev.offset;' }

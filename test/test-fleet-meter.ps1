@@ -25,7 +25,7 @@ foreach ($d in @(Get-ChildItem -Path (Join-Path $root "agents") -Directory)) {
     $mt = Join-Path $d.FullName "metrics\test"
     if (Test-Path -LiteralPath $mt) { $tests += @(Get-ChildItem -Path $mt -Filter "*.test.mjs" -File) }
 }
-Check ($tests.Count -ge 3) ("CONTROL: the meter's test files are found (" + $tests.Count + ")")
+Check ($tests.Count -ge 5) ("CONTROL: the meter's test files are found (" + $tests.Count + ")")
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $node.Source
@@ -46,7 +46,7 @@ foreach ($l in ($out -split "`r?`n")) {
     if ($l -cmatch '\Aok \d+ - (.+)\z') { Check $true $Matches[1]; $seen++ }
     elseif ($l -cmatch '\Anot ok \d+ - (.+)\z') { Check $false $Matches[1]; $seen++ }
 }
-Check ($seen -ge 30) ("CONTROL: the tests actually ran (" + $seen + " results read)")
+Check ($seen -ge 55) ("CONTROL: the tests actually ran (" + $seen + " results read)")
 Check ($code -eq 0) ("node reports no failed test (exit " + $code + ")")
 
 Complete-HordeSuite -Success "the fleet meter's node tests all pass"

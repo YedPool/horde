@@ -1,4 +1,4 @@
-# END TO END: `horde meter collect`, `watch-limits -DryRun` and `status`, driven at the real command line.
+# END TO END: `horde meter collect`, `live`, `latency`, `watch-limits -DryRun` and `status`, driven at the real command line.
 #
 # The user of the fleet meter is the scheduled task that runs it every few minutes and the person who
 # asks "is it collecting?". This scenario is both: it builds a small synthetic transcripts folder and
@@ -8,7 +8,8 @@
 # stopped session, a flag refused for the wrong verb, and a machine without Node failing in one
 # sentence and not hanging. No pane, no terminal and no session is touched, and the watch is only ever
 # run with -DryRun, so nobody is told anything. The real Horde home is checked before and after: it must
-# not have gained a metrics folder (CONTRIBUTING 9).
+# not have gained a metrics folder (CONTRIBUTING 9). The relay journal is a synthetic one under the test home:
+# its hops are read, a damaged header is counted, and its files are checked unchanged afterwards.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent $here)
@@ -40,6 +41,20 @@ Check ($builder.Count -eq 1) "CONTROL: the fixture builder for a reader is found
 $made = Start-Process -FilePath $node.Source -ArgumentList @(('"' + $builder[0].FullName + '"'), ('"' + $projects + '"'), ('"' + $registry + '"')) -Wait -PassThru -NoNewWindow
 Check ($made.ExitCode -eq 0 -and (Test-Path -LiteralPath $projects)) "CONTROL: the synthetic transcripts and registry are made"
 
+# A synthetic relay journal under the test home: two good records of one stream and one damaged header.
+$fromId = "af37" + ("0" * 28)
+$streamDir = Join-Path $hordeHome ("relay\journal\in\s-" + $fromId + "\c-chat")
+New-Item -ItemType Directory -Path $streamDir -Force | Out-Null
+function Write-Rec { param([long]$Seq, [long]$Ts, [long]$Rec)
+    $nonce = "a" * 24
+    $head = '{"v":1,"direction":"in","key":"' + $fromId + '/chat/' + $Seq + '/' + $nonce + '","from":"' + $fromId + '","channel":"chat","kind":"text","seq":' + $Seq + ',"nonce":"' + $nonce + '","ts":' + $Ts + ',"recordedAt":' + $Rec + ',"envelopeChars":1}'
+    [System.IO.File]::WriteAllText((Join-Path $streamDir ($Seq.ToString("D16") + ".rec")), ($head + "`nE"))
+}
+Write-Rec -Seq 1 -Ts 1000000 -Rec 1000400
+Write-Rec -Seq 2 -Ts 2000000 -Rec 2000600
+[System.IO.File]::WriteAllText((Join-Path $streamDir "0000000000000003.rec"), "not a header`nE")
+$journalBefore = @(Get-ChildItem -LiteralPath $streamDir -File | ForEach-Object { $_.Name + ":" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ","
+
 Write-Host ""
 Write-Host "=== status before anything is collected ===" -ForegroundColor Cyan
 $s0 = Invoke-Meter @("status")
@@ -51,15 +66,31 @@ Write-Host ""
 Write-Host "=== collect, and collect again ===" -ForegroundColor Cyan
 $c1 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
 Check ($c1.code -eq 0) ("collect exits 0 (" + $c1.code + ": " + $c1.out.Trim() + ")")
-Check ($c1.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=[1-9]\d* rows: tokens_requests=4 tokens_turns=3 tokens_agents=2 tokens_limits=1 ms=\d+') ("one summary line: 3 files (two sessions and a subagent), 4 requests (a repeated one counted once), 3 turns, 1 subagent call written twice - by the parent's call and by its sidecar, 1 limit hit (" + $c1.out.Trim() + ")")
+Check ($c1.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=[1-9]\d* rows: tokens_requests=4 tokens_turns=3 tokens_agents=2 tokens_limits=1 tokens_usage=[34] ms=\d+') ("one summary line: 3 files (two sessions and a subagent), 4 requests (a repeated one counted once), 3 turns, 1 subagent call written twice - by the parent's call and by its sidecar, 1 limit hit, live rows for the two sessions and the subagent (3 rows; the count is 4 when the subagent is read before its parent) (" + $c1.out.Trim() + ")")
+Check ($c1.out -cmatch 'mail: journal_records=3 hops_added=4 skipped_headers=1') "and a mail line: 2 journal records give 4 hops, the damaged header is skipped and counted"
 $c2 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
-Check ($c2.code -eq 0 -and $c2.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=0 rows: tokens_requests=0 tokens_turns=0 tokens_agents=0 tokens_limits=0') ("the same collect again finds nothing new (" + $c2.out.Trim() + ")")
+Check ($c2.code -eq 0 -and $c2.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=0 rows: tokens_requests=0 tokens_turns=0 tokens_agents=0 tokens_limits=0 tokens_usage=0' -and $c2.out -cmatch 'hops_added=0') ("the same collect again finds nothing new (" + $c2.out.Trim() + ")")
 
 Write-Host ""
 Write-Host "=== status after ===" -ForegroundColor Cyan
 $s1 = Invoke-Meter @("status")
-Check ($s1.code -eq 0 -and $s1.out -like "*tokens_requests: 4 rows*" -and $s1.out -like "*tokens_turns: 3 rows*" -and $s1.out -like "*tokens_agents: 1 rows*" -and $s1.out -like "*tokens_limits: 1 rows*") ("status counts the rows per table (" + ($s1.out.Trim() -replace "\r?\n", " / ") + ")")
+Check ($s1.code -eq 0 -and $s1.out -like "*tokens_requests: 4 rows*" -and $s1.out -like "*tokens_turns: 3 rows*" -and $s1.out -like "*tokens_agents: 1 rows*" -and $s1.out -like "*tokens_limits: 1 rows*" -and $s1.out -like "*tokens_usage: 3 rows*" -and $s1.out -like "*mail_hops: 4 rows*") ("status counts the rows per table (" + ($s1.out.Trim() -replace "\r?\n", " / ") + ")")
 Check ($s1.out -cmatch 'data age: \S+ \S+ since the newest row') "and says how old the newest row is"
+
+Write-Host ""
+Write-Host "=== live, and latency ===" -ForegroundColor Cyan
+$orcSession = "11111111-aaaa-4aaa-8aaa-000000000001"
+$l1 = Invoke-Meter @("live", "-Session", $orcSession, "-Projects", $projects, "-Registry", $registry)
+Check ($l1.code -eq 0) ("live -Session exits 0 (" + $l1.code + ": " + $l1.out.Trim() + ")")
+Check ($l1.out -cmatch 'session 11111111 \[-\] (running|done) [^ ]*sonnet-4-5 context 16000/200000') "it shows the session with its last request's context against the model window"
+Check ($l1.out -cmatch '  agent a0b1c2d3 of 11111111 \[-\] done [^ ]*haiku-4-5') "and the subagent, done because its call returned to the parent"
+Check ($l1.out -cmatch 'live: sessions=1 files=2 new_bytes=0 usage_rows=0 ms=\d+ errors=0') "it read nothing: collect had already taken every byte"
+$l2 = Invoke-Meter @("live", "-Projects", $projects, "-Registry", $registry)
+Check ($l2.code -eq 0 -and $l2.out -cmatch 'live: sessions=\d+ files=\d+ new_bytes=0 ') ("live with no session also works (" + $l2.code + ")")
+$lat = Invoke-Meter @("latency")
+Check ($lat.code -eq 0 -and $lat.out -cmatch 'phone_sent -> pc_journal: n=2 p50=400 ms p95=600 ms CROSSES CLOCKS \(phone vs pc\)') ("latency gives p50 and p95 for the one pair and flags that it crosses two clocks (" + $lat.out.Trim() + ")")
+$journalAfter = @(Get-ChildItem -LiteralPath $streamDir -File | ForEach-Object { $_.Name + ":" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ","
+Check ($journalAfter -ceq $journalBefore) "the relay journal is byte for byte as it was: the meter only reads it"
 
 Write-Host ""
 Write-Host "=== the limit watch, dry run ===" -ForegroundColor Cyan
@@ -80,6 +111,10 @@ Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan
 $bad = Invoke-Meter @("status", "-DryRun")
 Check ($bad.code -ne 0 -and $bad.out -like "*-DryRun does not apply to meter status*") ("a flag for another verb is refused (" + $bad.code + ")")
+$badLive = Invoke-Meter @("live", "-DryRun")
+Check ($badLive.code -ne 0 -and $badLive.out -like "*-DryRun does not apply to meter live*") "-DryRun is refused for live"
+$badSession = Invoke-Meter @("status", "-Session", "x")
+Check ($badSession.code -ne 0 -and $badSession.out -like "*-Session does not apply to meter status*") "-Session is refused for status"
 $noNode = Invoke-Meter @("status") @{ HORDE_HOME = $hordeHome; PATH = ($env:SystemRoot + "\System32;" + $env:SystemRoot + "\System32\WindowsPowerShell\v1.0") }
 Check ($noNode.code -ne 0 -and $noNode.out -like "*needs Node.js 24 or later*") ("with no Node on the PATH it fails at once in one sentence (" + $noNode.code + ")")
 
