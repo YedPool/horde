@@ -333,13 +333,17 @@ Reset-World
 $memo = [pscustomobject]@{ fileSeen = $false; exitSent = $false; blocked = "" }
 $script:w.parkAfter["L1"] = 0; $script:w.askedAt["L1"] = $script:clock.at
 $script:w.exitAnswer["L1"] = @("left-behind", "submitted")
-$req = [pscustomobject]@{ sessionId = $script:sids["L1"]; label = "L1"; typedFor = [pscustomobject]@{ sessionId = $script:sids["L1"]; transcriptPath = "" }; process = $null; cwd = $script:work; parkedPath = (Join-Path $script:parked "PARKED-L1.md"); askedAt = $script:clock.at; reason = "hibernation x"; others = @(); since = $null; memo = $memo }
+$req = [pscustomobject]@{ sessionId = $script:sids["L1"]; label = "L1"; typedFor = [pscustomobject]@{ sessionId = $script:sids["L1"]; transcriptPath = "" }; process = $null; cwd = $script:work; parkedPath = (Join-Path $script:parked "PARKED-L1.md"); askedAt = $script:clock.at; typedSince = $script:clock.at.AddMinutes(-30); reason = "hibernation x"; others = @(); since = $null; memo = $memo }
 $one = Invoke-HordeFleetParkSession -Request $req -Deps (New-Deps)
 $two = Invoke-HordeFleetParkSession -Request $req -Deps (New-Deps)
 Check ($one.outcome -ceq "refused" -and $two.outcome -ceq "refused" -and $script:w.exits.Count -eq 1) "a step whose box may hold the command answers refused for good, and never sends it again, however often it is asked"
 Reset-World
 $script:w.parkAfter["L1"] = 0; $script:w.askedAt["L1"] = $script:clock.at
 $bare = [pscustomobject]@{ sessionId = $script:sids["L1"]; label = "L1"; cwd = $script:work; parkedPath = (Join-Path $script:parked "PARKED-L1.md"); askedAt = $script:clock.at; reason = "hibernation x"; others = @(); since = $null; memo = [pscustomobject]@{ fileSeen = $false; exitSent = $false; blocked = "" } }
+$noWindow = $bare.PSObject.Copy()
+$noWindow | Add-Member -NotePropertyName "typedFor" -NotePropertyValue ([pscustomobject]@{ sessionId = $script:sids["L1"]; transcriptPath = "" }) -Force
+$nw = Invoke-HordeFleetParkSession -Request $noWindow -Deps (New-Deps)
+Check ($nw.outcome -ceq "not-yet" -and $nw.reason -like "*window*" -and $script:w.exits.Count -eq 0) ("a step handed no start for the typing window fails safe: not yet, never its exit command (" + $nw.outcome + ": " + $nw.reason + ")")
 $none = Invoke-HordeFleetParkSession -Request $bare -Deps (New-Deps)
 Check ($none.outcome -ceq "not-yet" -and $none.reason -like "*cannot be checked*" -and $script:w.exits.Count -eq 0) "a step handed no session to re-check the founder's typing of is never sent its exit command: not yet, said why"
 Reset-World

@@ -213,16 +213,16 @@ function Get-HordeFleetExclusion {
     #   -Analysts   the analyst service's session ids
     #   -Questions  the open questions, each { number; askedBy; waiting }
     #   -Typed      the agent's LastTyped answer for this session
+    #   -TypedSince the instant the 30-minute look-back for the founder's typing began (the selection's own)
     #   -Caller     the session id of the session running the command, or ""
-    param([Parameter(Mandatory = $true)]$Candidate, [string[]]$Analysts = @(), [object[]]$Questions = @(), $Typed = $null, [Parameter(Mandatory = $true)][datetime]$Now, [string]$Caller = "")
+    param([Parameter(Mandatory = $true)]$Candidate, [string[]]$Analysts = @(), [object[]]$Questions = @(), $Typed = $null, [Parameter(Mandatory = $true)][datetime]$TypedSince, [string]$Caller = "")
     $no = { param($r, $d) [pscustomobject]@{ reason = $r; detail = $d } }
     if (Test-HordeFleetMaster -Candidate $Candidate) { return (& $no "master" "the master is never put to sleep by hibernate") }
     if ($Caller -ne "" -and "" + $Candidate.sessionId -ceq $Caller) { return (& $no "self" "it is the session running this command, which cannot end itself and wait for itself") }
     if (@($Analysts) -ccontains ("" + $Candidate.sessionId)) { return (& $no "analyst" "the fleet analyst service runs always") }
     if ("" + $Candidate.label -eq "") { return (& $no "unlabelled" "it has no label, so its PARKED file could not be named") }
     if ($null -eq $Typed -or "" + $Typed.state -cne "known") { return (& $no "transcript-unreadable" ("whether the founder typed into it lately could not be read: " + $(if ($null -ne $Typed) { "" + $Typed.reason } else { "no reading" }))) }
-    $since = $Now.AddMinutes(-$script:HordeFleetHibernateTypedMinutes)
-    $hit = Get-HordeFleetFounderTyped -Turns @($Typed.value) -Since $since
+    $hit = Get-HordeFleetFounderTyped -Turns @($Typed.value) -Since $TypedSince
     if ($null -ne $hit) { return (& $no "founder-typed" ("the founder typed into it at " + (Format-HordeFleetTime -At $hit.at) + ", within the last " + $script:HordeFleetHibernateTypedMinutes + " minutes")) }
     if ("" + $Candidate.role -ceq "orc") {
         $q = Test-HordeFleetOrcWaits -Questions $Questions -Label ("" + $Candidate.label)
@@ -335,7 +335,9 @@ function Invoke-HordeFleetParkSession {
     if ($null -eq $typedFor -or $null -eq $Deps.PSObject.Properties["Typed"]) { return (& $ans "not-yet" "whether the founder typed into it since its ask cannot be checked, so it is not sent its exit command") }
     # THE LOOK STARTS WHERE THE SELECTION's OWN LOOK-BACK STARTED, not at the ask (review of PR 326): the record, the
     # markers and the earlier sessions' asks come between the two, and he may type into this session in that gap.
-    $typedFrom = $(if ($null -ne $Request.PSObject.Properties["typedSince"] -and $Request.typedSince -is [datetime]) { [datetime]$Request.typedSince } else { [datetime]$Request.askedAt })
+    # A request with no such instant FAILS SAFE: not yet, never an exit command, and never a guess at the ask's time.
+    if ($null -eq $Request.PSObject.Properties["typedSince"] -or $Request.typedSince -isnot [datetime]) { return (& $ans "not-yet" "the start of the founder-typing window was not handed in, so whether he typed cannot be checked and it is not sent its exit command") }
+    $typedFrom = [datetime]$Request.typedSince
     $typed = & $Deps.Typed $typedFor $typedFrom
     if ($null -eq $typed -or "" + $typed.state -cne "known") { return (& $ans "not-yet" ("whether the founder typed into it since its ask could not be read: " + $(if ($null -ne $typed) { "" + $typed.reason } else { "no reading" }))) }
     $hit = Get-HordeFleetFounderTyped -Turns @($typed.value) -Since $typedFrom
@@ -453,7 +455,7 @@ function Invoke-HordeFleetHibernate {
         if ($null -eq $why) {
             $typed = $null
             if (-not (Test-HordeFleetMaster -Candidate $c)) { $typed = & $Deps.Typed $c $typedSince }
-            $why = Get-HordeFleetExclusion -Candidate $c -Analysts @($an.value) -Questions @($q.value) -Typed $typed -Now $now -Caller $caller
+            $why = Get-HordeFleetExclusion -Candidate $c -Analysts @($an.value) -Questions @($q.value) -Typed $typed -TypedSince $typedSince -Caller $caller
         }
         if ($null -eq $why) { [void]$chosen.Add($c) } else { [void]$excluded.Add([pscustomobject]@{ candidate = $c; reason = $why.reason; detail = $why.detail }) }
     }
