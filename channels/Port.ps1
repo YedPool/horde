@@ -697,6 +697,30 @@ function Invoke-HordeRelayUnfinished {
     return (New-HordeKnown -Value ([pscustomobject]@{ done = @($done.ToArray()); refused = @($refused.ToArray()); retry = @($retry.ToArray()) }))
 }
 
+function Open-HordeRelayChannelRecord {
+    # One journaled record of a channel, opened: { ok; outcome; reason; item }, where item is what the
+    # channel's Accept is handed (Invoke-HordeRelayChannelRecord, below, says what is in it). Not ok: outcome
+    # refused (the record can never be opened) or retry (the trust store cannot be read now), with the reason.
+    # Reads only. The ONE place a journaled record is opened, so a channel that must read a record it
+    # has already finished (channels/chat: the words of a line it still waits to see taken) opens it exactly
+    # as the runner did.
+    param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
+    $no = { param([string]$Outcome, [string]$Why) return [pscustomobject]@{ ok = $false; outcome = $Outcome; reason = $Why; item = $null } }
+    if ($script:HordeRelayDataKinds.Contains("$($Record.kind)")) { return (& $no "refused" ("the kind " + $Record.kind + " is data, which is never handed to a channel's Accept")) }
+    if (@($Channel.kinds) -cnotcontains $Record.kind) { return (& $no "refused" ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind)) }
+    $r = Read-HordeRelayEnvelope -Text $Record.text
+    if (-not $r.ok) { return (& $no "refused" ("the journaled text is not an envelope: " + $r.reason)) }
+    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache -Now $Now
+    if ($senders.state -cne "known") { return (& $no "retry" ("the trust store cannot be read: " + $senders.reason)) }
+    # The senders trusted NOW: a device revoked since the record was made opens nothing.
+    $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
+    if (-not $opened.ok) { return (& $no "refused" ("not opened: " + $opened.reason)) }
+    $proof = $(if ($r.value.sig.alg -ceq "session") { "session" } elseif ($r.value.sig.alg -ceq "ES256") { "es256" } else { "webauthn" })
+    $vouchId = $(if ($proof -ceq "session") { $r.value.sig.vouchId } else { "" })
+    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value; proof = $proof; vouchId = $vouchId }
+    return [pscustomobject]@{ ok = $true; outcome = ""; reason = ""; item = $item }
+}
+
 function Invoke-HordeRelayChannelRecord {
     # One unfinished record: open it and hand it to its channel. { outcome; reason }.
     # The item also says HOW its sender signed it (proof: webauthn, a fresh passkey assertion; session,
@@ -705,18 +729,9 @@ function Invoke-HordeRelayChannelRecord {
     # judged again here against the PC's session records NOW: ended or past its cap since it was
     # journaled, it opens nothing.
     param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
-    if ($script:HordeRelayDataKinds.Contains("$($Record.kind)")) { return [pscustomobject]@{ outcome = "refused"; reason = ("the kind " + $Record.kind + " is data, which is never handed to a channel's Accept") } }
-    if (@($Channel.kinds) -cnotcontains $Record.kind) { return [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind) } }
-    $r = Read-HordeRelayEnvelope -Text $Record.text
-    if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("the journaled text is not an envelope: " + $r.reason) } }
-    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache -Now $Now
-    if ($senders.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the trust store cannot be read: " + $senders.reason) } }
-    # The senders trusted NOW: a device revoked since the record was made opens nothing.
-    $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
-    if (-not $opened.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("not opened: " + $opened.reason) } }
-    $proof = $(if ($r.value.sig.alg -ceq "session") { "session" } elseif ($r.value.sig.alg -ceq "ES256") { "es256" } else { "webauthn" })
-    $vouchId = $(if ($proof -ceq "session") { $r.value.sig.vouchId } else { "" })
-    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value; proof = $proof; vouchId = $vouchId }
+    $o = Open-HordeRelayChannelRecord -Context $Context -Channel $Channel -Record $Record -Cache $Cache -Now $Now
+    if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason } }
+    $item = $o.item
     $got = $null
     try { $got = & $Channel.accept $Context $item }
     catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }
