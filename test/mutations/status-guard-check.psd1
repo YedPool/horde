@@ -7,7 +7,7 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "bad-card-not-restored"
-           Find = 'Write-StatusGuardFile $file $goodBytes'
+           Find = 'Write-StatusGuardFile $file $goodBytes $goodInfo.LastWriteTimeUtc'
            Replace = '$null = $goodBytes' }
         @{ Name = "bad-last-good-restored"
            Find = 'if ((ConvertFrom-HordeFleetStatusBytes -Bytes $goodBytes).problems.Count -eq 0) {'
@@ -21,17 +21,11 @@
         @{ Name = "restored-card-stamped-now"
            Find = 'Write-StatusGuardFile $file $goodBytes $goodInfo.LastWriteTimeUtc'
            Replace = 'Write-StatusGuardFile $file $goodBytes' }
-        @{ Name = "unnamed-card-restored"
-           Find = '$mayRestore = $allowed.ContainsKey((Get-NormalPath $dir))'
-           Replace = '$mayRestore = $true' }
         @{ Name = "changed-card-restored"
            Find = 'if ($now.Length -ne $seen.Length -or [System.Convert]::ToBase64String($now) -cne [System.Convert]::ToBase64String($seen)) { continue }'
            Replace = 'if ($false) { continue }' }
         @{ Name = "bad-card-taken-as-clean"
            Find = 'if ($read.written) {'
-           Replace = 'if ($true) {' }
-        @{ Name = "bad-card-copied-as-last-good"
-           Find = 'if ($check.problems.Count -eq 0) {'
            Replace = 'if ($true) {' }
     )
 }

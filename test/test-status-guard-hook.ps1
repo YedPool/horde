@@ -127,8 +127,10 @@ $r = Hook-File "Edit" (Join-Path $c1 "status.txt")
 Check ($r.code -eq 0 -and (Text (Join-Path $c1 ".status.last-good.txt")) -ceq $goodCard2) "after a second clean edit the copy moves on"
 Check ((Names $c1) -ceq ".status.last-good.txt,status.txt") "no temp file is left"
 $upPath = $work + "\ORCS\C1\STATUS.TXT"
+Put (Join-Path $c1 ".status.last-good.txt") $goodCard
+Put (Join-Path $c1 "status.txt") $badCard
 $up = Hook-File "Write" $upPath
-Check ($up.code -eq 0) "the path match ignores letter case"
+Check ($up.code -eq 2 -and (Text (Join-Path $c1 "status.txt")) -ceq $goodCard) "the path match ignores letter case (a bad card under an upper-case path is still caught and restored)"
 
 Write-Host ""
 Write-Host "--- a bad card is put back from the last good copy ---" -ForegroundColor Cyan
@@ -209,6 +211,16 @@ $r = Hook-Shell ("cat " + (Join-Path $la "status.txt")) $ka
 Check ((Text (Join-Path $la "status.txt")) -ceq $goodCard -and (Text (Join-Path $ma "status.txt")) -ceq $badCard) "a card named by absolute path in the command is restored, an unnamed one still is not"
 $r = Hook-Shell "cat ..\MA\status.txt" $ka
 Check ((Text (Join-Path $ma "status.txt")) -ceq $goodCard) "a card named by a path relative to the working folder is restored"
+
+Write-Host ""
+Write-Host "--- the working folder's own lane is found from a sub-folder ---" -ForegroundColor Cyan
+New-Orcs "sub"
+$ow = Lane "OW"
+New-Item -ItemType Directory -Path (Join-Path $ow "sub") -Force | Out-Null
+Put (Join-Path $ow ".status.last-good.txt") $goodCard
+Put (Join-Path $ow "status.txt") $badCard 3
+$r = Hook-Shell "cd .. && cat status.txt" (Join-Path $ow "sub")
+Check ($r.code -eq 2 -and (Text (Join-Path $ow "status.txt")) -ceq $goodCard) "a command run from a folder inside a lane, naming status.txt, restores that lane's card"
 
 Write-Host ""
 Write-Host "--- a quoted path with spaces is one path ---" -ForegroundColor Cyan
