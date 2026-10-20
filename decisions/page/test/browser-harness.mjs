@@ -76,18 +76,68 @@ const CARDS_HOST = [
   "window.hostReady = true;",
   "</script></body></html>"
 ].join("\n");
+// /bar.html: the phone app's own bar, list and chat boxes - cut out of the shipped surfaces/pwa/page/index.html
+// at serve time, not copied - under the shipped app.css and list.css, with the chat's scroll rule
+// (chat-scroll.js) and the bar-height tracker (bar-height.js) wired as app.js wires them. window.drawChat(n, tall)
+// puts n short messages and a last one, tall pixels high, in the log; window.doc is the decisions document.
+function barHost(pageDir) {
+  const index = readFileSync(join(pageDir, "..", "..", "surfaces", "pwa", "page", "index.html"), "utf8").replace(/\r\n/g, "\n");
+  const bar = /<header id="bar">[\s\S]*?<\/header>/.exec(index)[0].replace("<div id=\"viewTabs\" role=\"tablist\" aria-label=\"Views\" hidden>", "<div id=\"viewTabs\" role=\"tablist\" aria-label=\"Views\">");
+  const chat = /<div id="chat" hidden>[\s\S]*?(?=<div id="progress" hidden>)/.exec(index)[0].replace("<div id=\"chat\" hidden>", "<div id=\"chat\">");
+  const progress = /<div id="progress" hidden>[\s\S]*?(?=<div id="notices" hidden>)/.exec(index)[0].replace("<div id=\"progress\" hidden>", "<div id=\"progress\">").replace("<div id=\"streamPage\" hidden>", "<div id=\"streamPage\">");
+  return [
+    "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+    "<link rel=\"stylesheet\" href=\"/app/app.css\"><link rel=\"stylesheet\" href=\"/list.css\"></head><body>",
+    bar, "<div id=\"lists\"></div>", chat, progress,
+    "<script src=\"/list.js\"></script><script type=\"module\">",
+    "import { createChatScroll } from '/app/chat-scroll.js';",
+    "import { trackBarHeight, scrollToNewest } from '/app/bar-height.js';",
+    "const $ = (id) => document.getElementById(id);",
+    "const topInset = () => $('bar').getBoundingClientRect().bottom;",
+    "trackBarHeight($('bar'), document.documentElement);",
+    "window.chatScroll = createChatScroll({ win: window, log: $('chatLog'), compose: $('chatCompose'), button: $('chatJump'), news: $('chatNews'), field: $('chatText'), topInset });",
+    "$('chatJump').addEventListener('click', (e) => window.chatScroll.jump(e));",
+    "window.addEventListener('scroll', () => window.chatScroll.update(), { passive: true });",
+    "window.drawChat = function (n, tall) {",
+    "  const log = $('chatLog'); while (log.firstChild) log.removeChild(log.firstChild);",
+    "  for (let i = 1; i <= n + 1; i++) {",
+    "    const box = document.createElement('div'); box.className = 'chat-item assistant'; box.dataset.key = 'm' + i;",
+    "    const t = document.createElement('div'); t.className = 'chat-text'; t.textContent = i === n + 1 ? 'Latest question' : 'Message ' + i; box.appendChild(t);",
+    "    if (i === n + 1) { box.style.height = tall + 'px'; box.id = 'newest'; }",
+    "    log.appendChild(box);",
+    "  }",
+    "};",
+    // A message arrives as app.js's drawChat has it: his place asked before, the log drawn, then the rule.
+    "window.arrive = function (tall) {",
+    "  const was = window.chatScroll.before(); const log = $('chatLog'); const old = document.getElementById('newest'); if (old) old.removeAttribute('id');",
+    "  const box = document.createElement('div'); box.className = 'chat-item assistant'; box.dataset.key = 'a' + log.children.length; box.id = 'newest'; box.style.height = tall + 'px';",
+    "  const t = document.createElement('div'); t.className = 'chat-text'; t.textContent = 'Arrived'; box.appendChild(t); log.appendChild(box); window.chatScroll.after(was);",
+    "};",
+    // The progress log: n short entries and a last one, tall pixels high; Jump to newest wired as app.js wires it.
+    "window.drawProgress = function (n, tall) {",
+    "  const log = $('progressLog'); while (log.firstChild) log.removeChild(log.firstChild);",
+    "  for (let i = 1; i <= n + 1; i++) { const box = document.createElement('div'); box.className = 'progress-item'; box.textContent = i === n + 1 ? 'Newest entry' : 'Entry ' + i; if (i === n + 1) { box.style.height = tall + 'px'; box.id = 'newest'; } log.appendChild(box); }",
+    "};",
+    "$('progressNewest').addEventListener('click', () => scrollToNewest(window, document.documentElement, $('progressLog').lastElementChild, $('bar').getBoundingClientRect().bottom));",
+    "const view = (/view=([a-z]+)/.exec(location.search) || [])[1] || 'chat';",
+    "$('chat').hidden = view !== 'chat'; $('progress').hidden = view !== 'progress';",
+    "window.doc = window.HordeDecisionsDocument.mount($('lists'), { topInset });",
+    "window.hostReady = true;",
+    "</script></body></html>"
+  ].join("\n");
+}
 // Served path -> [file under decisions/page, or under the repository when it starts with "/", type].
 const JS = "text/javascript; charset=utf-8";
 const CSS = "text/css; charset=utf-8";
 const FILES = { "/list.js": ["list.js", JS], "/list.css": ["list.css", CSS],
   "/app/app.css": ["/surfaces/pwa/page/app.css", CSS], "/app/decision-cards.js": ["/surfaces/pwa/page/decision-cards.js", JS],
-  "/app/lane-card.js": ["/surfaces/pwa/page/lane-card.js", JS], "/relay/protocol.js": ["/relay/js/protocol.js", JS] };
+  "/app/lane-card.js": ["/surfaces/pwa/page/lane-card.js", JS], "/app/chat-scroll.js": ["/surfaces/pwa/page/chat-scroll.js", JS], "/app/bar-height.js": ["/surfaces/pwa/page/bar-height.js", JS], "/relay/protocol.js": ["/relay/js/protocol.js", JS] };
 
 // The page served, Chrome started on a phone-sized screen with touch, and the means to drive it.
 export async function openBrowser(pageDir, chromePath, profileDir) {
   const server = http.createServer((req, res) => {
     const path = new URL(req.url, "http://localhost").pathname;
-    if (path === "/host.html" || path === "/cards.html") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(path === "/host.html" ? HOST : CARDS_HOST); return; }
+    if (path === "/host.html" || path === "/cards.html" || path === "/bar.html") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(path === "/host.html" ? HOST : (path === "/cards.html" ? CARDS_HOST : barHost(pageDir))); return; }
     const f = FILES[path];
     if (!f) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { "content-type": f[1], "cache-control": "no-store" });
