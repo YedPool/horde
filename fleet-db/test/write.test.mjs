@@ -364,6 +364,23 @@ test('a list published inside a larger write rolls back with it', () => {
   assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 0);
 });
 
+test('a lone surrogate or a misspelt field is refused, so the hash is of what the row holds', () => {
+  const w = world();
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: [{ text: 'a' + String.fromCharCode(0xd800) + 'b' }] }), /lone surrogate/);
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: [{ text: 'a', recomendation: 'yes' }] }), /no field recomendation/);
+  const entry = { at: T0, kind: 'note', orc_id: w.f, fleet_wide: 1, title: 't', text: 'x' + String.fromCharCode(0xdc00) };
+  assert.throws(() => appendHistory(w.db, 'changelog_entry', entry), /lone surrogate/);
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 0);
+});
+
+test('a list older than the live one, or in its millisecond, is refused in words', () => {
+  const w = world();
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 10, items: list(w) });
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 10, items: [] }), /already has a list published at or after/);
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: [{ text: 'old' }] }), /already has a list published at or after/);
+  assert.equal(publishDecisions(w.db, { orcId: w.k, publishedAt: T0, items: [] }).unchanged, false);
+});
+
 test('a list whose line breaks a rule leaves no snapshot behind', () => {
   const w = world();
   assert.throws(() => publishDecisions(w.db, { orcId: w.f, items: [{ text: 'ok' }, { text: '' }] }), /CHECK/);

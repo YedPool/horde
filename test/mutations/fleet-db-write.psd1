@@ -39,6 +39,18 @@
         @{ Name = "millisecond-forgotten"
            Find = 'last.set(atMs, tail);'
            Replace = 'last.clear(); last.set(atMs, tail);' }
+        @{ Name = "surrogate-in-history"
+           Find = 'if (type === ''TEXT'' && !v.isWellFormed()) throw'
+           Replace = 'if (false) throw' }
+        @{ Name = "surrogate-in-list"
+           Find = 'if (v !== null && !v.isWellFormed()) throw'
+           Replace = 'if (false) throw' }
+        @{ Name = "misspelt-item-field-dropped"
+           Find = 'if (!ITEM_KEYS.includes(k)) throw'
+           Replace = 'if (false) throw' }
+        @{ Name = "backdated-list-raw-error"
+           Find = '.published_at >= publishedAt) {'
+           Replace = '.published_at > 9e15) {' }
         @{ Name = "list-outer-write-split"
            Find = 'return db.isTransaction ? publish() : inWrite(db, publish);'
            Replace = 'if (db.isTransaction) db.exec(''COMMIT''); return inWrite(db, publish);' }

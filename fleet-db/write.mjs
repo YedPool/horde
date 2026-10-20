@@ -91,6 +91,7 @@ export function appendHistory(db, table, row, { mint = newId } = {}) {
     if (v === undefined || v === null) continue;
     const type = cols.get(k).type;
     if (type === 'TEXT' && typeof v !== 'string') throw new Error('appendHistory: ' + k + ' is text, not ' + typeof v);
+    if (type === 'TEXT' && !v.isWellFormed()) throw new Error('appendHistory: ' + k + ' holds a lone surrogate, which SQLite would store as another character');
     if (type === 'INTEGER' && !Number.isSafeInteger(v)) throw new Error('appendHistory: ' + k + ' must be a whole number, not ' + JSON.stringify(v));
     if (type !== 'TEXT' && type !== 'INTEGER') throw new Error('appendHistory: ' + table + '.' + k + ' is ' + type + ', which is not written here');
   }
@@ -112,12 +113,17 @@ export function appendHistory(db, table, row, { mint = newId } = {}) {
 
 // An item as it is stored and hashed: every field present, absent ones null, so {text} and
 // {text, blocks: null} are the same list.
+const ITEM_KEYS = ['position', 'question_id', 'text', 'recommendation', 'importance', 'blocks'];
+
 function normalItem(item, i) {
   if (item === null || typeof item !== 'object' || Array.isArray(item)) throw new Error('publishDecisions: item ' + (i + 1) + ' must be an object');
+  // A misspelt field fails, as in appendHistory: a dropped recommendation would publish without it.
+  for (const k of Object.keys(item)) if (!ITEM_KEYS.includes(k)) throw new Error('publishDecisions: item ' + (i + 1) + ' has no field ' + k);
   if (item.position !== undefined && item.position !== i + 1) throw new Error('publishDecisions: item ' + (i + 1) + ' says position ' + item.position);
   const text = (k) => {
     const v = item[k] ?? null;
     if (v !== null && typeof v !== 'string') throw new Error('publishDecisions: item ' + (i + 1) + ' ' + k + ' must be text');
+    if (v !== null && !v.isWellFormed()) throw new Error('publishDecisions: item ' + (i + 1) + ' ' + k + ' holds a lone surrogate');
     return v;
   };
   return { position: i + 1, question_id: text('question_id'), text: text('text'), recommendation: text('recommendation'), importance: text('importance'), blocks: text('blocks') };
@@ -138,6 +144,11 @@ export function publishDecisions(db, { orcId, sessionId = null, publishedAt = Da
   const publish = () => {
     const live = db.prepare('SELECT id, sha256 FROM decisions_live WHERE orc_id = ?').get(orcId);
     if (live && live.sha256 === hash) return { id: live.id, unchanged: true };
+    if (live && db.prepare('SELECT published_at FROM decisions_snapshot WHERE id = ?').get(live.id).published_at >= publishedAt) {
+      // Lists are published in time order (an import writes each Orc's lists oldest first): a list older
+      // than the live one, or in its millisecond, would be archive the moment it is written.
+      throw new Error('publishDecisions: this Orc already has a list published at or after ' + new Date(publishedAt).toISOString());
+    }
     const id = mint(publishedAt);
     db.prepare('INSERT INTO decisions_snapshot (id, orc_id, published_at, by_session_id, item_count, sha256) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, orcId, publishedAt, sessionId, list.length, hash);
