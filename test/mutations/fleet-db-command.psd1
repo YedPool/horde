@@ -11,6 +11,18 @@
         @{ Name = "node-not-checked"
            Find = 'if ($null -eq $node) { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "import-flag-accepted-on-other-verbs"
+           Find = 'if ($Verb -ne "import") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "import-dry-run-not-passed"
+           Find = 'if ($DryRun) { $nodeArgs += "--dry-run" }'
+           Replace = 'if ($false) { $nodeArgs += "--dry-run" }' }
+        @{ Name = "import-registry-not-passed"
+           Find = '"--registry" = $Registry }'
+           Replace = '"--registry" = $null }' }
+        @{ Name = "import-thrall-card-not-passed"
+           Find = '"--thrall-card" = $ThrallCard;'
+           Replace = '"--thrall-card" = $null;' }
         @{ Name = "failure-exit-0"
            Find = 'if ($LASTEXITCODE -ne 0) { throw'
            Replace = 'if ($false) { throw' }

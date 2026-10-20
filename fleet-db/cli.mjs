@@ -1,9 +1,13 @@
-// Entry point of fleet.db:  node cli.mjs init | status | check
+// Entry point of fleet.db:  node cli.mjs init | status | check | import [sources] [--dry-run]
 // Run by `horde db ...` (cli/commands/db.ps1). Exit codes: 0 done, 1 failed or a problem found, 2 no home.
 //
 //   init    make fleet.db in HORDE_HOME, or bring it to this code's schema; safe to run any number of times
 //   status  the file, its schema version and the rows in every table; changes no data and never creates the
 //           database (SQLite may still make its -wal and -shm files beside it to read a WAL file)
+//   import  read the old files named by --ledger, --pr-cache, --changelog, --cards, --thrall-card and
+//           --registry (every path explicit, none defaulted to the real files) into fleet.db, in one
+//           transaction; prints one line per table (added / already there) and what could not be linked;
+//           --dry-run does everything and rolls it back. fleet.db must exist (run init first)
 //   check   SQLite's integrity and foreign-key checks, plus the rules a single row cannot hold by itself
 //           (every decisions list has all its lines); each problem is one line, and any problem exits 1
 //
@@ -14,8 +18,38 @@ import { fileURLToPath } from 'node:url';
 import { dbPathFor, openStore } from './store.mjs';
 import { SCHEMA_VERSION, ENTITY_KINDS } from './schema.mjs';
 import { decisionsHash } from './write.mjs';
+import { importFleet } from './import.mjs';
 
-export const VERBS = ['init', 'status', 'check'];
+export const VERBS = ['init', 'status', 'check', 'import'];
+
+// import's flags, each with the source it names (importFleet's sources).
+const SOURCE_FLAGS = { '--ledger': 'ledger', '--pr-cache': 'prCache', '--changelog': 'changelog', '--cards': 'cards', '--thrall-card': 'thrallCard', '--registry': 'registry' };
+
+// The flags of import; an unknown flag, a flag with no path, or a flag given twice is refused, never ignored.
+export function parseImportArgs(args) {
+  const sources = {};
+  let dryRun = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--dry-run') { dryRun = true; continue; }
+    const key = SOURCE_FLAGS[a];
+    if (!key) throw new Error('import: unknown argument ' + a);
+    if (key in sources) throw new Error('import: ' + a + ' given twice');
+    const v = args[i + 1];
+    if (v === undefined || v === '' || v.startsWith('--')) throw new Error('import: ' + a + ' needs a path');
+    sources[key] = v;
+    i++;
+  }
+  if (Object.keys(sources).length === 0) throw new Error('import needs at least one source: ' + Object.keys(SOURCE_FLAGS).join(', '));
+  return { sources, dryRun };
+}
+
+function printImport(report, out) {
+  out(report.dryRun ? 'import: dry run, nothing was written' : 'import: done');
+  for (const [t, c] of Object.entries(report.tables)) out(t + ': ' + c.added + ' added, ' + c.existing + ' already there');
+  if (report.unlinked.length === 0) out('unlinked: none');
+  for (const u of report.unlinked) out(u.source + ': ' + u.reason + ': ' + u.count + (u.examples.length ? ' (e.g. ' + u.examples.join(', ') + ')' : ''));
+}
 
 function tableRows(db) {
   const names = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
@@ -58,11 +92,20 @@ function openForReading(file) {
 }
 
 export function main(argv, env = process.env, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n')) {
-  if (argv.length !== 1 || !VERBS.includes(argv[0])) {
-    err('usage: cli.mjs init | status | check' + (argv.length > 1 ? ' (nothing may follow the verb)' : ''));
+  const verb = argv[0];
+  if (!VERBS.includes(verb) || (verb !== 'import' && argv.length !== 1)) {
+    err('usage: cli.mjs init | status | check | import [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f] [--registry dir] [--dry-run]' + (VERBS.includes(verb) && argv.length > 1 ? ' (nothing may follow init, status or check)' : ''));
     return 1;
   }
-  const verb = argv[0];
+  let request;
+  if (verb === 'import') {
+    try {
+      request = parseImportArgs(argv.slice(1));
+    } catch (e) {
+      err('fleet.db: ' + e.message);
+      return 1;
+    }
+  }
   let file;
   try {
     file = dbPathFor(env.HORDE_HOME);
@@ -76,6 +119,12 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
       const existed = fs.existsSync(file);
       db = openStore(file);
       out('fleet.db: ' + file + ' (schema ' + SCHEMA_VERSION + ', ' + (existed ? 'already there, now current' : 'created') + ')');
+      return 0;
+    }
+    if (verb === 'import') {
+      if (!fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; run horde db init');
+      db = openStore(file);
+      printImport(importFleet(db, request.sources, { dryRun: request.dryRun }), out);
       return 0;
     }
     db = openForReading(file);
