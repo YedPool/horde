@@ -5,14 +5,20 @@
     Target = "surfaces\pwa\page\chat-scroll.js"
     Suite  = "test\test-pwa-bar-offset-browser.ps1"
     Mutations = @(
-        @{ Name = "newest-not-brought-below-the-bar"
-           Find = 'if (newest && newest.getBoundingClientRect().top < topInset()) newest.scrollIntoView({ block: "start", behavior: "instant" });'
-           Replace = '' }
-        @{ Name = "newest-compared-with-the-window-top-not-the-bar"
-           Find = 'newest.getBoundingClientRect().top < topInset()'
-           Replace = 'newest.getBoundingClientRect().top < 0' }
-        @{ Name = "newest-brought-to-the-foot-not-the-top"
-           Find = 'newest.scrollIntoView({ block: "start", behavior: "instant" });'
-           Replace = 'newest.scrollIntoView({ block: "end", behavior: "instant" });' }
+        @{ Name = "arrival-follow-forgets-the-tall-newest"
+           Find = 'near: caughtUp(metrics())'
+           Replace = 'near: nearBottom(metrics())' }
+        @{ Name = "jump-button-ignores-the-newest-top"
+           Find = 'return !caughtUp(m, threshold);'
+           Replace = 'return !nearBottom(m, threshold);' }
+        @{ Name = "caught-up-ignores-the-bar"
+           Find = 'm.newestTop >= m.barBottom && m.newestTop < m.composeTop'
+           Replace = 'm.newestTop < m.composeTop' }
+        @{ Name = "caught-up-whenever-the-top-is-below-the-bar"
+           Find = 'm.newestTop >= m.barBottom && m.newestTop < m.composeTop'
+           Replace = 'm.newestTop >= m.barBottom' }
+        @{ Name = "arrival-always-follows"
+           Find = 'return s.near === true ? "bottom" : "keep";'
+           Replace = 'return "bottom";' }
     )
 }

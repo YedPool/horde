@@ -31,12 +31,21 @@
 // a message (24 px) plus its padding.
 export const STICK_PX = 48;
 
+import { scrollToNewest } from "./bar-height.js";
+
 // How far the window stands above the bottom of the page.
 export function distanceFromBottom(m) {
   return Math.max(0, m.scrollHeight - (m.scrollTop + m.viewHeight));
 }
 export function nearBottom(m, threshold = STICK_PX) {
   return distanceFromBottom(m) <= threshold;
+}
+// CAUGHT UP: at the bottom, or - a newest message taller than the screen, brought up to the bar's foot so that
+// its top is seen - with the newest message's top on the screen (m.newestTop between m.barBottom and m.composeTop).
+// Caught up, nothing is unseen, the Jump to latest button goes, and a message that arrives is followed.
+export function caughtUp(m, threshold = STICK_PX) {
+  if (nearBottom(m, threshold)) return true;
+  return typeof m.newestTop === "number" && m.newestTop >= m.barBottom && m.newestTop < m.composeTop;
 }
 // What a drawing of the log does to his place: "bottom", or "keep" it where it was.
 export function placeAfterDraw(s) {
@@ -55,7 +64,7 @@ export function unseenCount(seen, keys) {
 }
 // The button is shown only away from the bottom.
 export function showJump(m, threshold = STICK_PX) {
-  return !nearBottom(m, threshold);
+  return !caughtUp(m, threshold);
 }
 export function jumpWords(count) {
   return count > 0 ? "Jump to latest (" + count + " new)" : "Jump to latest";
@@ -76,8 +85,12 @@ export function createChatScroll(parts) {
   let opening = true;
   let seen = new Set();
   let count = 0;
-  const metrics = () => ({ scrollTop: win.scrollY, viewHeight: win.innerHeight, scrollHeight: root.scrollHeight });
   const items = () => Array.from(log.children).filter((el) => el.dataset && el.dataset.key);
+  function metrics() {
+    const newest = items().pop();
+    return { scrollTop: win.scrollY, viewHeight: win.innerHeight, scrollHeight: root.scrollHeight,
+      newestTop: newest ? newest.getBoundingClientRect().top : undefined, barBottom: topInset(), composeTop: compose.getBoundingClientRect().top };
+  }
   const keys = () => items().map((el) => el.dataset.key);
   // The page's foot is the composer's height (app.css, #chat): measured, never guessed, with the button
   // row hidden - the button stands only while he is away from the bottom. (The composer is fixed, so it
@@ -97,16 +110,14 @@ export function createChatScroll(parts) {
     else if (said !== null) news.textContent = said;
   }
   // THE NEWEST MESSAGE IS SEEN FROM ITS TOP (the founder, 2026-10-20, desktop: "it jumps a little too far and
-  // I can't see the question - it's blocked by the decisions button"). The foot of the page is where a short
-  // message is whole; a newest message taller than the room between the sticky bar and the composer has its
-  // top, where the question is asked, under the bar. Then it is brought to the bar's foot instead: the
-  // scroll margin app.css gives it (the bar's real height, bar-height.js) is what scrollIntoView keeps.
+  // I can't see the question - it's blocked by the decisions button"): bar-height.js scrollToNewest. This is
+  // also what follows a message that arrives while he is at the bottom (after) and his own line (sent): a tall
+  // one shows its top below the bar, and the next arrival is followed too, since caughtUp holds with its top on
+  // the screen. Scrolled up, an arrival never gets here (placeAfterDraw keeps his place).
   function toBottom() {
     button.hidden = true;
     fitCompose();
-    win.scrollTo(0, root.scrollHeight);
-    const newest = items().pop();
-    if (newest && newest.getBoundingClientRect().top < topInset()) newest.scrollIntoView({ block: "start", behavior: "instant" });
+    scrollToNewest(win, root, items().pop(), topInset());
     update();
   }
   return {
@@ -118,7 +129,7 @@ export function createChatScroll(parts) {
     before() {
       const top = topInset();
       const first = items().find((el) => el.getBoundingClientRect().bottom > top);
-      return { near: nearBottom(metrics()), key: first ? first.dataset.key : "", at: first ? first.getBoundingClientRect().top : 0 };
+      return { near: caughtUp(metrics()), key: first ? first.dataset.key : "", at: first ? first.getBoundingClientRect().top : 0 };
     },
     // After it is drawn: to the bottom, or his place kept.
     after(was) {

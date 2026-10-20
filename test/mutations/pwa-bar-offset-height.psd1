@@ -14,5 +14,14 @@
         @{ Name = "bar-height-rounded-down"
            Find = 'Math.ceil(bar.getBoundingClientRect().height)'
            Replace = 'Math.floor(bar.getBoundingClientRect().height) - 40' }
+        @{ Name = "newest-top-never-brought-below-the-bar"
+           Find = 'if (newest && newest.getBoundingClientRect().top < barBottom) newest.scrollIntoView({ block: "start", behavior: "instant" });'
+           Replace = '' }
+        @{ Name = "newest-compared-with-the-window-top"
+           Find = 'newest.getBoundingClientRect().top < barBottom'
+           Replace = 'newest.getBoundingClientRect().top < 0' }
+        @{ Name = "newest-brought-to-the-foot-not-the-top"
+           Find = 'newest.scrollIntoView({ block: "start", behavior: "instant" });'
+           Replace = 'newest.scrollIntoView({ block: "end", behavior: "instant" });' }
     )
 }

@@ -72,7 +72,7 @@ function Invoke-BarOffsetBrowserDriver {
     Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($chromeProfile) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
-Invoke-BarOffsetBrowserDriver -Driver "browser-bar.mjs" -Title "the jump to the latest message, below the sticky bar" -Least 23
+Invoke-BarOffsetBrowserDriver -Driver "browser-bar.mjs" -Title "the jump to the latest message, below the sticky bar" -Least 45
 
 # The folder goes, with every profile in it.
 for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $work); $i++) {

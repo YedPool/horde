@@ -22,3 +22,13 @@ export function trackBarHeight(bar, root, win = window) {
   win.addEventListener("resize", set);
   return () => win.removeEventListener("resize", set);
 }
+
+// THE NEWEST ITEM OF A LOG, SEEN FROM ITS TOP (the chat's Jump to latest, the progress log's Jump to newest and its
+// opening at the newest end; the founder, 2026-10-20). The foot of the page is where a short item is whole; an item
+// taller than the room between the sticky bar and the foot has its top under the bar there. So: to the foot, and
+// then, if the item's top is above the bar's foot, the item is brought to the top of the view - scrollIntoView keeps
+// the scroll margin app.css gives it from --bar-h. newest may be null (an empty log): the foot only.
+export function scrollToNewest(win, root, newest, barBottom) {
+  win.scrollTo(0, root.scrollHeight);
+  if (newest && newest.getBoundingClientRect().top < barBottom) newest.scrollIntoView({ block: "start", behavior: "instant" });
+}

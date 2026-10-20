@@ -11,8 +11,11 @@
         @{ Name = "margin-ignores-the-bar"
            Find = 'calc(var(--bar-h, 0px) + 8px)'
            Replace = '8px' }
+        @{ Name = "margin-not-on-the-progress-entries"
+           Find = '#chatLog > .chat-item, #progressLog > .progress-item, #lists .hd-q {'
+           Replace = '#chatLog > .chat-item, #lists .hd-q {' }
         @{ Name = "margin-not-on-the-questions"
-           Find = '#chatLog > .chat-item, #lists .hd-q {'
-           Replace = '#chatLog > .chat-item {' }
+           Find = '#progressLog > .progress-item, #lists .hd-q {'
+           Replace = '#progressLog > .progress-item {' }
     )
 }

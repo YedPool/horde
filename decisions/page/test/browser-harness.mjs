@@ -84,13 +84,14 @@ function barHost(pageDir) {
   const index = readFileSync(join(pageDir, "..", "..", "surfaces", "pwa", "page", "index.html"), "utf8").replace(/\r\n/g, "\n");
   const bar = /<header id="bar">[\s\S]*?<\/header>/.exec(index)[0].replace("<div id=\"viewTabs\" role=\"tablist\" aria-label=\"Views\" hidden>", "<div id=\"viewTabs\" role=\"tablist\" aria-label=\"Views\">");
   const chat = /<div id="chat" hidden>[\s\S]*?(?=<div id="progress" hidden>)/.exec(index)[0].replace("<div id=\"chat\" hidden>", "<div id=\"chat\">");
+  const progress = /<div id="progress" hidden>[\s\S]*?(?=<div id="notices" hidden>)/.exec(index)[0].replace("<div id=\"progress\" hidden>", "<div id=\"progress\">").replace("<div id=\"streamPage\" hidden>", "<div id=\"streamPage\">");
   return [
     "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
     "<link rel=\"stylesheet\" href=\"/app/app.css\"><link rel=\"stylesheet\" href=\"/list.css\"></head><body>",
-    bar, "<div id=\"lists\"></div>", chat,
+    bar, "<div id=\"lists\"></div>", chat, progress,
     "<script src=\"/list.js\"></script><script type=\"module\">",
     "import { createChatScroll } from '/app/chat-scroll.js';",
-    "import { trackBarHeight } from '/app/bar-height.js';",
+    "import { trackBarHeight, scrollToNewest } from '/app/bar-height.js';",
     "const $ = (id) => document.getElementById(id);",
     "const topInset = () => $('bar').getBoundingClientRect().bottom;",
     "trackBarHeight($('bar'), document.documentElement);",
@@ -106,6 +107,20 @@ function barHost(pageDir) {
     "    log.appendChild(box);",
     "  }",
     "};",
+    // A message arrives as app.js's drawChat has it: his place asked before, the log drawn, then the rule.
+    "window.arrive = function (tall) {",
+    "  const was = window.chatScroll.before(); const log = $('chatLog'); const old = document.getElementById('newest'); if (old) old.removeAttribute('id');",
+    "  const box = document.createElement('div'); box.className = 'chat-item assistant'; box.dataset.key = 'a' + log.children.length; box.id = 'newest'; box.style.height = tall + 'px';",
+    "  const t = document.createElement('div'); t.className = 'chat-text'; t.textContent = 'Arrived'; box.appendChild(t); log.appendChild(box); window.chatScroll.after(was);",
+    "};",
+    // The progress log: n short entries and a last one, tall pixels high; Jump to newest wired as app.js wires it.
+    "window.drawProgress = function (n, tall) {",
+    "  const log = $('progressLog'); while (log.firstChild) log.removeChild(log.firstChild);",
+    "  for (let i = 1; i <= n + 1; i++) { const box = document.createElement('div'); box.className = 'progress-item'; box.textContent = i === n + 1 ? 'Newest entry' : 'Entry ' + i; if (i === n + 1) { box.style.height = tall + 'px'; box.id = 'newest'; } log.appendChild(box); }",
+    "};",
+    "$('progressNewest').addEventListener('click', () => scrollToNewest(window, document.documentElement, $('progressLog').lastElementChild, $('bar').getBoundingClientRect().bottom));",
+    "const view = (/view=([a-z]+)/.exec(location.search) || [])[1] || 'chat';",
+    "$('chat').hidden = view !== 'chat'; $('progress').hidden = view !== 'progress';",
     "window.doc = window.HordeDecisionsDocument.mount($('lists'), { topInset });",
     "window.hostReady = true;",
     "</script></body></html>"

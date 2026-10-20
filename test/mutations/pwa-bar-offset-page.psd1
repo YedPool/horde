@@ -8,5 +8,11 @@
         @{ Name = "bar-not-tracked"
            Find = 'trackBarHeight($("bar"), document.documentElement);'
            Replace = '' }
+        @{ Name = "progress-opening-to-the-foot-again"
+           Find = 'else if (progressMark >= 0) progressToNewest();'
+           Replace = 'else if (progressMark >= 0) window.scrollTo(0, document.documentElement.scrollHeight);' }
+        @{ Name = "progress-jump-to-the-foot-again"
+           Find = '$("progressNewest").addEventListener("click", progressToNewest);'
+           Replace = '$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));' }
     )
 }
