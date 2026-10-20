@@ -46,7 +46,7 @@
         # A line that cannot be reported to the phone is asked again, not forgotten.
         @{ Name = "unreported-line-forgotten"
            Find = '[void]$keep.Add($mark); [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", and the phone could not be told ("'
-           Replace = '[void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", and the phone could not be told ("' }
+           Replace = '$changed = $true; [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", and the phone could not be told ("' }
         # A line given up at ttl is told to the phone; a line is asked about only when due.
         @{ Name = "ttl-never-expires"
            Find = 'if ($AgeSeconds -ge $TtlSeconds) { return "expired" }'

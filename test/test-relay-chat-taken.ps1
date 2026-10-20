@@ -215,7 +215,12 @@ function Get-ReceiptsOf {
     param($World, [string]$Id)
     return @(Get-Receipts @(Get-NewMail $World) | Where-Object { $_.messageId -ceq $Id } | ForEach-Object { $_.status + "/" + $_.code })
 }
-function Get-Awaiting { param($World) return @((Read-HordeChatChannelState -HordeHome $World.home).value.awaiting) }
+function Get-Awaiting {
+    param($World)
+    $rs = Read-HordeChatChannelState -HordeHome $World.home
+    if ($rs.state -cne "known") { return @("unreadable state: " + $rs.reason) }
+    return @($rs.value.awaiting)
+}
 function Get-NowMs { return [long]([datetime]::UtcNow - [datetime]"1970-01-01T00:00:00Z").TotalMilliseconds }
 
 try {
@@ -367,6 +372,9 @@ try {
     New-Item -ItemType Directory -Path $statePath | Out-Null
     $g1 = Send-OneLine $G "Hold me until the state can be written."
     Check ((Has $g1.turn "retry") -and -not (Has $g1.turn "done ")) ("state unwritable: the record is retried, not done (" + $g1.turn.text + ")")
+    Use-World $G
+    $mem = Get-HordeChatChannelMemory -Context $G.ctx
+    Check ($mem.ok -and @($mem.mine.durable.awaiting).Count -eq 0) "and the line is not left on the list in memory either, so the retry adds it again and writes it"
     Remove-Item -LiteralPath $statePath -Recurse -Force
     $turn = Invoke-Turn $G
     Check ((Has $turn "done ") -and @(Get-Awaiting $G).Count -eq 1) ("once it can be written the record is done, and awaited (" + $turn.text + ")")
