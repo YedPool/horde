@@ -78,6 +78,15 @@ $logDir = Join-Path $profileDir "standin-log"
 foreach ($d in @($hordeHome, (Join-Path $hordeHome "settings"), (Join-Path $fleetRoot "registry\sessions"), $sessDir, $logDir, $binDir, $cfgDir, $lane, $masterLane)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 $marker = Join-Path $profileDir "horde-e2e-fleet-profile.marker"
 [System.IO.File]::WriteAllText($marker, "this profile belongs to test/e2e/e2e-fleet.ps1")
+# AN EMPTY TERMINAL CONFIG OF THE SCENARIO'S OWN (T-0216). A terminal `cli` call, like any start of the terminal,
+# loads the person's config, and under this scenario's profile its plugin manager clones a plugin into the
+# profile; a clone client then held the scenario's folder for over 60 s (seen 2026-10-16), so its removal
+# failed. The config-file variable in the environment below replaces the terminal's search for a config
+# (its --config-file option: "overrides the normal configuration file resolution"), so every command and pane
+# of the scenario loads this empty file and nothing else; the harness's own cli calls also skip the config
+# (hosts/wezterm/test/Isolation.ps1).
+$emptyTermConfig = Join-Path $work "terminal-empty.lua"
+[System.IO.File]::WriteAllText($emptyTermConfig, "return {}`n")
 $ids = @{}
 foreach ($l in @("M", "Q", "Q1", "Q2")) { $ids[$l] = [guid]::NewGuid().ToString() }
 
@@ -126,7 +135,7 @@ $standInPath = Join-Path $binDir "standin-agent.ps1"
 # every folder that holds the harness's command is left out of their PATH, so they cannot find it at all.
 $realDirs = @(Get-Command $command -All -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | ForEach-Object { (Split-Path -Parent $_.Source).TrimEnd([char]92).ToLowerInvariant() } | Sort-Object -Unique)
 $keptPath = @($env:PATH -split ';' | Where-Object { $_.Trim() -ne "" -and $realDirs -notcontains $_.Trim().TrimEnd([char]92).ToLowerInvariant() })
-$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; PATH = ((@($binDir) + $keptPath) -join ";") }
+$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; WEZTERM_CONFIG_FILE = $emptyTermConfig; PATH = ((@($binDir) + $keptPath) -join ";") }
 
 function Invoke-WithChildEnv {
     # Run -Do with this process's environment set as a child's, and put it back after, whatever happens:

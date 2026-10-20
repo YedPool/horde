@@ -212,4 +212,27 @@ Check ($c.code -eq 0 -and $c.out -like "*horde fleet record*") "horde help lists
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
+Section "a reason is one line of at most 600 characters, cut cleanly (T-0216)"
+function Test-ReasonOf { param([string]$Text) $q = [pscustomobject]@{ state = "recorded"; history = @() }; Add-HordeFleetState -Session $q -State "failed" -At ([datetime]::new(2026, 10, 16, 9, 0, 0, [System.DateTimeKind]::Utc)) -Reason $Text; return ("" + $q.history[-1].reason) }
+Check ((Test-ReasonOf ("a" * 600)).Length -eq 600 -and (Test-ReasonOf ("a" * 600)) -ceq ("a" * 600)) "a reason of exactly 600 characters is kept whole"
+$cut = Test-ReasonOf ("a" * 601)
+Check ($cut.Length -eq 600 -and $cut -ceq (("a" * 597) + "...")) ("one of 601 is cut to 597 and three dots, 600 in all (" + $cut.Length + ")")
+$cut = Test-ReasonOf ("a" * 5000)
+Check ($cut.Length -eq 600 -and $cut.EndsWith("...")) "a very long one is cut to 600"
+$pair = ([string][char]0xD83D) + ([string][char]0xDE00)
+$cut = Test-ReasonOf (("a" * 596) + $pair + ("b" * 100))
+Check ($cut -ceq (("a" * 596) + "...")) ("a cut that would fall between the halves of a surrogate pair is made before the pair (" + $cut.Length + ")")
+$lone = @($cut.ToCharArray() | Where-Object { [char]::IsSurrogate($_) })
+Check ($lone.Count -eq 0) "so no lone surrogate is left"
+$cut = Test-ReasonOf (("a" * 595) + $pair + ("b" * 100))
+Check ($cut -ceq (("a" * 595) + $pair + "...")) "CONTROL: a pair wholly inside the kept part is kept"
+
+Section "a session found running loses a stale hibernated marker, through the host, and nothing else"
+$umk = New-Object System.Collections.ArrayList
+$unmarkHost = [pscustomobject]@{ unmark = { param($sid, $why) [void]$umk.Add($sid + "/" + $why); if ($sid -ceq "bad") { return (New-HordeUnknown -Reason "the folder is locked") }; if ($sid -ceq "boom") { throw "the adapter fell over" }; if ($sid -ceq "gone") { return (New-HordeKnown -Value "removed") }; New-HordeKnown -Value "kept" }.GetNewClosure() }
+$said = @(Clear-HordeFleetHibernatedMarker -HostAdapter $unmarkHost -Ids @("gone", "gone", "kept", "bad", "boom", ""))
+Check ((@($umk) -join ",") -ceq "gone/hibernated,kept/hibernated,bad/hibernated,boom/hibernated") ("each distinct id is asked once, for the reason hibernated and no other (" + (@($umk) -join ",") + ")")
+Check ($said.Count -eq 3 -and $said[0] -like "*gone*removed*" -and $said[1] -like "*bad*could not be removed*locked*" -and $said[2] -like "*boom*could not be removed*fell over*") ("a removed marker and a failure are said, a kept one is not, and nothing throws (" + ($said -join " | ") + ")")
+Check (@(Clear-HordeFleetHibernatedMarker -HostAdapter ([pscustomobject]@{ name = "no-unmark" }) -Ids @("x")).Count -eq 0 -and @(Clear-HordeFleetHibernatedMarker -HostAdapter $null -Ids @("x")).Count -eq 0) "a host without the optional unmark, or none, is left alone"
+
 Complete-HordeSuite -Success "a hibernation record holds exactly the running, unretired sessions asked for, and nothing is written when that cannot be known"

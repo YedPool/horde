@@ -23,8 +23,8 @@
 # sleep is never the side effect of "all".
 #
 # SELECTION IS A PLUGGABLE BLOCK (New-HordeFleetSelector*): it is handed the running, unretired
-# sessions and returns the ones to record. -All and -Labels are the first two; the Orc registry's tiers
-# (an Orc's id is its lane folder name) will be a third, with no change here.
+# sessions and returns the ones to record. -All and -Labels are the first two; the Orc registry's tiers are
+# a third, in fleet/Hibernate.ps1 (-Tier 2: only an Orc the registry puts in tier 2, and its Wargs), with no change here.
 #
 # THE ID IS THE TIME, UTC, TO THE SECOND. Its record.json is claimed with CreateNew, one step in the file
 # system, before anything else: a second record in the same second is refused, never merged into the
@@ -133,7 +133,9 @@ function Add-HordeFleetState {
     if ($script:HordeFleetStates -cnotcontains $State) { throw ("'" + $State + "' is not a session state of a hibernation") }
     # A reason is one line of at most 600 characters (the schema): a terminal's own words have line breaks and no bound.
     $Reason = ($Reason -replace '[\x00-\x1F]+', ' ').Trim()
-    if ($Reason.Length -gt 600) { $Reason = $Reason.Substring(0, 597) + "..." }
+    # THE CUT NEVER SPLITS A SURROGATE PAIR (T-0216): index 596 is the last kept character, and a high surrogate
+    # there has its low half at 597, which the cut would drop - leaving half a character that is not valid text.
+    if ($Reason.Length -gt 600) { $keep = 597; if ([char]::IsHighSurrogate($Reason[596])) { $keep = 596 }; $Reason = $Reason.Substring(0, $keep) + "..." }
     $entry = [ordered]@{ state = $State; at = (Format-HordeFleetTime -At $At) }
     if ($Reason -ne "") { $entry["reason"] = $Reason }
     if ($Pane -ne "") { $entry["pane"] = $Pane }
@@ -314,4 +316,24 @@ function Invoke-HordeFleetRecord {
         throw
     }
     return [pscustomobject]@{ id = $id; path = $path; record = $record; notes = @($notes) }
+}
+
+function Clear-HordeFleetHibernatedMarker {
+    # A session that a record holds and that is RUNNING must not stay barred from the terminal's restore by
+    # the marker its hibernation wrote (T-0216): a hand restart, a restore or a wake that did not write its
+    # record leaves the session running with the marker still there, and the next restore would refuse it.
+    # Asks the host (fleet/Port.ps1, Unmark) to remove the marker of each of -Ids, which removes that exact
+    # file and only when it says "hibernated" and names the session - never a "parked" one, which someone
+    # else wrote. -HostAdapter without an unmark does nothing. NEVER THROWS: returns one line for each marker
+    # removed or that could not be, for the caller to say.
+    param($HostAdapter, [string[]]$Ids = @())
+    $lines = New-Object System.Collections.ArrayList
+    if ($null -eq $HostAdapter -or $null -eq $HostAdapter.PSObject.Properties["unmark"] -or $null -eq $HostAdapter.unmark) { return @() }
+    foreach ($id in @($Ids | Where-Object { "" + $_ -ne "" } | Select-Object -Unique)) {
+        $a = $null
+        try { $a = & $HostAdapter.unmark ("" + $id) "hibernated" } catch { $a = New-HordeUnknown -Reason ("" + $_.Exception.Message) }
+        if ($null -eq $a -or "" + $a.state -cne "known") { [void]$lines.Add("the no-restore marker of " + $id + " could not be removed (" + $(if ($null -ne $a) { "" + $a.reason } else { "the terminal answered nothing" }) + ")"); continue }
+        if ("" + $a.value -ceq "removed") { [void]$lines.Add("the no-restore marker of " + $id + " was removed: the session runs again") }
+    }
+    return @($lines)
 }
