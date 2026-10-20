@@ -34,7 +34,7 @@
            Find = '    $sec = New-HordeSecretFileSecurity'
            Replace = '    $sec = $null' }
         @{ Name = "a-file-of-another-owner-is-accepted"
-           Find = 'if (-not (Test-HordeSecretFileOwner -Owner $owner -Mine $mine -Elevated $admin)) {'
+           Find = 'if ($ownerWhy -cne "") { return $ownerWhy }'
            Replace = 'if ($false) {' }
         @{ Name = "an-administrators-owner-is-allowed-without-elevation"
            Find = 'return ($Owner -ceq $Mine -or ($Elevated -and $Owner -ceq "S-1-5-32-544"))'
@@ -57,6 +57,15 @@
         @{ Name = "the-agent-name-proves-a-registrar"
            Find = 'return ($null -ne $p -and "$($p.Value)" -ceq "registry")'
            Replace = 'return $true' }
+        @{ Name = "the-secret-file-owner-is-left-to-the-default"
+           Find = '    $sec.SetOwner($me)'
+           Replace = '' }
+        @{ Name = "the-owner-refusal-names-no-fix"
+           Find = '""" /setowner """'
+           Replace = '""" """' }
+        @{ Name = "the-owner-refusal-never-refuses"
+           Find = 'if (Test-HordeSecretFileOwner -Owner $Owner -Mine $Mine -Elevated $Elevated) { return "" }'
+           Replace = 'return ""' }
         @{ Name = "a-secret-file-in-the-repository-is-allowed"
            Find = 'if ($inside.Count -gt 0) {'
            Replace = 'if ($false) {' }
