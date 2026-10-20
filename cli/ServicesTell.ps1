@@ -90,10 +90,31 @@ function Format-HordeServicePageNoticeBody {
     return ("HORDE SERVICES - phone page" + $(if ($what -ceq "deployed") { "" } else { " needs attention" }) + "`n" + $said + $rev + "`nIts log: relay\publish-log.txt in the Horde home")
 }
 
+# THE INSTALLED CLI (cli/ServicesBin.ps1), told in the same way: kind "cli", one fixed sentence chosen
+# by its what alone.
+$script:HordeServiceTellCliSentences = [ordered]@{
+    "branch"   = "the installed CLI is not on the branch main, so it is not being kept current; a person puts it back on main"
+    "dirty"    = "the installed CLI has changed files of its own, so it is not being kept current; a person commits or discards them"
+    "diverged" = "the installed CLI holds commits that origin/main does not, and origin/main has moved on, so it cannot be fast-forwarded; a person reconciles it"
+    "ahead"    = "the installed CLI is ahead of origin/main: it holds commits origin/main does not, so it is not being moved; a person pushes or discards them"
+    "apply"    = "the installed CLI could not be fast-forwarded to origin/main; it was left as it was"
+    "failed"   = "a new revision of the CLI did not load when it was tried, so the installed CLI was left on the revision it was on; that revision is not tried again until origin/main moves on"
+    "stuck"    = "the installed CLI did not load after an update and could NOT be put back; it is reported broken until a revision that loads is live; a person must repair it now"
+}
+
+function Format-HordeServiceCliNoticeBody {
+    # PURE. The words of one notice about the installed CLI: fixed sentences only.
+    param([Parameter(Mandatory = $true)]$Notice)
+    $what = "" + $Notice.what
+    $said = $(if ($script:HordeServiceTellCliSentences.Contains($what)) { $script:HordeServiceTellCliSentences[$what] } else { "it needs a person" })
+    return ("HORDE SERVICES - installed CLI needs attention`n" + $said + "`nSee it with: horde services status")
+}
+
 function Format-HordeServiceNoticeBody {
     # PURE. The words of one notice (header): the service's name and fixed sentences, by the notice's
     # kind and its what - never its text. A name that is not a service name is not repeated either.
     param([Parameter(Mandatory = $true)]$Notice)
+    if ("" + $Notice.kind -ceq "cli") { return (Format-HordeServiceCliNoticeBody -Notice $Notice) }
     if ("" + $Notice.kind -ceq "page") { return (Format-HordeServicePageNoticeBody -Notice $Notice) }
     $service = "a service"
     $named = $Notice.PSObject.Properties["service"]

@@ -39,6 +39,7 @@ function check(ok, name, detail = "") {
   else { failures++; process.stdout.write("[FAIL] " + name + (detail ? ": " + detail : "") + "\n"); }
 }
 async function throwsAsync(fn) { try { await fn(); return ""; } catch (e) { return e && e.message ? e.message : String(e); } }
+function throwsSync(fn) { try { fn(); return ""; } catch (e) { return e && e.message ? e.message : String(e); } }
 
 // --- a machine, in JavaScript ---
 
@@ -755,6 +756,207 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const r = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "x", role: "tool", session: "s", text: "t" }, { id: "y", role: "user", session: "s", text: "ok" }] })), "work", "a".repeat(32));
   check(r.ok && r.value.turns.length === 1 && r.value.dropped === 1, "a turn with a role off the list is dropped and counted");
   check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
+}
+
+// --- 10b2. photos: shrunk within their caps, refused when not a picture, ONE passkey tap, parts paced ---
+const PH = await load("app/photo.js");
+{
+  // MADE-UP PIXELS for the heuristic (photo.js, HOW IT TELLS TEXT FROM A PHOTO): a screenshot - a white
+  // page with rows of black strokes, one blue bar - and a photo - smooth shading under noise - and a
+  // white wall, flat with no edges.
+  const W = 200, H = 120;
+  const pixels = (fn) => { const a = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const [r, g, b] = fn(x, y); const i = (y * W + x) * 4; a[i] = r; a[i + 1] = g; a[i + 2] = b; a[i + 3] = 255; } return a; };
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const shot = pixels((x, y) => (y < 12 ? [40, 90, 200] : (y % 14 < 9 && x % 7 < 3 && x > 10 && x < 180) ? [10, 10, 10] : [255, 255, 255]));
+  const photo = pixels((x, y) => [Math.min(255, 60 + x * 0.8 + rnd() * 40), Math.min(255, 90 + y * 0.9 + rnd() * 40), Math.min(255, 120 + rnd() * 50)]);
+  const wall = pixels(() => [240, 238, 236]);
+  const s = PH.textLikeness(shot, W, H), p = PH.textLikeness(photo, W, H), w = PH.textLikeness(wall, W, H);
+  check(s.textLike && s.flat >= 0.5 && s.edges >= 0.02, "a screenshot of text is text-like: a few flat colours, many hard edges", JSON.stringify(s));
+  check(!p.textLike && p.flat < 0.5, "a photo is not: its colours spread over many", JSON.stringify(p));
+  check(!w.textLike && w.flat === 1 && w.edges === 0, "a white wall is flat but has no edges: not text", JSON.stringify(w));
+  const leaves = pixels(() => (rnd() < 0.5 ? [20, 60 + rnd() * 120, 10] : [200 + rnd() * 55, 230, 120 + rnd() * 100]));
+  const l = PH.textLikeness(leaves, W, H);
+  check(!l.textLike && l.edges >= 0.02 && l.flat < 0.5, "a photo of leaves has hard edges but is not flat: not text", JSON.stringify(l));
+  const big = PH.targetSize(4000, 3000, false), tall = PH.targetSize(1440, 3200, true), small = PH.targetSize(800, 600, false);
+  check(big.width === 1600 && big.height === 1200 && tall.height === 2000 && tall.width === 900 && small.width === 800, "a photo's longest side is 1600 px, text's 2000, and nothing is enlarged", JSON.stringify([big, tall, small]));
+  // A made-up encoder: its JPEG's length grows with the pixels and the quality, as a real one's does.
+  const tries = [];
+  const encode = (perPixel) => async (wd, ht, q) => { tries.push([wd, ht, q]); const b = new Uint8Array(Math.round(wd * ht * q * perPixel)); b[0] = 0xff; b[1] = 0xd8; b[2] = 0xff; return b; };
+  const madePhoto = await PH.shrinkWith({ width: 4000, height: 3000, textLike: false }, encode(0.45));
+  check(madePhoto.bytes.length <= PH.PHOTO_OUT_BYTES && Math.max(madePhoto.width, madePhoto.height) <= 1600, "a large photo is shrunk to at most 1600 px and 1,000,000 bytes", JSON.stringify({ n: madePhoto.bytes.length, w: madePhoto.width, h: madePhoto.height, q: madePhoto.quality }));
+  tries.length = 0;
+  const madeShot = await PH.shrinkWith({ width: 1440, height: 3200, textLike: true }, encode(0.3));
+  check(madeShot.bytes.length <= PH.PHOTO_OUT_BYTES && madeShot.height <= 2000 && madeShot.height > 1600, "a tall screenshot keeps up to 2000 px, so its letters stay readable, and is within the bytes", JSON.stringify({ n: madeShot.bytes.length, w: madeShot.width, h: madeShot.height, q: madeShot.quality }));
+  check(tries[0][2] === 0.86 && tries.length === madeShot.tries, "quality steps down before the size does");
+  check((await throwsAsync(() => PH.shrinkWith({ width: 100, height: 100, textLike: false }, async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47])))).indexOf("JPEG") >= 0, "an encoder that does not give a JPEG is refused: only JPEG goes out");
+  check((await throwsAsync(() => PH.shrinkWith({ width: 100, height: 100, textLike: false }, async () => { const b = new Uint8Array(2000000); b[0] = 0xff; b[1] = 0xd8; b[2] = 0xff; return b; }))).indexOf("small enough") >= 0, "a picture that never fits is refused in plain words");
+  // THE FIRST BYTES: what is a picture, and what only says it is.
+  const asText = (t) => P.utf8(t);
+  check(P.sniffImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1])) === "jpeg" && P.sniffImage(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) === "png" && P.sniffImage(asText("RIFF\0\0\0\0WEBPVP8 ")) === "webp", "JPEG, PNG and WebP are known by their first bytes");
+  check(P.sniffImage(asText("#!/bin/sh\nrm -rf ~")) === "" && P.sniffImage(asText("%PDF-1.7\n")) === "" && P.sniffImage(asText("<!DOCTYPE html><script>")) === "" && P.sniffImage(new Uint8Array(0)) === "", "a script, a PDF and an HTML page called .jpg are not pictures, whatever their names");
+}
+{
+  // ONE TAP, AND THE PARTS PACED: a machine that takes photos, a phone that counts its passkey's prompts.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  let gets = 0;
+  const counting = { create: (x) => a.auth.create(x), get: (x) => { gets++; return a.auth.get(x); } };
+  const slept = [];
+  // The phone's clock, moved on below to look past a photo's hour (THE HOUR).
+  let shift = 0;
+  const phone = createPhone({ store: a.store, authenticator: counting, relay: R.createRelayClient(t), origin, now: () => Date.now() + shift, sleep: async (ms) => { slept.push(ms); } });
+  await phone.unlock(a.paired.id);
+  const photoBody = (photoBytes) => P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: m.horde, machine: m.keyId, session: "sess-1", backfill: false, ...(photoBytes ? { photoBytes } : {}), turns: [turn("p1", "assistant", "hi")] }));
+  await sendChat(t, m, a.phoneKey, photoBody(0));
+  await phone.refresh(a.paired.id);
+  const jpeg = (n) => { const b = new Uint8Array(n); for (let i = 0; i < n; i += 65536) b.set(P.randomBytes(Math.min(65536, n - i)), i); b[0] = 0xff; b[1] = 0xd8; b[2] = 0xff; b[3] = 0xe0; return b; };
+  let head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const old = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(old === P.PHOTO_PC_OLD && (await t.get(m.mailbox, 0, 256)).value.items.length === head && (await phone.chat(a.paired.id)).photoBytes === 0, "A MACHINE THAT OFFERS NO PHOTOS is sent none: refused in plain words, nothing put", old);
+  await sendChat(t, m, a.phoneKey, photoBody(2097152));
+  await phone.refresh(a.paired.id);
+  check((await phone.chat(a.paired.id)).photoBytes === 2097152, "a turns body that offers photos says up to what size");
+  const html = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: P.utf8("<!DOCTYPE html><p>not a photo</p>"), photoId: P.hex(P.randomBytes(16)) }));
+  check(html === P.PHOTO_NOT_IMAGE && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "a non-image is refused with a plain line before the passkey is asked", html);
+  const huge = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(2097153), photoId: P.hex(P.randomBytes(16)) }));
+  check(huge.indexOf("at most 2097152") >= 0, "a photo larger than the machine takes is refused", huge);
+  gets = 0;
+  const pid = P.hex(P.randomBytes(16));
+  const img = jpeg(1000000);
+  const sent = await phone.sendPhoto(a.paired.id, { bytes: img, photoId: pid });
+  check(gets === 1, "A PHOTO OF 1 MB IS ONE PASSKEY TAP, the same as one line", "prompts: " + gets);
+  check(sent.parts === 21 && sent.puts === 22, "it is 21 parts and its manifest: 22 puts", JSON.stringify(sent));
+  check(slept.length === 4 && slept.every((ms) => ms === 1100), "the first 18 puts go at once and the rest 1.1 s apart: under the relay's burst of 20, then its one a second", JSON.stringify(slept));
+  const items = (await t.get(m.mailbox, 0, 256)).value.items.slice(head);
+  const mf = await machineOpens(m, items[0].text);
+  check(mf.header.kind === "photo" && mf.header.channel === "chat" && mf.sig.alg === "webauthn.get", "the manifest is an envelope on chat, kind photo, signed by the passkey");
+  const want = ["v", "photoId", "horde", "machine", "mailbox", "from", "phoneKey", "seq", "session", "expiresAt", "bytes", "sha256", "key", "parts"];
+  check(JSON.stringify(Object.keys(mf.body)) === JSON.stringify(want), "its body is exactly the members the machine reads, in order", JSON.stringify(Object.keys(mf.body)));
+  const phoneKeyId = await P.keyId(a.phoneKey);
+  check(mf.body.photoId === pid && mf.body.horde === "work" && mf.body.machine === m.keyId && mf.body.mailbox === m.mailbox && mf.body.from === mf.header.from && mf.body.seq === mf.header.seq && mf.body.phoneKey === phoneKeyId && mf.body.session === "sess-1" && mf.body.bytes === 1000000, "it binds the photo, the horde, the machine and its mailbox, the passkey, the phone key, its own seq and the session", JSON.stringify({ ...mf.body, key: "-", parts: mf.body.parts.length }));
+  check(mf.body.expiresAt === mf.header.ts + P.PHOTO_WINDOW_MS && mf.body.sha256 === P.hex(await P.sha256(img)), "and an expiry an hour after it was signed (the founder's choice: a photo waits up to an hour for the PC), and the whole image's SHA-256");
+  const partRe = /^\{"v":1,"kind":"photo-part","from":"([0-9a-f]{32})","photo":"([0-9a-f]{32})","part":([1-9][0-9]{0,2}),"ct":"([A-Za-z0-9_-]{1,70000})"\}$/;
+  const parts = items.slice(1);
+  check(parts.length === 21 && parts.every((it, i) => partRe.test(it.text) && it.key === P.photoPartKey(mf.body.from, pid, i + 1, mf.body.parts[i]) && it.text.length <= 65536), "each part is in its one form, under its own key, within the hosted relay's 65,536 characters", String(Math.max(...parts.map((x) => x.text.length))));
+  // THE KEY NAMES THE DIGEST (review of PR 285): the relay keeps the first text under a key, so junk put
+  // first under the same photo and number must land under a key of its own, not the real part's.
+  const junkDigest = "0".repeat(64);
+  check(parts.every((it, i) => it.key === mf.body.from + "/photo-part/" + pid + "/" + (i + 1) + "/" + mf.body.parts[i].slice(0, 16) && it.key.length <= 160), "each part's relay key ends with the first 16 hex of its digest, within the relay's 160 characters", parts[0].key);
+  check(P.photoPartKey(mf.body.from, pid, 1, junkDigest) !== parts[0].key && P.photoPartKey(mf.body.from, pid, 1, mf.body.parts[0]) === parts[0].key, "junk of the same photo and number has another key; the real part's digest gives its key back exactly");
+  let noDigest = "";
+  try { P.photoPartKey(mf.body.from, pid, 1); } catch (e) { noDigest = e.message; }
+  check(noDigest.includes("digest"), "a part's key cannot be made without its digest", noDigest);
+  // The machine's side, in JavaScript: each part's digest is the manifest's at its number, and opened
+  // under the manifest's key the parts are the image.
+  const key = P.unb64u(mf.body.key);
+  const back = [];
+  let digestsOk = true;
+  for (let i = 0; i < parts.length; i++) {
+    const ct = P.unb64u(partRe.exec(parts[i].text)[4]);
+    if (P.hex(await P.sha256(ct)) !== mf.body.parts[i]) digestsOk = false;
+    const nonce = new Uint8Array(12); nonce[11] = i + 1;
+    back.push(await P.gcmOpen(key, nonce, P.utf8("horde-relay/chat/v1 photo part\n" + mf.body.from + "\n" + pid + "\n" + (i + 1)), ct));
+  }
+  check(digestsOk && P.equalBytes(P.cat(...back), img), "every part's digest is listed at its number, and the parts open to the image exactly");
+  check(parts.every((it) => it.text.indexOf(P.b64u(img.subarray(4, 40))) < 0), "the relay sees sealed bytes: no run of the image is in a part's text");
+  let c = await phone.chat(a.paired.id);
+  let ph = c.items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].photoId === pid && ph[0].words === P.PHOTO_WAITING && ph[0].status === "waiting" && !ph[0].sendAgain && ph[0].said === mf.header.ts, "every part put and no word from the PC yet, the chat shows the photo waiting for the PC, at the time it was signed", JSON.stringify(ph));
+  // THE HOUR (the founder's choice, 2026-10-16): with no word from the PC by the end of the window the
+  // manifest names, the photo says it was not delivered, and may be sent again.
+  shift = mf.body.expiresAt - Date.now() - 1000;
+  ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].words === P.PHOTO_WAITING && !ph[0].sendAgain, "TWIN: a second before its hour it still waits", JSON.stringify(ph));
+  shift = mf.body.expiresAt - Date.now();
+  ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].words === P.PHOTO_NOT_DELIVERED && ph[0].status === "not-delivered" && ph[0].sendAgain === true, "AT ITS HOUR with no word from the PC, the photo says plainly it was not delivered, and offers to send it again", JSON.stringify(ph));
+  shift = 0;
+  const prBody = (status, code, file = "") => P.utf8(JSON.stringify({ v: 1, kind: "chat-photo-receipt", horde: m.horde, machine: m.keyId, session: "sess-1", photoId: pid, status, code, sentAt: mf.header.ts, file }));
+  await sendChat(t, m, a.phoneKey, prBody("accepted", "receiving"), "photo-receipt");
+  await sendChat(t, m, a.phoneKey, prBody("refused", "your-account-closed"), "photo-receipt");
+  await sendChat(t, m, a.phoneKey, prBody("accepted", "delivered", "photo-20261014-120000-0a1b2c3d.jpg"), "photo-receipt");
+  await phone.refresh(a.paired.id);
+  ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].words === P.PHOTO_WORDS.accepted.delivered && ph[0].file === "photo-20261014-120000-0a1b2c3d.jpg", "the newest receipt's code is shown in the phone's own words, with the machine's file name; a code it does not know is not", JSON.stringify(ph));
+  check(P.readPhotoReceipt(prBody("refused", "your-account-closed"), "work", m.keyId).ok === false && P.readPhotoReceipt(prBody("held", "receiving"), "work", m.keyId).ok === false, "a receipt whose code this phone does not know, or a known code under another status, is not read at all - the newest receipt winning is not what refuses it");
+  check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), "work", m.keyId).value.file ==="", "a file name that is not a plain name is not shown");
+  // THE HOUR, in the timeline alone: sending, waiting, not delivered; any word from the PC outranks the clock.
+  const ph0 = { photoId: "a".repeat(32), at: 1000, session: "s", expiresAt: 1000 + P.PHOTO_WINDOW_MS };
+  const one = (p, now, rs = []) => P.chatTimeline({ photos: [p], photoReceipts: rs }, now).filter((x) => x.kind === "photo")[0];
+  const rcp = (status, code) => ({ photoId: ph0.photoId, status, code, session: "s", sentAt: 1000, file: "", seq: 2, ts: 5000 });
+  check(P.PHOTO_WINDOW_MS === 3600000, "a photo waits for the PC up to an hour");
+  check(one({ ...ph0, sent: false }, 2000).words === P.PHOTO_SENDING && one({ ...ph0, sent: true }, 2000).words === P.PHOTO_WAITING, "while its parts go it is sending; once they are put, waiting for the PC");
+  check(one({ ...ph0, sent: false }, ph0.expiresAt).sendAgain === true && one({ ...ph0, sent: true }, 0).words === P.PHOTO_WAITING, "a photo whose parts never all went is not delivered at its hour too; with no clock given nothing is late");
+  check(one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).words === P.PHOTO_WORDS.accepted.receiving && !one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).sendAgain, "a word from the PC outranks the clock: taken after the hour, it says so and offers nothing");
+  check(one({ ...ph0, sent: true }, 2000, [rcp("refused", "expired")]).sendAgain === true && one({ ...ph0, sent: true }, 2000, [rcp("refused", "incomplete")]).sendAgain === true && !one({ ...ph0, sent: true }, 2000, [rcp("refused", "damaged")]).sendAgain && !one({ ...ph0, sent: true }, 2000, [rcp("accepted", "delivered")]).sendAgain, "refused as too late or incomplete it may be sent again; damaged or delivered, not");
+  // REVIEW OF PR 285, SHOULD-1: the window a machine tells is the window the photo names - a machine set
+  // to 600 s refuses a photo that names the hour.
+  check(P.photoWindowFor(600000) === 600000 && P.photoWindowFor(7200000) === 3600000 && P.photoWindowFor(0) === 3600000 && P.photoWindowFor(undefined) === 3600000, "the phone names the machine's window when it is shorter than the hour, and the hour otherwise");
+  const photoBodyW = (photoWindowMs) => P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: m.horde, machine: m.keyId, session: "sess-1", backfill: false, photoBytes: 2097152, photoWindowMs, turns: [turn("p2", "assistant", "hi")] }));
+  check(P.readChatTurns(photoBodyW(600000), m.horde, m.keyId).value.photoWindowMs === 600000 && P.readChatTurns(photoBody(2097152), m.horde, m.keyId).value.photoWindowMs === 0, "a turns body says the machine's window; one that says none reads as 0");
+  await sendChat(t, m, a.phoneKey, photoBodyW(600000));
+  await phone.refresh(a.paired.id);
+  head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const w1id = P.hex(P.randomBytes(16));
+  await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: w1id, resendOf: pid });
+  const w1 = await machineOpens(m, (await t.get(m.mailbox, 0, 256)).value.items[head].text);
+  check(w1.body.expiresAt === w1.header.ts + 600000, "THE WINDOW TOLD: to a machine that says 600 s the manifest names 600 s after it was signed, not the hour", String(w1.body.expiresAt - w1.header.ts));
+  check(w1.body.resendOf === pid && Object.keys(mf.body).indexOf("resendOf") < 0, "RESEND NAMED: a Send again names the photo it is sent again for (resendOf); a first send has no such member", JSON.stringify(Object.keys(w1.body)));
+  const mfArgs = { photoId: pid, horde: m.horde, machine: m.keyId, mailbox: m.mailbox, from: "a".repeat(32), phoneKey: "b".repeat(32), seq: 1, session: "sess-1", expiresAt: 5, bytes: 1, sha256: "c".repeat(64), key: new Uint8Array(32), parts: ["d".repeat(64)] };
+  check(throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: "not-an-id" })) !== "" && throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: pid })) !== "" && throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: "e".repeat(32) })) === "", "a resendOf must be another photo's 32 hex id");
+  // SHOULD-3: while the PC is off its mailbox fills with photos, and a full one refuses chat lines and
+  // answers too; at most 3 photos wait for a word from the machine.
+  const waiting = [w1id];
+  for (let i = 0; i < 2; i++) { const nid = P.hex(P.randomBytes(16)); await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: nid }); waiting.push(nid); }
+  head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const capped = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(capped === P.PHOTO_TOO_MANY_UNANSWERED && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "THREE WAITING: a fourth photo is refused in plain words and nothing is put", capped);
+  // The cap survives a lock, an unlock and a restart: three photos waiting stay three after the app is reopened.
+  phone.lock(a.paired.id);
+  await phone.unlock(a.paired.id);
+  await phone.refresh(a.paired.id);
+  const cappedAfter = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(cappedAfter === P.PHOTO_TOO_MANY_UNANSWERED, "AFTER A LOCK AND AN UNLOCK the three photos still wait: the cap is not handed back by reopening the app", cappedAfter);
+  const wordFor = async (id) => { await sendChat(t, m, a.phoneKey, P.utf8(JSON.stringify({ v: 1, kind: "chat-photo-receipt", horde: m.horde, machine: m.keyId, session: "sess-1", photoId: id, status: "accepted", code: "delivered", sentAt: w1.header.ts, file: "" })), "photo-receipt"); };
+  await wordFor(waiting[0]);
+  await phone.refresh(a.paired.id);
+  const nid4 = P.hex(P.randomBytes(16));
+  const fourth = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: nid4 }));
+  waiting.push(nid4);
+  check(fourth === "", "TWIN: a word from the PC about one frees a place for the next", String(fourth));
+  check(P.photosUnanswered([{ photoId: "a".repeat(32), expiresAt: 1000 }, { photoId: "b".repeat(32), expiresAt: 5000 }, { photoId: "c".repeat(32), expiresAt: 5000 }], [{ photoId: "c".repeat(32) }], 2000) === 1, "a photo past its window, or one with a word from the machine, is not waiting");
+  for (const id of waiting.slice(1)) await wordFor(id);
+  await phone.refresh(a.paired.id);
+  // REVIEW 3, SHOULD 1: a receipt read ends the wait for good. The stored list forgets it, so a mailbox that
+  // later trims the receipt away (and a page that reloads) does not give the place back or take it again.
+  const hide = new Set((await t.get(m.horde + "/phone", 0, 512)).value.items.map((i) => i.seq));
+  const hideSome = async (r) => (r.state === "known" ? { ...r, value: { ...r.value, items: r.value.items.filter((i) => !hide.has(i.seq)) } } : r);
+  const hidingT = { ...t, get: async (mb, since, max) => hideSome(await t.get(mb, since, max)), watch: async (mb, since, max, ms) => hideSome(await t.watch(mb, since, max, ms)) };
+  // REVIEW 3, NIT 7: entries stored that are not a photo id with a whole-number expiry are dropped, not counted for ever.
+  await a.store.update("horde/" + a.paired.id, (x) => ({ ...x, photosWaiting: [...(x.photosWaiting || []), { photoId: 1, expiresAt: 9e15 }, { photoId: "zz", expiresAt: 9e15 }, null] }));
+  const phone2 = createPhone({ store: a.store, authenticator: counting, relay: R.createRelayClient(hidingT), origin, now: () => Date.now() + shift, sleep: async () => {} });
+  await phone2.unlock(a.paired.id);
+  await sendChat(t, m, a.phoneKey, photoBodyW(600000));
+  await phone2.refresh(a.paired.id);
+  const afterTrim = await throwsAsync(() => phone2.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(afterTrim === "", "RECEIPTS TRIMMED: four photos were answered, the mailbox no longer holds their receipts, the app was reopened - a next photo is still allowed", afterTrim);
+  // Through the bridge: the page's bytes and id.
+  const br = createBridge(phone, { loadKinds: async () => ({}) });
+  await br.request("pick", { id: a.paired.id });
+  gets = 0;
+  const via = await br.request("chat-photo", { bytes: jpeg(5000), id: "c".repeat(32) });
+  check(via.ok === true && via.id === "c".repeat(32) && via.parts === 1 && gets === 1, "chat-photo through the bridge: one tap, one part", JSON.stringify(via));
+  const notImg = await br.request("chat-photo", { bytes: P.utf8("%PDF-1.7"), id: "d".repeat(32) });
+  check(notImg.ok === false && notImg.reason === P.PHOTO_NOT_IMAGE, "and refuses a non-image in the phone's own words", JSON.stringify(notImg));
+  // Read only: never.
+  phone.lock(a.paired.id);
+  await phone.recover(a.paired.id, a.paired.recoveryCode);
+  head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const ro = await throwsAsync(() => phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: P.hex(P.randomBytes(16)) }));
+  check(ro.indexOf("recovery code") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "unlocked by the recovery code, a photo is refused and nothing put", ro);
+  check(JSON.stringify(await a.store.list("")).indexOf(P.b64u(img.subarray(0, 30))) < 0, "nothing of the photo is in the store");
 }
 
 // --- 10c. when it was said: the turn's own time, the line's signed one, and never a guessed one ---
@@ -2104,6 +2306,12 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   check(CS.STICK_PX === 48, "the stick threshold is 48 px", String(CS.STICK_PX));
   check(CS.nearBottom(at(4200)) && CS.nearBottom(at(4200 - 48)) && !CS.nearBottom(at(4200 - 49)), "AT THE BOTTOM means within 48 px of it, and 49 px up is away", JSON.stringify([CS.nearBottom(at(4152)), CS.nearBottom(at(4151))]));
   check(!CS.showJump(at(4200)) && !CS.showJump(at(4152)) && CS.showJump(at(4151)) && CS.showJump(at(0)), "JUMP TO LATEST HIDES AT THE BOTTOM, and shows away from it");
+  {
+    const far = { ...at(0), barBottom: 114, composeTop: 700 };
+    check(CS.caughtUp({ ...far, newestTop: 122 }) && !CS.caughtUp({ ...far, newestTop: -300 }) && !CS.caughtUp({ ...far, newestTop: 700 }) && !CS.caughtUp({ ...far, newestTop: 113 }) && !CS.caughtUp(far) && CS.caughtUp({ ...at(4200), newestTop: -300, barBottom: 114, composeTop: 700 }),
+      "CAUGHT UP is at the bottom, or with the newest message's top on the screen between the bar and the composer");
+    check(!CS.showJump({ ...far, newestTop: 122 }) && CS.showJump({ ...far, newestTop: -300 }), "Jump to latest is gone while the newest message's top is on the screen");
+  }
   check(CS.placeAfterDraw({ opening: true, near: false }) === "bottom", "AN OPENING GOES TO THE NEWEST MESSAGE, wherever the window stood");
   check(CS.placeAfterDraw({ opening: false, near: true }) === "bottom", "A REFRESH AT THE BOTTOM STICKS TO THE BOTTOM");
   check(CS.placeAfterDraw({ opening: false, near: false }) === "keep", "A REFRESH WHILE HE READS BACK KEEPS HIS PLACE");

@@ -105,13 +105,15 @@ import { accountFromConfig, presenceOf, offlineWords } from "./account-client.js
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
-import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
+import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace, sniffImage, PHOTO_NOT_IMAGE, PHOTO_PC_OLD } from "../relay/protocol.js";
+import { shrinkInBrowser } from "./photo.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderDecisionCards } from "./decision-cards.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
 import { createChatScroll } from "./chat-scroll.js";
+import { trackBarHeight, scrollToNewest } from "./bar-height.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 import { sessionLines } from "./session-view.js";
 
@@ -390,6 +392,8 @@ function timeStamp(ms, before, key, shortForm = clockTime) {
   return t;
 }
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
+// THE BAR'S REAL HEIGHT, in --bar-h, kept current (bar-height.js): app.css hangs the cards' scroll margin on it.
+trackBarHeight($("bar"), document.documentElement);
 // WHERE THE CHAT STANDS (chat-scroll.js): at the newest message when it opens, his place kept on a refresh
 // while he reads back, and Jump to latest while he is away from the bottom.
 const chatScroll = createChatScroll({ win: window, log: $("chatLog"), compose: $("chatCompose"), button: $("chatJump"), news: $("chatNews"), field: $("chatText"), topInset: () => $("bar").getBoundingClientRect().bottom });
@@ -408,24 +412,51 @@ function drawChat(rec) {
     const box = document.createElement("div");
     const who = document.createElement("div");
     const text = document.createElement("div");
-    const key = "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id);
-    box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
+    // A photo is a message like a line (chat-scroll.js counts it by its key, for Jump to latest).
+    const mine = it.kind === "line" || it.kind === "photo";
+    const key = "chat/" + (it.kind === "line" ? "line/" + it.messageId : it.kind === "photo" ? "photo/" + it.photoId : "turn/" + it.id);
+    box.className = "chat-item " + (mine ? "founder" : it.role);
     box.dataset.key = key;
     who.className = "chat-who";
     const name = document.createElement("span");
-    name.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
     who.appendChild(name);
     const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", key);
     if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
-    text.textContent = it.text;
     box.appendChild(who);
+    if (it.kind === "photo") {
+      // A PHOTO: the small picture this page drew when it was sent (kept in memory only, like the chat);
+      // from another phone, or after a reload, the words say what it is.
+      const thumb = photoThumbs.get(it.photoId);
+      if (thumb) { const c = document.createElement("canvas"); c.className = "chat-photo"; c.width = thumb.width; c.height = thumb.height; c.getContext("2d").drawImage(thumb, 0, 0); c.setAttribute("role", "img"); c.setAttribute("aria-label", "Your photo"); box.appendChild(c); }
+      text.textContent = it.file ? "Photo " + it.file : "Photo";
+    } else text.textContent = it.text;
     box.appendChild(text);
     const notes = [];
-    if (it.kind === "line") notes.push(it.words);
+    if (it.kind === "line" || it.kind === "photo") notes.push(it.words);
     if (it.truncated) notes.push("Cut short at the machine: it was longer than a turn may be.");
     if (it.redactions) notes.push(it.redactions + " thing(s) that look like secrets were hidden at the machine.");
     for (const n of notes) { const d = document.createElement("div"); d.className = "chat-note"; d.textContent = n; box.appendChild(d); }
+    // SEND AGAIN (the founder's choice, 2026-10-16): a photo the PC did not take within its hour, or
+    // refused as too late or incomplete, can be sent again from here while this page still holds what it
+    // shrank - as a new photo, since the PC closed the old one. Otherwise the words say to send it again.
+    if (it.kind === "photo" && it.sendAgain && photoKept.has(it.photoId)) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "chat-again";
+      again.textContent = "Send again";
+      again.disabled = !(v.mode === "passkey");
+      const old = it.photoId;
+      again.addEventListener("click", async () => {
+        // Sent again, the old one offers it no more; not sent, it still does.
+        const k = photoKept.get(old);
+        if (!k) return;
+        photoKept.delete(old);
+        if (!(await sendPhotoBytes(k.bytes, k.thumb, old))) photoKept.set(old, k);
+      });
+      box.appendChild(again);
+    }
     log.appendChild(box);
   }
   $("chatEmpty").hidden = v.items.length > 0 || !!v.session;
@@ -436,8 +467,56 @@ function drawChat(rec) {
   $("chatText").disabled = !canWrite;
   $("chatSend").disabled = !canWrite;
   $("chatNewline").disabled = !canWrite;
+  $("chatPhoto").disabled = !canWrite;
+  photoOffered = v.photoBytes || 0;
   chatScroll.after(was);
 }
+// --- photos to the Thrall (photo.js shrinks; phone-core.js, sendPhoto, signs once and sends) ---
+// What the machine said it takes (its newest turns body), and the small pictures this page drew, by id.
+let photoOffered = 0;
+const photoThumbs = new Map();
+// What this page shrank, by photo id, kept in memory only (never stored) so Send again needs no new pick;
+// dropped when the horde locks (dropDoc).
+const photoKept = new Map();
+let photoSending = false;
+// One shrunk photo to the PC, under a new id; true when it went. Its own photo, sent, takes him to the
+// bottom, as his own line does (chat-scroll.js).
+async function sendPhotoBytes(bytes, thumb, resendOf = "") {
+  if (photoSending) return false;
+  photoSending = true;
+  say("action", "");
+  try {
+    const id = newDraftId();
+    photoThumbs.set(id, thumb);
+    photoKept.set(id, { bytes, thumb });
+    const r = await bridge.request("chat-photo", { bytes, id, resendOf });
+    if (r.ok) { chatScroll.sent(); return true; }
+    say("action", r.reason);
+  } catch (e) { say("action", messageOf(e)); } finally { photoSending = false; settleUpdate(); }
+  return false;
+}
+$("chatPhoto").addEventListener("click", () => {
+  if ($("chatPhoto").disabled || photoSending) return;
+  // A MACHINE OLDER THAN PHOTOS never offered them: said in plain words, and nothing is picked or sent.
+  if (!photoOffered) { say("action", PHOTO_PC_OLD); return; }
+  $("chatPhotoFile").value = "";
+  $("chatPhotoFile").click();
+});
+$("chatPhotoFile").addEventListener("change", async () => {
+  const file = $("chatPhotoFile").files && $("chatPhotoFile").files[0];
+  if (!file || photoSending) return;
+  photoSending = true;
+  say("action", "");
+  let made = null;
+  try {
+    // THE FIRST BYTES DECIDE, not the name or the type the browser guesses from it: an HTML page called
+    // .jpg is refused here, before anything is drawn.
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    if (!sniffImage(head)) { say("action", PHOTO_NOT_IMAGE); return; }
+    try { made = await shrinkInBrowser(file); } catch (e) { made = null; say("action", PHOTO_NOT_IMAGE + " (" + messageOf(e) + ")"); return; }
+  } catch (e) { made = null; say("action", messageOf(e)); } finally { photoSending = false; if (!made) settleUpdate(); }
+  if (made) await sendPhotoBytes(made.bytes, made.thumb);
+});
 // The page's id for the words in the composer: kept until they are sent, so a line sent again after a
 // failure is the same line, posted once - but only the SAME words: words changed since the last try
 // are a new line with a new id (review of 3d837f0, finding 1).
@@ -710,12 +789,15 @@ function drawProgress(rec, own = true) {
     // (or nothing read yet), the newest end, or the start.
     const mark = $("progressNew");
     if (mark) window.scrollTo(0, Math.max(0, window.scrollY + mark.getBoundingClientRect().top - $("bar").getBoundingClientRect().bottom - 8));
-    else if (progressMark >= 0) window.scrollTo(0, document.documentElement.scrollHeight);
+    else if (progressMark >= 0) progressToNewest();
     else window.scrollTo(0, 0);
   }
   // Only now, with the page where it will stand, is what is on the screen taken as seen.
   watchEntries();
 }
+// The newest entry seen from its top, below the bar (bar-height.js): an entry taller than the screen would
+// otherwise have its top under the bar at the foot of the page (the founder, 2026-10-20).
+function progressToNewest() { scrollToNewest(window, document.documentElement, $("progressLog").lastElementChild, $("bar").getBoundingClientRect().bottom); }
 // HE HAS READ WHAT HE HAS SEEN, IN ORDER. An entry is seen once half of it - or, for one taller than the
 // screen, half a screen of it - has stood between the bar and the foot; the browser tells the page so as
 // entries pass (an IntersectionObserver), whether he reads slowly or scrolls on. His place moves on from
@@ -757,7 +839,7 @@ function readAsSeen() {
 }
 // A browser with no such observer is told by the scroll itself.
 window.addEventListener("scroll", () => { if (!watcher) noteSeen(); }, { passive: true });
-$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));
+$("progressNewest").addEventListener("click", progressToNewest);
 $("progressAllRead").addEventListener("click", () => { bridge.request("progress-read", { all: true }).then((rec) => { if (rec.state === "known") { progressLast = rec.value; showProgressCount(rec.value); } else say("action", rec.reason || ""); }); });
 bridge.on("progress-changed", (rec) => {
   if (!stream || stream.entry === current) { drawProgress(rec, true); return; }
@@ -1118,7 +1200,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
@@ -1243,7 +1325,7 @@ function inFlight(p) {
 // His unsent words: a send under way, a chat line, a draft the document keeps, a field outside the
 // document with words in it, or the pairing screens (the recovery code is shown only once).
 function unsentWords() {
-  if (sending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;
+  if (sending || photoSending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;
   for (const id of Object.keys(docs)) if (draftsHeld(docs[id].storage.getItem(DRAFTS_KEY))) return true;
   const f = document.activeElement;
   if (f && (f.tagName === "TEXTAREA" || f.tagName === "INPUT") && f.type !== "checkbox" && f.value && !$("lists").contains(f)) return true;

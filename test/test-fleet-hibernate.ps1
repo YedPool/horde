@@ -349,8 +349,12 @@ $noWindow = $bare.PSObject.Copy()
 $noWindow | Add-Member -NotePropertyName "typedFor" -NotePropertyValue ([pscustomobject]@{ sessionId = $script:sids["L1"]; transcriptPath = "" }) -Force
 $nw = Invoke-HordeFleetParkSession -Request $noWindow -Deps (New-Deps)
 Check ($nw.outcome -ceq "not-yet" -and $nw.reason -like "*window*" -and $script:w.exits.Count -eq 0) ("a step handed no start for the typing window fails safe: not yet, never its exit command (" + $nw.outcome + ": " + $nw.reason + ")")
-$none = Invoke-HordeFleetParkSession -Request $bare -Deps (New-Deps)
-Check ($none.outcome -ceq "not-yet" -and $none.reason -like "*cannot be checked*" -and $script:w.exits.Count -eq 0) "a step handed no session to re-check the founder's typing of is never sent its exit command: not yet, said why"
+# HANDED ITS TYPING WINDOW BUT NO SESSION TO RE-CHECK: only the first guard can refuse it, so the reason is that guard's
+# own (the window guard below it also says "cannot be checked", and hid the first one's removal from this suite).
+$noTyped = $bare.PSObject.Copy()
+$noTyped | Add-Member -NotePropertyName "typedSince" -NotePropertyValue $script:clock.at -Force
+$none = Invoke-HordeFleetParkSession -Request $noTyped -Deps (New-Deps)
+Check ($none.outcome -ceq "not-yet" -and $none.reason -like "*since its ask cannot be checked*" -and $script:w.exits.Count -eq 0) ("a step handed no session to re-check the founder's typing of is never sent its exit command: not yet, said why (" + $none.outcome + ": " + $none.reason + ")")
 Reset-World
 $asked = New-Object System.Collections.ArrayList
 $d = New-Deps

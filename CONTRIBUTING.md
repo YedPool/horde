@@ -356,3 +356,22 @@ its branch can break main when main moved under it").
    targeted set**, and run on the final head, in a clean tree, before every merge, by any Orc. They
    are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
    278, 279 and 288 each merged green on their own suites and left `main` red on both.
+
+## 16. Horde never depends on a Microsoft Store package
+
+Horde does not run, launch or require anything installed as a Microsoft Store (MSIX/AppX) package:
+not PowerShell 7, not Node, not Python, not a terminal. Use the vendor's MSI or installer and start
+it by its full path (`C:\Program Files\PowerShell\7\pwsh.exe`, never whatever `pwsh` the search path
+finds first), and keep the Store's automatic updates off.
+
+Why (2026-10-16, 13:58): the Store auto-updated PowerShell 7 (`Microsoft.PowerShell`, running from
+`C:\Program Files\WindowsApps\...`). An update closes every running process of the package, so every
+`pwsh.exe` was closed at once, and because the terminal's panes ran `pwsh`, every fleet session died
+with it. A Store package also cannot be pinned to a version, and its alias can hide the MSI copy.
+
+`horde setup` holds this rule in two steps of `setup/steps.json`: `store-updates-off` (the policy
+`HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore` `AutoDownload` = 2; setting it needs an elevated run
+and setup says so rather than do it silently) and `powershell-msi` (installs the MSI by the hash the
+winget source publishes when `pwsh` is missing or is the Store copy). Setup never uninstalls the Store
+copy, because removing it closes the `pwsh.exe` running from it: remove it by hand when no session
+runs on it. `test\test-setup-store.ps1` and `test\e2e\e2e-setup-store.ps1` hold both steps.
