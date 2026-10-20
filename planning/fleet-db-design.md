@@ -57,6 +57,7 @@ with correct efficient and proper unique ids and relational structure." DDL: `fl
 | `session`, `pane`, `session_pane` | K (SessionStart/SessionEnd hooks, resume binding) | `horde db seat bind` (one transaction) |
 | `parking_lot`, `parking_lot_member`, `wake`, `wake_member` | K | `horde fleet hibernate / wake` calling the access layer |
 | `question`, `question_event`, `answer`, `answer_route`, `answer_route_taken` (TAKEN from the target's hook) | F (decisions verbs; routing reads `orc_seat`) | decisions store writes the DB in the same call |
+| `decisions_snapshot`, `decisions_snapshot_item` (append-only; live list = newest per Orc) | F (the publish verb; until then an interim JSON per publish, imported by N) | `publishDecisions` in `fleet-db/write.mjs` |
 | `service`, `deploy` | F (relay tend), L (router) | `horde db deploy add` after verify |
 | meter tables (`tokens_*`, `mail_hops`) | L, in `metrics/fleet.sqlite` | ATTACH; ids from here |
 
@@ -101,3 +102,42 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
 - Every multi-row write is one `inWrite` call. Take a label inside the write that uses it.
 - History rows are inserted with their sha256; on a UNIQUE conflict on sha256 the write is a no-op.
 - A new column or table is a new migration appended to `MIGRATIONS`; an old one is never edited.
+- History rows go in through `appendHistory` (`fleet-db/write.mjs`): the hash is of the whole stored row
+  (every column but `id` and `sha256`, a column left out taking its default or null), so it can be
+  recomputed from the row alone; the conflict clause names `sha256` only, so a row that breaks a CHECK,
+  a NOT NULL or another UNIQUE still fails loudly (a plain INSERT OR IGNORE would drop it in silence).
+- Ids come from one minter per process (`newId`): a second id in the same millisecond is the last one
+  plus one, so rows written in one millisecond sort in the order they were written.
+
+## Migration 2: what the Progress and Decisions pages show (M's orders of 2026-10-19 and 10-20)
+
+- `parking_lot.keep_visible` (0/1, default 0, lot level, agreed with lane K): a parked Orc's card and
+  questions leave the Progress and Decisions pages unless its park says keep-visible. `parked_now` is
+  every member still parked, with its lot's `keep_visible` and an `orc_id` (the member's own, else its
+  session's). Lane F's lists read it.
+- `decisions_snapshot` and `decisions_snapshot_item` (founder, 10-20: the Decisions page showed stale
+  lists): each Orc publishes its whole list; the live list is the newest snapshot per Orc
+  (`decisions_live`, `decisions_live_item`) and every older one is the archive. No `superseded_by`
+  column: "newest" is already a fact of `published_at`, and a pointer would be a second copy of it.
+  `sha256` is of the canonical items and is not unique (A, B, A records the second A); a trigger
+  refuses a snapshot equal to that Orc's newest, and `publishDecisions` answers "unchanged" instead of
+  writing. Positions run 1..`item_count` (a trigger); that every position is present is checked by
+  `horde db check`, since the items are written after their snapshot. An empty list is a list.
+- Until lane F's publish verb calls the access layer, F writes one JSON per publish
+  (`{orc, publishedAt, sessionId, items: [{position, questionNumber, text, recommendation, importance,
+  blocks}]}`) and the phase 1 importer hashes it; F need not match the canonical form.
+
+## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
+
+The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in
+`fleet/StatusPanel.ps1`) is rendered from fleet.db, not typed:
+
+- a new `orc_status` table holds the only human words: `doing` and `blocked`, set through lane K's
+  validating writer (`horde status set`), so the reader's rules (120 characters, plain words, no bare
+  references) hold when the words are written;
+- `finished` and `waiting on` are derived: from `task_now` (done and verified tasks), `pr` (merged
+  work) and `question_now` (open founder questions of that Orc);
+- the renderer writes `status.txt` through K's writer, and its tests read the result back with
+  `ConvertFrom-HordeFleetStatusBytes`, so a rendered card that the reader refuses fails the build;
+- lane F's Progress page lists cards only for registry Orcs today, and for live `orc` rows once
+  fleet.db holds them.

@@ -441,6 +441,88 @@ export const MIGRATIONS = [
       WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes
   FROM answer a JOIN question qn ON qn.id = a.question_id;
   `,
+
+  // 2: what the Progress and Decisions pages show (M's orders of 2026-10-19 and 10-20).
+  `
+  -- A park that says keep-visible leaves its Orcs on the Progress and Decisions pages; any other park
+  -- takes them off. Lot level (agreed with lane K, schema/fleet-parking-lot.v1.json).
+  ALTER TABLE parking_lot ADD COLUMN keep_visible INTEGER NOT NULL DEFAULT 0 ${flag('keep_visible')};
+
+  -- Every member still parked, with its lot's keep_visible. A member's own orc_id is the one the park
+  -- recorded; a member that has none falls back to its session's.
+  CREATE VIEW parked_now AS
+  SELECT m.lot_id, m.session_id, coalesce(m.orc_id, s.orc_id) AS orc_id, m.tier, l.keep_visible,
+    l.created_at AS parked_at, l.reason
+  FROM parking_lot_member m JOIN parking_lot l ON l.id = m.lot_id JOIN session s ON s.id = m.session_id
+  WHERE m.state = 'parked';
+
+  -- DECISIONS LISTS ----------------------------------------------------------------------------------
+
+  -- Each list an Orc (or the Thrall, through its orc row) publishes for the founder, whole, as it was.
+  -- The live list is the newest snapshot of each Orc (decisions_live); every older one is the archive.
+  -- There is no superseded_by column: which snapshot is newest is already a fact of published_at, and a
+  -- stored pointer would be a second copy of it. sha256 is of the canonical items (fleet-db/write.mjs,
+  -- publishDecisions) and is NOT unique: a list that goes A, B, A records the second A. A publish equal
+  -- to the Orc's newest list is refused below, so "unchanged" writes nothing. An empty list is a list.
+  CREATE TABLE decisions_snapshot (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    orc_id TEXT NOT NULL REFERENCES orc (id),
+    published_at INTEGER NOT NULL CHECK (published_at >= 0),
+    by_session_id TEXT REFERENCES session (id),
+    item_count INTEGER NOT NULL CHECK (item_count >= 0),
+    sha256 TEXT NOT NULL ${sha('sha256')},
+    -- One Orc cannot publish twice in one millisecond, and an import of the same file twice hits this.
+    UNIQUE (orc_id, published_at)
+  ) STRICT;
+
+  CREATE TRIGGER decisions_snapshot_not_same BEFORE INSERT ON decisions_snapshot
+  WHEN NEW.sha256 = (SELECT s.sha256 FROM decisions_snapshot s WHERE s.orc_id = NEW.orc_id
+    ORDER BY s.published_at DESC, s.id DESC LIMIT 1)
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot: same as the live list'); END;
+
+  -- One line of a list. question_id is NULL for an item that is not a numbered question yet.
+  CREATE TABLE decisions_snapshot_item (
+    snapshot_id TEXT NOT NULL REFERENCES decisions_snapshot (id),
+    position INTEGER NOT NULL CHECK (position >= 1),
+    question_id TEXT REFERENCES question (id),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 400),
+    recommendation TEXT CHECK (length(recommendation) <= 400),
+    importance TEXT CHECK (length(importance) BETWEEN 1 AND 40),
+    blocks TEXT CHECK (length(blocks) <= 400),
+    PRIMARY KEY (snapshot_id, position)
+  ) STRICT;
+  CREATE INDEX decisions_snapshot_item_question ON decisions_snapshot_item (question_id);
+
+  -- Positions run 1..item_count: with the primary key, a list can hold no gap and no extra line. That
+  -- every position is present, and that the lines still hash to the snapshot's sha256, is checked by
+  -- horde db check, since the items come after their snapshot.
+  CREATE TRIGGER decisions_snapshot_item_in_range BEFORE INSERT ON decisions_snapshot_item
+  WHEN NEW.position > (SELECT s.item_count FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot_item: position beyond the list''s item_count'); END;
+
+  -- Lines go only into the Orc's newest list, as it is published: an older snapshot is the archive and is
+  -- frozen, even one left short. An import therefore writes each Orc's lists in time order.
+  CREATE TRIGGER decisions_snapshot_item_newest_only BEFORE INSERT ON decisions_snapshot_item
+  WHEN NEW.snapshot_id <> (SELECT l.id FROM decisions_live l
+    WHERE l.orc_id = (SELECT s.orc_id FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id))
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot_item: lines go only into the newest list of its Orc'); END;
+
+  ${appendOnly('decisions_snapshot')}
+  ${appendOnly('decisions_snapshot_item')}
+
+  -- The newest snapshot of each Orc: the list the Decisions page shows. "Same as the live list" above is
+  -- against this one only, so a backdated import equal to an older list is written (the design's A, B, A).
+  CREATE VIEW decisions_live AS
+  SELECT id, orc_id, published_at, by_session_id, item_count, sha256 FROM (
+    SELECT s.*, row_number() OVER (PARTITION BY s.orc_id ORDER BY s.published_at DESC, s.id DESC) AS rn
+    FROM decisions_snapshot s)
+  WHERE rn = 1;
+
+  CREATE VIEW decisions_live_item AS
+  SELECT l.orc_id, l.published_at, i.snapshot_id, i.position, i.question_id, i.text, i.recommendation,
+    i.importance, i.blocks
+  FROM decisions_live l JOIN decisions_snapshot_item i ON i.snapshot_id = l.id;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
