@@ -35,7 +35,7 @@
            Replace = '    $sec = $null' }
         @{ Name = "a-file-of-another-owner-is-accepted"
            Find = 'if ($ownerWhy -cne "") { return $ownerWhy }'
-           Replace = 'if ($false) {' }
+           Replace = 'if ($false) { return $ownerWhy }' }
         @{ Name = "an-administrators-owner-is-allowed-without-elevation"
            Find = 'return ($Owner -ceq $Mine -or ($Elevated -and $Owner -ceq "S-1-5-32-544"))'
            Replace = 'return ($Owner -ceq $Mine -or $Owner -ceq "S-1-5-32-544")' }

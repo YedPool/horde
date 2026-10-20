@@ -104,7 +104,7 @@ try {
     # T-0304: a secret file made by an ELEVATED registrar was owned by Administrators, and the non-elevated service then refused it.
     # The owner is part of the security the file is made with, so the registrar's elevation cannot change it.
     $meSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    Check ((New-HordeSecretFileSecurity).GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ceq $meSid) "the security a secret file is made with names the current user as its OWNER (not left to the elevated default)"
+    Check ("$((New-HordeSecretFileSecurity).GetOwner([System.Security.Principal.SecurityIdentifier]))" -ceq $meSid) "the security a secret file is made with names the current user as its OWNER (not left to the elevated default)"
     $ownedPath = Join-Path $work "owned-by-me.secret"
     New-HordeLockedSecretFile -Path $ownedPath -Text "x"
     Check ((Get-HordeFileAcl -Path $ownedPath).GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ceq $meSid) "a secret file made by New-HordeLockedSecretFile is owned by the current user"
