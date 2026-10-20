@@ -642,9 +642,10 @@ function Get-HordeRelayJournalReceivedRecord {
     $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "in" -From $From -Channel $Channel
     $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "in" -From $From -Channel $Channel -Seq $Seq
     if (-not $r.ok) { return (New-HordeUnknown -Reason $r.reason) }
-    $verdict = New-HordeKnown -Value ([pscustomobject]@{ key = $r.meta.key; fresh = $true; why = ""; gapBefore = [long]0; direction = "in"; resumed = $true }) -ObservedAt ([datetime]::UtcNow)
-    return (New-HordeKnown -Value ([pscustomobject]@{ from = $From; channel = $Channel; kind = $r.meta.kind; seq = $Seq; key = $r.meta.key; text = $r.envelope
-        evidence = (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $r.whole))); verdict = $verdict }) -ObservedAt ([datetime]::UtcNow))
+    $replay = [ordered]@{ key = $r.meta.key; fresh = $true; why = ""; gapBefore = [long]0; direction = "in"; resumed = $true }
+    $verdict = New-HordeKnown -Value ([pscustomobject]$replay) -ObservedAt ([datetime]::UtcNow)
+    $digest = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $r.whole))
+    return (New-HordeKnown -Value ([pscustomobject]@{ from = $From; channel = $Channel; kind = $r.meta.kind; seq = $Seq; key = $r.meta.key; text = $r.envelope; evidence = $digest; verdict = $verdict }) -ObservedAt ([datetime]::UtcNow))
 }
 
 function Test-HordeRelayJournalSent {
