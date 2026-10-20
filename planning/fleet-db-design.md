@@ -150,6 +150,11 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   (top tasks by priority, then position, then age; subtasks by position under their parent: 3, 3.1,
   3.1.2), with a sort key that orders 1.10 after 1.9. `task_checkin` records each turn that looked at its
   list (the list's hash), for lane K's per-turn Stop hook.
+- Writers never INSERT OR REPLACE an object (the replace deletes and re-makes it, so its entity row loses
+  created_by and updated_at): UPDATE, or INSERT ... ON CONFLICT DO UPDATE. A tagged or linked object
+  cannot be deleted until its tags and links are removed (their foreign keys hold its entity row). A task
+  cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
+  columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
 
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 

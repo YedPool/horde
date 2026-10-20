@@ -66,7 +66,10 @@ const appendOnly = (table) => `
   CREATE TRIGGER ${table}_no_delete BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, '${table} is append-only'); END;`;
 const NOW_MS = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
 // An object's entity row is made, touched and removed with it, so nothing can point at an object that is
-// not there and no object is missing from the registry. Its id cannot change: every pointer is to it.
+// not there and no object is missing from the registry; an entity row cannot be made for an object that
+// does not exist. Its id cannot change: every pointer is to it. NEVER INSERT OR REPLACE an object: the
+// replace deletes it and makes it again, so its entity row comes back without created_by and updated_at
+// (review of phase 1b); change it with UPDATE, or INSERT ... ON CONFLICT DO UPDATE.
 const entityTriggers = (table) => `
   CREATE TRIGGER ${table}_entity_add AFTER INSERT ON ${table} BEGIN
     INSERT INTO entity (id, kind, created_at) VALUES (NEW.id, '${table}', ${ENTITY_TABLES[table] ? 'NEW.' + ENTITY_TABLES[table] : NOW_MS}); END;
@@ -77,7 +80,10 @@ const entityTriggers = (table) => `
   BEGIN SELECT RAISE(ABORT, '${table}: an id never changes'); END;
   CREATE TRIGGER entity_keeps_${table} BEFORE DELETE ON entity
   WHEN OLD.kind = '${table}' AND EXISTS (SELECT 1 FROM ${table} x WHERE x.id = OLD.id)
-  BEGIN SELECT RAISE(ABORT, 'entity: its ${table} row is still there'); END;`;
+  BEGIN SELECT RAISE(ABORT, 'entity: its ${table} row is still there'); END;
+  CREATE TRIGGER entity_needs_${table} BEFORE INSERT ON entity
+  WHEN NEW.kind = '${table}' AND NOT EXISTS (SELECT 1 FROM ${table} x WHERE x.id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'entity: no ${table} row has this id'); END;`;
 const entityBackfill = (table) =>
   `INSERT INTO entity (id, kind, created_at) SELECT id, '${table}', ${ENTITY_TABLES[table] ?? NOW_MS} FROM ${table};`;
 
@@ -655,11 +661,18 @@ export const MIGRATIONS = [
 
   -- THE TASK TREE AND THE PER-TURN CHECK-IN ---------------------------------------------------------
 
-  -- position orders a task among its siblings, and a top task in its owner's list; gaps are fine, since
-  -- the number shown (3.2.1) is derived by task_tree. due_at: when the task is wanted by.
+  -- position orders a task among its siblings, and breaks ties of priority in its owner's list; gaps are
+  -- fine, since the number shown (3.2.1) is derived by task_tree. due_at: when the task is wanted by.
   ALTER TABLE task ADD COLUMN position INTEGER CHECK (position >= 1);
   ALTER TABLE task ADD COLUMN due_at INTEGER;
   CREATE INDEX task_parent ON task (parent_id, position);
+  -- A task cannot sit under its own subtask: the tasks of a loop would have no top and would drop out of
+  -- every list unseen. An insert cannot make a loop (nothing points at a new id yet); a move can.
+  CREATE TRIGGER task_no_loop BEFORE UPDATE OF parent_id ON task
+  WHEN NEW.parent_id IS NOT NULL AND NEW.id IN (
+    WITH RECURSIVE up (x) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM task p JOIN up ON p.id = up.x WHERE p.parent_id IS NOT NULL)
+    SELECT x FROM up)
+  BEGIN SELECT RAISE(ABORT, 'task: it cannot sit under its own subtask'); END;
 
   -- "I looked at my task list this turn": one row per turn that checked in, with the hash of the list it
   -- saw. Lane K's Stop hook reads the newest per session.

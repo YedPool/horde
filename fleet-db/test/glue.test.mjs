@@ -121,6 +121,7 @@ test('every main table has its triggers: each kind is made, touched and removed 
       assert.equal(count(db, "SELECT count(*) AS n FROM sqlite_schema WHERE type = 'trigger' AND name = ?", t + '_' + k), 1, t + '_' + k);
     }
     assert.equal(count(db, "SELECT count(*) AS n FROM sqlite_schema WHERE type = 'trigger' AND name = ?", 'entity_keeps_' + t), 1, t);
+    assert.equal(count(db, "SELECT count(*) AS n FROM sqlite_schema WHERE type = 'trigger' AND name = ?", 'entity_needs_' + t), 1, t);
   }
 });
 
@@ -161,6 +162,22 @@ test('an object that is tagged cannot be removed from under its tag', () => {
   w.db.prepare('INSERT INTO entity_tag (entity_id, tag_id, at) VALUES (?, ?, 1)').run(w.k, tag);
   assert.throws(() => w.db.prepare('DELETE FROM orc WHERE id = ?').run(w.k), /FOREIGN KEY/);
   assert.ok(entityOf(w.db, w.k));
+});
+
+test('an entity row for an object that does not exist is refused', () => {
+  const w = world();
+  assert.throws(() => w.db.prepare("INSERT INTO entity (id, kind, created_at) VALUES (?, 'task', 1)").run(id()), /no task row has this id/);
+});
+
+test('a task cannot be moved under its own subtask, and can be moved anywhere else', () => {
+  const w = world();
+  const a = task(w, { owner: w.f, prio: 1, at: 10 });
+  const b = task(w, { owner: w.f, parent: a.id, at: 11 });
+  const c = task(w, { owner: w.f, parent: b.id, at: 12 });
+  assert.throws(() => w.db.prepare('UPDATE task SET parent_id = ? WHERE id = ?').run(c.id, a.id), /its own subtask/);
+  assert.throws(() => w.db.prepare('UPDATE task SET parent_id = ? WHERE id = ?').run(b.id, a.id), /its own subtask/);
+  w.db.prepare('UPDATE task SET parent_id = ? WHERE id = ?').run(a.id, c.id);
+  assert.deepEqual(tree(w, w.f), ['1 ' + a.key, '1.1 ' + b.key, '1.2 ' + c.key]);
 });
 
 test('an entity of a kind no table holds is refused', () => {
@@ -327,7 +344,7 @@ test('subtasks past ten sort as numbers, not as text', () => {
 test('a task cannot be its own parent', () => {
   const w = world();
   const a = task(w, { owner: w.f });
-  assert.throws(() => w.db.prepare('UPDATE task SET parent_id = id WHERE id = ?').run(a.id), /CHECK/);
+  assert.throws(() => w.db.prepare('UPDATE task SET parent_id = id WHERE id = ?').run(a.id), /CHECK|its own subtask/);
 });
 
 // --- check -------------------------------------------------------------------------------------------
@@ -339,6 +356,7 @@ test('check names an object missing from the registry and an entry whose object 
   w.db.exec('PRAGMA foreign_keys = OFF');
   w.db.exec('DROP TRIGGER task_entity_add');
   w.db.prepare("INSERT INTO task (id, key, title, source, created_at) VALUES (?, 'T-0900', 't', 'founder', 1)").run(id());
+  w.db.exec('DROP TRIGGER entity_needs_pr');
   w.db.prepare("INSERT INTO entity (id, kind, created_at) VALUES (?, 'pr', 1)").run(id());
   const p = findProblems(w.db);
   assert.ok(p.includes('orc: 1 rows have no entity row'), p.join(' | '));

@@ -25,6 +25,16 @@
         @{ Name = "entity-removable-under-object"
            Find = 'BEGIN SELECT RAISE(ABORT, ''entity: its ${table} row is still there''); END;'
            Replace = 'BEGIN SELECT 1; END;' }
+        @{ Name = "entity-without-object"
+           Find = 'BEGIN SELECT RAISE(ABORT, ''entity: no ${table} row has this id''); END;'
+           Replace = 'BEGIN SELECT 1; END;' }
+        @{ Name = "task-loop-allowed"
+           Find = 'BEGIN SELECT RAISE(ABORT, ''task: it cannot sit under its own subtask''); END;'
+           Replace = 'BEGIN SELECT 1; END;' }
+        @{ Name = "task-loop-one-step-only"
+           Find = 'SELECT NEW.parent_id UNION SELECT p.parent_id FROM task p JOIN up ON p.id = up.x WHERE p.parent_id IS NOT NULL'
+           Replace = 'SELECT NEW.parent_id'
+        }
         @{ Name = "entity-kind-editable"
            Find = 'WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.created_at IS NOT OLD.created_at'
            Replace = 'WHEN NEW.id IS NOT OLD.id' }
