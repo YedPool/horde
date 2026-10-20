@@ -19,7 +19,8 @@ import { inWrite } from './store.mjs';
 
 // The append-only tables that carry a sha256 of their content (schema.mjs). answer_route_taken has no
 // hash: it is keyed by its route and written once.
-export const HASHED_HISTORY = ['task_event', 'question_event', 'answer', 'answer_route', 'changelog_entry', 'deploy'];
+export const HASHED_HISTORY = ['task_event', 'question_event', 'answer', 'answer_route', 'changelog_entry', 'deploy',
+  'orc_status'];
 
 const ULID_TAIL_MAX = (1n << 80n) - 1n;
 

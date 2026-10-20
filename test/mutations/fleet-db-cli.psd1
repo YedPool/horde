@@ -29,6 +29,12 @@
         @{ Name = "hash-not-rechecked"
            Find = '!== s.sha256) problems.push'
            Replace = '=== ''never'') problems.push' }
+        @{ Name = "registry-gaps-not-found"
+           Find = 'if (missing > 0) problems.push'
+           Replace = 'if (false) problems.push' }
+        @{ Name = "registry-orphans-not-found"
+           Find = 'if (orphans > 0) problems.push'
+           Replace = 'if (false) problems.push' }
         @{ Name = "init-hint-lost"
            Find = 'e.message.replace(''open it for writing once'', ''run horde db init'')'
            Replace = 'e.message' }

@@ -127,6 +127,35 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   (`{orc, publishedAt, sessionId, items: [{position, questionNumber, text, recommendation, importance,
   blocks}]}`) and the phase 1 importer hashes it; F need not match the canonical form.
 
+## Migration 3: the glue (founder, 2026-10-20: every object of the Horde in one database)
+
+- `entity` is the registry of every object: one row per row of `horde`, `node`, `person`, `orc`,
+  `session`, `pane`, `task`, `pr`, `question`, `answer`, `decisions_snapshot`, `changelog_entry`,
+  `parking_lot`, `service`, `deploy` and `orc_status` (`ENTITY_TABLES` in `schema.mjs`), made, touched
+  (`updated_at`) and removed with its object by triggers, so it can never drift. `kind` is the table;
+  `created_by_id` is who made it (a person, an Orc or a session, itself an entity). An object's id never
+  changes, an entity cannot be deleted from under its object, and `horde db check` lists any object
+  missing from the registry and any entry whose object is gone. Existing rows are entered by the migration.
+- `tag` + `entity_tag` tag any object (lower-case names; a colon makes a family, `area:relay`). `link`
+  relates any two objects with a typed relation (`blocks`, `relates-to`, `answers`, `implements`,
+  `duplicates`, `follows-up`, `caused-by`, `mentions`); a link is retired, not deleted, and live at most
+  once. Fixed relations stay foreign keys (a task's parent, a question's task). Lane F's notification
+  tables (event, subscription, delivery) point their subjects and owners at `entity` in a later migration.
+- `horde` (one Thrall across machines, `node.horde_id`), `person` (one live founder; staff), and
+  `session.model`.
+- `orc_status`: the status of every Orc and of the Thrall, history kept, append-only and hashed;
+  `status_now` is the newest per Orc. Only `doing` and `blocked` are typed (the card's limits); the card's
+  finished and waiting-on lines are derived (phase 3 plan above).
+- `task.position` and `task.due_at`; the view `task_tree` numbers every open task in its owner's list
+  (top tasks by priority, then position, then age; subtasks by position under their parent: 3, 3.1,
+  3.1.2), with a sort key that orders 1.10 after 1.9. `task_checkin` records each turn that looked at its
+  list (the list's hash), for lane K's per-turn Stop hook.
+- Writers never INSERT OR REPLACE an object (the replace deletes and re-makes it, so its entity row loses
+  created_by and updated_at): UPDATE, or INSERT ... ON CONFLICT DO UPDATE. A tagged or linked object
+  cannot be deleted until its tags and links are removed (their foreign keys hold its entity row). A task
+  cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
+  columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
+
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 
 The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in

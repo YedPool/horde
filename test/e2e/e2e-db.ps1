@@ -61,7 +61,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 2, created\)') ("init creates the file at schema 2 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 3, created\)') ("init creates the file at schema 3 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -69,7 +69,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 2, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 3, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
