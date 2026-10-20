@@ -79,8 +79,7 @@ test('a version 1 file is brought to the current version and its lots are not ke
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(SCHEMA_VERSION, 2);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.equal(db.prepare('SELECT keep_visible FROM parking_lot WHERE id = ?').get(lot).keep_visible, 0);
 });
 
@@ -200,11 +199,15 @@ test('another millisecond starts from fresh random bits', () => {
 });
 
 test('an id for a millisecond seen before sorts after the last one made in it, even after others', () => {
-  const mint = makeMinter();
+  // Each fresh draw is smaller than the last, so an id minted from fresh bits would sort BEFORE the first:
+  // the test fails every time the millisecond is forgotten, not half the time.
+  let fill = 0x80;
+  const mint = makeMinter(() => Buffer.alloc(10, fill--));
   const a = mint(T0);
   mint(T0 + 1);
   const b = mint(T0);
   assert.ok(a < b, a + ' then ' + b);
+  assert.equal(b, ulid(T0, Buffer.from([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81])));
 });
 
 test('a millisecond whose 80 bits are used up is refused, not wrapped to a smaller id', () => {
@@ -449,12 +452,12 @@ test('init creates the file, init again keeps it, status counts every table', ()
   const home = tempDir();
   const a = run(['init'], { HORDE_HOME: home });
   assert.equal(a.code, 0);
-  assert.match(a.out, /schema 2, created/);
+  assert.match(a.out, new RegExp('schema ' + SCHEMA_VERSION + ', created'));
   const b = run(['init'], { HORDE_HOME: home });
   assert.match(b.out, /already there, now current/);
   const s = run(['status'], { HORDE_HOME: home });
   assert.equal(s.code, 0);
-  assert.match(s.out, /schema 2,/);
+  assert.match(s.out, new RegExp('schema ' + SCHEMA_VERSION + ','));
   assert.match(s.out, /^decisions_snapshot: 0 rows$/m);
   assert.match(s.out, /^task_event: 0 rows$/m);
 });

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dbPathFor, openStore } from './store.mjs';
-import { SCHEMA_VERSION } from './schema.mjs';
+import { SCHEMA_VERSION, ENTITY_KINDS } from './schema.mjs';
 import { decisionsHash } from './write.mjs';
 
 export const VERBS = ['init', 'status', 'check'];
@@ -36,6 +36,14 @@ export function findProblems(db) {
   const lines = db.prepare('SELECT question_id, text, recommendation, importance, blocks FROM decisions_snapshot_item WHERE snapshot_id = ? ORDER BY position');
   for (const s of db.prepare('SELECT id, sha256 FROM decisions_snapshot ORDER BY id').all()) {
     if (decisionsHash(lines.all(s.id).map((r) => ({ ...r }))) !== s.sha256) problems.push('decisions list ' + s.id + ' does not hash to its sha256');
+  }
+  // The entity registry must match the tables exactly: an object with no entity row cannot be tagged or
+  // linked, and an entity row with no object points at nothing. Table names come from schema.mjs.
+  for (const t of ENTITY_KINDS) {
+    const missing = db.prepare('SELECT count(*) AS n FROM ' + t + ' x WHERE NOT EXISTS (SELECT 1 FROM entity e WHERE e.id = x.id)').get().n;
+    if (missing > 0) problems.push(t + ': ' + missing + ' rows have no entity row');
+    const orphans = db.prepare('SELECT count(*) AS n FROM entity e WHERE e.kind = ? AND NOT EXISTS (SELECT 1 FROM ' + t + ' x WHERE x.id = e.id)').get(t).n;
+    if (orphans > 0) problems.push('entity: ' + orphans + ' ' + t + ' rows point at nothing');
   }
   return problems;
 }
