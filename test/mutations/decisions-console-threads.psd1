@@ -33,11 +33,11 @@
            Find = '        $request["text"] = $words'
            Replace = '        $request["text"] = $words.Trim()' }
         @{ Name = "blank-line-of-the-words-not-printed"
-           Find = 'foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }'
-           Replace = 'foreach ($l in @(([string]$Message.text) -split "\r?\n" | Where-Object { $_.Trim() -ne "" })) { [void]$lines.Add($Indent + "    " + $l) }' }
+           Find = 'foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l) }'
+           Replace = 'foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n" | Where-Object { $_.Trim() -ne "" })) { [void]$lines.Add($Indent + "    " + $l) }' }
         @{ Name = "lines-of-the-words-trimmed-when-printed"
-           Find = 'foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }'
-           Replace = 'foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l.Trim()) }' }
+           Find = 'foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l) }'
+           Replace = 'foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l.Trim()) }' }
         # --- every line can be read with no other context ---
         @{ Name = "message-does-not-say-how-it-was-recorded"
            Find = '[void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " +'

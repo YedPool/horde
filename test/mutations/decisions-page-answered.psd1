@@ -16,8 +16,8 @@
     Suite  = "test\e2e\e2e-decisions-order.ps1"
     Mutations = @(
         @{ Name = "an-answered-question-stays-in-his-list"
-           Find = '      if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }'
-           Replace = '      if (st.answered && false) { return (st.local || lingers(q)) ? "main" : "thrall"; }' }
+           Find = '      if (st.answered) { return (!answeredShown || st.local || lingers(q)) ? "main" : "thrall"; }'
+           Replace = '      if (st.answered && false) { return (!answeredShown || st.local || lingers(q)) ? "main" : "thrall"; }' }
         @{ Name = "the-list-is-not-sorted"
            Find = '      inOrder(mine, orderKey, orderTurned).forEach(function (q) {'
            Replace = '      mine.forEach(function (q) {' }

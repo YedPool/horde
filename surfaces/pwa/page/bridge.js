@@ -43,6 +43,9 @@
 //   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
 //                         mode } } as phone-core's chat answers it; a locked or empty horde answers
 //                         unknown with the reason
+//   chat-photo {bytes, id, resendOf?}  one photo to the Thrall's machine, already shrunk to a JPEG by the page
+//                         (photo.js): signed once by the passkey and sent in parts (phone-core.js,
+//                         sendPhoto): { ok, id, parts } or { ok: false, reason }; id the photo's (32 hex)
 //   chat-send {text, id}  one line to the Thrall, signed and sent: { ok } or { ok: false, reason }; id is
 //                         the page's id for the words (32 hex), so the same words sent again are one line
 //   progress {of}         the picked horde's progress log: { state, value } as phone-core's progress
@@ -101,7 +104,7 @@ const RANK_WAIT_MS = 10 * 60 * 1000;
 const RANK_REFUSED = "The PC refused this change (it may be older than a change made since, or the question has left your list). Nothing was changed.";
 const RANK_NEEDS_PASSKEY = "Not changed: your PC asks for your passkey for this question. Tap it again and confirm with your passkey.";
 const RANK_UNCONFIRMED = "Not confirmed by the PC yet: it shows the new level once the PC has made the change. Tap again to send it again.";
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "chat-photo", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -313,6 +316,16 @@ export function createBridge(phone, options = {}) {
       return sessionsRecord();
     },
     "progress-read": async (a) => progressRecord(() => phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))),
+    "chat-photo": async (a) => {
+      try {
+        if (!(a.bytes instanceof Uint8Array)) return { ok: false, reason: "There is no photo to send." };
+        const photoId = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
+        const resendOf = /^[0-9a-f]{32}$/.test(String(a.resendOf || "")) ? String(a.resendOf) : "";
+        const sent = await phone.sendPhoto(picked, { bytes: a.bytes, photoId, resendOf });
+        emit("chat-changed", await chatRecord());
+        return { ok: true, id: photoId, parts: sent.parts };
+      } catch (e) { emit("chat-changed", await chatRecord()); return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+    },
     "chat-send": async (a) => {
       try {
         const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();

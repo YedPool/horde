@@ -122,6 +122,11 @@ $script:HordeServiceSettings = New-HordeModuleSettings -Module "services" -Setti
     # minutes, not every pass (the design's default).
     @{ name = "fetchIntervalSeconds"; kind = "whole"; default = 300; min = 30; max = 86400
        what = "How often, in seconds, a followed remote is asked for its newest revision." },
+    # The installed CLI (cli/ServicesBin.ps1): the clone every session runs `horde` from follows main.
+    @{ name = "followInstalledCli"; kind = "truefalse"; default = $true
+       what = "Whether the supervisor fast-forwards the installed CLI to origin/main, when that is safe, and proves it loads." },
+    @{ name = "installedCliFolder"; kind = "folder"; default = ""
+       what = "The installed CLI's folder; empty means the bin\horde clone under the person's profile." },
     @{ name = "startBackoffSeconds"; kind = "whole"; default = 30; min = 1; max = 3600
        what = "The wait, in seconds, before starting again after the first start that did not last." },
     @{ name = "startBackoffMaxSeconds"; kind = "whole"; default = 1800; min = 1; max = 86400

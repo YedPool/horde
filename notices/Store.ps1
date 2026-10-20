@@ -49,6 +49,12 @@ function Get-HordeNoticeSettingsDeclaration {
         # 10 an hour: "notify me when X is done" is one line per X; a session that says more than ten
         # things an hour is not doing what he asked for, and is cut off for the rest of that hour.
         @{ name = "perHour"; kind = "whole"; default = 10; min = 1; max = 120; what = "How many notices one session may send in one clock hour (UTC); one more cuts it off until the hour ends." },
+        # A SERVICE (an unattended program such as a scheduled task) has its own count, so a noisy service
+        # can never use up a session's ten, and a session never a service's (notices/Services.ps1).
+        @{ name = "servicePerHour"; kind = "whole"; default = 10; min = 1; max = 120; what = "How many notices one registered service may send in one clock hour (UTC); one more cuts it off until the hour ends." },
+        # Who may register or revoke a service: a PROVEN session whose label is in this list. A service can
+        # never register itself or another: it has no session.
+        @{ name = "serviceRegistrars"; kind = "text"; default = "M"; min = 1; max = 120; what = "The session labels that may register and revoke notice services, comma separated (the founder's side); a service is never one." },
         @{ name = "keepNotices"; kind = "whole"; default = 500; min = 50; max = 10000; what = "How many of the newest notices the machine keeps." },
         @{ name = "textChars"; kind = "whole"; default = 300; min = 40; max = 2000; what = "The longest notice text, in characters; a longer one is cut, after it is checked for secrets whole." }
     ))

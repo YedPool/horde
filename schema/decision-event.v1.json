@@ -45,7 +45,8 @@
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1},
-        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."}
+        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."},
+        "closedBySeat": {"type": "string", "enum": ["warchief"], "description": "Present only when the close was made by a session the command line PROVED holds the warchief's seat. Nothing else may make Horde say the warchief closed a question."}
       }
     },
     "question-reopened": {
@@ -94,6 +95,48 @@
       "properties": {
         "reader": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Who has read, as one lowercase label: a speaker of decisions/Rules.ps1 that has an inbox."},
         "upTo": {"type": "integer", "minimum": 1, "description": "The sequence number of the last record the reader has read up to. Always below this record's own sequence number: nothing is read before it is written."}
+      }
+    },
+    "answer-routed": {
+      "type": "object",
+      "description": "One answer of the founder's was sent, by code, to the seat of whoever asked the question - or that seat was reminded, once, that the answered question is still open (decisions/Route.ps1). One record per answer and purpose: a second does not apply, so an answer is never mailed twice. It changes nothing else of the question, and authorizes nothing.",
+      "required": ["number", "answer", "purpose", "seat", "resolved", "notice"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1, "description": "The question the answer is under."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the message-said record that holds the founder's answer."},
+        "purpose": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "answer: the answer itself was sent. nudge: the one reminder that the question is answered and still open. The closed list is decisions/Rules.ps1's."},
+        "seat": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Whose seat it went to: orc (the Orc that asked) or warchief (the warchief asked, or askedBy could not be resolved to an Orc's seat - resolved and note say which)."},
+        "label": {"type": "string", "pattern": "^([A-Z]{1,2}([1-9][0-9]{0,3})?)?$", "description": "The fleet label of the seat it went to (an Orc's lane letter); empty for the warchief's."},
+        "sessionId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "description": "The session the fleet's registry proved holds that seat when it was sent."},
+        "resolved": {"type": "boolean", "description": "True when it went to the seat askedBy names. False when askedBy could not be resolved to a seat, and it went to the warchief instead; note says why."},
+        "notice": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The messageId of the notice the messenger took. The same answer, purpose and seat always make the same id, so a send repeated after a crash is one message."},
+        "note": {"type": "string", "description": "One line: why it did not go where askedBy names, or empty."},
+        "analyst": {"type": "string", "description": "One line: what the fleet analyst was told of the answer (purpose answer), or empty."}
+      }
+    },
+    "answer-change-replied": {
+      "type": "object",
+      "description": "The Orc that asked a question says what became of its work when the founder changed his answer (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER): not acted yet and using the new answer, already acted and undoing, or already acted and unable to undo, with why. It names the record of the changed answer it replies to.",
+      "required": ["number", "by", "answer", "reply"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The lane letter of the Orc that replies, as its session's fleet label proves it. It must be the Orc the question's askedBy names."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's CHANGED answer that is replied to."},
+        "reply": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "not-acted, undoing or cannot-undo: the closed list is decisions/Rules.ps1's."},
+        "why": {"type": "string", "description": "One line: why the work cannot be undone. Present only with cannot-undo."}
+      }
+    },
+    "question-acked": {
+      "type": "object",
+      "description": "The Orc that asked a question acknowledges the founder's answer to it, and the question is closed with that Orc as the closer. Only an open question whose answer stands and is waiting for the keeper closes this way, and only for the answer that stands now; a closed question is never opened again by it (decisions/Rules.ps1).",
+      "required": ["number", "by", "answer"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The lane letter of the Orc that acknowledges, as its session's fleet label proves it. It must be the Orc the question's askedBy names."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's answer that is acknowledged: the one that stands under the question when the record is written."}
       }
     }
   }

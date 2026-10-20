@@ -43,3 +43,4 @@ test/e2e/e2e-cli.ps1 | 16 | horde's own CLI scenario, not host tooling, driven t
 # --- the agent harnesses' allowlists, which must name this host's files by path to list them.
 agents/claude-code/allowlist.txt | 3 | the harness's allowlist names this host's own files by path, and each such path names the host
 agents/codex/allowlist.txt | 3 | the harness's allowlist names this host's own files by path, and each such path names the host
+test/e2e/e2e-fleet.ps1 | 21 | horde's own fleet record and wake scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance, and naming the terminal's socket, its settings and its restore markers; it shrinks when spawn and read-text reach it through a host-neutral port

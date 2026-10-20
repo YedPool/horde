@@ -22,6 +22,7 @@
     "messages": {"type": "array", "items": {"$ref": "#/definitions/inboxItem"}, "description": "What an inbox hands back: what others said that the reader had not read, under every question, oldest first."},
     "upTo": {"type": "integer", "minimum": 0, "description": "For an inbox: the sequence number of the last message handed back, or 0 when there is none; a caller that then marks names this. For a marking: the record it marked up to."},
     "marked": {"type": "integer", "minimum": 0, "description": "For a marking only: how many messages it marked as read. 0 when the reader had already read that far, in which case nothing was written."},
+    "unclosed": {"type": "array", "items": {"$ref": "#/definitions/unclosed"}, "description": "For a list: every open question the founder answered longer ago than the setting decisions.answers.unclosedMinutes that nobody has closed, in number order, whatever the list was filtered to (decisions/Rules.ps1, Get-HordeDecisionUnclosed)."},
     "kinds": {"type": "object", "description": "The table of question kinds, as the kinds operation gives it: by kind name, each with label (how a list names it), means (one sentence) and list (which list of a question it needs: options, parts, or none). It is decisions/question-kinds.json's table, handed out here so that no caller needs the file."},
     "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a known kind with data that is not that kind's, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
     "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."},
@@ -87,6 +88,9 @@
         "evidence": {"type": "string", "description": "For words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them; empty for every other message, and for a stored phone record that holds none."},
         "part": {"type": "string", "description": "The letter of the one part of the question these words answer; empty for words said to the whole question."},
         "partWords": {"type": "string", "description": "That part's words as they read when the answer was recorded; empty when no part is named, or the part was no longer in the question."},
+        "changedFrom": {"type": "integer", "minimum": 1, "description": "Present only when these words are a CHANGE of his answer: the record of the answer of his to the same part that they replace. Worked out from the order of the records each time, stored nowhere."},
+        "changedFromText": {"type": "string", "description": "Present with changedFrom: the words of the answer replaced."},
+        "notPasskey": {"type": "boolean", "enum": [true], "description": "Present, and true, only for the founder's words recorded from chat under a question that needs a passkey: they are kept and shown, and are never his answer to it. Absent for every other message."},
         "signedBy": {"type": "string", "description": "For words answered on the founder's phone: the key id of the passkey the relay channel verified them against, as the record holds it; empty for every other message, and for a record that names none. What the record says, not a verdict: whether that passkey is trusted now is relay's to answer."}
       }
     },
@@ -160,6 +164,70 @@
         "note": {"type": "string", "description": "What the record did to the question, in a few words."}
       }
     },
+    "answerChange": {
+      "type": "object",
+      "description": "One change of the founder's answer (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER).",
+      "required": ["answer", "at", "from", "oldText", "newText", "part", "orcShown"],
+      "additionalProperties": false,
+      "properties": {
+        "answer": {"type": "integer", "minimum": 1, "description": "The record of the changed answer."},
+        "at": {"type": "string", "description": "When it was recorded."},
+        "from": {"type": "integer", "minimum": 1, "description": "The record of the answer it replaced."},
+        "oldText": {"type": "string"},
+        "newText": {"type": "string"},
+        "part": {"type": "string", "description": "The part changed; empty for the whole question."},
+        "orcShown": {"type": "string", "description": "Orc X when an Orc asked the question and is to confirm; empty when none is, because only an Orc replies."},
+        "reply": {
+          "type": "object",
+          "description": "The asking Orc's newest reply to this change. Absent until it has replied.",
+          "required": ["sequence", "at", "by", "reply", "replyShown", "why"],
+          "additionalProperties": false,
+          "properties": {
+            "sequence": {"type": "integer", "minimum": 1},
+            "at": {"type": "string"},
+            "by": {"type": "string"},
+            "reply": {"type": "string", "description": "not-acted, undoing or cannot-undo."},
+            "replyShown": {"type": "string", "description": "That in words: not acted yet, using the new answer; already acted, undoing; already acted, cannot undo."},
+            "why": {"type": "string", "description": "Why it cannot be undone; empty for the other two."}
+          }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "description": "One answer-routed record that applied to the question: where one answer of the founder's was sent, or the seat reminded once.",
+      "required": ["sequence", "at", "answer", "purpose", "seat", "label", "sessionId", "resolved", "notice", "note", "analyst"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1, "description": "The answer-routed record."},
+        "at": {"type": "string"},
+        "answer": {"type": "integer", "minimum": 1, "description": "The record of the founder's answer that was sent."},
+        "purpose": {"type": "string", "description": "answer, nudge or closed (the warchief closed the Orc's question over a change it never replied to, or over chat words only)."},
+        "seat": {"type": "string", "description": "orc or warchief."},
+        "label": {"type": "string"},
+        "sessionId": {"type": "string"},
+        "resolved": {"type": "boolean", "description": "False when askedBy could not be resolved to a seat and it went to the warchief instead."},
+        "notice": {"type": "string"},
+        "note": {"type": "string"},
+        "analyst": {"type": "string"}
+      }
+    },
+    "unclosed": {
+      "type": "object",
+      "description": "An open question the founder answered long enough ago that it should have been closed.",
+      "required": ["number", "askedBy", "asker", "answer", "answeredAt", "minutes", "reminded", "line"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "askedBy": {"type": "string"},
+        "asker": {"type": "string", "description": "Who asked, as askedBy is read: Orc X, the warchief, or askedBy quoted when it names nobody."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The record of the answer that stands."},
+        "answeredAt": {"type": "string"},
+        "minutes": {"type": "integer", "minimum": 0, "description": "How long ago he answered, in whole minutes."},
+        "reminded": {"type": "boolean", "description": "Whether the asker was reminded once for this answer."},
+        "line": {"type": "string", "description": "The flag in words: question N: answered 1 h ago, not closed by Orc X."}
+      }
+    },
     "view": {
       "type": "object",
       "description": "One question as it stands now: its words (schema/decision-question.v1, every field present) and what the records say has happened to it.",
@@ -195,7 +263,13 @@
         "blocks": {"type": "string", "description": "How much of that task's work stands still until the question is answered: a label of decisions/Rules.ps1's blockings, part for a question that was given none."},
         "blocksShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
         "needsPasskey": {"type": "boolean", "enum": [true], "description": "Present, and true, only for a question its asker marked as needing a passkey: from the phone it is answered only with a fresh passkey. Absent for every other question."},
-        "followsUp": {"$ref": "#/definitions/followsUp"}
+        "followsUp": {"$ref": "#/definitions/followsUp"},
+        "routes": {"type": "array", "items": {"$ref": "#/definitions/route"}, "description": "Where the founder's answers to it were sent, by code, in order. Absent when none was."},
+        "closedBy": {"type": "string", "description": "The Orc that closed it by acknowledging the founder's answer, as Orc X. Absent when no acknowledgement closed it."},
+        "answerChanges": {"type": "array", "items": {"$ref": "#/definitions/answerChange"}, "description": "Every change of the founder's answer under the question, in order, with the asking Orc's newest reply to each. Absent when he changed none."},
+        "actedBy": {"type": "string", "description": "For a question that is not open: who has acted on it - Orc X, or the warchief. What the page says when he asks to change his answer to it. Absent for an open question."},
+        "closedByWarchief": {"type": "boolean", "description": "True only when the question was closed by a session proven to hold the warchief's seat (the close record says so). Absent for any other close."},
+        "warchiefClosedUnreplied": {"type": "boolean", "description": "True only when the warchief closed the question over a changed answer its asking Orc never replied to; the page then says the warchief closed it, with the outcome. Absent otherwise."}
       }
     }
   }
