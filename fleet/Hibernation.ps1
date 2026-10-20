@@ -105,8 +105,9 @@ function Test-HordeFleetRecord {
 function Write-HordeFleetRecord {
     # Replace <Dir>\record.json with -Record, whole, in one step. Throws, writing nothing, when the record
     # breaks its schema: a record that does not read back is worse than none.
-    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Record)
-    $findings = @(Test-HordeFleetRecord -Record $Record -Id (Split-Path -Leaf $Dir))
+    # -FolderId is the hibernation id the folder will have, for a record written in a staging folder (backfill, fleet/Lots.ps1).
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Record, [string]$FolderId = "")
+    $findings = @(Test-HordeFleetRecord -Record $Record -Id $(if ($FolderId -ne "") { $FolderId } else { Split-Path -Leaf $Dir }))
     if ($findings.Count -gt 0) { throw ("the hibernation record was not written, it breaks its schema: " + ($findings -join "; ")) }
     $path = Join-Path $Dir "record.json"
     $tmp = Join-Path $Dir ("record.json." + [guid]::NewGuid().ToString("N") + ".tmp")
@@ -316,6 +317,7 @@ function Invoke-HordeFleetRecord {
         if ($null -ne $e -and (Test-Path -LiteralPath $path)) { throw $taken }
         throw
     }
+    $recordWritten = $false
     try {
         $parked = $null
         if ($null -ne $Deps.PSObject.Properties["ParkedExists"]) { $parked = $Deps.ParkedExists }
@@ -328,12 +330,16 @@ function Invoke-HordeFleetRecord {
         $record = New-HordeFleetRecord -Id $id -At $at -Chosen $chosen -AgentName $Deps.Agent.name -HostName $Deps.Host.name -Selection $Selection -Placed $placed -ParkedExists $parked
         if ($byWord -ne "" -and $byWord -cmatch '\A[^\x00-\x1F]{1,200}\z') { $record | Add-Member -NotePropertyName "parkedBy" -NotePropertyValue $byWord -Force }
         $path = Write-HordeFleetRecord -Dir $dir -Record $record
+        $recordWritten = $true
         # THE LOT (T-0216): one parking_lot row for this run and a parking_lot_member row for each session in it, in the
         # folder this run claimed. The lot's ULID is made for this second.
         $lot = New-HordeFleetLot -At $at -ById $By -Reason $Why -Kind ("" + $Selection.kind) -KeepVisible:$KeepVisible
         $lotMembers = @(ConvertTo-HordeFleetLotMembers -LotId ("" + $lot.id) -Record $record -Tier $Tier)
         [void](Write-HordeFleetLot -Dir $dir -Lot $lot -Members $lotMembers)
     } catch {
+        # A RECORD WITHOUT ITS LOT would read later as a lot from before lots, a park that never was one (review of PR 338):
+        # when the lot could not be written, the record this same call wrote goes with it.
+        if ($recordWritten) { foreach ($leftover in @("record.json", "parking_lot_member.json", "parking_lot.json")) { Remove-Item -LiteralPath (Join-Path $dir $leftover) -Force -ErrorAction SilentlyContinue } }
         if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-Item -LiteralPath $path).Length -eq 0) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         if (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue).Count -eq 0) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }
         throw

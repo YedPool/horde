@@ -131,6 +131,7 @@ function ConvertTo-HordeFleetLotMember {
     param([Parameter(Mandatory = $true)][string]$LotId, [Parameter(Mandatory = $true)]$Session, $Prior = $null, [int]$Tier = 0)
     $get = { param($o, $n) if ($null -eq $o) { return "" }; $p = $o.PSObject.Properties[$n]; if ($null -eq $p -or $null -eq $p.Value) { return "" }; return ("" + $p.Value) }
     $row = [ordered]@{ lot_id = $LotId; session_id = (& $get $Session "sessionId") }
+    # orc_id is never written for a new lot: it waits for the orc table of fleet.db (N), which owns Orc ids.
     $orc = & $get $Prior "orc_id"; if ($orc -ne "") { $row["orc_id"] = $orc }
     # Not named $tier: PowerShell variables ignore case, so that would overwrite the -Tier parameter.
     $priorTier = & $get $Prior "tier"; if ($priorTier -ne "") { $row["tier"] = [int]$priorTier } elseif ($Tier -gt 0) { $row["tier"] = $Tier }
@@ -197,8 +198,8 @@ function Read-HordeFleetTableFile {
 function Write-HordeFleetLot {
     # Write one lot into -Dir: its members first, then its row. Throws, writing nothing, when they break their
     # schemas: a lot that does not read back is worse than none.
-    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Members)
-    $findings = @(Test-HordeFleetLotFiles -Lot $Lot -Members @($Members) -FolderId (Split-Path -Leaf $Dir))
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Members, [string]$FolderId = "")
+    $findings = @(Test-HordeFleetLotFiles -Lot $Lot -Members @($Members) -FolderId $(if ($FolderId -ne "") { $FolderId } else { Split-Path -Leaf $Dir }))
     if ($findings.Count -gt 0) { throw ("the lot was not written, it breaks its schema: " + ($findings -join "; ")) }
     Write-HordeFleetTableFile -Path (Join-Path $Dir "parking_lot_member.json") -Table $script:HordeFleetTableNames.member -Rows @($Members)
     Write-HordeFleetTableFile -Path (Join-Path $Dir "parking_lot.json") -Table $script:HordeFleetTableNames.lot -Rows @($Lot)
@@ -255,12 +256,15 @@ function Read-HordeFleetLot {
         $kind = "" + $record.selection.kind
         if ($script:HordeFleetLotSelectionKinds -cnotcontains $kind) { $kind = "" }
         $lot = New-HordeFleetLot -At $at -Reason "hibernate (recorded before parking lots)" -Kind $kind -Seed ("legacy|" + $hid)
+        if ($Id -cmatch $script:HordeUlidPattern -and $Id -cne ("" + $lot.id)) { return (New-HordeAbsent -Note ("no lot has the id " + $Id + ": the lot made for that second is " + $lot.id)) }
         return (New-HordeKnown -Value ([pscustomobject]@{ lot = $lot; members = @(ConvertTo-HordeFleetLotMembers -LotId ("" + $lot.id) -Record $record); record = $record; folder = $hid }))
     }
     try {
         $lot = (Read-HordeFleetTableFile -Path $lotPath -Table $script:HordeFleetTableNames.lot)[0]
         $members = @(Read-HordeFleetTableFile -Path (Join-Path $dir "parking_lot_member.json") -Table $script:HordeFleetTableNames.member)
     } catch { return (New-HordeUnknown -Reason ("lot " + $hid + " could not be read") -ErrorRecord $_) }
+    # A ULID NAMES ONE LOT: its time picks the folder, but a typo in its random part is no lot (review of PR 338).
+    if ($Id -cmatch $script:HordeUlidPattern -and $Id -cne ("" + $lot.id)) { return (New-HordeAbsent -Note ("no lot has the id " + $Id + ": the lot made for that second is " + $lot.id)) }
     $findings = @(Test-HordeFleetLotFiles -Lot $lot -Members $members -FolderId $hid)
     if ($findings.Count -gt 0) { return (New-HordeUnknown -Reason ("lot " + $hid + " breaks its schema: " + ($findings -join "; "))) }
     if ($null -ne $record) {

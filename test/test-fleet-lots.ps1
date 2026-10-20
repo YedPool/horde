@@ -36,7 +36,7 @@ $world = @{}
 function Reset-World {
     $world.live = @{}; $world.error = ""; $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 19, 21, 0, 0, [System.DateTimeKind]::Utc)
-    $world.order = New-Object System.Collections.ArrayList; $world.unmarks = New-Object System.Collections.ArrayList
+    $world.throwAt = 0; $world.order = New-Object System.Collections.ArrayList; $world.unmarks = New-Object System.Collections.ArrayList
     $world.procs = @{ "777" = "133000000000000000" }
 }
 Reset-World
@@ -54,6 +54,7 @@ Register-HordeFleetHost -Name "stand-in" `
     -Placement { param($refs) New-HordeKnown -Value ([pscustomobject]@{ placed = @{}; notes = @() }) } `
     -Open {
         $spawn = { param($req)
+            if ($world.throwAt -gt 0 -and $world.spawns.Count + 1 -ge $world.throwAt) { throw "the terminal fell over" }
             [void]$world.spawns.Add($req)
             $id = ("" + $req.line).Substring(7)
             [void]$world.order.Add("spawn " + $id)
@@ -372,6 +373,98 @@ $wk = Wakes-Of $hh $lid
 Check ($wk.Count -eq 1 -and (@($wk[0].members | Where-Object { $_.session_id -ceq $e1 })[0]).outcome -ceq "woken" -and (@($wk[0].members | Where-Object { $_.session_id -ceq $e2 })[0]).outcome -ceq "failed") "the wake records both outcomes"
 $ls = Lots-Of $hh
 Check ((Member-Of $ls[0] "E1").state -ceq "woken" -and @($ls[0].members).Count -eq 2) "the lot lists the woken one and still holds the one that could not be woken"
+
+Section "review of PR 338: a lot id is exact, a failed lot write leaves nothing, a wake that stops part way is recorded"
+$hh = New-Home
+Reset-World
+$lotRow = Put-Lot -H $hh -Id $id1 -At "2026-10-16T09:15:00Z" -Sessions @((Session "A" "orc"), (Session "B" "orc"))
+$typo = $lotRow.id.Substring(0, 25) + $(if ($lotRow.id.EndsWith("0")) { "1" } else { "0" })
+Check ((Read-HordeFleetLot -Id $lotRow.id -HordeHome $hh).state -ceq "known" -and (Read-HordeFleetLot -Id $id1 -HordeHome $hh).state -ceq "known") "CONTROL: the lot is found by its ULID and by its hibernation id"
+$tr = Read-HordeFleetLot -Id $typo -HordeHome $hh
+Check ($tr.state -ceq "absent" -and $tr.reason -like "*no lot has the id*") ("a ULID with the right time and a typo in its random part is no lot (" + $tr.state + ")")
+Check (Throws { Invoke-HordeFleetWakeLot -Lot $typo -Deps $deps -HordeHome $hh } "no lot has the id") "and a wake by it is refused, nothing is started"
+$hhOld = New-Home
+$oldDir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $hhOld) "20261012-080000"
+[void](New-Item -ItemType Directory -Path $oldDir -Force)
+[void](Write-HordeFleetRecord -Dir $oldDir -Record ([pscustomobject][ordered]@{ schemaVersion = 1; id = "20261012-080000"; createdAt = "2026-10-12T08:00:00Z"; agent = "stand-in"; host = "stand-in"
+    selection = [pscustomobject][ordered]@{ kind = "all"; labels = @(); exclude = @() }; sessions = @((Session "C" "orc")) }))
+$legacyId = (Read-HordeFleetLot -Id "20261012-080000" -HordeHome $hhOld).value.lot.id
+$legacyTypo = $legacyId.Substring(0, 25) + $(if ($legacyId.EndsWith("0")) { "1" } else { "0" })
+Check ((Read-HordeFleetLot -Id $legacyId -HordeHome $hhOld).state -ceq "known" -and (Read-HordeFleetLot -Id $legacyTypo -HordeHome $hhOld).state -ceq "absent") "the same for a lot read from a record from before lots"
+
+Reset-World
+foreach ($l in @("A", "A1", "B")) { $world.live[$ids[$l]] = @{ pid = 100 + $l.Length; cwd = $cwds[$l]; state = "running" } }
+$hhFail = New-Home
+$failed = $false
+try { [void](Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $sel -HordeHome $hhFail -By $ids["A"] -Why "") } catch { $failed = $true }
+$left = @(Get-ChildItem -LiteralPath (Get-HordeFleetHibernationsDir -HordeHome $hhFail) -Force -ErrorAction SilentlyContinue)
+Check ($failed -and $left.Count -eq 0) ("when the lot cannot be written, the record written in the same call goes too, and the folder (" + $left.Count + " left)")
+Check ((Lots-Of $hhFail).Count -eq 0) "so no lot from before lots appears where there was none"
+
+Reset-World
+$hh = New-Home
+$null = Put-Lot -H $hh -Id $id1 -At "2026-10-16T09:15:00Z" -Sessions @((Session "A" "orc"), (Session "B" "orc"))
+$world.throwAt = 2
+$stopped = ""
+try { [void](Invoke-HordeFleetWakeLot -Lot $id1 -Deps $deps -By $ids["C"] -HordeHome $hh) } catch { $stopped = $_.Exception.Message }
+$wk = Wakes-Of $hh $id1
+Check ($stopped -like "*terminal fell over*" -and $world.spawns.Count -eq 1) ("a wake that throws after starting one is still an error (" + $stopped + ")")
+Check ($wk.Count -eq 1 -and @($wk[0].members).Count -eq 2 -and @($wk[0].members | Where-Object { $_.outcome -ceq "woken" }).Count -eq 1 -and @($wk[0].members | Where-Object { $_.outcome -ceq "failed" }).Count -eq 1) "and it is recorded: the one started as woken, the one not reached as failed"
+Check ($wk.Count -eq 1 -and $wk[0].wake.requested_by_session_id -ceq $ids["C"]) "with who asked"
+Reset-World
+$hh = New-Home
+$null = Put-Lot -H $hh -Id $id1 -At "2026-10-16T09:15:00Z" -Sessions @((Session "A" "orc"))
+$world.live[$ids["A"]] = @{ pid = 9; cwd = $cwds["A"]; state = "running" }
+$r = Invoke-HordeFleetWakeLot -Lot $id1 -Deps $deps -HordeHome $hh
+Check ((Wakes-Of $hh $id1).Count -eq 1 -and $world.spawns.Count -eq 0) "CONTROL: a wake that throws nothing records as it did"
+
+Section "review of PR 338: a backfill completes its own half lot, and keeps who parked"
+$partial = Join-Path $work "partial2.json"
+$e1 = "66666666-0000-4000-8000-000000000001"; $e2 = "66666666-0000-4000-8000-000000000002"
+[System.IO.File]::WriteAllText($partial, ('{ "v": 1, "lots": [ { "at": "2026-10-16T19:59:00Z", "by": "K", "why": "old park", "members": [ { "sessionId": "' + $e1 + '", "label": "E1", "cwd": "C:\\lanes\\e1" }, { "sessionId": "' + $e2 + '", "label": "E2" } ] } ] }'))
+$lid = "20261016-195900"
+$hh = New-Home
+$null = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+$hdir = Get-HordeFleetLotDir -Id $lid -HordeHome $hh
+Check (@(Get-ChildItem -LiteralPath (Get-HordeFleetHibernationsDir -HordeHome $hh) | Where-Object { $_.Name -like "*.partial" }).Count -eq 0) "a finished backfill leaves no staging folder"
+Remove-Item -LiteralPath (Join-Path $hdir "parking_lot.json"), (Join-Path $hdir "parking_lot_member.json") -Force
+$again = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+$ls = Lots-Of $hh
+Check ($again.written -eq 1 -and $again.skipped -eq 0 -and @(@($again.lines) -like "*completed lot*").Count -eq 1) ("a record with no lot row, the backfill's own, is completed on a re-run (" + $again.written + " written)")
+Check ($ls.Count -eq 1 -and $ls[0].reason -ceq "old park" -and $ls[0].selection_kind -ceq "backfill" -and @($ls[0].members).Count -eq 2) "and the lot is the backfill's, not one from before lots"
+$hh = New-Home
+$null = Put-Lot -H $hh -Id $lid -At "2026-10-16T19:59:00Z" -Sessions @((Session "A" "orc"))
+$hdir = Get-HordeFleetLotDir -Id $lid -HordeHome $hh
+Remove-Item -LiteralPath (Join-Path $hdir "parking_lot.json"), (Join-Path $hdir "parking_lot_member.json") -Force
+$foreign = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+Check ($foreign.written -eq 0 -and $foreign.refused -eq 1 -and @(@($foreign.lines) -like "*not this backfill's*").Count -eq 1) "a record with no lot row that is some other park is refused, naming why"
+Check (-not (Test-Path -LiteralPath (Join-Path $hdir "parking_lot.json"))) "and nothing is written into it"
+$hh = New-Home
+$stale = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $hh) ($lid + ".partial")
+[void](New-Item -ItemType Directory -Path $stale -Force)
+[System.IO.File]::WriteAllText((Join-Path $stale "record.json"), "{ half")
+Check ((Lots-Of $hh).Count -eq 0) "a staging folder a crash left is no lot and is not listed"
+$redo = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+Check ($redo.written -eq 1 -and -not (Test-Path -LiteralPath $stale) -and (Lots-Of $hh).Count -eq 1) "a re-run starts it again and leaves none behind"
+
+$byFile = Join-Path $work "by.json"
+$s1 = "77777777-0000-4000-8000-000000000001"; $s2 = "77777777-0000-4000-8000-000000000002"; $s3 = "77777777-0000-4000-8000-000000000003"
+[System.IO.File]::WriteAllText($byFile, ('{ "v": 1, "lots": [ ' +
+    '{ "at": "2026-10-01T00:00:00Z", "by": "Q9", "why": "word, no cwd", "members": [ { "sessionId": "' + $s1 + '" } ] }, ' +
+    '{ "at": "2026-10-02T00:00:00Z", "by": "E7", "why": "label of a member", "members": [ { "sessionId": "' + $s2 + '", "label": "E7", "cwd": "C:\\lanes\\e7" } ] }, ' +
+    '{ "at": "2026-10-03T00:00:00Z", "by": "Z3", "why": "word, member with cwd", "members": [ { "sessionId": "' + $s3 + '", "label": "E8", "cwd": "C:\\lanes\\e8" } ] } ] }'))
+$hh = New-Home
+$null = Invoke-HordeFleetLotBackfill -File $byFile -Deps $eDeps -HordeHome $hh
+$ls = Lots-Of $hh
+Check ((@($ls | ForEach-Object { $_.by }) -join ",") -ceq "Z3,E7,Q9") ("who parked is kept as a word, with or without a record (" + (@($ls | ForEach-Object { $_.by }) -join ",") + ")")
+$labelLot = Read-HordeFleetLot -Id "20261002-000000" -HordeHome $hh
+Check ($labelLot.value.lot.created_by_session_id -ceq $s2) "a label of one of the members is resolved to its session id"
+
+Section "review of PR 338: -Only is said to take ids too"
+$cliText = Get-Content -LiteralPath (Join-Path $root "cli\commands\fleet.ps1") -Raw
+Check ($cliText -match '\[-Only <labels, session ids or id prefixes>\]') "the usage says -Only takes labels, session ids or id prefixes"
+$readme = Get-Content -LiteralPath (Join-Path $root "test\fixtures\fleet\README.md") -Raw
+Check ($readme -match 'fleet wake <hibernation id> -Only') "and the fixtures README says so"
 
 Section "the command line"
 $cliEnv = @{ HORDE_HOME = (Join-Path $work "cli-home"); WEZFLEET_ROOT = (Join-Path $work "no-registry") }

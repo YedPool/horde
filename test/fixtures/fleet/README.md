@@ -147,6 +147,8 @@ Wake a whole lot, or any combination of its members.
   a session that runs is left alone, spawns are held after an earlier wake, free memory is checked
   before each start, and the no-restore marker is removed. A `members` entry that names no member of
   the lot refuses the whole request with the reason, and nothing is woken.
+- `fleet wake <hibernation id> -Only` takes the same names as `-Members`: a label, a session id or a unique
+  id prefix of eight or more characters.
 - Every wake that is not a dry run is recorded as a `wake` row with a `wake_member` row for each
   session it was asked to wake; the next `lots.json` carries it in the lot's `wakes`.
 - Signing is the same as `wake` (the founder's unlocked session).

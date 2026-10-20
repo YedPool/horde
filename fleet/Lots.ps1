@@ -105,6 +105,7 @@ function Get-HordeFleetLots {
         }
         $by = ""
         if ($null -ne $one.record -and $null -ne (Get-HordeFleetMember $one.record "parkedBy")) { $by = "" + $one.record.parkedBy }
+        elseif ($null -ne (Get-HordeFleetMember $one.lot "created_by_orc_id")) { $by = "" + $one.lot.created_by_orc_id }
         elseif ($null -ne (Get-HordeFleetMember $one.lot "created_by_session_id")) { $by = "" + $one.lot.created_by_session_id }
         $kind = Get-HordeFleetMember $one.lot "selection_kind"
         $kv = Get-HordeFleetMember $one.lot "keep_visible"
@@ -174,7 +175,10 @@ function Read-HordeFleetBackfillFile {
         $hid = New-HordeFleetHibernationId -At $at
         if (-not $seenIds.Add($hid)) { throw ($where + ": another lot of the file is at the same second (" + $hid + "), and a lot's folder is its time") }
         $by = ("" + $dl.by).Trim()
-        $lot = New-HordeFleetLot -At $at -ById $by -Reason ("" + $dl.why) -Kind "backfill" -Seed ("backfill|" + (Format-HordeFleetTime -At $at) + "|" + $dl.why)
+        $seed = "backfill|" + (Format-HordeFleetTime -At $at) + "|" + $dl.why
+        # The id depends on the time and seed only; the parking session is known once the members are, so the row is made again below.
+        $lot = New-HordeFleetLot -At $at -Reason ("" + $dl.why) -Kind "backfill" -Seed $seed
+        $labelSessions = @{}
         $rows = New-Object System.Collections.ArrayList
         $sessions = New-Object System.Collections.ArrayList
         foreach ($dm in @($dl.members)) {
@@ -186,6 +190,7 @@ function Read-HordeFleetBackfillFile {
             if ($null -ne $Enrich -and $sid -cmatch $script:HordeFleetSessionPattern) { $info = & $Enrich $sid }
             $fill = { param($name) $v = & $get $dm $name; if ($v -ne "" -or $null -eq $info) { return $v }; $p = $info.PSObject.Properties[$name]; if ($null -eq $p -or $null -eq $p.Value) { return "" }; return ("" + $p.Value) }
             $label = & $fill "label"
+            if ($label -ne "" -and $sid -cmatch $script:HordeFleetSessionPattern) { $labelSessions[$label] = $sid }
             $note = & $get $dm "parkedNote"
             if ($note -eq "" -and $label -ne "" -and $ParkedFolder -ne "") { $pf = Join-Path $ParkedFolder ("PARKED-" + $label + ".md"); if ([bool](& $ParkedExists $pf)) { $note = $pf } }
             $role = & $get $dm "role"; if (@("orc", "warg") -cnotcontains $role) { $role = "other" }
@@ -202,11 +207,35 @@ function Read-HordeFleetBackfillFile {
                 [void]$sessions.Add([pscustomobject]$s)
             }
         }
+        # WHO PARKED is kept whatever it is (review of PR 338): a session id, else the id of the member it is the label of, and
+        # the word itself in created_by_orc_id when it is not an id, so the listing shows it even for a lot with no record.
+        $byId = ""; $byOrc = ""
+        if ($by -cmatch $script:HordeFleetSessionPattern) { $byId = $by }
+        elseif ($by -ne "") {
+            if ($labelSessions.ContainsKey($by)) { $byId = "" + $labelSessions[$by] }
+            if ($by -cmatch '\A[^\x00-\x1F]{1,64}\z') { $byOrc = $by }
+        }
+        $lot = New-HordeFleetLot -At $at -ById $byId -ByOrc $byOrc -Reason ("" + $dl.why) -Kind "backfill" -Seed $seed
         $findings = @(Test-HordeFleetLotFiles -Lot $lot -Members @($rows) -FolderId $hid)
         if ($findings.Count -gt 0) { throw ($where + " breaks the lot shape: " + ($findings -join "; ")) }
         [void]$out.Add([pscustomobject]@{ hid = $hid; at = $at; by = $by; lot = $lot; members = @($rows); sessions = @($sessions) })
     }
     return @($out)
+}
+
+function Test-HordeFleetBackfillOwnRecord {
+    # "" when the record.json in the folder of the parsed backfill lot -Parsed is this backfill's own half-written lot: taken at
+    # its time, holding exactly the sessions it would have written. Otherwise the reason it is not (the record is some other park).
+    param([Parameter(Mandatory = $true)]$Parsed, [string]$HordeHome = (Get-HordeHome))
+    $r = Read-HordeFleetRecord -Id ("" + $Parsed.hid) -HordeHome $HordeHome
+    if ($r.state -cne "known") { return ("the record cannot be read: " + $r.reason) }
+    if (@($Parsed.sessions).Count -eq 0) { return "this backfill writes no record for the lot, so one that is there is another park's" }
+    $at = Format-HordeFleetTime -At $Parsed.at
+    if ("" + $r.value.createdAt -cne $at) { return ("it was taken at " + $r.value.createdAt + ", not " + $at) }
+    $have = @(@($r.value.sessions) | ForEach-Object { "" + $_.sessionId } | Sort-Object)
+    $want = @(@($Parsed.sessions) | ForEach-Object { "" + $_.sessionId } | Sort-Object)
+    if (($have -join ",") -cne ($want -join ",")) { return "it holds other sessions than the file names" }
+    return ""
 }
 
 function Invoke-HordeFleetLotBackfill {
@@ -227,25 +256,42 @@ function Invoke-HordeFleetLotBackfill {
     }
     $parsed = @(Read-HordeFleetBackfillFile -File $File -Enrich $enrich -ParkedFolder $parkedFolder -ParkedExists $parkedExists)
     $lines = New-Object System.Collections.ArrayList
-    $written = 0; $skipped = 0
+    $written = 0; $skipped = 0; $refused = 0
     foreach ($p in $parsed) {
         $dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $p.hid
-        if ((Test-Path -LiteralPath (Join-Path $dir "parking_lot.json") -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $dir "record.json") -PathType Leaf)) {
+        # THE LOT ROW IS THE COMMIT: a lot is there once its parking_lot.json is (fleet/LotTables.ps1), so that alone is "there already".
+        if (Test-Path -LiteralPath (Join-Path $dir "parking_lot.json") -PathType Leaf) {
             $skipped++; [void]$lines.Add("lot " + $p.lot.id + " (" + $p.hid + ") is there already, left as it is"); continue
         }
-        [void](New-Item -ItemType Directory -Path $dir -Force)
+        $recPath = Join-Path $dir "record.json"
+        if (Test-Path -LiteralPath $recPath -PathType Leaf) {
+            # A record with no lot row: a hibernate of the same second, or an earlier backfill that stopped part way. It is
+            # completed only when it is this backfill's own (its time and its sessions), else this lot is refused.
+            $why = Test-HordeFleetBackfillOwnRecord -Parsed $p -HordeHome $HordeHome
+            if ($why -ne "") { $refused++; [void]$lines.Add("lot " + $p.lot.id + " (" + $p.hid + ") is refused: its folder holds a record that is not this backfill's (" + $why + ")"); continue }
+            [void](Write-HordeFleetLot -Dir $dir -Lot $p.lot -Members @($p.members))
+            $written++; [void]$lines.Add("completed lot " + $p.lot.id + " (" + $p.hid + "): its record was there from an earlier run, its lot rows were not")
+            continue
+        }
+        # WRITTEN IN A STAGING FOLDER, then renamed to the lot's name in one step: a crash leaves "<id>.partial", which no reader
+        # lists (it is not a hibernation id), never a record that reads as a lot from before lots. A re-run starts it again.
+        $stage = $dir + ".partial"
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+        [void](New-Item -ItemType Directory -Path $stage -Force)
         if (@($p.sessions).Count -gt 0) {
             $labels = @(@($p.sessions) | Where-Object { $null -ne $_.PSObject.Properties["label"] } | ForEach-Object { "" + $_.label })
             $rec = [pscustomobject][ordered]@{ schemaVersion = 1; id = $p.hid; createdAt = (Format-HordeFleetTime -At $p.at); agent = $agentName; host = $hostName
                 selection = [pscustomobject][ordered]@{ kind = "labels"; labels = @($labels); exclude = @() }; sessions = @($p.sessions) }
             if ($p.by -cmatch '\A[^\x00-\x1F]{1,200}\z') { $rec | Add-Member -NotePropertyName "parkedBy" -NotePropertyValue $p.by -Force }
-            [void](Write-HordeFleetRecord -Dir $dir -Record $rec)
+            [void](Write-HordeFleetRecord -Dir $stage -Record $rec -FolderId $p.hid)
         }
-        [void](Write-HordeFleetLot -Dir $dir -Lot $p.lot -Members @($p.members))
+        [void](Write-HordeFleetLot -Dir $stage -Lot $p.lot -Members @($p.members) -FolderId $p.hid)
+        if (Test-Path -LiteralPath $dir) { foreach ($f in @(Get-ChildItem -LiteralPath $stage -Force)) { Move-Item -LiteralPath $f.FullName -Destination $dir -Force }; Remove-Item -LiteralPath $stage -Force }
+        else { Move-Item -LiteralPath $stage -Destination $dir }
         $written++; [void]$lines.Add("wrote lot " + $p.lot.id + " (" + $p.hid + ", " + @($p.members).Count + " member(s), " + $p.lot.reason + ")")
     }
-    [void]$lines.Add("backfill: " + $written + " lot(s) written, " + $skipped + " already there")
-    return [pscustomobject]@{ written = $written; skipped = $skipped; lines = @($lines) }
+    [void]$lines.Add("backfill: " + $written + " lot(s) written, " + $skipped + " already there" + $(if ($refused -gt 0) { ", " + $refused + " refused" } else { "" }))
+    return [pscustomobject]@{ written = $written; skipped = $skipped; refused = $refused; lines = @($lines) }
 }
 
 function Resolve-HordeFleetLotMembers {
@@ -301,7 +347,24 @@ function Invoke-HordeFleetWakeLot {
         # The whole record is asked for with no id list when everything in it is wanted, so a later wake of the
         # same lot is the same wake it always was.
         $only = $(if ($named.Count -eq 0) { @() } else { $wakeIds })
-        $done = Invoke-HordeFleetWake -Id $hid -Deps $Deps -DryRun:$DryRun -Retry:$Retry -OnlyIds $only -HordeHome $HordeHome
+        $sink = New-Object System.Collections.ArrayList
+        $done = $null
+        try { $done = Invoke-HordeFleetWake -Id $hid -Deps $Deps -DryRun:$DryRun -Retry:$Retry -OnlyIds $only -HordeHome $HordeHome -OutcomesSink $sink }
+        catch {
+            # A WAKE THAT THROWS AFTER IT STARTED SESSIONS still happened: record what it gathered, the rest as failed with the
+            # error, then let the error through (review of PR 338). One that threw before any outcome changed nothing and records nothing.
+            $err = $_
+            if (-not $DryRun -and $sink.Count -gt 0) {
+                foreach ($o in @($sink)) { [void]$outcomes.Add($o) }
+                $got = @($outcomes | ForEach-Object { "" + $_.sessionId })
+                foreach ($sid in @($wakeIds | Where-Object { $got -cnotcontains $_ })) {
+                    $lab = $(if ($labelOf.ContainsKey($sid)) { $labelOf[$sid] } else { "" })
+                    [void]$outcomes.Add([pscustomobject]@{ sessionId = $sid; label = $lab; outcome = "failed"; reason = ("the wake stopped on an error: " + $err.Exception.Message) })
+                }
+                try { [void](Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes @($outcomes)) } catch { $null = $_ }
+            }
+            throw $err
+        }
         foreach ($l in @($done.lines)) { [void]$lines.Add($l) }
         foreach ($o in @($done.outcomes)) { [void]$outcomes.Add($o) }
     } else { [void]$lines.Add("  nothing to wake") }
