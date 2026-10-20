@@ -30,11 +30,11 @@
            Find = 'if ($hit.Count -gt 1) { throw ('
            Replace = 'if ($false) { throw (' }
         @{ Name = "backfill-writes-again-on-a-second-run"
-           Find = 'if ((Test-Path -LiteralPath (Join-Path $dir "parking_lot.json") -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $dir "record.json") -PathType Leaf)) {'
+           Find = 'if (Test-Path -LiteralPath (Join-Path $dir "parking_lot.json") -PathType Leaf) {'
            Replace = 'if ($false) {' }
         @{ Name = "backfill-id-from-chance"
-           Find = '-Seed ("backfill|" + (Format-HordeFleetTime -At $at) + "|" + $dl.why)'
-           Replace = '-Seed ""' }
+           Find = '$seed = "backfill|" + (Format-HordeFleetTime -At $at) + "|" + $dl.why'
+           Replace = '$seed = ""' }
         @{ Name = "wake-not-recorded"
            Find = 'if ($recordable.Count -gt 0) { $wakeId ='
            Replace = 'if ($false) { $wakeId =' }
