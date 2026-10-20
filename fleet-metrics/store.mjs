@@ -372,7 +372,11 @@ class Store {
       this.db.exec('ROLLBACK');
       throw e;
     }
-    return Object.fromEntries(Object.entries(keys).map(([t, k]) => [t, k.size]));
+    const counts = Object.fromEntries(Object.entries(keys).map(([t, k]) => [t, k.size]));
+    // The usage keys ride along unlisted (not enumerable), so a caller can count DISTINCT live rows over
+    // many applies: a subagent row is touched by its own file and by its parent's file, in either order.
+    Object.defineProperty(counts, 'usageKeys', { value: [...keys.tokens_usage], enumerable: false });
+    return counts;
   }
 
   tableStats() {

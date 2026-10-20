@@ -212,3 +212,23 @@ test('orc_id stays NULL until fleet.db links sessions: the registry folder name 
   assert.equal(usageOf(r.store, fx.SID_STUCK).orc_id, null); // a label in the old attribution file ('Q') is not used
   r.done();
 });
+
+test('the collect summary counts DISTINCT live rows: 3, whichever of a subagent and its parent is read first', async () => {
+  for (const subFirst of [false, true]) {
+    const r = rig();
+    fx.writeProjects(r.projects, BASE);
+    // Files are read newest first, so the mtime order decides which comes first.
+    const files = [];
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else files.push(f); } };
+    walk(r.projects);
+    const now = Date.now();
+    files.forEach((f, i) => {
+      const isSub = f.includes('subagents');
+      const t = new Date(now - 60000 + (isSub === subFirst ? 30000 : 0) + i);
+      fs.utimesSync(f, t, t);
+    });
+    const c = await r.collect();
+    assert.equal(c.rows.tokens_usage, 3, 'subFirst=' + subFirst);
+    r.done();
+  }
+});

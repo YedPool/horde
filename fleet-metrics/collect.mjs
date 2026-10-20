@@ -52,7 +52,7 @@ function readRange(fd, start, len) {
 }
 
 // Returns the number of new bytes consumed. `acc` collects { skipped } from the reader.
-export function collectFile({ store, reader, file, rows, ctx, acc = { skipped: 0 } }) {
+export function collectFile({ store, reader, file, rows, ctx, acc = { skipped: 0, usage: new Set() } }) {
   let st;
   try { st = fs.statSync(file); } catch { return 0; }
   const base = identOf(st);
@@ -90,6 +90,9 @@ export function collectFile({ store, reader, file, rows, ctx, acc = { skipped: 0
       const next = offset + nl + 1;
       const counts = store.apply(batch, { path: file, size, mtime: Math.round(st.mtimeMs), offset: next, ident: identAt(next) }, ctx && ctx.now ? ctx.now() : Date.now());
       for (const t of METRIC_TABLES) rows[t] += counts[t];
+      // Live rows are counted DISTINCT over the whole pass, so the number does not depend on which of a
+      // subagent's file and its parent's file is read first.
+      if (acc.usage) { for (const k of counts.usageKeys) acc.usage.add(k); rows.tokens_usage = acc.usage.size; }
       acc.skipped += batch.skipped || 0;
       consumed += nl + 1;
       offset = next;
@@ -120,7 +123,7 @@ export async function runCollect({ store, opts = {}, readers = null, ctx = {} })
   let files = 0;
   let bytes = 0;
   let skippedOld = 0;
-  const acc = { skipped: 0 };
+  const acc = { skipped: 0, usage: new Set() };
   const failures = [];
   // One shared context per pass, so a reader can load its lookups (a registry) once and not per file.
   const shared = { ...ctx, opts };
@@ -173,7 +176,7 @@ export async function runLive({ store, opts = {}, readers = null, ctx = {}, sess
   const list = readers || (await openReaders(opts));
   store.reloadOrcRegistry();
   const rows = Object.fromEntries(METRIC_TABLES.map((t) => [t, 0]));
-  const acc = { skipped: 0 };
+  const acc = { skipped: 0, usage: new Set() };
   const failures = [];
   const shared = { ...ctx, opts };
   const sessions = new Set();
