@@ -96,10 +96,17 @@ export function createChatScroll(parts) {
     if (!away) news.textContent = "";
     else if (said !== null) news.textContent = said;
   }
+  // THE NEWEST MESSAGE IS SEEN FROM ITS TOP (the founder, 2026-10-20, desktop: "it jumps a little too far and
+  // I can't see the question - it's blocked by the decisions button"). The foot of the page is where a short
+  // message is whole; a newest message taller than the room between the sticky bar and the composer has its
+  // top, where the question is asked, under the bar. Then it is brought to the bar's foot instead: the
+  // scroll margin app.css gives it (the bar's real height, bar-height.js) is what scrollIntoView keeps.
   function toBottom() {
     button.hidden = true;
     fitCompose();
     win.scrollTo(0, root.scrollHeight);
+    const newest = items().pop();
+    if (newest && newest.getBoundingClientRect().top < topInset()) newest.scrollIntoView({ block: "start", behavior: "instant" });
     update();
   }
   return {

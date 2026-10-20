@@ -31,6 +31,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
    app scrolls it to its end) or a long list never takes the way back off the screen (the founder's first
    live use, 2026-10-11: the chat page had no way back to the questions). */
 #bar { position: sticky; top: 0; z-index: 5; background: var(--bg); }
+/* A CARD SCROLLED TO THE TOP STOPS BELOW THE BAR (the founder, 2026-10-20: the jump to the latest question
+   left its top under the Decisions button): --bar-h is the bar's real height, measured and kept current
+   (bar-height.js), so this holds at every width and zoom, and when the bar wraps to more lines. */
+#chatLog > .chat-item, #lists .hd-q { scroll-margin-top: calc(var(--bar-h, 0px) + 8px); }
 #top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); background: var(--bg); border-bottom: 1px solid var(--line); }
 #tabs { display: flex; gap: 6px; overflow-x: auto; min-width: 0; }
 #tabs button { white-space: nowrap; }

@@ -113,6 +113,7 @@ import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } f
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
 import { createChatScroll } from "./chat-scroll.js";
+import { trackBarHeight } from "./bar-height.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 import { sessionLines } from "./session-view.js";
 
@@ -391,6 +392,8 @@ function timeStamp(ms, before, key, shortForm = clockTime) {
   return t;
 }
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
+// THE BAR'S REAL HEIGHT, in --bar-h, kept current (bar-height.js): app.css hangs the cards' scroll margin on it.
+trackBarHeight($("bar"), document.documentElement);
 // WHERE THE CHAT STANDS (chat-scroll.js): at the newest message when it opens, his place kept on a refresh
 // while he reads back, and Jump to latest while he is away from the bottom.
 const chatScroll = createChatScroll({ win: window, log: $("chatLog"), compose: $("chatCompose"), button: $("chatJump"), news: $("chatNews"), field: $("chatText"), topInset: () => $("bar").getBoundingClientRect().bottom });
