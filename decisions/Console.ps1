@@ -89,6 +89,10 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # closer (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED). The one verb an Orc runs: which
     # Orc it is, is proven from the session it runs in (acks below), never taken from the command line.
     ack    = @{ number = $true;  flags = @("Answer", "Id", "Json", "HordeHome");       usage = "ack <number> -Answer <record> [-Id <32 hex>] [-Json] [-HordeHome <path>]"; acks = $true }
+    # change-reply: THE ORC THAT ASKED says what became of its work when the founder changed his answer
+    # (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER): -Reply not-acted (using the new answer), undoing,
+    # or cannot-undo with -Why. Which Orc it is, is proven from the session, as for ack.
+    "change-reply" = @{ number = $true; flags = @("Answer", "Reply", "Why", "Id", "Json", "HordeHome"); usage = "change-reply <number> -Answer <record> -Reply <not-acted, undoing or cannot-undo> [-Why <one line>] [-Id <32 hex>] [-Json] [-HordeHome <path>]" }
     # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
     # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
     route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
@@ -215,7 +219,13 @@ function Format-HordeDecisionMessage {
     # The marks (decisions/Rules.ps1): an edit, a note, an act. Read with care: a record written
     # before they existed has none of them.
     $has = { param([string]$Name) return ($null -ne $Message.PSObject.Properties[$Name]) }
-    if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder") { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
+    if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder" -and (Test-HordeDecisionMessageAuthorizes -Message $Message)) { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
+    # A CHANGE OF HIS ANSWER says which answer it replaces and what that said (decisions/Rules.ps1).
+    if ((& $has "changedFrom") -and [long]$Message.changedFrom -ge 1) {
+        [void]$lines.Add($Indent + "  (CHANGES HIS ANSWER: replaces record " + $Message.changedFrom + ", which said:)")
+        foreach ($oldLine in @(([string]$Message.changedFromText) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "      > " + $oldLine) }
+    }
+    if ((& $has "notPasskey") -and [bool]$Message.notPasskey) { [void]$lines.Add($Indent + "  (NOT A PASSKEY ANSWER: the question needs a passkey; these words were recorded from chat and do not answer it)") }
     if ((& $has "asks") -and $Message.asks -eq $false) { [void]$lines.Add($Indent + "  (a note: it asks him nothing, and the turn stayed the keeper's)") }
     # THE PART ANSWERED, by its letter and its words as they read when he answered: the keeper is told
     # which part these words are for, and does not have to work it out from them.
@@ -230,7 +240,7 @@ function Format-HordeDecisionMessage {
         if ($NowWording -gt 0) { $now = "; the question is now at wording " + $NowWording }
         [void]$lines.Add($Indent + "  NOTE: this was said to an earlier wording (wording " + $Message.wordingVersion + $now + "). Check that it still answers the question as it reads now.")
     }
-    foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }
+    foreach ($l in @(([string]$Message.text) -split "\r\n|\r|\n")) { [void]$lines.Add($Indent + "    " + $l) }
     return @($lines)
 }
 
@@ -322,7 +332,7 @@ function Get-HordeDecisionAnsweredLine {
     param($Question)
     if ("$($Question.state)" -cne "open" -or "$($Question.thread.turn)" -ceq (Get-HordeDecisionFirstTurn)) { return "" }
     if ($null -eq $Question.thread.PSObject.Properties["messages"]) { return "" }
-    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" })
+    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" -and (Test-HordeDecisionMessageAuthorizes -Message $_) })
     if ($mine.Count -eq 0) { return "" }
     $last = $mine[$mine.Count - 1]
     $said = Get-HordeDecisionFirstLine -Text ([string]$last.text)
@@ -463,6 +473,14 @@ function Format-HordeDecisionQuestion {
         foreach ($l in @(Format-HordeDecisionMessage -Message $m -NowWording ([int]$q.wordingVersion))) { [void]$lines.Add($l) }
         foreach ($reader in @($m.unreadBy)) { $who = @($q.thread.unread | Where-Object { $_.reader -ceq $reader }) | Select-Object -First 1; if ($null -ne $who) { [void]$lines.Add("    (not yet read by " + $who.readerShown + ")") } }
     }
+    # WHAT BECAME OF EACH CHANGE OF HIS ANSWER, said in the words the page uses (decisions/Rules.ps1).
+    if ($null -ne $q.PSObject.Properties["answerChanges"]) {
+        foreach ($c in @($q.answerChanges)) {
+            $state = "no reply yet from " + $(if ("$($c.orcShown)" -ne "") { $c.orcShown } else { "anyone: no Orc asked this question" })
+            if ($null -ne $c.PSObject.Properties["reply"]) { $state = "Orc " + $c.reply.by + " replied (record " + $c.reply.sequence + "): " + $c.reply.replyShown + $(if ("$($c.reply.why)" -ne "") { ": " + $c.reply.why } else { "" }) }
+            [void]$lines.Add("Answer changed at record " + $c.answer + " (replacing record " + $c.from + "): " + $state)
+        }
+    }
     return @($lines)
 }
 
@@ -502,12 +520,17 @@ function Format-HordeDecisionAnswer {
         if ($Verb -ceq "answer") { $said = "Kept " + $value.message.speakerShown + "'s words, " + $value.message.routeShown + ", under question " }
         [void]$lines.Add($said + $value.number + " (record " + $value.sequence + "): " + $value.question.title)
         if ($value.message.arrivedAfterClosing) { [void]$lines.Add("  NOTE: question " + $value.number + " is " + $value.question.state + ". The words are kept under it, and it stays " + $value.question.state + ": saying something reopens nothing.") }
+        if ($null -ne $value.message.PSObject.Properties["notPasskey"] -and [bool]$value.message.notPasskey) { [void]$lines.Add("  NOTE: question " + $value.number + " needs a passkey. These words are kept and shown, but they are NOT a passkey answer: it is still waiting for his answer on the phone.") }
         if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
-        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; ack = "Closed question " }
+        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; ack = "Closed question "; "change-reply" = "Replied to the changed answer of question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
+        # S1 (review of PR 335, round 5): a close that was not proven from the warchief's seat says so, so the closer is
+        # never left believing the asking Orc was told.
+        if ($Verb -ceq "close" -and -not ($null -ne $value.question.PSObject.Properties["closedByWarchief"] -and [bool]$value.question.closedByWarchief)) { [void]$lines.Add("  NOTE: this session was not proven as the warchief's seat, so the Orc that asked will not be told of this close. Tell it yourself if it is waiting.") }
         if ($Verb -ceq "ack") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note + ". " + $value.question.outcome) }
+        if ($Verb -ceq "change-reply") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
         if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
         if ($Verb -ceq "add") {
             # WHERE IT STANDS IN HIS LIST, said back so that a keeper who gave neither word sees what
@@ -562,6 +585,66 @@ function Complete-HordeDecisionCommand {
     # Another reader marked them between this command's printing and its marking: said as it is.
     if ([int]$marking.marked -eq 0) { $lines = @("", "Nothing was left to mark: the messages above were marked as read by another reader in the meantime.") }
     return [pscustomobject]@{ lines = $lines; failure = "" }
+}
+
+function Resolve-HordeDecisionOrcCaller {
+    # WHICH ORC IS PROVEN, NEVER TYPED (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED): the session
+    # this command runs inside, by notices/Sender.ps1's three steps, and its fleet label, held to the seat the
+    # fleet gives that label with the role orc. Returns the sender ({ label; sessionId; ... }) or throws in
+    # words. -Verb names the command in the words; -Instead is what the warchief does in its place.
+    param([string]$Verb, [string]$Instead, [scriptblock]$Sender = $null, [hashtable]$SenderArgs = @{}, [scriptblock]$SeatProof = $null, [hashtable]$SeatArgs = @{})
+    $who = $null
+    if ($null -ne $Sender) { $who = & $Sender }
+    else {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
+        $who = Resolve-HordeNoticeSender @SenderArgs
+    }
+    if ($null -eq $who -or -not [bool]$who.ok) { throw ("decisions " + $Verb + " is run by the Orc that asked, from inside its own session, and which session this is could not be proven: " + $(if ($null -eq $who) { "nothing answered" } else { ("" + $who.reason) -replace '\Ano notice was sent: ', '' })) }
+    if ("$($who.label)" -cnotmatch '\A[A-Z]\z') { throw ("decisions " + $Verb + " is run by the Orc that asked, and this session's fleet label is '" + $who.label + "', which is not an Orc's lane letter. " + $Instead) }
+    # THE LABEL IS NOT THE ROLE: the sender's name falls back to the agent's own name for the
+    # session, so any session named with one capital letter wears an Orc's label. Routing finds
+    # an Orc by its label AND the role orc, with the seat's still-there proof; the verb holds the
+    # session to the same proof, and the seat found must be this very session.
+    $held = $null
+    if ($null -ne $SeatProof) { $held = & $SeatProof $who }
+    else {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+        $held = $null
+        try {
+            $seatFound = Get-HordeLabelSeat -Label "$($who.label)" -Role "orc" @SeatArgs
+            if ($seatFound.state -ceq "known" -and "$($seatFound.value.sessionId)" -ieq "$($who.sessionId)") { $held = [pscustomobject]@{ ok = $true; reason = "" } }
+            else { $held = [pscustomobject]@{ ok = $false; reason = $(if ($seatFound.state -ceq "known") { "the Orc " + $who.label + " is another session" } elseif ("$($seatFound.reason)" -ne "") { "$($seatFound.reason)" } else { "no live session wears the label with the role orc" }) } }
+        } catch { $held = [pscustomobject]@{ ok = $false; reason = $_.Exception.Message } }
+    }
+    if ($null -eq $held -or -not [bool]$held.ok) { throw ("decisions " + $Verb + " is run by the Orc that asked, and this session is not proven to be Orc " + $who.label + ": its fleet record does not wear that label with the role orc (" + $(if ($null -eq $held) { "nothing answered" } else { "" + $held.reason }) + "). " + $Instead) }
+    return $who
+}
+
+function Test-HordeDecisionWarchiefCaller {
+    # IS THIS COMMAND RUN INSIDE THE WARCHIEF'S OWN SESSION? Proven as an Orc's seat is (Resolve-HordeDecisionOrcCaller):
+    # the session this command runs inside (notices/Sender.ps1), held to the seat the fleet's records give the role
+    # warchief (core/SessionSeat.ps1, Get-HordeRoleSeat), which must be this very session. Never throws: no proof,
+    # an Orc's seat, a registry that cannot be read are all just "not proven", as { ok; reason }.
+    param([scriptblock]$Sender = $null, [hashtable]$SenderArgs = @{}, [scriptblock]$SeatProof = $null, [hashtable]$SeatArgs = @{})
+    try {
+        $who = $null
+        if ($null -ne $Sender) { $who = & $Sender }
+        else {
+            . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
+            $who = Resolve-HordeNoticeSender @SenderArgs
+        }
+        if ($null -eq $who -or -not [bool]$who.ok) { return [pscustomobject]@{ ok = $false; reason = "which session this is could not be proven" } }
+        $held = $null
+        if ($null -ne $SeatProof) { $held = & $SeatProof $who "warchief" }
+        else {
+            . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+            $seatFound = Get-HordeRoleSeat -Role "warchief" @SeatArgs
+            if ($seatFound.state -ceq "known" -and "$($who.sessionId)" -ieq "$($seatFound.value.sessionId)") { $held = [pscustomobject]@{ ok = $true; reason = "" } }
+            else { $held = [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief's seat" } }
+        }
+        if ($null -eq $held -or -not [bool]$held.ok) { return [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief's seat" } }
+        return [pscustomobject]@{ ok = $true; reason = "" }
+    } catch { return [pscustomobject]@{ ok = $false; reason = $_.Exception.Message } }
 }
 
 function Invoke-HordeDecisionCommand {
@@ -642,6 +725,10 @@ function Invoke-HordeDecisionCommand {
             if ($have.ContainsKey("Outcome") -eq $have.ContainsKey("OutcomeFile")) { throw ("decisions close needs the outcome exactly once: -Outcome <one line>, or -OutcomeFile <path> for more than a line" + $usageNote) }
             if ($have.ContainsKey("OutcomeFile")) { $request["outcome"] = Read-HordeDecisionTextFile -Path "$($have['OutcomeFile'])" -What "the outcome file" }
             else { $request["outcome"] = "$($have['Outcome'])" }
+            # THE SEAT IS PROVEN, NEVER TRUSTED: this command sends every write as the actor "warchief", whoever runs it.
+            # Only a session proven to hold the warchief's seat says so (callerSeat); the operation relies on that
+            # alone to let a close go over a change its Orc has not replied to (decisions/Operations.ps1).
+            if ("$($request['outcome'])".Trim() -ne "" -and (Test-HordeDecisionWarchiefCaller -Sender $Sender -SenderArgs $SenderArgs -SeatProof $SeatProof -SeatArgs $SeatArgs).ok) { $request["callerSeat"] = "warchief" }
         }
         "reopen" {
             if (-not $have.ContainsKey("Reason")) { throw ("decisions reopen needs -Reason <one line>: why the question is open again" + $usageNote) }
@@ -657,32 +744,9 @@ function Invoke-HordeDecisionCommand {
         "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
         "ack" {
             # WHICH ORC IS PROVEN, NEVER TYPED (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED):
-            # the session this command runs inside, by notices/Sender.ps1's three steps, and its fleet label.
-            # The rules then hold that Orc to the question's askedBy.
-            $who = $null
-            if ($null -ne $Sender) { $who = & $Sender }
-            else {
-                . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
-                $who = Resolve-HordeNoticeSender @SenderArgs
-            }
-            if ($null -eq $who -or -not [bool]$who.ok) { throw ("decisions ack is run by the Orc that asked, from inside its own session, and which session this is could not be proven: " + $(if ($null -eq $who) { "nothing answered" } else { ("" + $who.reason) -replace '\Ano notice was sent: ', '' })) }
-            if ("$($who.label)" -cnotmatch '\A[A-Z]\z') { throw ("decisions ack is run by the Orc that asked, and this session's fleet label is '" + $who.label + "', which is not an Orc's lane letter. The warchief closes a question with: horde decisions close <number> -Outcome <one line>") }
-            # THE LABEL IS NOT THE ROLE: the sender's name falls back to the agent's own name for the
-            # session, so any session named with one capital letter wears an Orc's label. Routing finds
-            # an Orc by its label AND the role orc, with the seat's still-there proof; ack holds the
-            # session to the same proof, and the seat found must be this very session.
-            $held = $null
-            if ($null -ne $SeatProof) { $held = & $SeatProof $who }
-            else {
-                . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
-                $held = $null
-                try {
-                    $seatFound = Get-HordeLabelSeat -Label "$($who.label)" -Role "orc" @SeatArgs
-                    if ($seatFound.state -ceq "known" -and "$($seatFound.value.sessionId)" -ieq "$($who.sessionId)") { $held = [pscustomobject]@{ ok = $true; reason = "" } }
-                    else { $held = [pscustomobject]@{ ok = $false; reason = $(if ($seatFound.state -ceq "known") { "the Orc " + $who.label + " is another session" } elseif ("$($seatFound.reason)" -ne "") { "$($seatFound.reason)" } else { "no live session wears the label with the role orc" }) } }
-                } catch { $held = [pscustomobject]@{ ok = $false; reason = $_.Exception.Message } }
-            }
-            if ($null -eq $held -or -not [bool]$held.ok) { throw ("decisions ack is run by the Orc that asked, and this session is not proven to be Orc " + $who.label + ": its fleet record does not wear that label with the role orc (" + $(if ($null -eq $held) { "nothing answered" } else { "" + $held.reason }) + "). The warchief closes a question with: horde decisions close <number> -Outcome <one line>") }
+            # the session this command runs inside and its fleet label, held to the seat of that Orc
+            # (Resolve-HordeDecisionOrcCaller). The rules then hold that Orc to the question's askedBy.
+            $who = Resolve-HordeDecisionOrcCaller -Verb "ack" -Instead "The warchief closes a question with: horde decisions close <number> -Outcome <one line>" -Sender $Sender -SenderArgs $SenderArgs -SeatProof $SeatProof -SeatArgs $SeatArgs
             $request["actor"] = $script:HordeDecisionAckActor
             $request["by"] = "$($who.label)"
             # THE ANSWER IS NAMED, ALWAYS: an ack that named none would close over whatever stood at that
@@ -691,6 +755,25 @@ function Invoke-HordeDecisionCommand {
             $answerText = "$($have['Answer'])"
             if ($answerText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Answer is the record of the answer you were sent, as the notice names it: -Answer 57" + $usageNote) }
             $request["answer"] = [long]$answerText
+        }
+        "change-reply" {
+            # THE ORC THAT ASKED says what became of its work when the founder changed his answer (decisions/Rules.ps1,
+            # THE FOUNDER CHANGES HIS ANSWER). Proven as ack proves it; the rules hold it to the question's askedBy.
+            $who = Resolve-HordeDecisionOrcCaller -Verb "change-reply" -Instead "The warchief is told of a change in the answer by the notice it was sent, and has no reply to give" -Sender $Sender -SenderArgs $SenderArgs -SeatProof $SeatProof -SeatArgs $SeatArgs
+            $request["actor"] = $script:HordeDecisionAckActor
+            $request["by"] = [string]$who.label
+            if ($have.ContainsKey("Answer") -eq $false) { throw ("decisions change-reply needs -Answer <record>: the changed answer you were sent, as the notice names it" + $usageNote) }
+            $changeText = "$($have['Answer'])"
+            if ($changeText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Answer is the record of the changed answer you were sent, as the notice names it: -Answer 57" + $usageNote) }
+            $request["answer"] = [long]$changeText
+            if (-not $have.ContainsKey("Reply")) { throw ("decisions change-reply needs -Reply <not-acted, undoing or cannot-undo>: what became of your work" + $usageNote) }
+            $request["reply"] = "$($have['Reply'])".ToLowerInvariant()
+            # -Why is handed on as typed: the rules say where it is needed (cannot-undo) and where it is refused.
+            if ($have.ContainsKey("Why")) {
+                $whyText = "$($have['Why'])"
+                if ($whyText -match "[\r\n]") { throw ("-Why is one line" + $usageNote) }
+                $request["why"] = $whyText
+            }
         }
         "mark-read" {
             if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }

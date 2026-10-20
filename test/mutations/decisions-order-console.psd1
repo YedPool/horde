@@ -77,7 +77,7 @@
            Find = '    if ("$($Question.state)" -cne "open" -or "$($Question.thread.turn)" -ceq (Get-HordeDecisionFirstTurn)) { return "" }'
            Replace = '    if ("$($Question.state)" -cne "open") { return "" }' }
         @{ Name = "a-keepers-note-is-shown-as-his-answer"
-           Find = '    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" })'
+           Find = '    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" -and (Test-HordeDecisionMessageAuthorizes -Message $_) })'
            Replace = '    $mine = @($Question.thread.messages | Where-Object { "$($_.act)" -eq "" })' }
         @{ Name = "an-answer-by-parts-shows-only-the-last-part"
            Find = '        $said = (@($byPart.Keys | Sort-Object | ForEach-Object { "(" + $_ + ") " + (Get-HordeDecisionFirstLine -Text ([string]$byPart[$_].text)) }) -join "; ")'

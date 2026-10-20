@@ -45,7 +45,8 @@
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1},
-        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."}
+        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."},
+        "closedBySeat": {"type": "string", "enum": ["warchief"], "description": "Present only when the close was made by a session the command line PROVED holds the warchief's seat. Nothing else may make Horde say the warchief closed a question."}
       }
     },
     "question-reopened": {
@@ -112,6 +113,19 @@
         "notice": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The messageId of the notice the messenger took. The same answer, purpose and seat always make the same id, so a send repeated after a crash is one message."},
         "note": {"type": "string", "description": "One line: why it did not go where askedBy names, or empty."},
         "analyst": {"type": "string", "description": "One line: what the fleet analyst was told of the answer (purpose answer), or empty."}
+      }
+    },
+    "answer-change-replied": {
+      "type": "object",
+      "description": "The Orc that asked a question says what became of its work when the founder changed his answer (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER): not acted yet and using the new answer, already acted and undoing, or already acted and unable to undo, with why. It names the record of the changed answer it replies to.",
+      "required": ["number", "by", "answer", "reply"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The lane letter of the Orc that replies, as its session's fleet label proves it. It must be the Orc the question's askedBy names."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's CHANGED answer that is replied to."},
+        "reply": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "not-acted, undoing or cannot-undo: the closed list is decisions/Rules.ps1's."},
+        "why": {"type": "string", "description": "One line: why the work cannot be undone. Present only with cannot-undo."}
       }
     },
     "question-acked": {
