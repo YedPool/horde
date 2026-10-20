@@ -456,7 +456,9 @@ $s1 = "77777777-0000-4000-8000-000000000001"; $s2 = "77777777-0000-4000-8000-000
 $hh = New-Home
 $null = Invoke-HordeFleetLotBackfill -File $byFile -Deps $eDeps -HordeHome $hh
 $ls = Lots-Of $hh
-Check ((@($ls | ForEach-Object { $_.by }) -join ",") -ceq "Z3,E7,Q9") ("who parked is kept as a word, with or without a record (" + (@($ls | ForEach-Object { $_.by }) -join ",") + ")")
+Check ((@($ls | ForEach-Object { $_.by }) -join ",") -ceq "Z3,E7,") ("who parked is kept in the record as a word; a lot with no record shows none (" + (@($ls | ForEach-Object { $_.by }) -join ",") + ")")
+$noRecLot = Read-HordeFleetLot -Id "20261001-000000" -HordeHome $hh
+Check ($null -eq $noRecLot.value.lot.PSObject.Properties["created_by_orc_id"] -and $null -eq $noRecLot.value.lot.PSObject.Properties["created_by_session_id"]) "and a free word is never put in created_by_orc_id, which holds an orc table id"
 $labelLot = Read-HordeFleetLot -Id "20261002-000000" -HordeHome $hh
 Check ($labelLot.value.lot.created_by_session_id -ceq $s2) "a label of one of the members is resolved to its session id"
 

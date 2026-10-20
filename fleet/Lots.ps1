@@ -105,7 +105,6 @@ function Get-HordeFleetLots {
         }
         $by = ""
         if ($null -ne $one.record -and $null -ne (Get-HordeFleetMember $one.record "parkedBy")) { $by = "" + $one.record.parkedBy }
-        elseif ($null -ne (Get-HordeFleetMember $one.lot "created_by_orc_id")) { $by = "" + $one.lot.created_by_orc_id }
         elseif ($null -ne (Get-HordeFleetMember $one.lot "created_by_session_id")) { $by = "" + $one.lot.created_by_session_id }
         $kind = Get-HordeFleetMember $one.lot "selection_kind"
         $kv = Get-HordeFleetMember $one.lot "keep_visible"
@@ -208,14 +207,13 @@ function Read-HordeFleetBackfillFile {
             }
         }
         # WHO PARKED is kept whatever it is (review of PR 338): a session id, else the id of the member it is the label of, and
-        # the word itself in created_by_orc_id when it is not an id, so the listing shows it even for a lot with no record.
-        $byId = ""; $byOrc = ""
+        # the word itself only in the record's parkedBy (created_by_orc_id is the orc table's foreign key, never a free word).
+        $byId = ""
         if ($by -cmatch $script:HordeFleetSessionPattern) { $byId = $by }
         elseif ($by -ne "") {
             if ($labelSessions.ContainsKey($by)) { $byId = "" + $labelSessions[$by] }
-            if ($by -cmatch '\A[^\x00-\x1F]{1,64}\z') { $byOrc = $by }
         }
-        $lot = New-HordeFleetLot -At $at -ById $byId -ByOrc $byOrc -Reason ("" + $dl.why) -Kind "backfill" -Seed $seed
+        $lot = New-HordeFleetLot -At $at -ById $byId -Reason ("" + $dl.why) -Kind "backfill" -Seed $seed
         $findings = @(Test-HordeFleetLotFiles -Lot $lot -Members @($rows) -FolderId $hid)
         if ($findings.Count -gt 0) { throw ($where + " breaks the lot shape: " + ($findings -join "; ")) }
         [void]$out.Add([pscustomobject]@{ hid = $hid; at = $at; by = $by; lot = $lot; members = @($rows); sessions = @($sessions) })

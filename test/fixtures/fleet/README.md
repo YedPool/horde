@@ -160,3 +160,9 @@ Not a phone file. The two parks that happened before lots existed, for
 (by K) and M's park of 2026-10-19. It carries session ids and labels only; the working directory,
 pane and parent are read from the fleet registry when it is applied, so the file names no machine
 path. Applying it twice writes nothing the second time. It is not applied by any test.
+
+Who parked (`by`): a session id is the lot's `created_by_session_id`; the label of one of the lot's members
+is resolved to that member's id; any other word is kept only in the record's `parkedBy`, which the listing
+reads first. `created_by_orc_id` is never written from it: that column is the orc table's key in fleet.db,
+and a free word there would break the import. A lot with no record (no member has a working directory)
+and a `by` that is not a member's label therefore shows no parker.
