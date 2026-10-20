@@ -8,6 +8,9 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-whole-question-signed-answer-does-not-count-as-answering-the-parts"
+           Find = '-not $wordsOnly -and -not $wholeSigned -and $null -ne $q.PSObject.Properties["needsPasskey"]'
+           Replace = '-not $wordsOnly -and $null -ne $q.PSObject.Properties["needsPasskey"]' }
         @{ Name = "the-orc-is-not-told-when-the-warchief-closes-its-question"
            Find = '        if ($null -ne $told) { [void]$work.Add($told); continue }'
            Replace = '' }
