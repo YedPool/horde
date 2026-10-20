@@ -411,6 +411,35 @@ try {
     Check ((Get-HordeChatTakenAction -Status (New-HordeAbsent -Note "x") -AgeSeconds 3600 -Alarmed $true -AlarmSeconds 90 -TtlSeconds 3600) -ceq "expired") "an absent status at ttl: expired"
     Check ((Get-HordeChatTakenAction -Status (& $known "expired") -AgeSeconds 1 -Alarmed $false -AlarmSeconds 90 -TtlSeconds 3600) -ceq "expired") "given up by the fleet: expired"
     Check ((Get-HordeChatTakenAction -Status (& $known "held") -AgeSeconds 1 -Alarmed $false -AlarmSeconds 90 -TtlSeconds 3600) -ceq "held") "held by the fleet: held"
+    Write-Host ""
+    Write-Host "--- TAKEN 13. the cadence of the asking, and a line the phone cannot be told of is not forgotten ---" -ForegroundColor Cyan
+    $base2 = $base + 20000000
+    Set-HordeChatTakenClock -Ms $base2
+    $W2 = New-World -NoPhoneKey -Settings $S
+    $null = Invoke-Tick $W2
+    Reset-Posts
+    Remove-TestMessengers
+    $null = Register-TestMessenger "chat-cadence"
+    $e = Send-OneLine $W2 "No phone key yet."
+    Check ($e.messengerId -cne "" -and @(Get-Awaiting $W2).Count -eq 1) ("the line is accepted and awaited even though no phone key is trusted yet (" + @(Get-Awaiting $W2).Count + ")")
+    $script:statusAsks = 0
+    Set-HordeChatTakenClock -Ms ($base2 + 2000)
+    $null = Invoke-Tick $W2
+    Check ($script:statusAsks -eq 0) ("2 s on, inside takenCheckSeconds: the fleet is not asked again (" + $script:statusAsks + " asks)")
+    Set-HordeChatTakenClock -Ms ($base2 + 12000)
+    $null = Invoke-Tick $W2
+    $null = Invoke-Tick $W2
+    Check ($script:statusAsks -eq 1) ("12 s on: asked once, and not again by the next turn of the runner (" + $script:statusAsks + " asks)")
+    $script:stages[$e.messengerId] = "handed-over"
+    Set-HordeChatTakenClock -Ms ($base2 + 25000)
+    $t = Invoke-Tick $W2
+    Check (@(Get-Awaiting $W2).Count -eq 1) ("taken, but the phone cannot be told (no key): the line stays awaited, not forgotten (" + ($t.lines -join " | ") + ")")
+    Add-PhoneKey -HordeHome $W2.home -Phone $W2.phone
+    Set-HordeChatTakenClock -Ms ($base2 + 40000)
+    $null = Invoke-Tick $W2
+    $rc = @(Get-ReceiptsOf $W2 $e.id)
+    Check (@(Get-Awaiting $W2).Count -eq 0 -and $rc -ccontains "accepted/delivered") ("once the phone can be told it gets delivered, and the list is empty (" + ($rc -join ",") + ")")
+
     Set-HordeChatTakenClock -Ms 0
     Reset-Posts
 } finally {
