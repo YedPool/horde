@@ -278,3 +278,10 @@ test('command line: --session must look like a session id (exit 2); latency take
   assert.match(spawnSync(process.execPath, [CLI, 'latency', '--since-days', '30'], { env, encoding: 'utf8' }).stdout, /n=1 p50=9 ms/);
   fs.rmSync(r.dir, { recursive: true, force: true });
 });
+
+test('a hop on a clock that is not phone or pc is refused by the table', () => {
+  const r = rig();
+  assert.throws(() => r.store.addHop({ at: T0, message_id: 'm', hop: 'pc_journal', from_session: FROM, to_session: '', clock: 'moon' }));
+  assert.equal(all(r.store, 'SELECT COUNT(*) AS n FROM mail_hops').at(0).n, 0);
+  r.done();
+});

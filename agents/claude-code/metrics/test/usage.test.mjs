@@ -238,12 +238,15 @@ test('updated_at is the write time: every upsert bumps it, and so does the settl
   r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1000 }] }, null, BASE + 2000);
   let u = usageOf(r.store, 'S1');
   assert.deepEqual([u.state, u.updated_at, u.last_seen_at], ['running', BASE + 2000, BASE + 1000]);
-  r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1000 }] }, null, BASE + 3000); // an unchanged upsert is still a write
-  assert.equal(usageOf(r.store, 'S1').updated_at, BASE + 3000);
-  const later = BASE + 1000 + IDLE_DONE_MS + 7000;
+  r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1500 }] }, null, BASE + 3000);
+  u = usageOf(r.store, 'S1');
+  assert.deepEqual([u.updated_at, u.at, u.last_seen_at], [BASE + 3000, BASE + 1500, BASE + 1500]); // the row is updated in place, `at` follows last_seen_at
+  r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1500 }] }, null, BASE + 3500); // an unchanged upsert is still a write
+  assert.equal(usageOf(r.store, 'S1').updated_at, BASE + 3500);
+  const later = BASE + 1500 + IDLE_DONE_MS + 7000;
   assert.equal(r.store.settleUsage(later), 1);
   u = usageOf(r.store, 'S1');
-  assert.deepEqual([u.state, u.updated_at, u.last_seen_at], ['done', later, BASE + 1000]); // last_seen_at did not move: updated_at must
+  assert.deepEqual([u.state, u.updated_at, u.last_seen_at], ['done', later, BASE + 1500]); // last_seen_at did not move: updated_at must
   const idx = all(r.store, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tokens_usage'").map((x) => x.name);
   assert.ok(idx.includes('tokens_usage_updated') && idx.includes('tokens_usage_seen'), idx.join());
   assert.deepEqual(all(r.store, "SELECT name FROM pragma_index_info('tokens_usage_updated')").map((x) => x.name), ['session_id', 'updated_at']);
@@ -288,5 +291,24 @@ test('a session older than the table starts at its earliest stored request, not 
   const u = usageOf(r.store, 'S1');
   assert.equal(u.started_at, BASE - 3600000);
   assert.ok(Math.abs(u.minutes_running - (3600000 + 1000) / 60000) < 1e-9);
+  r.done();
+});
+
+test('a row written after its session has been quiet for the idle time is done at once, and one just before is running', async () => {
+  const r = rig();
+  const mark = { session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1000 };
+  r.store.apply({ tokens_usage: [mark] }, null, BASE + 1000 + IDLE_DONE_MS + 1);
+  assert.equal(usageOf(r.store, 'S1').state, 'done');
+  r.store.apply({ tokens_usage: [{ ...mark, session_id: 'S2' }] }, null, BASE + 1000 + IDLE_DONE_MS);
+  assert.equal(usageOf(r.store, 'S2').state, 'running');
+  r.done();
+});
+
+test('settle leaves a fresh running row alone and closes only the quiet one', async () => {
+  const r = rig();
+  const mark = (sid, seen) => ({ session_id: sid, agent_id: '', started_at: BASE, last_seen_at: seen });
+  r.store.apply({ tokens_usage: [mark('QUIET', BASE), mark('FRESH', BASE + IDLE_DONE_MS)] }, null, BASE + 1);
+  assert.equal(r.store.settleUsage(BASE + IDLE_DONE_MS + 10), 1);
+  assert.deepEqual([usageOf(r.store, 'QUIET').state, usageOf(r.store, 'FRESH').state], ['done', 'running']);
   r.done();
 });

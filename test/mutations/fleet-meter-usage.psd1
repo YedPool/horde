@@ -42,8 +42,8 @@
            Find = "const orcId = this.orcIdOf(session);"
            Replace = "const orcId = session.slice(0, 1);" }
         @{ Name = "settle-closes-fresh-rows"
-           Find = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now - IDLE_DONE_MS).changes); }"
-           Replace = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now + IDLE_DONE_MS).changes); }" }
+           Find = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now, now - IDLE_DONE_MS).changes); }"
+           Replace = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now, now + IDLE_DONE_MS).changes); }" }
         @{ Name = "updated-at-not-bumped-by-an-upsert"
            Find = 'ON CONFLICT (session_id, agent_id) DO UPDATE SET updated_at = excluded.updated_at, at = excluded.at,'
            Replace = 'ON CONFLICT (session_id, agent_id) DO UPDATE SET at = excluded.at,' }
