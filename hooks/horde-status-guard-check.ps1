@@ -14,10 +14,21 @@
 # Folders are named by index so no path is ever sent through a console code page. Exit 0 when every
 # folder was clean or absent, 3 when any was rejected. The caller turns 3 into the hook's exit 2.
 #
+# -RestoreFolders: the folders (joined by *) the hook may put a last good copy back into. A bad card in any other
+# folder is only reported (outcome "reported"): it may be another Orc's edit in progress, and blaming and
+# overwriting it from someone else's command is wrong.
+#
+# THE CARD IS READ AGAIN right before the restore, and the restore is skipped when its bytes are not those
+# the verdict was made on: a good `horde status set` may have landed in between.
+#
+# HORDE_STATUS_GUARD_TEST_REWRITE (tests only): a file whose bytes are written over status.txt just before
+# that second read, standing in for a write that lands in the window.
+#
 # HORDE_STATUS_GUARD_MARKER (tests only): a file this script appends one line to when it runs, so a
 # test can prove that a payload the hook should ignore never reached here.
 param(
-    [Parameter(Mandatory = $true)][string]$Folders
+    [Parameter(Mandatory = $true)][string]$Folders,
+    [string]$RestoreFolders = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -44,10 +55,12 @@ function Read-StatusGuardBytes([string]$Path) {
         return $bytes
     } finally { $stream.Dispose() }
 }
-function Write-StatusGuardFile([string]$Path, [byte[]]$Bytes) {
+function Write-StatusGuardFile([string]$Path, [byte[]]$Bytes, $Mtime = $null) {
     $temp = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
     try {
         [System.IO.File]::WriteAllBytes($temp, $Bytes)
+        # The panel's "as of" is the file's modified time, so a restored card keeps its copy's, not "now".
+        if ($null -ne $Mtime) { [System.IO.File]::SetLastWriteTimeUtc($temp, $Mtime) }
         Move-HordeFileAtomic -From $temp -To $Path
     } finally {
         if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) }
@@ -55,12 +68,18 @@ function Write-StatusGuardFile([string]$Path, [byte[]]$Bytes) {
 }
 
 $rejected = 0
+function Get-NormalPath([string]$p) { return ([System.IO.Path]::GetFullPath($p).TrimEnd('\', '/')).ToLowerInvariant() }
+$allowed = @{}
+foreach ($rf in @($RestoreFolders -split '\*')) { if ($rf -ne '' -and $rf -ne '-') { $allowed[(Get-NormalPath $rf)] = $true } }
 $list = @($Folders -split '\*')
 for ($i = 0; $i -lt $list.Count; $i++) {
     $dir = $list[$i]
     if ($dir -eq '') { continue }
     $file = Join-Path $dir $script:HordeFleetStatusFile
     if (-not [System.IO.File]::Exists($file)) { continue }
+    # The bytes the verdict is made on are read FIRST, so a change after this point is seen at the restore.
+    $seen = $null
+    if ((New-Object System.IO.FileInfo($file)).Length -le $script:HordeFleetStatusMostBytes) { $seen = Read-StatusGuardBytes $file }
     $read = Read-HordeFleetStatusFolder -Path $dir
     $good = Join-Path $dir $lastGood
     if ($read.written) {
@@ -78,14 +97,21 @@ for ($i = 0; $i -lt $list.Count; $i++) {
         }
         continue
     }
-    $rejected++
     $outcome = 'left'
-    if ([System.IO.File]::Exists($good)) {
+    $mayRestore = $allowed.ContainsKey((Get-NormalPath $dir))
+    if ($env:HORDE_STATUS_GUARD_TEST_REWRITE) { [System.IO.File]::WriteAllBytes($file, [System.IO.File]::ReadAllBytes($env:HORDE_STATUS_GUARD_TEST_REWRITE)) }
+    if ($null -ne $seen -and [System.IO.File]::Exists($file)) {
+        $now = Read-StatusGuardBytes $file
+        if ($now.Length -ne $seen.Length -or [System.Convert]::ToBase64String($now) -cne [System.Convert]::ToBase64String($seen)) { continue }
+    }
+    $rejected++
+    if (-not $mayRestore) { $outcome = 'reported' }
+    elseif ([System.IO.File]::Exists($good)) {
         $goodInfo = New-Object System.IO.FileInfo($good)
         if ($goodInfo.Length -le $script:HordeFleetStatusMostBytes) {
             $goodBytes = Read-StatusGuardBytes $good
             if ((ConvertFrom-HordeFleetStatusBytes -Bytes $goodBytes).problems.Count -eq 0) {
-                Write-StatusGuardFile $file $goodBytes
+                Write-StatusGuardFile $file $goodBytes $goodInfo.LastWriteTimeUtc
                 $outcome = 'restored'
             }
         }

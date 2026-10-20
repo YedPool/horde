@@ -41,6 +41,9 @@ const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
 const RECENT_MS = 120 * 1000;
 const CHILD_TIMEOUT_MS = 8000;
 const STATUS_PATH = /[\\/]orcs[\\/][^\\/]+[\\/]status\.txt$/i;
+// A path in a shell command that ends in status.txt: no space, quote or shell punctuation inside it, so
+// an absolute, relative, drive-letter or UNC (\\host\share\...) spelling is all one token.
+const STATUS_TOKEN = /[^\s"'<>|;&()*?]*status\.txt/gi;
 
 const LOG_FILE =
   process.env.HORDE_STATUS_GUARD_LOG || join(homedir(), "Documents", "Code", ".wezfleet", "accuracy", "status-guard-hook.log");
@@ -75,7 +78,27 @@ function isDir(p) {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
-function findOrcsRoot(cwd, command) {
+function absolute(p, cwd) {
+  return resolve(typeof cwd === "string" && cwd !== "" ? cwd : process.cwd(), p);
+}
+
+function samePath(a, b) {
+  return resolve(a).replace(/[\\/]+$/, "").toLowerCase() === resolve(b).replace(/[\\/]+$/, "").toLowerCase();
+}
+
+// The lane folder the working folder is in: the ancestor (or itself) whose parent is the orcs root.
+function cwdLane(cwd, root) {
+  if (typeof cwd !== "string" || cwd === "" || !root) return null;
+  let dir = resolve(cwd);
+  for (;;) {
+    const up = dirname(dir);
+    if (up === dir) return null;
+    if (samePath(up, root)) return dir;
+    dir = up;
+  }
+}
+
+function findOrcsRoot(cwd, namedFiles) {
   if (typeof cwd === "string" && cwd !== "") {
     let dir = resolve(cwd);
     for (;;) {
@@ -87,8 +110,11 @@ function findOrcsRoot(cwd, command) {
     const below = join(resolve(cwd), "orcs");
     if (isDir(below)) return below;
   }
-  const m = /([A-Za-z]:[\\/][^"'*?<>|\r\n]*?[\\/]orcs)[\\/]/i.exec(command || "");
-  if (m && isDir(m[1])) return m[1];
+  // an orcs path the command itself names (a drive-letter, relative or UNC spelling alike)
+  for (const f of namedFiles) {
+    const root = dirname(dirname(f));
+    if (isDir(root)) return root;
+  }
   const env = process.env.HORDE_STATUS_ORCS_ROOT;
   if (env && isDir(env)) return env;
   return null;
@@ -110,9 +136,9 @@ function recentFolders(orcsRoot) {
 }
 
 // Runs the checker. Resolves { ok, lines } or { ok: false } after logging why.
-function runChecker(folders) {
+function runChecker(folders, restorable) {
   return new Promise((resolveRun) => {
-    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", CHECKER, "-Folders", folders.join("*")];
+    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", CHECKER, "-Folders", folders.join("*"), "-RestoreFolders", restorable.join("*") || "-"];
     let out = "";
     let done = false;
     let child;
@@ -131,6 +157,7 @@ function runChecker(folders) {
     child.on("error", (e) => { logLine("pwsh error: " + (e && e.code ? e.code : e && e.message)); finish({ ok: false, lines: [] }); });
     child.stdout.on("data", (d) => { out += d.toString("utf8"); });
     child.on("close", (code) => {
+      if (done) return; // an error event already settled this run and logged it
       if (code !== 0 && code !== 3) { logLine("checker exited " + code); return finish({ ok: false, lines: [] }); }
       const lines = out.split(/\r?\n/).filter((l) => l.startsWith("rejected\t"));
       if (code === 3 && lines.length === 0) { logLine("checker exited 3 with no report"); return finish({ ok: false, lines: [] }); }
@@ -146,22 +173,31 @@ async function main() {
   const ti = input.tool_input || {};
 
   let folders = [];
+  let restorable = [];
   if (FILE_TOOLS.has(input.tool_name)) {
     const file = ti.file_path;
-    if (typeof file !== "string" || !STATUS_PATH.test(file)) return 0;
-    folders = [dirname(resolve(file))];
+    if (typeof file !== "string" || file === "") return 0;
+    if (!STATUS_PATH.test(absolute(file, input.cwd))) return 0;
+    folders = [dirname(absolute(file, input.cwd))];
+    restorable = folders;
   } else if (SHELL_TOOLS.has(input.tool_name)) {
     const command = ti.command;
     if (typeof command !== "string" || !/status\.txt/i.test(command)) return 0;
-    const root = findOrcsRoot(input.cwd, command);
+    const named = (command.match(STATUS_TOKEN) || []).map((t) => absolute(t, input.cwd)).filter((p) => STATUS_PATH.test(p));
+    const root = findOrcsRoot(input.cwd, named);
     if (!root) return 0;
     folders = recentFolders(root);
+    // Restore only what the command names, or its own lane; anything else recently changed is only reported.
+    restorable = [];
+    for (const f of named.map((p) => dirname(p))) if (samePath(dirname(f), root)) restorable.push(f);
+    const own = cwdLane(input.cwd, root);
+    if (own) restorable.push(own);
   } else {
     return 0;
   }
   if (folders.length === 0) return 0;
 
-  const res = await runChecker(folders);
+  const res = await runChecker(folders, restorable);
   if (!res.ok || res.lines.length === 0) return 0;
 
   const report = [];
@@ -173,11 +209,14 @@ async function main() {
     for (const problem of p.slice(3)) report.push("  - " + problem);
     report.push(p[2] === "restored"
       ? "  The last good copy (.status.last-good.txt) was put back, so the card on the phone is the previous one, not this edit."
-      : "  No good copy existed, so the bad file was left as it is.");
+      : p[2] === "reported"
+        ? "  NOT restored: this command did not name this card, so it may be another Orc's edit in progress. Its Orc should fix it."
+        : "  No good copy existed, so the bad file was left as it is.");
   }
   report.push("Fix: write the card with `horde status set -Doing <text> -Finished <text> -Blocked <no|sentence>` (add -WaitingOn <text> if something is awaited); it refuses a bad card and writes nothing.");
   process.stderr.write(report.join("\n") + "\n");
   return 2;
 }
 
-main().then((c) => process.exit(c), (e) => { logLine("internal error: " + (e && e.message)); process.exit(0); });
+// process.exitCode, not process.exit(): exiting at once can cut off a large stderr write on a pipe.
+main().then((c) => { process.exitCode = c; }, (e) => { logLine("internal error: " + (e && e.message)); process.exitCode = 0; });

@@ -79,7 +79,7 @@ function Invoke-Hook {
     } finally { $p.Dispose() }
 }
 function Payload { param([string]$Tool, [hashtable]$ToolInput, [string]$Cwd = "") return (ConvertTo-Json -Compress -Depth 5 -InputObject @{ tool_name = $Tool; tool_input = $ToolInput; cwd = $Cwd; session_id = "t" }) }
-function Hook-File { param([string]$Tool, [string]$Path, [hashtable]$Env = @{}) return (Invoke-Hook (Payload $Tool @{ file_path = $Path }) $Env) }
+function Hook-File { param([string]$Tool, [string]$Path, [hashtable]$Env = @{}, [string]$Cwd = "") return (Invoke-Hook (Payload $Tool @{ file_path = $Path } $Cwd) $Env) }
 function Hook-Shell { param([string]$Cmd, [string]$Cwd, [string]$Tool = "Bash", [hashtable]$Env = @{}) return (Invoke-Hook (Payload $Tool @{ command = $Cmd } $Cwd) $Env) }
 
 try {
@@ -191,10 +191,70 @@ $r = Hook-Shell "Set-Content status.txt 'x'" $s1 "PowerShell"
 Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "the PowerShell tool is treated the same way"
 Put (Join-Path $s1 "status.txt") $badCard 3
 $r = Hook-Shell "cat status.txt" $elsewhere -Env @{ HORDE_STATUS_ORCS_ROOT = $shellOrcs }
-Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "from a folder outside orcs, HORDE_STATUS_ORCS_ROOT finds the cards"
+Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $badCard -and $r.err.Contains("NOT restored")) "from a folder outside orcs, HORDE_STATUS_ORCS_ROOT finds the card and REPORTS it, but restores nothing the command did not name"
 Put (Join-Path $s1 "status.txt") $badCard 3
 $r = Hook-Shell ("echo x > " + (Join-Path $s1 "status.txt")) $env:TEMP
-Check ($r.code -eq 2) "an orcs path written in the command finds the cards when the working folder is elsewhere"
+Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "an orcs path written in the command finds the card, and restores it, when the working folder is elsewhere"
+
+Write-Host ""
+Write-Host "--- a shell command restores only the cards it names, or its own lane ---" -ForegroundColor Cyan
+New-Orcs "scope"
+$ka = Lane "KA"; $la = Lane "LA"; $ma = Lane "MA"
+foreach ($x in @($ka, $la, $ma)) { Put (Join-Path $x ".status.last-good.txt") $goodCard; Put (Join-Path $x "status.txt") $badCard 3 }
+$r = Hook-Shell "cat status.txt" $ka
+Check ($r.code -eq 2 -and (Text (Join-Path $ka "status.txt")) -ceq $goodCard) "the working folder's own lane is restored"
+Check ((Text (Join-Path $la "status.txt")) -ceq $badCard -and (Text (Join-Path $ma "status.txt")) -ceq $badCard) "other Orcs' recently changed bad cards are NOT restored"
+Check ($r.err.Contains((Join-Path $la "status.txt")) -and $r.err.Contains("NOT restored")) "   but they are reported, and the report says they were not restored"
+$r = Hook-Shell ("cat " + (Join-Path $la "status.txt")) $ka
+Check ((Text (Join-Path $la "status.txt")) -ceq $goodCard -and (Text (Join-Path $ma "status.txt")) -ceq $badCard) "a card named by absolute path in the command is restored, an unnamed one still is not"
+$r = Hook-Shell "cat ..\MA\status.txt" $ka
+Check ((Text (Join-Path $ma "status.txt")) -ceq $goodCard) "a card named by a path relative to the working folder is restored"
+
+Write-Host ""
+Write-Host "--- a restore keeps the last good card's own time ---" -ForegroundColor Cyan
+New-Orcs "mtime"
+$mt = Lane "MT"
+Put (Join-Path $mt ".status.last-good.txt") $goodCard 5000
+Put (Join-Path $mt "status.txt") $badCard 1
+$r = Hook-File "Write" (Join-Path $mt "status.txt")
+$age = ([datetime]::UtcNow - (Get-Item -LiteralPath (Join-Path $mt "status.txt")).LastWriteTimeUtc).TotalSeconds
+Check ($r.code -eq 2 -and (Text (Join-Path $mt "status.txt")) -ceq $goodCard -and $age -gt 4900 -and $age -lt 5200) "the restored card is as old as the copy it came from (a stale card does not look fresh)"
+
+Write-Host ""
+Write-Host "--- a good card that lands during the check is not overwritten ---" -ForegroundColor Cyan
+New-Orcs "race"
+$rc = Lane "RC"
+$landing = Join-Path $work "landing.txt"
+[System.IO.File]::WriteAllBytes($landing, $utf8.GetBytes($goodCard2))
+Put (Join-Path $rc ".status.last-good.txt") $goodCard 100
+Put (Join-Path $rc "status.txt") $badCard 1
+$r = Hook-File "Write" (Join-Path $rc "status.txt") @{ HORDE_STATUS_GUARD_TEST_REWRITE = $landing }
+Check ($r.code -eq 0 -and (Text (Join-Path $rc "status.txt")) -ceq $goodCard2) "a card that changed between the verdict and the restore is left as it landed (no restore, exit 0)"
+
+Write-Host ""
+Write-Host "--- a path is resolved against the payload's working folder ---" -ForegroundColor Cyan
+New-Orcs "rel"
+$rl = Lane "RL"
+Put (Join-Path $rl ".status.last-good.txt") $goodCard
+Put (Join-Path $rl "status.txt") $badCard
+$relRoot = Split-Path -Parent $script:orcs
+Reset-Marks
+$r = Hook-File "Write" "orcs\RL\status.txt" -Cwd $relRoot
+Check ($r.code -eq 2 -and (Text (Join-Path $rl "status.txt")) -ceq $goodCard) "a relative orcs\RL\status.txt with the working folder above orcs is matched and restored"
+Put (Join-Path $rl "status.txt") $badCard
+$r = Hook-File "Write" "status.txt" -Cwd $rl
+Check ($r.code -eq 2 -and (Text (Join-Path $rl "status.txt")) -ceq $goodCard) "a bare status.txt with the working folder inside the lane is matched and restored"
+Reset-Marks
+$r = Hook-File "Write" "status.txt" -Cwd $work
+Check ($r.code -eq 0 -and -not (Ran)) "CONTROL: a bare status.txt with a working folder that is no lane spawns nothing"
+$uncRoot = "\localhost\" + $script:orcs.Substring(0, 1) + "$" + $script:orcs.Substring(2)
+if (Test-Path -LiteralPath $uncRoot) {
+    Put (Join-Path $rl "status.txt") $badCard
+    $r = Hook-Shell ("cat " + $uncRoot + "\RL\status.txt") $elsewhere
+    Check ($r.code -eq 2 -and (Text (Join-Path $rl "status.txt")) -ceq $goodCard) "an orcs path written as a UNC path in a command is found and restored"
+} else {
+    Write-Host "  [SKIP] no administrative share here: the UNC command path is not exercised" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "--- status.retired.txt is never looked at ---" -ForegroundColor Cyan

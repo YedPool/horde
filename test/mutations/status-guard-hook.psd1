@@ -31,8 +31,17 @@
            Find = 'const env = process.env.HORDE_STATUS_ORCS_ROOT;'
            Replace = 'const env = null;' }
         @{ Name = "orcs-path-in-command-ignored"
-           Find = 'if (m && isDir(m[1])) return m[1];'
-           Replace = 'if (false) return m[1];' }
+           Find = 'if (isDir(root)) return root;'
+           Replace = 'if (false) return root;' }
+        @{ Name = "restore-scope-ignored"
+           Find = 'restorable.join("*") || "-"'
+           Replace = 'folders.join("*")' }
+        @{ Name = "own-lane-not-restorable"
+           Find = 'if (own) restorable.push(own);'
+           Replace = 'if (false) restorable.push(own);' }
+        @{ Name = "relative-path-not-resolved"
+           Find = 'if (!STATUS_PATH.test(absolute(file, input.cwd))) return 0;'
+           Replace = 'if (!STATUS_PATH.test(file)) return 0;' }
         @{ Name = "checker-failure-silent"
            Find = 'if (code !== 0 && code !== 3) {'
            Replace = 'if (false) {' }

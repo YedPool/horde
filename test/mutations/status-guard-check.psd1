@@ -18,6 +18,15 @@
         @{ Name = "restore-not-reported"
            Find = '$outcome = ''restored'''
            Replace = '$outcome = ''left''' }
+        @{ Name = "restored-card-stamped-now"
+           Find = 'Write-StatusGuardFile $file $goodBytes $goodInfo.LastWriteTimeUtc'
+           Replace = 'Write-StatusGuardFile $file $goodBytes' }
+        @{ Name = "unnamed-card-restored"
+           Find = '$mayRestore = $allowed.ContainsKey((Get-NormalPath $dir))'
+           Replace = '$mayRestore = $true' }
+        @{ Name = "changed-card-restored"
+           Find = 'if ($now.Length -ne $seen.Length -or [System.Convert]::ToBase64String($now) -cne [System.Convert]::ToBase64String($seen)) { continue }'
+           Replace = 'if ($false) { continue }' }
         @{ Name = "bad-card-taken-as-clean"
            Find = 'if ($read.written) {'
            Replace = 'if ($true) {' }
