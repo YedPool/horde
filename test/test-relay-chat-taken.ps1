@@ -419,7 +419,7 @@ try {
     $null = Invoke-Tick $W2
     Reset-Posts
     Remove-TestMessengers
-    $null = Register-TestMessenger "chat-cadence"
+    $null = Register-TestMessenger "chat-wakes"
     $e = Send-OneLine $W2 "No phone key yet."
     Check ($e.messengerId -cne "" -and @(Get-Awaiting $W2).Count -eq 1) ("the line is accepted and awaited even though no phone key is trusted yet (" + @(Get-Awaiting $W2).Count + ")")
     $script:statusAsks = 0
