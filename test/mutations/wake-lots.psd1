@@ -6,7 +6,7 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "only-ids-wakes-everyone"
-           Find = 'if ($onlyIds.Count -gt 0) { $all = @($all | Where-Object { $onlyIds -ccontains ("" + $_.sessionId) }) }'
+           Find = 'if ($idsAsked.Count -gt 0) { $all = @($all | Where-Object { $idsAsked -ccontains ("" + $_.sessionId) }) }'
            Replace = '' }
     )
 }
