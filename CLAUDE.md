@@ -92,3 +92,10 @@ reason.
   `test/test-host-names.ps1` fails on anything new.
 - Core matches no process image name. A harness declares its image as a `processImage` line in its
   `names.txt`; which processes are its own is its adapter's to answer.
+
+## No Microsoft Store packages (CONTRIBUTING 16)
+
+- Horde never depends on a Store (MSIX/AppX) package for anything it runs (PowerShell 7, Node, Python,
+  terminals): Store packages auto-update and are closed while running (2026-10-16: a Store update of
+  PowerShell closed every `pwsh.exe` and every session with it). Use the MSI or the vendor installer,
+  started by full path, and keep Store automatic updates off. `horde setup` checks both.

@@ -68,7 +68,8 @@
 #   6. open every journaled record no channel has finished (Get-HordeRelayJournalUnfinished) - the ones
 #      just recorded, and any a killed run left - with Unprotect-HordeRelayEnvelope against the senders
 #      trusted NOW, hand the body to its channel's Accept, and mark it done when the channel is done
-#      with it, or refuses it for good.
+#      with it, or refuses it for good. A BATCH THAT HOLDS A DATA ITEM runs this step between 4 and the
+#      data items (Complete-HordeRelayInbox), so a photo's manifest is opened before its parts are judged.
 # Exactly once is therefore the journal's (each envelope recorded once) plus the channel's (its act is
 # idempotent by the record); nothing here holds state that a crash could lose.
 #
@@ -102,6 +103,23 @@
 #              it does at the top of each turn - so the runner judges a failed turn's backoff by what the
 #              relay said THIS turn, never by the sticky full mark (cli/RelayRun.ps1, BACKOFF).
 #
+# DATA KINDS (shape B, 2026-10-14: agreed by the Horde coordinator and the relay owner, for the photos
+# of channels/chat/Photo.ps1). An item in the machine's mailbox that is NOT an envelope, and opens with
+# {"v":1,"kind":"<a registered data kind>", is not signed by anybody, so it is never an envelope, never
+# journaled with them, never opened, and never handed to an Accept. It is handed to its kind's Take
+# block ALONE - Register-HordeRelayDataKind - whose only power is to keep inert bytes that a passkey-
+# signed envelope already vouched for by digest. THE GATE ENFORCES IT BY KIND, NOT BY CONVENTION:
+#   - a data kind's name can never be an envelope kind: Test-HordeRelayInboundGate refuses an envelope
+#     of that kind on EVERY channel before the journal sees it, Invoke-HordeRelayChannelRecord refuses a
+#     record of it (one journaled by older code), and Register-HordeRelayChannel refuses a channel that
+#     says it takes it - so an answer, a line, a follow or anything a runner acts on can never be one;
+#   - a data item whose kind is not registered is refused as not an envelope, as before;
+#   - every Take outcome - taken, pending or refused - settles the item, and a Take that throws refuses
+#     it: a part can be lost (the photo is then incomplete, and its phone is told), never wedge the
+#     mailbox behind it;
+#   - data items refused for the very same reason are said as ONE line with their count, so a photo
+#     its runtime cannot take is one line, not one a part (review of PR 285).
+#
 # Answers are core/tristate; the channels' outcomes are words. Nothing here prints: the runner does.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
@@ -116,6 +134,9 @@ if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction 
 $script:HordeRelayChannelSenders = @("founder", "horde")
 $script:HordeRelayChannelOutcomes = @("done", "refused", "retry")
 $script:HordeRelayChannelWordPattern = '\A[a-z][a-z0-9-]{0,31}\z'
+if ($null -eq (Get-Variable -Name HordeRelayDataKinds -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayDataKinds = [ordered]@{} }
+$script:HordeRelayDataKindPattern = '\A\{"v":1,"kind":"([a-z][a-z0-9-]{0,31})",'
+$script:HordeRelayDataOutcomes = @("taken", "pending", "refused")
 
 function Get-HordeRelayChannelRoot {
     return $PSScriptRoot
@@ -145,6 +166,7 @@ function Register-HordeRelayChannel {
     if ($Name -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("a channel is one lower-case word of up to 32 characters, not '" + $Name + "'") }
     if ((Split-Path -Leaf $Folder) -cne $Name) { throw ("the channel '" + $Name + "' sits in the folder '" + (Split-Path -Leaf $Folder) + "'; a channel's folder is its name") }
     foreach ($k in $Kinds) { if ($k -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("the channel '" + $Name + "' takes the kind '" + $k + "', which is not one lower-case word") } }
+    foreach ($k in $Kinds) { if ($script:HordeRelayDataKinds.Contains($k)) { throw ("the channel '" + $Name + "' says it takes the kind '" + $k + "', which is a data kind: unsigned, and never an envelope (DATA KINDS)") } }
     if ($script:HordeRelayChannelSenders -cnotcontains $Senders) { throw ("a channel takes envelopes from " + ($script:HordeRelayChannelSenders -join " or ") + ", not '" + $Senders + "'") }
     # Once per name: a second registration would silently swap the channel every envelope goes to.
     if ($script:HordeRelayChannels.Contains($Name)) { throw ("the channel '" + $Name + "' is already registered, from " + $script:HordeRelayChannels[$Name].folder + "; the first registration stands") }
@@ -153,6 +175,30 @@ function Register-HordeRelayChannel {
     $c = [pscustomobject]@{ PSTypeName = "Horde.RelayChannel"; name = $Name; folder = $Folder; kinds = @($Kinds); senders = $Senders; accept = $Accept; tick = $Tick; glance = $Glance }
     $script:HordeRelayChannels[$Name] = $c
     return $c
+}
+
+function Register-HordeRelayDataKind {
+    # A data kind (DATA KINDS, in the header): -Name, owned by the registered channel -Channel from its
+    # -Folder, and the one block its items are handed to - param($Context, $Text) -> { outcome; reason },
+    # outcome taken, pending or refused. Throws on a declaration that does not hold together.
+    param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][scriptblock]$Take)
+    if ($Name -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("a data kind is one lower-case word of up to 32 characters, not '" + $Name + "'") }
+    $owner = Get-HordeRelayChannel -Name $Channel
+    if ($null -eq $owner) { throw ("the data kind '" + $Name + "' names the channel '" + $Channel + "', which is not registered") }
+    if ($owner.folder -cne $Folder) { throw ("the data kind '" + $Name + "' is registered from " + $Folder + ", not from its channel's folder " + $owner.folder) }
+    if ($script:HordeRelayDataKinds.Contains($Name)) { throw ("the data kind '" + $Name + "' is already registered; the first registration stands") }
+    foreach ($c in @($script:HordeRelayChannels.Values)) { if (@($c.kinds) -ccontains $Name) { throw ("the channel '" + $c.name + "' takes '" + $Name + "' as an envelope kind, so it cannot be a data kind") } }
+    $d = [pscustomobject]@{ PSTypeName = "Horde.RelayDataKind"; name = $Name; channel = $Channel; take = $Take }
+    $script:HordeRelayDataKinds[$Name] = $d
+    return $d
+}
+
+function Get-HordeRelayDataKindOf {
+    # The registered data kind an item's text opens with, or $null.
+    param([AllowEmptyString()][string]$Text)
+    $m = [regex]::Match($Text, $script:HordeRelayDataKindPattern)
+    if (-not $m.Success -or -not $script:HordeRelayDataKinds.Contains($m.Groups[1].Value)) { return $null }
+    return $script:HordeRelayDataKinds[$m.Groups[1].Value]
 }
 
 function Get-HordeRelayChannelNames {
@@ -380,6 +426,8 @@ function Test-HordeRelayInboundGate {
     # trust store unreadable) is not a refusal of this envelope: why is "" and transient is $true.
     param($Context, $Envelope, [hashtable]$Cache = $null, $Now = $null)
     $h = $Envelope.header
+    # BY NAME, FIRST, ON EVERY CHANNEL (DATA KINDS): a data kind is never an envelope's.
+    if ($script:HordeRelayDataKinds.Contains("$($h.kind)")) { return [pscustomobject]@{ why = ("the kind " + $h.kind + " is data, which is never taken as an envelope on any channel"); transient = $false; channel = $null; senders = $null } }
     $ch = Get-HordeRelayChannel -Name $h.channel
     if ($null -eq $ch) { return [pscustomobject]@{ why = ("no channel '" + $h.channel + "' is registered here"); transient = $false; channel = $null; senders = $null } }
     if (@($ch.kinds) -cnotcontains $h.kind) { return [pscustomobject]@{ why = ("the channel " + $ch.name + " takes " + $(if (@($ch.kinds).Count) { @($ch.kinds) -join ", " } else { "nothing in" }) + ", not " + $h.kind); transient = $false; channel = $ch; senders = $null } }
@@ -403,7 +451,9 @@ function Receive-HordeRelayInbox {
     # taken: the replay keys journaled; refused: lines saying what was refused for good and why; held:
     # lines for what could not be judged now and comes again; missing: lines for envelopes of a sender
     # that the journal saw skipped (dropped, delayed or withheld by the relay: design Q11, "shown as
-    # missing, never as silence"). Unknown when the relay could not be read.
+    # missing, never as silence"); data: a line for each data item taken or waiting; opened: when the batch
+    # held a data item, the Invoke-HordeRelayUnfinished report of step 6 run before them, else $null.
+    # Unknown when the relay could not be read.
     #
     # -Between, WITH -SliceMs, ON A RELAY THAT WATCHES IN SLICES (relays/Port.ps1, A WATCH IN SLICES): the
     # same one watch, held open and waited on -SliceMs at a time, and after every slice in which nothing
@@ -458,6 +508,12 @@ function Complete-HordeRelayInbox {
     $settled = @{}
     # The trusted senders, read once for the whole batch (Get-HordeRelayChannelSenders).
     $senderCache = @{}
+    $data = New-Object System.Collections.ArrayList
+    # Refused data items BY REASON, said once each after the batch (below): a photo is up to 64 items.
+    # Keyed ORDINALLY (review round 3 of PR 285): [ordered]@{} ignores case, so two reasons that differ
+    # only in case - a hex digest, a photo id - would be folded into one line.
+    $dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)
+    $dataItems = New-Object System.Collections.ArrayList
     $vouched = New-Object System.Collections.ArrayList
     $joined = New-Object System.Collections.ArrayList
     foreach ($it in @($w.value.items)) {
@@ -481,7 +537,12 @@ function Complete-HordeRelayInbox {
             continue
         }
         $r = Read-HordeRelayEnvelope -Text $it.text
-        if (-not $r.ok) { [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue }
+        if (-not $r.ok) {
+            # A DATA ITEM (the header, DATA KINDS) is set aside, and judged after the envelopes (below).
+            $dk = Get-HordeRelayDataKindOf -Text $it.text
+            if ($null -ne $dk) { [void]$dataItems.Add([pscustomobject]@{ item = $it; kind = $dk }); continue }
+            [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue
+        }
         [void]$parsed.Add([pscustomobject]@{ item = $it; envelope = $r.value })
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
@@ -550,6 +611,48 @@ function Complete-HordeRelayInbox {
         }
         else { [void]$refused.Add($rk + ": " + $verdict.value.why) }
     }
+    # ENVELOPES ARE OPENED BEFORE DATA ITEMS ARE JUDGED (review round 4 of PR 285): step 6 runs here, on
+    # what was just journaled, when the batch holds a data item - so a photo's signed manifest is
+    # verified and accepted before its parts are judged, and they are taken at once, never left in the
+    # pending area for junk to crowd. Until round 4 data came first, and every genuine photo's parts
+    # waited there for a manifest in the same batch. A BATCH WITH NO DATA ITEM - every chat line,
+    # answer, follow and receipt - takes exactly the path it always did: nothing is opened here, and the
+    # runner's own step 6 opens it after this returns (test-relay-channels, test-relay-channel-chat). What
+    # is opened here is said by the runner from opened, in the words of its own step 6.
+    $opened = $null
+    if ($dataItems.Count -gt 0) {
+        $un = Invoke-HordeRelayUnfinished -Context $Context -Now $Now
+        if ($un.state -ceq "known") { $opened = $un.value }
+    }
+    foreach ($d in $dataItems) {
+        # To its kind's Take alone, settled whatever it says.
+        $it = $d.item
+        $dk = $d.kind
+        $settled[[long]$it.seq] = $true
+        $got = $null
+        try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker failed: " + $_.Exception.Message); continue }
+        $said = $(if ($null -ne $got -and $null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
+        if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayDataOutcomes -cnotcontains "$($got.outcome)") { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker answered with something that is not taken, pending or refused"); continue }
+        if ("$($got.outcome)" -ceq "refused") {
+            if (-not $dataRefused.Contains($said)) { $dataRefused[$said] = New-Object System.Collections.ArrayList }
+            [void]$dataRefused[$said].Add([long]$it.seq)
+        } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
+    }
+    # ONE LINE A REASON (review of PR 285): data items refused for the same reason - every part of a photo
+    # a runtime cannot take says the same thing - are one line naming how many, not a line each. A reason
+    # that names its part (a digest, a number) stays a line of its own. "items A to B" only when they are
+    # every seq from A to B; otherwise each is named, or, past 8, how many and the first and last
+    # (review round 3 of PR 285): items of other reasons, or envelopes, may lie between them. The seqs
+    # are SORTED first (review round 4): the relay's order is not trusted, and 3, 1, 5 read as a range
+    # of its first and last was "items 3 to 5 (3)".
+    foreach ($why in @($dataRefused.Keys)) {
+        $seqs = @(@($dataRefused[$why]) | Sort-Object)
+        $span = $(if ($seqs.Count -eq 1) { "item " + $seqs[0] }
+            elseif ([long]$seqs[$seqs.Count - 1] - [long]$seqs[0] -eq $seqs.Count - 1) { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }
+            elseif ($seqs.Count -le 8) { "items " + ($seqs -join ", ") }
+            else { $seqs.Count.ToString() + " items, the first " + $seqs[0] + " and the last " + $seqs[$seqs.Count - 1] })
+        [void]$refused.Add($span + ": " + $why)
+    }
     # Step 5: the cursor and the ack move to the last item before the first one held. Items the port
     # dropped are its anomalies and are behind its own cursor already.
     $through = $Context.cursor
@@ -565,7 +668,7 @@ function Complete-HordeRelayInbox {
         if ($ack.state -ceq "known") { $Context.acked = $through }
         else { [void]$held.Add("the relay was not acked through " + $through + ": " + $ack.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; vouched = @($vouched.ToArray()); joined = @($joined.ToArray()) }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; vouched = @($vouched.ToArray()); joined = @($joined.ToArray()); data = @($data.ToArray()); opened = $opened }))
 }
 
 function Invoke-HordeRelayUnfinished {
@@ -602,6 +705,7 @@ function Invoke-HordeRelayChannelRecord {
     # judged again here against the PC's session records NOW: ended or past its cap since it was
     # journaled, it opens nothing.
     param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
+    if ($script:HordeRelayDataKinds.Contains("$($Record.kind)")) { return [pscustomobject]@{ outcome = "refused"; reason = ("the kind " + $Record.kind + " is data, which is never handed to a channel's Accept") } }
     if (@($Channel.kinds) -cnotcontains $Record.kind) { return [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind) } }
     $r = Read-HordeRelayEnvelope -Text $Record.text
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("the journaled text is not an envelope: " + $r.reason) } }

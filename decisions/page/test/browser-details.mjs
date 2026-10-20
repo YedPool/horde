@@ -152,17 +152,18 @@ try {
 
   // ---------------- 5. THE ANSWERED ARE HIDDEN UNTIL ASKED FOR ----------------
   // Twelve to answer (taller than the screen), two answered (With Thrall) and one closed (History).
-  const answered = (n) => question(n, { thread: { messages: [{ speaker: "founder", text: "Yes.", sequence: n }] } });
+  const answered = (n) => question(n, { importance: "low", thread: { messages: [{ speaker: "founder", text: "Yes.", sequence: n }] } });
   const SWITCH_LIST = () => { const qs = []; for (let n = 1; n <= 12; n++) qs.push(full(n + 20)); return qs.concat([answered(40), answered(41), question(42, { state: "closed", closedAt: "2026-10-14T10:00:00Z" })]); };
   const TOP = `(() => {
     const sw = document.querySelector('#list .hd-showans'), fa = document.querySelector('#list .hd-foldall');
     const s = sw ? sw.getBoundingClientRect() : null, f = fa ? fa.getBoundingClientRect() : null;
     const tops = Array.from(document.querySelectorAll('#list .hd-order-btn')).map((b) => Math.round(b.getBoundingClientRect().top));
-    const lines = Array.from(document.querySelectorAll('#list .hd-q:not(.hd-done)')).map((w) => { const m = /Question (\\d+):/.exec((w.querySelector('.hd-qt') || {}).textContent || ''); const r = w.getBoundingClientRect(); return { n: m ? Number(m[1]) : 0, top: r.top, bottom: r.bottom, open: w.classList.contains('open') }; });
+    const lines = Array.from(document.querySelectorAll('#list .hd-q:not(.hd-done):not(.answered)')).map((w) => { const m = /Question (\\d+):/.exec((w.querySelector('.hd-qt') || {}).textContent || ''); const r = w.getBoundingClientRect(); return { n: m ? Number(m[1]) : 0, top: r.top, bottom: r.bottom, open: w.classList.contains('open') }; });
     const inView = lines.filter((l) => l.bottom > 0 && l.top < innerHeight);
     return { text: sw ? sw.textContent : '', role: sw ? sw.getAttribute('role') : '', checked: sw ? sw.getAttribute('aria-checked') : '', says: sw ? sw.getAttribute('aria-label') : '',
       x: s ? s.left + s.width / 2 : 0, y: s ? s.top + s.height / 2 : 0, swTop: s ? Math.round(s.top) : null, faTop: f ? Math.round(f.top) : null, swLeft: s ? s.left : 0, faLeft: f ? f.left : 0,
       orderOneLine: tops.length === 3 && new Set(tops).size === 1,
+      folded: Array.from(document.querySelectorAll('#list .hd-q.answered:not(.hd-done)')).map((w) => { const m = /Question (\\d+):/.exec((w.querySelector('.hd-qt') || {}).textContent || ''); return m ? Number(m[1]) : 0; }).join(','),
       done: document.querySelectorAll('#list .hd-done').length, heads: Array.from(document.querySelectorAll('#list .hd-head .hd-txt')).map((t) => t.textContent).filter((t) => /With Thrall|History/.test(t)),
       main: lines.map((l) => l.n).join(','), open: lines.filter((l) => l.open).map((l) => l.n).join(','), first: inView.length ? { n: inView[0].n, top: Math.round(inView[0].top) } : null, scrollY: Math.round(scrollY), order: window.doc.order() };
   })()`;
@@ -173,7 +174,7 @@ try {
   await openCards();
   await hostList(SWITCH_LIST());
   let t = await top();
-  check(t.done === 0 && t.heads.length === 0 && t.main.split(",").length === 12, "BY DEFAULT THE ANSWERED ARE HIDDEN: no With Thrall, no History, the twelve to answer shown", JSON.stringify(t));
+  check(t.done === 0 && t.heads.length === 0 && t.main.split(",").length === 12 && t.folded.split(",").sort().join(",") === "40,41", "BY DEFAULT THE ANSWERED ARE HIDDEN: no With Thrall, no History, the twelve to answer shown (and the two answered, not closed, stand in his list as folded lines, T-0152)", JSON.stringify(t));
   check(t.text === "Show answered and closed: off" && t.role === "switch" && t.checked === "false" && /hidden/i.test(t.says), "a switch says so in words - 'Show answered and closed: off' - and to a screen reader (role switch, not checked)", JSON.stringify({ text: t.text, role: t.role, checked: t.checked, says: t.says }));
   check(t.swTop !== null && t.swTop === t.faTop && t.swLeft < t.faLeft && t.orderOneLine, "it stands at the head of the page across from Collapse all, and the order line stays one line on a phone", JSON.stringify({ sw: t.swTop, fa: t.faTop, oneLine: t.orderOneLine }));
   // His order and a fold of his own, then the page scrolled so the switch is still on the screen.
@@ -186,7 +187,7 @@ try {
   check(was.order === "importance" && was.open.split(",").indexOf("25") < 0 && was.scrollY > 0, "CONTROL: his order is Task importance, question 25 folded by his tap, the page scrolled", JSON.stringify({ order: was.order, open: was.open, scrollY: was.scrollY }));
   await touch(was.x, was.y);
   t = await top();
-  check(t.text === "Show answered and closed: on" && t.checked === "true" && t.done === 3 && t.heads.some((h) => /^With Thrall \(2\)/.test(h)) && t.heads.some((h) => /^History \(1\)/.test(h)), "A TAP SHOWS THEM: the switch says on, With Thrall (2) and History (1) stand below the list as before", JSON.stringify({ text: t.text, heads: t.heads, done: t.done }));
+  check(t.text === "Show answered and closed: on" && t.checked === "true" && t.done === 3 && t.folded === "" && t.heads.some((h) => /^With Thrall \(2\)/.test(h)) && t.heads.some((h) => /^History \(1\)/.test(h)), "A TAP SHOWS THEM: the switch says on, With Thrall (2) and History (1) stand below the list as before", JSON.stringify({ text: t.text, heads: t.heads, done: t.done }));
   check(t.order === was.order && t.main === was.main && t.open === was.open, "and it touches neither the order nor what is folded", JSON.stringify({ was: [was.order, was.open], now: [t.order, t.open] }));
   check(!!t.first && !!was.first && t.first.n === was.first.n && Math.abs(t.first.top - was.first.top) <= 1 && t.scrollY === was.scrollY, "nor his place: the same question at the same pixel, the page scrolled as it was", JSON.stringify({ was: was.first, now: t.first, y: [was.scrollY, t.scrollY] }));
   await openCards();
@@ -214,7 +215,7 @@ try {
     return { onSwitch: a === sw, tri: (a && a.classList.contains('hd-tri')) ? (a.getAttribute('aria-label') || '') : '', field: !!a && a.tagName === 'TEXTAREA',
       ring: a === sw ? cs.outlineStyle + ' ' + cs.outlineWidth : '', tab: sw.tabIndex, checked: sw.getAttribute('aria-checked'), done: document.querySelectorAll('#list .hd-done').length };
   })()`;
-  await evaluate("scrollTo(0, 0), document.querySelector('#list .hd-q:not(.hd-done) .hd-box > textarea').focus(), true");
+  await evaluate("scrollTo(0, 0), document.querySelector('#list .hd-q:not(.hd-done):not(.answered) .hd-box > textarea').focus(), true");
   await settle();
   let k = await evaluate(AT);
   check(k.field && !k.onSwitch && k.tab === -1, "CONTROL: the caret in the first question's field, and the switch out of the Tab run (tabIndex -1)", JSON.stringify(k));

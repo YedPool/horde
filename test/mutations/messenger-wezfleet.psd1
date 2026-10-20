@@ -234,6 +234,9 @@
         @{ Name = "repost-says-the-target-sleeps"
            Find = ' -and $code -cne "already-posted") { $value["woken"]'
            Replace = ') { $value["woken"]' }
+        @{ Name = "system-sender-passes-session-id"
+           Find = '$fromSid = ""'
+           Replace = '$null = $fromSid' }
         @{ Name = "held-says-woken-or-not"
            Find = '-and [int]$Run.exit -eq 0 -and $code -cne "already-posted"'
            Replace = '-and $code -cne "already-posted"' }

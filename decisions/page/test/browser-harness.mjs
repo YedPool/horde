@@ -9,7 +9,9 @@
 //                    throws, as a page whose storage is refused; window.mountError is what
 //                    mounting threw, if anything
 //   ?expanded=0      mounted with expanded: false, as the window mounts it
-//   ?say=ok          a host whose say takes every answer: window.said holds { n, t } for each
+//   ?say=ok          a host whose say takes every answer: window.said holds { n, t, w, id } for each
+//   ?say=refuse      a host whose say refuses every answer, saying 'refused by the stand-in host'
+//                    (the same two on /cards.html, the phone's page)
 // and hands a list in by window.hostList(questions). Every change of rank the page asks for is kept in
 // window.rankCalls and answered by window.rankAnswer(result). /cards.html is the phone's decisions page
 // with its cards first (CARDS_HOST, below).
@@ -45,7 +47,8 @@ const HOST = [
   "var options = { prefs: prefs, storage: prefs, rank: rank };",
   "if (/expanded=0/.test(location.search)) { options.expanded = false; }",
   "window.said = [];",
-  "if (/say=ok/.test(location.search)) { options.say = function (n, t) { window.said.push({ n: n, t: t }); return Promise.resolve({ ok: true, sequence: window.said.length }); }; }",
+  "var sayMode = (/say=(ok|refuse)/.exec(location.search) || [])[1] || '';",
+  "if (sayMode) { options.say = function (n, t, w, id) { window.said.push({ n: n, t: t, w: w, id: id }); return Promise.resolve(sayMode === 'ok' ? { ok: true, sequence: window.said.length } : { ok: false, reason: 'refused by the stand-in host' }); }; }",
   "window.mountError = '';",
   "try { window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), options); } catch (e) { window.mountError = String(e && e.message || e); }",
   "window.hostList = function (qs) { return window.doc ? window.doc.setList({ state: 'known', value: { questions: qs } }) : 'not mounted: ' + window.mountError; };",
@@ -63,7 +66,11 @@ const CARDS_HOST = [
   "const cards = document.getElementById('cards');",
   "window.lanesDoc = null;",
   "function drawCards() { if (!window.doc) return; while (cards.firstChild) cards.removeChild(cards.firstChild); for (const c of renderDecisionCards(document, window.lanesDoc, window.doc.lanes(), { chosen: window.doc.lane(), onChoose: (l) => window.doc.setLane(l) })) cards.appendChild(c); }",
-  "window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), { onDraw: drawCards });",
+  "window.said = [];",
+  "const sayMode = (/say=(ok|refuse)/.exec(location.search) || [])[1] || '';",
+  "const cardsOptions = { onDraw: drawCards };",
+  "if (sayMode) { cardsOptions.say = function (n, t, w, id) { window.said.push({ n: n, t: t, w: w, id: id }); return Promise.resolve(sayMode === 'ok' ? { ok: true, sequence: window.said.length } : { ok: false, reason: 'refused by the stand-in host' }); }; }",
+  "window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), cardsOptions);",
   "window.redrawCards = drawCards;",
   "window.hostList = function (qs) { return window.doc.setList({ state: 'known', value: { questions: qs } }); };",
   "window.hostReady = true;",

@@ -413,8 +413,10 @@ function Invoke-HordeServiceHordeCommand {
     if ($null -ne $Named) { foreach ($k in @($Named.Keys)) { $arguments += @(("-" + $k), ("" + $Named[$k])) } }
     foreach ($k in @($Switches)) { $arguments += ("-" + $k) }
     $r = Invoke-HordeServiceProgram -Program (Get-HordeServiceShell) -Arguments $arguments -WorkingDirectory $Checkout -Environment @{ HORDE_HOME = $HordeHome } -TimeoutSeconds $TimeoutSeconds
-    if (-not $r.started -or $r.timedOut) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + ": " + $r.err)) } }
-    if ($r.code -ne 0) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit " + $r.code + ": " + ($r.err + " " + $r.out).Trim())) } }
+    # transient: the command did not RUN to an end (not started, or ended at the time limit), which says
+    # nothing of the command; a command that ran and exited non-zero is transient = false.
+    if (-not $r.started -or $r.timedOut) { return [pscustomobject]@{ ok = $false; transient = $true; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + ": " + $r.err)) } }
+    if ($r.code -ne 0) { return [pscustomobject]@{ ok = $false; transient = $false; detail = (Protect-HordeServiceText ("horde " + ($Words -join " ") + " failed with exit " + $r.code + ": " + ($r.err + " " + $r.out).Trim())) } }
     return [pscustomobject]@{ ok = $true; detail = ("asked with horde " + ($Words -join " ")) }
 }
 

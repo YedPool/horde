@@ -699,6 +699,39 @@ try {
         Check ($script:watched.Count -eq 1 -and $script:watched[0] -eq 60000) ("CONTROL: with nothing waiting to be rung, the run's watch is its own 60 s (" + (@($script:watched) -join ",") + ")")
     } finally { $script:HordeMessengers = $keepMessengers; $script:HordeDecisionsChannelBellSeat = $null }
     }
+
+    Write-Host ""
+    Write-Host "--- the Tick turns the router too: a phone answer reaches whoever asked, once, and the phone never sees where ---" -ForegroundColor Cyan
+    # The audit of 2026-10-16, finding 5 (decisions/Route.ps1): this run is the process that is always
+    # there, so it routes each answer to the seat of whoever asked. The world's question was asked by
+    # "orc-b", which names no Orc: it goes to the warchief, and the record says why.
+    if ($script:canDecide) {
+    $keepMessengers = $script:HordeMessengers
+    $script:HordeMessengers = @{}
+    $script:routePosts = New-Object System.Collections.ArrayList
+    $script:routeAnalyst = New-Object System.Collections.ArrayList
+    try {
+        $null = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\decisions-notify\doorbell") `
+            -Post { param($Message) [void]$script:routePosts.Add($Message); return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Message.messageId)"; stage = "accepted"; at = [datetime]::UtcNow; reason = "woken"; woken = $true }) -ObservedAt ([datetime]::UtcNow)) } `
+            -Status { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
+        $script:HordeDecisionsChannelRouteSeat = { param([string]$Role, [string]$Label) if ($Role -ceq "warchief") { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "3"; instance = "t1" })) }; return (New-HordeAbsent -Note "no such seat in this suite") }
+        $script:HordeDecisionsChannelRouteAnalyst = { param([string]$Text, [string]$Token, $Since) [void]$script:routeAnalyst.Add($Text); return [pscustomobject]@{ ok = $true; said = "left for the analyst (stand-in)" } }
+        $R = New-World
+        [void](Send-ToMachine $R (Get-Answer $R -Text "Routed from the phone.").text)
+        $t = Invoke-Turn $R
+        Use-World $R
+        $ticks = Invoke-HordeRelayChannelTicks -Context $R.ctx
+        $routed = @($script:routePosts | Where-Object { "$($_.body)" -clike "FOUNDER ANSWER to question 1, asked by 'orc-b', sent to you, the warchief:*" })
+        Check ((Has $t "done") -and $routed.Count -eq 1 -and "$($routed[0].sessionId)" -ceq "warchief-session-1" -and "$($routed[0].body)".Contains("Routed from the phone.") -and "$($routed[0].body)".Contains("answered on the founder's phone")) ("the next Tick routes the phone's answer, with his words: to the warchief, since 'orc-b' names no Orc (" + (@($ticks.lines) -join " | ") + ")")
+        Check (@($ticks.lines | Where-Object { $_ -clike "decisions: route: routed answer record * of question 1 to the warchief, through messenger doorbell (accepted; woken)*" }).Count -eq 1 -and $script:routeAnalyst.Count -eq 1) "the run's log has the router's line, and the analyst its one line"
+        $shown = (Invoke-HordeDecision -Operation "show" -Request @{ number = 1 } -Root $R.store).value.question
+        Check (@($shown.routes).Count -eq 1 -and $shown.routes[0].resolved -eq $false -and $shown.routes[0].note -like "its askedBy, 'orc-b', is neither*") "the store records where it went, and why not to an Orc"
+        $ticks = Invoke-HordeRelayChannelTicks -Context $R.ctx
+        Check (@($script:routePosts | Where-Object { "$($_.body)" -clike "FOUNDER ANSWER to question 1, asked by*" }).Count -eq 1 -and @($ticks.lines | Where-Object { $_ -clike "*route:*" }).Count -eq 0) "a Tick after that routes nothing more and says nothing more"
+        $phoneCopy = ConvertFrom-HordeJson (ConvertTo-HordeDecisionsChannelQuestion -Question $shown)
+        Check ($null -ne $shown.PSObject.Properties["routes"] -and $null -eq $phoneCopy.PSObject.Properties["routes"]) "the phone's copy of the question leaves out where its answers were routed: the keeper's record, not his"
+    } finally { $script:HordeMessengers = $keepMessengers; $script:HordeDecisionsChannelRouteSeat = $null; $script:HordeDecisionsChannelRouteAnalyst = $null }
+    }
     Check ((Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs 20000) -eq 20000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs 0) -eq 60000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs $null) -eq 60000) "a turn's watch is what a channel asked when that is sooner, and the run's own when nobody asked"
     Check ((Get-HordeRelayRunTurnWatchMs -WatchMs 25000 -AgainMs 90000) -eq 25000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 0 -AgainMs 500) -eq 0 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs -5) -eq 60000) "a channel can only shorten a watch, never lengthen it, and a watch of 0 stays 0"
 
