@@ -102,7 +102,7 @@ function New-HordeFleetLot {
     # The parking_lot row of a park taken at -At. -ById is the parking session's id and -ByOrc its Orc's id, each
     # only when known. -Kind is how the park chose its sessions: all, labels, orcs, or backfill. -Seed makes the id
     # a function of the park (backfill, legacy); without it the id is fresh.
-    param([Parameter(Mandatory = $true)][datetime]$At, [string]$ById = "", [string]$ByOrc = "", [Parameter(Mandatory = $true)][string]$Reason, [string]$Kind = "", [string]$Seed = "")
+    param([Parameter(Mandatory = $true)][datetime]$At, [string]$ById = "", [string]$ByOrc = "", [Parameter(Mandatory = $true)][string]$Reason, [string]$Kind = "", [string]$Seed = "", [switch]$KeepVisible)
     $why = ([string]($Reason -replace '[\x00-\x1F]+', ' ')).Trim()
     if ($why.Length -gt 200) { $why = $why.Substring(0, 197) + "..." }
     # To the second, as the folder and the table say it; named apart from -At, which a lint reads as a shadow of it.
@@ -112,6 +112,8 @@ function New-HordeFleetLot {
     if ($ByOrc -ne "") { $row["created_by_orc_id"] = $ByOrc }
     $row["reason"] = $why
     if ($Kind -ne "") { $row["selection_kind"] = $Kind }
+    # KEEP_VISIBLE IS KNOWN FOR EVERY LOT WRITTEN NOW (0 unless the park asked for 1), so it is always written.
+    $row["keep_visible"] = $(if ($KeepVisible) { 1 } else { 0 })
     return [pscustomobject]$row
 }
 

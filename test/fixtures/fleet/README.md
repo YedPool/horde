@@ -107,12 +107,14 @@ What `horde fleet lots -Json` prints. Replaced whole each time; lots newest firs
 | `lots` | list of lots, newest first |
 | `skipped` | list of plain-word lines, one for each lot the PC could not read (empty when none) |
 
-A lot: `{ id, hibernation_id, created_at, by, reason, selection_kind, members, wakes }`.
+A lot: `{ id, hibernation_id, created_at, by, reason, selection_kind, keep_visible, members, wakes }`.
 - `id`, `created_at`, `reason`, `selection_kind` are `parking_lot` columns. `selection_kind` is
   `"orcs"` (the tier-2 hibernate), `"all"` or `"labels"` (`horde fleet record`) or `"backfill"` (a
   park from before lots existed, written from a file).
 - `by` is the parking session in words (a label, or a session id when it has none); `""` if unknown.
 - `reason` is one line.
+- `keep_visible` is the lot's one flag, `0` or `1`, set by the park (`horde fleet hibernate -KeepVisible`):
+  `1` keeps every member's card on the founder's pages while it sleeps. A lot written before the flag reads `0`.
 
 A member: `{ session_id, label, role, parent, cwd, pane, note, state, stored }`.
 - `session_id` and `note` are `parking_lot_member` columns. `label`, `role`, `parent`, `cwd` and `pane`

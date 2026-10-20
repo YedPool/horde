@@ -135,7 +135,14 @@ Check ($lot1.id -cmatch $script:HordeUlidPattern -and (Get-HordeFleetUlidTime -U
 Check ($lot1.created_at -ceq "2026-10-19T21:00:00Z" -and $lot1.reason -ceq "unit park" -and $lot1.selection_kind -ceq "orcs" -and $lot1.created_by_session_id -ceq $ids["A"]) "the parking_lot row: created_at, reason, selection_kind and the parking session's id"
 Check ($lotRead.value.folder -ceq $made.id -and (Get-HordeFleetLotDir -Id $lot1.id -HordeHome $hh) -ceq $dir1) "the lot's folder is found from its ULID, and is the hibernation id"
 $colsLot = @($lot1.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
-Check (($colsLot -join ",") -ceq "created_at,created_by_session_id,id,reason,selection_kind") ("the row has the audit's columns and no others (" + ($colsLot -join ",") + ")")
+Check (($colsLot -join ",") -ceq "created_at,created_by_session_id,id,keep_visible,reason,selection_kind") ("the row has the audit's columns and no others (" + ($colsLot -join ",") + ")")
+Check ($lot1.keep_visible -is [int] -and $lot1.keep_visible -eq 0) "keep_visible is written for every new lot, and is 0 unless the park asks for 1"
+$hhKv = New-Home
+$madeKv = Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $sel -HordeHome $hhKv -By $ids["A"] -Why "kept park" -Tier 2 -KeepVisible
+$lotKv = (Read-HordeFleetLot -Id $madeKv.id -HordeHome $hhKv).value.lot
+Check ($lotKv.keep_visible -eq 1) "-KeepVisible writes keep_visible 1 on the lot: one flag for the whole lot, not one per member"
+$badKv = [pscustomobject][ordered]@{ id = $lot1.id; created_at = $lot1.created_at; reason = "x"; keep_visible = 2 }
+Check (@(Test-HordeFleetTable -Name "fleet-parking-lot.v1" -Rows @($badKv)).Count -gt 0) "the schema refuses a keep_visible that is not 0 or 1"
 Check (@($lotRead.value.members).Count -eq 3 -and @($lotRead.value.members | Where-Object { $_.lot_id -ceq $lot1.id }).Count -eq 3) "one parking_lot_member row for each session, each naming the lot by lot_id"
 $mA1 = @($lotRead.value.members | Where-Object { $_.session_id -ceq $ids["A1"] })[0]
 $colsM = @($mA1.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object

@@ -12,6 +12,7 @@
     "created_by_session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The session that parked, when it is known." },
     "created_by_orc_id": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The Orc that parked, as the orc table's id, when it is known." },
     "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,200}$", "description": "One line of plain words." },
-    "selection_kind": { "type": "string", "enum": ["all", "labels", "orcs", "backfill"], "description": "How the sessions were chosen: all (fleet record -All), labels (fleet record -Labels), orcs (fleet hibernate), backfill (written from a file for a park that happened before lots existed)." }
+    "selection_kind": { "type": "string", "enum": ["all", "labels", "orcs", "backfill"], "description": "How the sessions were chosen: all (fleet record -All), labels (fleet record -Labels), orcs (fleet hibernate), backfill (written from a file for a park that happened before lots existed)." },
+    "keep_visible": { "type": "integer", "enum": [0, 1], "description": "ONE FLAG FOR THE WHOLE LOT, set by the park (fleet hibernate -KeepVisible): 1 keeps its members' cards on the founder's pages while they sleep, 0 (the default) does not. Every member inherits it. A lot written before the flag has none and is read as 0." }
   }
 }

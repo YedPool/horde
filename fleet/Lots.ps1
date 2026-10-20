@@ -107,10 +107,11 @@ function Get-HordeFleetLots {
         if ($null -ne $one.record -and $null -ne (Get-HordeFleetMember $one.record "parkedBy")) { $by = "" + $one.record.parkedBy }
         elseif ($null -ne (Get-HordeFleetMember $one.lot "created_by_session_id")) { $by = "" + $one.lot.created_by_session_id }
         $kind = Get-HordeFleetMember $one.lot "selection_kind"
+        $kv = Get-HordeFleetMember $one.lot "keep_visible"
         $wakes = @(Read-HordeFleetWakes -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $one.folder) | ForEach-Object {
             [pscustomobject][ordered]@{ id = "" + $_.wake.id; requested_at = "" + $_.wake.requested_at; members = @($_.members | ForEach-Object { $nid = Get-HordeFleetMember $_ "new_session_id"; [pscustomobject][ordered]@{ session_id = "" + $_.session_id; new_session_id = $(if ($null -ne $nid) { "" + $nid } else { "" }); outcome = "" + $_.outcome } }) } })
         [void]$lots.Add([pscustomobject][ordered]@{ id = "" + $one.lot.id; hibernation_id = "" + $one.folder; created_at = "" + $one.lot.created_at; by = $by; reason = "" + $one.lot.reason
-            selection_kind = $(if ($null -ne $kind) { "" + $kind } else { "" }); members = @($rows); wakes = @($wakes) })
+            selection_kind = $(if ($null -ne $kind) { "" + $kind } else { "" }); keep_visible = $(if ("" + $kv -ceq "1") { 1 } else { 0 }); members = @($rows); wakes = @($wakes) })
     }
     # NEWEST FIRST: the founder reads his parks by when they were parked. The id breaks a tie, being the same second.
     $sorted = @($lots | Sort-Object -Property @{ Expression = { $_.created_at }; Descending = $true }, @{ Expression = { $_.id }; Descending = $true })
@@ -129,7 +130,7 @@ function Format-HordeFleetLotsText {
         }
         $by = $(if ("" + $l.by -ne "") { " by " + $l.by } else { "" })
         $why = $(if ("" + $l.reason -ne "") { ", " + $l.reason } else { "" })
-        [void]$lines.Add("lot " + $l.id + "  " + $l.created_at + $by + $why + "  " + @($l.members).Count + " member(s): " + ($counts -join ", "))
+        [void]$lines.Add("lot " + $l.id + "  " + $l.created_at + $by + $why + $(if ("" + $l.keep_visible -ceq "1") { ", kept visible" } else { "" }) + "  " + @($l.members).Count + " member(s): " + ($counts -join ", "))
         foreach ($m in @($l.members)) {
             $name = $(if ("" + $m.label -ne "") { $m.label + " (" + ("" + $m.session_id).Substring(0, 8) + ")" } else { ("" + $m.session_id).Substring(0, 8) })
             [void]$lines.Add("  " + ("" + $m.state).PadRight(11) + " " + $name + " " + $m.role + " " + $m.cwd)

@@ -275,7 +275,7 @@ function Invoke-HordeFleetRecord {
     #   ParkedExists (path) optional, whether a PARKED file is there
     param([Parameter(Mandatory = $true)]$Deps, [Parameter(Mandatory = $true)][scriptblock]$Selector, [Parameter(Mandatory = $true)]$Selection,
           [string[]]$Exclude = @(), [string]$HordeHome = (Get-HordeHome),
-          [string]$By = "", [string]$Why = "fleet record", [int]$Tier = 0)
+          [string]$By = "", [string]$Why = "fleet record", [int]$Tier = 0, [switch]$KeepVisible)
     $registry = & $Deps.Registry
     $snapshot = & $Deps.Agent.snapshot
     $found = Get-HordeFleetCandidates -Registry $registry -Agent $Deps.Agent -Snapshot $snapshot
@@ -330,7 +330,7 @@ function Invoke-HordeFleetRecord {
         $path = Write-HordeFleetRecord -Dir $dir -Record $record
         # THE LOT (T-0216): one parking_lot row for this run and a parking_lot_member row for each session in it, in the
         # folder this run claimed. The lot's ULID is made for this second.
-        $lot = New-HordeFleetLot -At $at -ById $By -Reason $Why -Kind ("" + $Selection.kind)
+        $lot = New-HordeFleetLot -At $at -ById $By -Reason $Why -Kind ("" + $Selection.kind) -KeepVisible:$KeepVisible
         $lotMembers = @(ConvertTo-HordeFleetLotMembers -LotId ("" + $lot.id) -Record $record -Tier $Tier)
         [void](Write-HordeFleetLot -Dir $dir -Lot $lot -Members $lotMembers)
     } catch {
