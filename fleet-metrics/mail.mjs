@@ -49,23 +49,35 @@ function firstLine(file) {
   }
 }
 
-const ms = (v) => Number.isSafeInteger(v) && v >= 0;
+// A stamp is believable between 2020-01-01 and a day from now: anything else (0, a year-3000 clock, a
+// microsecond count) would poison every percentile, so the record is skipped and counted instead.
+export const PLAUSIBLE_FROM = Date.parse('2020-01-01T00:00:00Z');
+const DAY_MS = 86400000;
+const stamp = (v, now) => Number.isSafeInteger(v) && v >= PLAUSIBLE_FROM && v <= now + DAY_MS;
 
 // One header line -> { from, channel, seq, ts, recordedAt } or null when it is not a record's header
 // for exactly this place (from, channel, seq come from the folder and file names).
-export function parseHeader(line, from, channel, seq) {
+// `seq` is the file name's 16 digits AS A STRING (a Number could lose digits past 2^53); the header's own
+// number must be a safe integer that prints as exactly the same digits without their leading zeros.
+export function parseHeader(line, from, channel, seq, now = Date.now()) {
   if (line == null) return null;
   let o;
   try { o = JSON.parse(line); } catch { return null; }
   if (!o || typeof o !== 'object' || o.v !== 1 || o.direction !== 'in') return null;
-  if (o.from !== from || o.channel !== channel || o.seq !== seq) return null;
-  if (!ms(o.ts) || !ms(o.recordedAt)) return null;
+  if (o.from !== from || o.channel !== channel) return null;
+  if (!Number.isSafeInteger(o.seq) || String(o.seq) !== seq.replace(/^0+(?=\d)/, '')) return null;
+  if (!stamp(o.ts, now) || !stamp(o.recordedAt, now)) return null;
   return { from, channel, seq, ts: o.ts, recordedAt: o.recordedAt };
 }
 
 const list = (dir) => { try { return fs.readdirSync(dir); } catch { return []; } };
 
-export function collectMailHops({ store, home, journal }) {
+// A record that was skipped is remembered by (path, size, mtime) in meter_offsets (ident 'skip', offset 0),
+// so the next pass does not open it again unless it changed. The journal is append-only: a header does not
+// change under an unchanged size and mtime.
+const SKIP = 'skip';
+
+export function collectMailHops({ store, home, journal, now = Date.now() }) {
   const out = { added: 0, skipped: 0, seen: 0 };
   const root = journalFolder(home, journal);
   if (!root) return out;
@@ -81,15 +93,29 @@ export function collectMailHops({ store, home, journal }) {
       for (const name of list(dir)) {
         const m = SEQ_FILE.exec(name);
         if (!m) continue; // lock, .part, .done: not records
-        const seq = Number(m[1]);
-        const id = sDir + '/' + cDir + '/' + seq;
+        const seq = m[1];
+        const id = sDir + '/' + cDir + '/' + seq.replace(/^0+(?=\d)/, '');
         out.seen++;
         if (known.has(id)) continue;
+        const file = path.join(dir, name);
+        let st = null;
+        try { st = fs.statSync(file); } catch { st = null; }
+        const mtime = st ? Math.round(st.mtimeMs) : 0;
+        const was = st ? store.getOffset(file) : null;
+        if (was && was.ident === SKIP && was.size === st.size && was.mtime === mtime) { out.skipped++; continue; }
         let h = null;
-        try { h = parseHeader(firstLine(path.join(dir, name)), from, channel, seq); } catch { h = null; }
-        if (!h) { out.skipped++; continue; }
-        if (store.addHop({ at: h.ts, message_id: id, hop: 'phone_sent', from_session: from, to_session: '', clock: 'phone' })) out.added++;
-        if (store.addHop({ at: h.recordedAt, message_id: id, hop: 'pc_journal', from_session: from, to_session: '', clock: 'pc' })) out.added++;
+        try { h = parseHeader(firstLine(file), from, channel, seq, now); } catch { h = null; }
+        if (!h) {
+          out.skipped++;
+          if (st) store.markOffset({ path: file, size: st.size, mtime, offset: 0, ident: SKIP });
+          continue;
+        }
+        // Both hops of one message or neither: a crash between the two inserts must not leave a message
+        // with only one of them. phone_sent is what marks a message as already read, so it goes last.
+        out.added += store.addHops([
+          { at: h.recordedAt, message_id: id, hop: 'pc_journal', from_session: from, to_session: '', clock: 'pc' },
+          { at: h.ts, message_id: id, hop: 'phone_sent', from_session: from, to_session: '', clock: 'phone' },
+        ]);
       }
     }
   }
@@ -102,39 +128,41 @@ export function percentile(sorted, p) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))];
 }
 
-// Per adjacent pair of hops that a message actually passed (in HOPS order, skipping hops it lacks):
-// { from, to, n, p50, p95, min, negative, crossClock }. crossClock is true when the two hops were
-// stamped by different clocks, so the delta includes whatever the clocks disagree by (a negative one
-// is clock skew, not a message that arrived before it was sent).
+// Per adjacent pair of the hop kinds the store holds at all (in HOPS order): { from, to, n, p50, p95, min,
+// negative, crossClock, lacking }. A pair is measured over the messages that have BOTH its hops;
+// `lacking` is how many messages have one of the two but not the other (so n + lacking is every message
+// that reached either). crossClock is true when the two hops were stamped by different clocks, so the
+// delta includes whatever the clocks disagree by. `negative` counts deltas below zero for EVERY pair: across
+// clocks that is skew, on one clock it is a clock that stepped back; both are shown.
 export function latencyPairs(hops) {
   const byMsg = new Map();
   for (const h of hops) {
     if (!byMsg.has(h.message_id)) byMsg.set(h.message_id, new Map());
     byMsg.get(h.message_id).set(h.hop, h);
   }
-  const pairs = new Map();
-  for (const m of byMsg.values()) {
-    const have = HOPS.filter((n) => m.has(n));
-    for (let i = 0; i + 1 < have.length; i++) {
-      const a = m.get(have[i]);
-      const b = m.get(have[i + 1]);
-      const key = a.hop + '>' + b.hop;
-      if (!pairs.has(key)) pairs.set(key, { from: a.hop, to: b.hop, crossClock: a.clock !== b.clock, deltas: [] });
-      pairs.get(key).deltas.push(b.at - a.at);
+  const kinds = HOPS.filter((n) => hops.some((h) => h.hop === n));
+  const out = [];
+  for (let i = 0; i + 1 < kinds.length; i++) {
+    const deltas = [];
+    let lacking = 0;
+    let crossClock = false;
+    for (const m of byMsg.values()) {
+      const a = m.get(kinds[i]);
+      const b = m.get(kinds[i + 1]);
+      if (a && b) { deltas.push(b.at - a.at); if (a.clock !== b.clock) crossClock = true; } else if (a || b) lacking++;
     }
+    const d = deltas.sort((x, y) => x - y);
+    out.push({ from: kinds[i], to: kinds[i + 1], crossClock, n: d.length, lacking, p50: percentile(d, 50), p95: percentile(d, 95), min: d[0], negative: d.filter((x) => x < 0).length });
   }
-  return [...pairs.values()].map((p) => {
-    const d = p.deltas.slice().sort((x, y) => x - y);
-    return { from: p.from, to: p.to, crossClock: p.crossClock, n: d.length, p50: percentile(d, 50), p95: percentile(d, 95), min: d[0], negative: d.filter((x) => x < 0).length };
-  }).sort((x, y) => HOPS.indexOf(x.from) - HOPS.indexOf(y.from));
+  return out;
 }
 
 export function latencyLines(pairs) {
-  if (pairs.length === 0) return ['latency: no message has two hops yet'];
+  if (pairs.length === 0 || pairs.every((p) => p.n === 0)) return ['latency: no message has two hops yet'];
   const out = [];
   for (const p of pairs) {
-    out.push(p.from + ' -> ' + p.to + ': n=' + p.n + ' p50=' + p.p50 + ' ms p95=' + p.p95 + ' ms' +
-      (p.crossClock ? ' CROSSES CLOCKS (phone vs pc): includes clock skew, ' + p.negative + ' negative' : ''));
+    out.push(p.from + ' -> ' + p.to + ': n=' + p.n + ' p50=' + p.p50 + ' ms p95=' + p.p95 + ' ms lacking_a_hop=' + p.lacking +
+      (p.crossClock ? ' CROSSES CLOCKS (phone vs pc): includes clock skew' : '') + ' negative=' + p.negative);
   }
   return out;
 }

@@ -7,6 +7,7 @@
 //   --agents <dir>         where to look for readers (default: the repository's agents folder)
 //   --horde-script <file>  horde.ps1, used by watch-limits to tell the master session
 //   --since-days <n>       collect: skip files not touched for n days (default 14; they get no offset)
+//                          latency: only messages with a hop in the last n days (default 7)
 //   --max-ms <n>           collect: stop between files after n ms (default 240000) and say partial
 //   --session <id>         live: refresh only this session (default: every session changed in the last 10 minutes)
 //   --journal <dir>        collect: the relay journal to read hops from (default: <HORDE_HOME>/relay/journal)
@@ -35,6 +36,9 @@ const ago = (ms) => {
   return Math.round(s / 86400) + ' days';
 };
 
+const SESSION_ID = /^[0-9a-f-]{8,64}$/;
+export const DEFAULT_LATENCY_DAYS = 7;
+
 export async function main(argv, env = process.env, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n')) {
   const a = parseArgs(argv);
   if (!['collect', 'live', 'latency', 'watch-limits', 'status'].includes(a.verb) || a.bad) {
@@ -50,6 +54,8 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
     if (!Number.isFinite(n) || n < 0) { err('--' + (k === 'sinceDays' ? 'since-days' : 'max-ms') + ' must be a number of at least 0'); return 1; }
     opts[k] = n;
   }
+  // A session id is hex and dashes: anything else is refused before it can reach a file name match.
+  if (a.flags.session !== undefined && !SESSION_ID.test(a.flags.session)) { err('--session must be a session id (8 to 64 hex digits and dashes)'); return 2; }
   let store;
   try {
     store = openStore(home.home);
@@ -66,7 +72,8 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
       for (const f of r.failures.slice(0, 5)) err('could not refresh ' + f.file + ': ' + f.message);
       if (r.errors) return 1;
     } else if (a.verb === 'latency') {
-      for (const l of latencyLines(latencyPairs(store.allHops()))) out(l);
+      const days = opts.sinceDays == null ? DEFAULT_LATENCY_DAYS : opts.sinceDays;
+      for (const l of latencyLines(latencyPairs(store.hopsSince(Date.now() - days * 86400000)))) out(l);
     } else if (a.verb === 'watch-limits') {
       const r = await runWatch({ store, opts, dryRun: !!a.flags.dryRun, sender: hordeSender(a.flags.hordeScript, env) });
       for (const t of r.would) out('would send: ' + t);

@@ -50,8 +50,9 @@ function Write-Rec { param([long]$Seq, [long]$Ts, [long]$Rec)
     $head = '{"v":1,"direction":"in","key":"' + $fromId + '/chat/' + $Seq + '/' + $nonce + '","from":"' + $fromId + '","channel":"chat","kind":"text","seq":' + $Seq + ',"nonce":"' + $nonce + '","ts":' + $Ts + ',"recordedAt":' + $Rec + ',"envelopeChars":1}'
     [System.IO.File]::WriteAllText((Join-Path $streamDir ($Seq.ToString("D16") + ".rec")), ($head + "`nE"))
 }
-Write-Rec -Seq 1 -Ts 1000000 -Rec 1000400
-Write-Rec -Seq 2 -Ts 2000000 -Rec 2000600
+$stampBase = [DateTimeOffset]::UtcNow.AddHours(-1).ToUnixTimeMilliseconds()  # a believable stamp: mail.mjs refuses any outside 2020..now+1 day
+Write-Rec -Seq 1 -Ts $stampBase -Rec ($stampBase + 400)
+Write-Rec -Seq 2 -Ts ($stampBase + 1000000) -Rec ($stampBase + 1000600)
 [System.IO.File]::WriteAllText((Join-Path $streamDir "0000000000000003.rec"), "not a header`nE")
 $journalBefore = @(Get-ChildItem -LiteralPath $streamDir -File | ForEach-Object { $_.Name + ":" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ","
 
@@ -88,7 +89,7 @@ Check ($l1.out -cmatch 'live: sessions=1 files=2 new_bytes=0 usage_rows=0 ms=\d+
 $l2 = Invoke-Meter @("live", "-Projects", $projects, "-Registry", $registry)
 Check ($l2.code -eq 0 -and $l2.out -cmatch 'live: sessions=\d+ files=\d+ new_bytes=0 ') ("live with no session also works (" + $l2.code + ")")
 $lat = Invoke-Meter @("latency")
-Check ($lat.code -eq 0 -and $lat.out -cmatch 'phone_sent -> pc_journal: n=2 p50=400 ms p95=600 ms CROSSES CLOCKS \(phone vs pc\)') ("latency gives p50 and p95 for the one pair and flags that it crosses two clocks (" + $lat.out.Trim() + ")")
+Check ($lat.code -eq 0 -and $lat.out -cmatch 'phone_sent -> pc_journal: n=2 p50=400 ms p95=600 ms lacking_a_hop=0 CROSSES CLOCKS \(phone vs pc\)') ("latency gives p50 and p95 for the one pair and flags that it crosses two clocks (" + $lat.out.Trim() + ")")
 $journalAfter = @(Get-ChildItem -LiteralPath $streamDir -File | ForEach-Object { $_.Name + ":" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ","
 Check ($journalAfter -ceq $journalBefore) "the relay journal is byte for byte as it was: the meter only reads it"
 

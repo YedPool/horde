@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openStore, IDLE_DONE_MS } from '../../../../fleet-metrics/store.mjs';
+import { openStore, migrate, SCHEMA_VERSION, IDLE_DONE_MS } from '../../../../fleet-metrics/store.mjs';
 import { runCollect, runLive } from '../../../../fleet-metrics/collect.mjs';
 import { contextLimitOf } from '../../../../fleet-metrics/prices.mjs';
 import reader from '../reader.mjs';
@@ -191,7 +191,7 @@ test('a database made at schema 2 walks forward and keeps its rows', async () =>
   const again = openStore(dir);
   assert.equal(again.getState('k'), 'v');
   assert.equal(all(again, 'SELECT COUNT(*) AS n FROM tokens_usage').at(0).n, 0);
-  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   again.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -231,4 +231,62 @@ test('the collect summary counts DISTINCT live rows: 3, whichever of a subagent 
     assert.equal(c.rows.tokens_usage, 3, 'subFirst=' + subFirst);
     r.done();
   }
+});
+
+test('updated_at is the write time: every upsert bumps it, and so does the settle that closes a row', async () => {
+  const r = rig(BASE + 5000);
+  r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1000 }] }, null, BASE + 2000);
+  let u = usageOf(r.store, 'S1');
+  assert.deepEqual([u.state, u.updated_at, u.last_seen_at], ['running', BASE + 2000, BASE + 1000]);
+  r.store.apply({ tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE, last_seen_at: BASE + 1000 }] }, null, BASE + 3000); // an unchanged upsert is still a write
+  assert.equal(usageOf(r.store, 'S1').updated_at, BASE + 3000);
+  const later = BASE + 1000 + IDLE_DONE_MS + 7000;
+  assert.equal(r.store.settleUsage(later), 1);
+  u = usageOf(r.store, 'S1');
+  assert.deepEqual([u.state, u.updated_at, u.last_seen_at], ['done', later, BASE + 1000]); // last_seen_at did not move: updated_at must
+  const idx = all(r.store, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tokens_usage'").map((x) => x.name);
+  assert.ok(idx.includes('tokens_usage_updated') && idx.includes('tokens_usage_seen'), idx.join());
+  assert.deepEqual(all(r.store, "SELECT name FROM pragma_index_info('tokens_usage_updated')").map((x) => x.name), ['session_id', 'updated_at']);
+  r.done();
+});
+
+test('a v3 database gains updated_at from last_seen_at and keeps its rows', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-meter-migrate3-'));
+  const s = openStore(dir);
+  s.db.exec('DROP INDEX tokens_usage_updated; DROP INDEX tokens_usage_updated_all; ALTER TABLE tokens_usage DROP COLUMN updated_at; PRAGMA user_version = 3');
+  s.db.exec("INSERT INTO tokens_usage (source, at, session_id, agent_id, model, started_at, last_seen_at, minutes_running, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, context_tokens, context_limit, state) VALUES ('tokens', 5, 'S', '', 'm', 1, 77, 0, 0, 0, 0, 0, 0, 200000, 'done')");
+  s.close();
+  const again = openStore(dir);
+  assert.equal(usageOf(again, 'S').updated_at, 77);
+  again.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('two processes opening the same old database at once both succeed: a step already applied is skipped', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-meter-race-'));
+  const s = openStore(dir);
+  s.db.exec('DROP TABLE tokens_usage; DROP TABLE mail_hops; ALTER TABLE tokens_agents DROP COLUMN done_at; PRAGMA user_version = 2');
+  s.close();
+  const { DatabaseSync } = await import('node:sqlite');
+  const a = new DatabaseSync(s.file);
+  const b = new DatabaseSync(s.file);
+  for (const db of [a, b]) db.exec('PRAGMA busy_timeout = 5000');
+  migrate(a, 2); // both read version 2 before either wrote
+  migrate(b, 2); // the second must find the work done, not fail on ALTER TABLE ADD COLUMN
+  assert.equal(b.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  a.close();
+  b.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a session older than the table starts at its earliest stored request, not at the newest chunk', async () => {
+  const r = rig(BASE + 5000);
+  const req = (id, at) => ({ at, request_id: id, session_id: 'S1', agent_id: null, turn_uuid: null, orc: 'x', rank: 'orc', model: 'claude-sonnet-4-5', family: 'sonnet',
+    input: 1, output: 1, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0, context_tokens: 10, cost_usd: 0 });
+  r.store.apply({ tokens_requests: [req('r1', BASE - 3600000)] }, null, BASE); // stored before there was a usage table
+  r.store.apply({ tokens_requests: [req('r2', BASE + 1000)], tokens_usage: [{ session_id: 'S1', agent_id: '', started_at: BASE + 1000, last_seen_at: BASE + 1000 }] }, null, BASE + 2000);
+  const u = usageOf(r.store, 'S1');
+  assert.equal(u.started_at, BASE - 3600000);
+  assert.ok(Math.abs(u.minutes_running - (3600000 + 1000) / 60000) < 1e-9);
+  r.done();
 });

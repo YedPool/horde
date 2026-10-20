@@ -160,7 +160,14 @@ export async function runCollect({ store, opts = {}, readers = null, ctx = {} })
   // Rows that went quiet while nothing was written to them are closed here (a session that simply stopped).
   store.settleUsage(ctx.now ? ctx.now() : Date.now());
   // The relay journal's headers are read in the same pass (read-only; see mail.mjs).
-  const mail = collectMailHops({ store, home: opts.home, journal: opts.journal });
+  // A journal that cannot be read must never fail the transcript collect: the error is counted and shown.
+  let mail;
+  try {
+    mail = collectMailHops({ store, home: opts.home, journal: opts.journal, now: ctx.now ? ctx.now() : Date.now() });
+    mail.errors = 0;
+  } catch (e) {
+    mail = { added: 0, skipped: 0, seen: 0, errors: 1, message: e && e.message ? e.message : String(e) };
+  }
   return { files, bytes, rows, ms: clock() - t0, skippedOld, partial: left > 0, left, skipped: acc.skipped, errors: failures.length, failures, mail };
 }
 
@@ -232,5 +239,5 @@ export function summaryLine(r) {
 }
 
 export function mailLine(r) {
-  return 'mail: journal_records=' + r.mail.seen + ' hops_added=' + r.mail.added + ' skipped_headers=' + r.mail.skipped;
+  return 'mail: journal_records=' + r.mail.seen + ' hops_added=' + r.mail.added + ' skipped_headers=' + r.mail.skipped + ' mail_errors=' + r.mail.errors;
 }

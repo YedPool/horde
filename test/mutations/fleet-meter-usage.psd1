@@ -12,8 +12,8 @@
            Find = "    UNIQUE (session_id, agent_id)"
            Replace = "    CHECK (1)" }
         @{ Name = "usage-upsert-forgets-the-update"
-           Find = "ON CONFLICT (session_id, agent_id) DO UPDATE SET at = excluded.at, orc_id = excluded.orc_id, model = excluded.model,"
-           Replace = "ON CONFLICT (session_id, agent_id) DO UPDATE SET at = at, orc_id = excluded.orc_id, model = excluded.model," }
+           Find = "ON CONFLICT (session_id, agent_id) DO UPDATE SET updated_at = excluded.updated_at, at = excluded.at,"
+           Replace = "ON CONFLICT (session_id, agent_id) DO UPDATE SET updated_at = excluded.updated_at, at = at," }
         @{ Name = "idle-never-closes-a-session"
            Find = "const done = (returned != null && seen <= returned) || now - seen > IDLE_DONE_MS;"
            Replace = "const done = (returned != null && seen <= returned);" }
@@ -24,8 +24,8 @@
            Find = "const done = (returned != null && seen <= returned) || now - seen > IDLE_DONE_MS;"
            Replace = "const done = (returned != null) || now - seen > IDLE_DONE_MS;" }
         @{ Name = "start-moves-forward"
-           Find = "const started = Math.min(mark ? mark.started_at : Infinity, old ? old.started_at : Infinity);"
-           Replace = "const started = mark ? mark.started_at : old.started_at;" }
+           Find = "let started = Math.min(mark ? mark.started_at : Infinity, old ? old.started_at : Infinity);"
+           Replace = "let started = mark ? mark.started_at : old.started_at;" }
         @{ Name = "context-from-first-request"
            Find = "SELECT model, context_tokens FROM tokens_requests WHERE session_id = ? AND agent_id IS ? ORDER BY at DESC"
            Replace = "SELECT model, context_tokens FROM tokens_requests WHERE session_id = ? AND agent_id IS ? ORDER BY at ASC" }
@@ -44,5 +44,23 @@
         @{ Name = "settle-closes-fresh-rows"
            Find = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now - IDLE_DONE_MS).changes); }"
            Replace = "settleUsage(now = Date.now()) { return Number(this.s.settle.run(now + IDLE_DONE_MS).changes); }" }
+        @{ Name = "updated-at-not-bumped-by-an-upsert"
+           Find = 'ON CONFLICT (session_id, agent_id) DO UPDATE SET updated_at = excluded.updated_at, at = excluded.at,'
+           Replace = 'ON CONFLICT (session_id, agent_id) DO UPDATE SET at = excluded.at,' }
+        @{ Name = "settle-leaves-updated-at"
+           Find = 'SET state = ''done'', updated_at = ? WHERE'
+           Replace = 'SET state = ''done'', updated_at = updated_at + 0 * ? WHERE' }
+        @{ Name = "migration-does-not-re-read-the-version"
+           Find = 'if (db.prepare(''PRAGMA user_version'').get().user_version <= v) {'
+           Replace = 'if (true) {' }
+        @{ Name = "first-row-starts-at-the-newest-chunk"
+           Find = 'if (!old) { const f = s.usageFirst.get(session, ag);'
+           Replace = 'if (false) { const f = s.usageFirst.get(session, ag);' }
+        @{ Name = "hops-of-one-message-not-atomic"
+           Find = 'for (const h of list) if (this.addHop(h)) n++;'
+           Replace = 'for (const h of list) { if (this.addHop(h)) n++; this.db.exec(''COMMIT''); this.db.exec(''BEGIN IMMEDIATE''); }' }
+        @{ Name = "latency-window-cuts-a-message-in-half"
+           Find = 'WHERE message_id IN (SELECT message_id FROM mail_hops WHERE at >= ?)'
+           Replace = 'WHERE at >= ? AND message_id IN (SELECT message_id FROM mail_hops)' }
     )
 }
