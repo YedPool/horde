@@ -39,6 +39,7 @@ $HordeCommand = @{
         # A missing Orc or Lane is the command line being short, not the card being wrong.
         if ($r.usage) { throw (New-HordeUsageError -Message "$($r.problems[0])") }
         $out = @("status NOT written: the card would not be read, for " + @($r.problems).Count + " reason(s)")
+        if ($r.PSObject.Properties["undone"] -and $r.undone) { $out = @("status write undone: the card was written and did not read back clean, for " + @($r.problems).Count + " reason(s)") }
         foreach ($p in @($r.problems)) { $out += ("  - " + $p) }
         if ($DryRun) { foreach ($l in @($r.lines)) { Write-Output ("  " + $l) } }
         throw ($out -join "`n")

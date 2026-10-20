@@ -36,8 +36,17 @@
         @{ Name = "non-ascii-transliterated"
            Find = 'return (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)'
            Replace = 'return [System.Text.Encoding]::ASCII.GetBytes($text)' }
+        @{ Name = "size-cap-ignored"
+           Find = 'if ($bytes.Length -gt $script:HordeFleetStatusMostBytes) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sibling-letter-ignored"
+           Find = 'if ($rivals.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "failed-readback-not-undone"
+           Find = 'if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone'
+           Replace = 'if ($false) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone' }
         @{ Name = "readback-skipped-last-good-from-bad"
-           Find = 'Write-HordeStatusFileAtomic -Path (Join-Path $Folder $script:HordeFleetStatusFile) -Bytes $bytes'
-           Replace = 'Write-HordeStatusFileAtomic -Path (Join-Path $Folder $script:HordeFleetStatusFile) -Bytes ([System.Text.Encoding]::ASCII.GetBytes("junk"))' }
+           Find = 'Write-HordeStatusFileAtomic -Path $target -Bytes $bytes'
+           Replace = 'Write-HordeStatusFileAtomic -Path $target -Bytes ([System.Text.Encoding]::ASCII.GetBytes("junk"))' }
     )
 }

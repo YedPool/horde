@@ -43,7 +43,7 @@ function ConvertTo-HordeStatusRecordBytes {
 }
 
 function Write-HordeStatusFileAtomic {
-    # Bytes to a file, whole: a temp file beside it, then one rename. The temp file never outlives the call.
+    # Bytes to a file, whole: a temp file beside it, then one rename. The temp file is removed in finally unless the process is killed between its creation and the rename, which leaves one ".tmp-" file beside the target; the target itself is never half-written.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
     $temp = $Path + ".tmp-" + [guid]::NewGuid().ToString("N")
     try {
@@ -89,6 +89,26 @@ function Invoke-HordeStatusSet {
     # THE READER'S OWN FUNCTION decides. Every problem it finds is listed, in its words.
     $verdict = ConvertFrom-HordeFleetStatusBytes -Bytes $bytes
     $problems += @($verdict.problems)
+    # THE READER'S SIZE CAP is in Read-HordeFleetStatusFolder, not in the bytes function: a card past it
+    # passes every rule above and is then NOT READ. Held here in the reader's own words (review, 2026-10-20:
+    # a 9000 character -Lane passed a dry run and wrote a card the panel could not read).
+    if ($bytes.Length -gt $script:HordeFleetStatusMostBytes) { $problems += ("is " + $bytes.Length + " bytes, far more than a record's seven lines, and was not read") }
+    # TWO FOLDERS, ONE LETTER (the panel's own rule, in its words): a sibling lane whose card reads clean and
+    # says the same letter would make both cards "no status written".
+    $parent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($Folder).TrimEnd("\", "/"))
+    if ($Orc -cmatch '\A[A-Z]\z' -and $parent) {
+        $rivals = @()
+        foreach ($sib in @([System.IO.Directory]::GetDirectories($parent) | Sort-Object)) {
+            if ([string]::Equals($sib.TrimEnd("\", "/"), [System.IO.Path]::GetFullPath($Folder).TrimEnd("\", "/"), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $theirs = Read-HordeFleetStatusFolder -Path $sib
+            if ($theirs.written -and $theirs.orc -ceq $Orc) { $rivals += (Split-Path -Leaf $sib) }
+        }
+        if ($rivals.Count -gt 0) {
+            $names = (@($rivals | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", ")
+            if ($rivals.Count -gt $script:HordeFleetStatusMostNamed) { $names += " and " + ($rivals.Count - $script:HordeFleetStatusMostNamed) + " more" }
+            $problems += ("says it is Orc " + $Orc + ", and so does another folder (" + $names + "), so which is that Orc cannot be told")
+        }
+    }
     $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes).TrimEnd("`n")
     $recordLines = @($text -split "`n")
     if ($problems.Count -gt 0) {
@@ -97,10 +117,17 @@ function Invoke-HordeStatusSet {
     if ($DryRun) {
         return [pscustomobject]@{ ok = $true; written = $false; problems = @(); lines = $recordLines; message = "dry run: the record reads clean and was not written"; usage = $false }
     }
-    Write-HordeStatusFileAtomic -Path (Join-Path $Folder $script:HordeFleetStatusFile) -Bytes $bytes
+    $target = Join-Path $Folder $script:HordeFleetStatusFile
+    # The previous bytes, kept so a card that does not read back can be taken away again.
+    $previous = $null
+    if ([System.IO.File]::Exists($target)) { $previous = [System.IO.File]::ReadAllBytes($target) }
+    Write-HordeStatusFileAtomic -Path $target -Bytes $bytes
     $back = Read-HordeFleetStatusFolder -Path $Folder
     if (-not $back.written) {
-        return [pscustomobject]@{ ok = $false; written = $true; problems = @("read back after the write, the card does not read clean: " + (@($back.problems) -join "; ")); lines = $recordLines; message = ""; usage = $false }
+        $undone = "the new file was taken away again (there was no previous card)"
+        if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone = "the previous card was put back" }
+        elseif ([System.IO.File]::Exists($target)) { [System.IO.File]::Delete($target) }
+        return [pscustomobject]@{ ok = $false; written = $false; undone = $true; problems = @("read back after the write, the card does not read clean: " + (@($back.problems) -join "; ") + "; " + $undone); lines = $recordLines; message = ""; usage = $false }
     }
     Write-HordeStatusFileAtomic -Path (Join-Path $Folder $script:HordeStatusLastGoodFile) -Bytes $bytes
     return [pscustomobject]@{ ok = $true; written = $true; problems = @(); lines = $recordLines; message = ("status written for " + $back.orc + ": " + $back.doing); usage = $false }

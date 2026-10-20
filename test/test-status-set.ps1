@@ -26,8 +26,8 @@ $script:n = 0
 function New-Lane {
     param([string]$Card = "")
     $script:n++
-    $dir = Join-Path $work ("lane" + $script:n)
-    New-Item -ItemType Directory -Path $dir | Out-Null
+    $dir = Join-Path (Join-Path $work ("p" + $script:n)) "lane"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
     if ($Card -ne "") { [System.IO.File]::WriteAllBytes((Join-Path $dir "status.txt"), $utf8.GetBytes($Card)) }
     return $dir
 }
@@ -192,6 +192,71 @@ Check ((Get-HordeTestMember $res "ok") -eq $false -and [System.IO.File]::ReadAll
 $null = Set-Card $dir -Doing "second good doing"
 Check ([System.IO.File]::ReadAllText((Join-Path $dir ".status.last-good.txt")).Contains("second good doing")) "a clean second write moves the last-good copy on"
 Check ((Names $dir) -ceq ".status.last-good.txt,status.txt") "and still no temp file is left behind"
+
+Write-Host ""
+Write-Host "--- a card past the reader's size cap is refused before anything is written ---" -ForegroundColor Cyan
+foreach ($big in @(@{ n = "lane"; a = @{ Lane = ("l" * 9000) } }, @{ n = "blocked"; a = @{ Blocked = ("b" * 9000) } })) {
+    $dir = New-Lane $cleanCard
+    [System.IO.File]::SetLastWriteTimeUtc((Join-Path $dir "status.txt"), [datetime]::new(2026, 10, 1, 8, 0, 0, [System.DateTimeKind]::Utc))
+    $before = Snapshot $dir
+    $a = @{ Orc = "K" }
+    if (-not $big.a.ContainsKey("Lane")) { $a.Lane = "status writer" }
+    foreach ($k in $big.a.Keys) { $a[$k] = $big.a[$k] }
+    $res = Set-Card $dir @a
+    Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "far more than a record's seven lines")) ("a 9000 character " + $big.n + " is refused in the reader's words")
+    Check ((Snapshot $dir) -ceq $before) "   and the good card, its time and the folder are exactly as they were"
+    $res = Set-Card $dir @a -DryRun
+    Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "far more than a record's seven lines")) ("   and a dry run refuses it too: " + $big.n)
+}
+
+Write-Host ""
+Write-Host "--- a write that does not read back puts the previous card back ---" -ForegroundColor Cyan
+$dir = New-Lane $cleanCard
+$prevBytes = [System.IO.File]::ReadAllBytes((Join-Path $dir "status.txt"))
+$real = ${function:Read-HordeFleetStatusFolder}
+$script:reads = 0; $script:failDir = $dir
+function Read-HordeFleetStatusFolder {
+    param([string]$Path, [datetime]$Now = [datetime]::UtcNow)
+    if ($Path -ceq $script:failDir) { $script:reads++ }
+    # the first read of that folder is the writer's look at the current card; the second is its read-back, which fails
+    if ($Path -ceq $script:failDir -and $script:reads -eq 2) { return [pscustomobject]@{ folder = "x"; written = $false; problems = @("pretend the file broke a rule"); orc = ""; lane = "" } }
+    return (& $real -Path $Path -Now $Now)
+}
+$res = Set-Card $dir -Doing "a doing that cannot be read back"
+Set-Item -Path function:Read-HordeFleetStatusFolder -Value $real
+Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "pretend the file broke a rule") -and (Says $res "previous card was put back")) "a failed read-back is reported, and says the previous card was put back"
+Check ([System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $dir "status.txt"))) -ceq [System.Convert]::ToBase64String($prevBytes)) "   and status.txt holds the previous bytes again"
+Check ((Names $dir) -ceq "status.txt") "   with no last-good written and no temp file"
+$dir2 = New-Lane
+function Read-HordeFleetStatusFolder {
+    param([string]$Path, [datetime]$Now = [datetime]::UtcNow)
+    if ($Path -ceq $script:failDir) { $script:reads++ }
+    if ($Path -ceq $script:failDir -and $script:reads -eq 2) { return [pscustomobject]@{ folder = "x"; written = $false; problems = @("pretend"); orc = ""; lane = "" } }
+    return (& $real -Path $Path -Now $Now)
+}
+$script:reads = 0; $script:failDir = $dir2
+$res = Set-Card $dir2 -Orc K -Lane "fresh"
+Set-Item -Path function:Read-HordeFleetStatusFolder -Value $real
+Check ((Get-HordeTestMember $res "ok") -eq $false -and -not (Test-Path -LiteralPath (Join-Path $dir2 "status.txt"))) "when there was no previous card, the failed write is taken away again"
+
+Write-Host ""
+Write-Host "--- two folders may not claim one letter ---" -ForegroundColor Cyan
+$fleet = Join-Path $work "fleetdir"
+New-Item -ItemType Directory -Path $fleet | Out-Null
+$other = Join-Path $fleet "a-lane"; $mine = Join-Path $fleet "b-lane"; $broken = Join-Path $fleet "c-lane"
+foreach ($x in @($other, $mine, $broken)) { New-Item -ItemType Directory -Path $x | Out-Null }
+[System.IO.File]::WriteAllBytes((Join-Path $other "status.txt"), $utf8.GetBytes($cleanCard))
+[System.IO.File]::WriteAllBytes((Join-Path $broken "status.txt"), $utf8.GetBytes($cleanCard.Replace("blocked: no", "blocked:").Replace("orc: K", "orc: Q")))
+$before = Snapshot $mine
+$res = Set-Card $mine -Orc K -Lane "second K"
+Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "says it is Orc K, and so does another folder (a-lane)")) "an -Orc another folder's clean card already holds is refused, naming that folder"
+Check ((Snapshot $mine) -ceq $before) "   and nothing is written"
+$res = Set-Card $mine -Orc Q -Lane "uses a broken card's letter"
+Check ((Get-HordeTestMember $res "ok") -eq $true) "CONTROL: a letter only a card that does not read clean claims is free"
+$res = Set-Card $other -Doing "rewriting my own card"
+Check ((Get-HordeTestMember $res "ok") -eq $true) "CONTROL: a folder keeping its own letter is not its own rival"
+$res = Set-Card $mine -Orc K -Lane "second K" -DryRun
+Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "and so does another folder")) "a dry run refuses it too"
 
 Write-Host ""
 Write-Host "--- the real horde command ---" -ForegroundColor Cyan
