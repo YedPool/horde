@@ -36,6 +36,9 @@
         @{ Name = "non-ascii-transliterated"
            Find = 'return (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)'
            Replace = 'return [System.Text.Encoding]::ASCII.GetBytes($text)' }
+        @{ Name = "undo-stamps-now"
+           Find = ' -Mtime $previousTime; $undone'
+           Replace = '; $undone' }
         @{ Name = "size-cap-ignored"
            Find = 'if ($bytes.Length -gt $script:HordeFleetStatusMostBytes) {'
            Replace = 'if ($false) {' }
