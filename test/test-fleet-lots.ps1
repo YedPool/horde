@@ -413,6 +413,14 @@ Check ($wk.Count -eq 1 -and @($wk[0].members).Count -eq 2 -and @($wk[0].members 
 Check ($wk.Count -eq 1 -and $wk[0].wake.requested_by_session_id -ceq $ids["C"]) "with who asked"
 Reset-World
 $hh = New-Home
+$null = Put-Lot -H $hh -Id $id1 -At "2026-10-16T09:15:00Z" -Sessions @((Session "A" "orc"), (Session "B" "orc"))
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeFleetLotDir -Id $id1 -HordeHome $hh) "wakes"), "a file where the wakes folder goes")
+$world.throwAt = 2
+$stopped = ""
+try { [void](Invoke-HordeFleetWakeLot -Lot $id1 -Deps $deps -HordeHome $hh) } catch { $stopped = $_.Exception.Message }
+Check ($stopped -like "*terminal fell over*" -and $stopped -like "*could not be recorded*") ("a wake row that cannot be written is said, with the original error kept (" + $stopped + ")")
+Reset-World
+$hh = New-Home
 $null = Put-Lot -H $hh -Id $id1 -At "2026-10-16T09:15:00Z" -Sessions @((Session "A" "orc"))
 $world.live[$ids["A"]] = @{ pid = 9; cwd = $cwds["A"]; state = "running" }
 $r = Invoke-HordeFleetWakeLot -Lot $id1 -Deps $deps -HordeHome $hh
@@ -446,6 +454,27 @@ $stale = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $hh) ($lid + ".part
 Check ((Lots-Of $hh).Count -eq 0) "a staging folder a crash left is no lot and is not listed"
 $redo = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
 Check ($redo.written -eq 1 -and -not (Test-Path -LiteralPath $stale) -and (Lots-Of $hh).Count -eq 1) "a re-run starts it again and leaves none behind"
+$hh = New-Home
+$hdir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $hh) $lid
+[void](New-Item -ItemType Directory -Path $hdir -Force)
+$redo = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+Check ($redo.written -eq 1 -and (Lots-Of $hh).Count -eq 1 -and (Test-Path -LiteralPath (Join-Path $hdir "parking_lot.json"))) "a lot's folder that exists and is empty is replaced by the staged one"
+$hh = New-Home
+$hdir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $hh) $lid
+[void](New-Item -ItemType Directory -Path $hdir -Force)
+[System.IO.File]::WriteAllText((Join-Path $hdir "stray.txt"), "keep me")
+$redo = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+Check ($redo.written -eq 0 -and $redo.refused -eq 1 -and @(@($redo.lines) -like "*not empty*").Count -eq 1) "a folder that exists and holds something is refused, naming why"
+Check ((Get-Content -LiteralPath (Join-Path $hdir "stray.txt") -Raw) -ceq "keep me" -and @(Get-ChildItem -LiteralPath $hdir).Count -eq 1 -and -not (Test-Path -LiteralPath ($hdir + ".partial"))) "and nothing in it is overwritten, no staging folder is left"
+$hh = New-Home
+$null = Put-Lot -H $hh -Id $lid -At "2026-10-16T19:59:00Z" -Sessions @((Session "A" "orc"))
+$hdir = Get-HordeFleetLotDir -Id $lid -HordeHome $hh
+$twin = (Read-HordeFleetRecord -Id $lid -HordeHome $hh).value
+Remove-Item -LiteralPath (Join-Path $hdir "parking_lot.json"), (Join-Path $hdir "parking_lot_member.json") -Force
+$twin.sessions = @([pscustomobject]@{ sessionId = $e1; role = "orc"; cwd = "C:\lanes\e1"; state = "exited"; label = "E1"; history = @([pscustomobject]@{ state = "exited"; at = "2026-10-16T19:59:00Z" }) })
+[void](Write-HordeFleetRecord -Dir $hdir -Record $twin)
+$twinRun = Invoke-HordeFleetLotBackfill -File $partial -Deps $eDeps -HordeHome $hh
+Check ($twinRun.written -eq 0 -and $twinRun.refused -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $hdir "parking_lot.json"))) "a hibernate of the same second and the same sessions is never completed as a backfill: only a record marked as the backfill's is"
 
 $byFile = Join-Path $work "by.json"
 $s1 = "77777777-0000-4000-8000-000000000001"; $s2 = "77777777-0000-4000-8000-000000000002"; $s3 = "77777777-0000-4000-8000-000000000003"

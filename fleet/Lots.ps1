@@ -228,6 +228,7 @@ function Test-HordeFleetBackfillOwnRecord {
     $r = Read-HordeFleetRecord -Id ("" + $Parsed.hid) -HordeHome $HordeHome
     if ($r.state -cne "known") { return ("the record cannot be read: " + $r.reason) }
     if (@($Parsed.sessions).Count -eq 0) { return "this backfill writes no record for the lot, so one that is there is another park's" }
+    if ("" + $r.value.selection.kind -cne "backfill") { return "it is not marked as a backfill's (a hibernate or record run of that second wrote it)" }
     $at = Format-HordeFleetTime -At $Parsed.at
     if ("" + $r.value.createdAt -cne $at) { return ("it was taken at " + $r.value.createdAt + ", not " + $at) }
     $have = @(@($r.value.sessions) | ForEach-Object { "" + $_.sessionId } | Sort-Object)
@@ -273,19 +274,31 @@ function Invoke-HordeFleetLotBackfill {
         }
         # WRITTEN IN A STAGING FOLDER, then renamed to the lot's name in one step: a crash leaves "<id>.partial", which no reader
         # lists (it is not a hibernation id), never a record that reads as a lot from before lots. A re-run starts it again.
+        # A FOLDER THAT IS THERE ALREADY is replaced only when it is empty: a same-second hibernate may have just claimed it
+        # (the backfill takes no hibernating lock), and nothing in it is moved over or overwritten, file by file or otherwise.
+        if ((Test-Path -LiteralPath $dir) -and @(Get-ChildItem -LiteralPath $dir -Force).Count -gt 0) {
+            $refused++; [void]$lines.Add("lot " + $p.lot.id + " (" + $p.hid + ") is refused: its folder exists and is not empty, so nothing in it was overwritten"); continue
+        }
         $stage = $dir + ".partial"
         if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
         [void](New-Item -ItemType Directory -Path $stage -Force)
         if (@($p.sessions).Count -gt 0) {
             $labels = @(@($p.sessions) | Where-Object { $null -ne $_.PSObject.Properties["label"] } | ForEach-Object { "" + $_.label })
             $rec = [pscustomobject][ordered]@{ schemaVersion = 1; id = $p.hid; createdAt = (Format-HordeFleetTime -At $p.at); agent = $agentName; host = $hostName
-                selection = [pscustomobject][ordered]@{ kind = "labels"; labels = @($labels); exclude = @() }; sessions = @($p.sessions) }
+                selection = [pscustomobject][ordered]@{ kind = "backfill"; labels = @($labels); exclude = @() }; sessions = @($p.sessions) }
             if ($p.by -cmatch '\A[^\x00-\x1F]{1,200}\z') { $rec | Add-Member -NotePropertyName "parkedBy" -NotePropertyValue $p.by -Force }
             [void](Write-HordeFleetRecord -Dir $stage -Record $rec -FolderId $p.hid)
         }
         [void](Write-HordeFleetLot -Dir $stage -Lot $p.lot -Members @($p.members) -FolderId $p.hid)
-        if (Test-Path -LiteralPath $dir) { foreach ($f in @(Get-ChildItem -LiteralPath $stage -Force)) { Move-Item -LiteralPath $f.FullName -Destination $dir -Force }; Remove-Item -LiteralPath $stage -Force }
-        else { Move-Item -LiteralPath $stage -Destination $dir }
+        # Directory.Move refuses a target that exists (Move-Item would put the staging folder INSIDE it), so a folder claimed
+        # between the check and now is refused, not merged.
+        try {
+            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -ErrorAction Stop }
+            [System.IO.Directory]::Move($stage, $dir)
+        } catch {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+            $refused++; [void]$lines.Add("lot " + $p.lot.id + " (" + $p.hid + ") is refused: its folder could not be taken over (" + $_.Exception.Message + ")"); continue
+        }
         $written++; [void]$lines.Add("wrote lot " + $p.lot.id + " (" + $p.hid + ", " + @($p.members).Count + " member(s), " + $p.lot.reason + ")")
     }
     [void]$lines.Add("backfill: " + $written + " lot(s) written, " + $skipped + " already there" + $(if ($refused -gt 0) { ", " + $refused + " refused" } else { "" }))
@@ -307,6 +320,15 @@ function Resolve-HordeFleetLotMembers {
         if (-not $out.Contains("" + $hit[0].session_id)) { [void]$out.Add("" + $hit[0].session_id) }
     }
     return @($out)
+}
+
+function Get-HordeFleetWokenAs {
+    # session id -> the id it came back under, from the record as it is now (for the wake_member rows).
+    param([Parameter(Mandatory = $true)][string]$Hid, [string]$HordeHome = (Get-HordeHome))
+    $newIds = @{}
+    $again = Read-HordeFleetRecord -Id $Hid -HordeHome $HordeHome
+    if ($again.state -ceq "known") { foreach ($s in @($again.value.sessions)) { $w = Get-HordeFleetMember $s "wokenAs"; if ($null -ne $w -and "" + $w -ne "") { $newIds["" + $s.sessionId] = "" + $w } } }
+    return $newIds
 }
 
 function Invoke-HordeFleetWakeLot {
@@ -359,7 +381,9 @@ function Invoke-HordeFleetWakeLot {
                     $lab = $(if ($labelOf.ContainsKey($sid)) { $labelOf[$sid] } else { "" })
                     [void]$outcomes.Add([pscustomobject]@{ sessionId = $sid; label = $lab; outcome = "failed"; reason = ("the wake stopped on an error: " + $err.Exception.Message) })
                 }
-                try { [void](Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes @($outcomes)) } catch { $null = $_ }
+                $recordable = @($outcomes | Where-Object { @("woken", "still-awake", "failed", "held", "asleep") -ccontains ("" + $_.outcome) })
+                try { [void](Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes $recordable -NewIds (Get-HordeFleetWokenAs -Hid $hid -HordeHome $HordeHome)) }
+                catch { throw ($err.Exception.Message + " (and the wake could not be recorded: " + $_.Exception.Message + ")") }
             }
             throw $err
         }
@@ -368,9 +392,7 @@ function Invoke-HordeFleetWakeLot {
     } else { [void]$lines.Add("  nothing to wake") }
     $wakeId = ""
     if (-not $DryRun -and $outcomes.Count -gt 0) {
-        $newIds = @{}
-        $again = Read-HordeFleetRecord -Id $hid -HordeHome $HordeHome
-        if ($again.state -ceq "known") { foreach ($s in @($again.value.sessions)) { $w = Get-HordeFleetMember $s "wokenAs"; if ($null -ne $w -and "" + $w -ne "") { $newIds["" + $s.sessionId] = "" + $w } } }
+        $newIds = Get-HordeFleetWokenAs -Hid $hid -HordeHome $HordeHome
         $recordable = @($outcomes | Where-Object { @("woken", "still-awake", "failed", "held", "asleep") -ccontains ("" + $_.outcome) })
         if ($recordable.Count -gt 0) { $wakeId = Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes $recordable -NewIds $newIds }
     }
