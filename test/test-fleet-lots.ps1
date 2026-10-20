@@ -19,13 +19,14 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
 . (Join-Path $root "fleet\Lots.ps1")
+. (Join-Path $root "fleet\Asleep.ps1")
 
 function Section { param([string]$Title) Write-Host ""; Write-Host ("--- " + $Title + " ---") -ForegroundColor Cyan }
 
 $work = Join-Path $env:TEMP ("horde-fleet-lots-" + [guid]::NewGuid().ToString("N"))
 [void](New-Item -ItemType Directory -Path $work -Force)
 $ids = @{
-    A = "44444444-0000-4000-8000-000000000001"; A1 = "44444444-0000-4000-8000-000000000002"; B = "44444444-0000-4000-8000-000000000003"
+    A = "44444444-0000-4000-8000-000000000001"; A1 = "44444444-0000-4000-8000-000000000002"; B = "b0b0b0b0-0000-4000-8000-000000000003"
     B1 = "44444444-0000-4000-8000-000000000004"; C = "44444444-0000-4000-8000-000000000005"; D = "44444444-0000-4000-8000-000000000006"
 }
 $cwds = @{ A = "C:\lanes\a"; A1 = "C:\work\a1"; B = "C:\lanes\b"; B1 = "C:\work\b1"; C = "C:\lanes\c"; D = "C:\lanes\d" }
@@ -104,8 +105,8 @@ function Put-Lot {
     [void](Write-HordeFleetLot -Dir $dir -Lot $lot -Members @(ConvertTo-HordeFleetLotMembers -LotId $lot.id -Record $rec))
     return $lot
 }
-function Wakes-Of { param([string]$H, [string]$Id) return @(Read-HordeFleetWakes -Dir (Get-HordeFleetLotDir -Id $Id -HordeHome $H)) }
-function Lots-Of { param([string]$H) $a = Get-HordeFleetLots -HordeHome $H -Agent $agent.value; if ($a.state -cne "known") { throw ("lots unknown: " + $a.reason) }; return @($a.value.lots) }
+function Wakes-Of { param([string]$H, [string]$Id) return ,@(Read-HordeFleetWakes -Dir (Get-HordeFleetLotDir -Id $Id -HordeHome $H)) }
+function Lots-Of { param([string]$H) $a = Get-HordeFleetLots -HordeHome $H -Agent $agent.value; if ($a.state -cne "known") { throw ("lots unknown: " + $a.reason) }; return ,@($a.value.lots) }
 function Member-Of { param($Lot, [string]$L) return @($Lot.members | Where-Object { $_.label -ceq $L })[0] }
 function Spawned { param([string]$L) return @($world.spawns | Where-Object { $_.line -ceq ("resume " + $ids[$L]) }).Count }
 
@@ -136,7 +137,7 @@ Check ($lot1.created_at -ceq "2026-10-19T21:00:00Z" -and $lot1.reason -ceq "unit
 Check ($lotRead.value.folder -ceq $made.id -and (Get-HordeFleetLotDir -Id $lot1.id -HordeHome $hh) -ceq $dir1) "the lot's folder is found from its ULID, and is the hibernation id"
 $colsLot = @($lot1.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
 Check (($colsLot -join ",") -ceq "created_at,created_by_session_id,id,keep_visible,reason,selection_kind") ("the row has the audit's columns and no others (" + ($colsLot -join ",") + ")")
-Check ($lot1.keep_visible -is [int] -and $lot1.keep_visible -eq 0) "keep_visible is written for every new lot, and is 0 unless the park asks for 1"
+Check (($lot1.keep_visible -is [long] -or $lot1.keep_visible -is [int]) -and $lot1.keep_visible -eq 0) "keep_visible is written for every new lot, and is 0 unless the park asks for 1"
 $hhKv = New-Home
 $madeKv = Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $sel -HordeHome $hhKv -By $ids["A"] -Why "kept park" -Tier 2 -KeepVisible
 $lotKv = (Read-HordeFleetLot -Id $madeKv.id -HordeHome $hhKv).value.lot
@@ -177,6 +178,7 @@ Check ((@($rows | Where-Object { $_.session_id -ceq $ids["A1"] })[0].state) -ceq
 
 Section "lots newest first"
 $hh = New-Home
+Reset-World
 $null = Put-Lot -H $hh -Id "20261014-100000" -At "2026-10-14T10:00:00Z" -Sessions @((Session "A" "orc")) -Why "middle"
 $null = Put-Lot -H $hh -Id "20261019-090000" -At "2026-10-19T09:00:00Z" -Sessions @((Session "B" "orc")) -Why "newest"
 $null = Put-Lot -H $hh -Id "20261010-120000" -At "2026-10-10T12:00:00Z" -Sessions @((Session "C" "orc")) -Why "oldest"
@@ -264,7 +266,7 @@ Check ((Spawned "A") -eq 1) "a member can be named by its label"
 $nWakes = (Wakes-Of $hh $id1).Count
 Check (Throws { Invoke-HordeFleetWakeLot -Lot $id1 -Members @("A1", "nobody") -Deps $deps -HordeHome $hh } "holds no member 'nobody'") "a name that picks no member refuses the whole request"
 Check ($world.spawns.Count -eq 1 -and (Wakes-Of $hh $id1).Count -eq $nWakes) "and starts nothing more and records no wake"
-Check (Throws { Invoke-HordeFleetWakeLot -Lot $id1 -Members @("44444444") -Deps $deps -HordeHome $hh } "names 4 members") "a prefix shared by several members is refused as ambiguous, not guessed"
+Check (Throws { Invoke-HordeFleetWakeLot -Lot $id1 -Members @("44444444") -Deps $deps -HordeHome $hh } "names 3 members") "a prefix shared by several members is refused as ambiguous, not guessed"
 Reset-World
 $r = Invoke-HordeFleetWakeLot -Lot $id1 -Members @($ids["B1"]) -DryRun -Deps $deps -HordeHome $hh
 Check ($world.spawns.Count -eq 0 -and (Member-Of (Lots-Of $hh)[0] "B1").state -ceq "asleep") "a dry run of a subset starts nothing and changes nothing"
