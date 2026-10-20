@@ -120,7 +120,7 @@ function Get-HordeFleetLots {
 
 function Format-HordeFleetLotsText {
     # The lots as lines for a person: one line for the lot, then one for each member.
-    param([Parameter(Mandatory = $true)][object[]]$Lots)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Lots)
     $lines = New-Object System.Collections.ArrayList
     foreach ($l in @($Lots)) {
         $counts = New-Object System.Collections.ArrayList

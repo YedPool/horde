@@ -132,7 +132,8 @@ function ConvertTo-HordeFleetLotMember {
     $get = { param($o, $n) if ($null -eq $o) { return "" }; $p = $o.PSObject.Properties[$n]; if ($null -eq $p -or $null -eq $p.Value) { return "" }; return ("" + $p.Value) }
     $row = [ordered]@{ lot_id = $LotId; session_id = (& $get $Session "sessionId") }
     $orc = & $get $Prior "orc_id"; if ($orc -ne "") { $row["orc_id"] = $orc }
-    $tier = & $get $Prior "tier"; if ($tier -ne "") { $row["tier"] = [int]$tier } elseif ($Tier -gt 0) { $row["tier"] = $Tier }
+    # Not named $tier: PowerShell variables ignore case, so that would overwrite the -Tier parameter.
+    $priorTier = & $get $Prior "tier"; if ($priorTier -ne "") { $row["tier"] = [int]$priorTier } elseif ($Tier -gt 0) { $row["tier"] = $Tier }
     $row["state"] = (Get-HordeFleetMemberState -RecordState (& $get $Session "state"))
     $note = & $get $Session "parkedFile"; if ($note -eq "") { $note = & $get $Prior "note" }
     if ($note -ne "") { $row["note"] = $note }
@@ -149,7 +150,7 @@ function ConvertTo-HordeFleetLotMembers {
 
 function Test-HordeFleetTable {
     # Findings for rows against the schema -Name (fleet-parking-lot.v1 ...).
-    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][object[]]$Rows)
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Rows)
     $out = New-Object System.Collections.ArrayList
     $schema = Get-HordeSchema -Name $Name
     foreach ($r in @($Rows)) { foreach ($f in @(Test-HordeSchema -Value $r -Schema $schema)) { [void]$out.Add($Name + ": " + $f) } }
@@ -159,7 +160,7 @@ function Test-HordeFleetTable {
 function Test-HordeFleetLotFiles {
     # Findings for a lot row and its member rows: the schemas', and what they cannot say - the lot holds a member,
     # each member names this lot, and a session is in it once.
-    param([Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][object[]]$Members, [string]$FolderId = "")
+    param([Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Members, [string]$FolderId = "")
     $out = New-Object System.Collections.ArrayList
     foreach ($f in @(Test-HordeFleetTable -Name "fleet-parking-lot.v1" -Rows @($Lot))) { [void]$out.Add($f) }
     foreach ($f in @(Test-HordeFleetTable -Name "fleet-parking-lot-member.v1" -Rows @($Members))) { [void]$out.Add($f) }
@@ -196,7 +197,7 @@ function Read-HordeFleetTableFile {
 function Write-HordeFleetLot {
     # Write one lot into -Dir: its members first, then its row. Throws, writing nothing, when they break their
     # schemas: a lot that does not read back is worse than none.
-    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][object[]]$Members)
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)]$Lot, [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Members)
     $findings = @(Test-HordeFleetLotFiles -Lot $Lot -Members @($Members) -FolderId (Split-Path -Leaf $Dir))
     if ($findings.Count -gt 0) { throw ("the lot was not written, it breaks its schema: " + ($findings -join "; ")) }
     Write-HordeFleetTableFile -Path (Join-Path $Dir "parking_lot_member.json") -Table $script:HordeFleetTableNames.member -Rows @($Members)
