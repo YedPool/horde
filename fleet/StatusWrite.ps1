@@ -44,10 +44,12 @@ function ConvertTo-HordeStatusRecordBytes {
 
 function Write-HordeStatusFileAtomic {
     # Bytes to a file, whole: a temp file beside it, then one rename. The temp file is removed in finally unless the process is killed between its creation and the rename, which leaves one ".tmp-" file beside the target; the target itself is never half-written.
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes, $Mtime = $null)
     $temp = $Path + ".tmp-" + [guid]::NewGuid().ToString("N")
     try {
         [System.IO.File]::WriteAllBytes($temp, $Bytes)
+        # An undo gives the old card back its own modified time (the panel's "as of"), not now.
+        if ($null -ne $Mtime) { [System.IO.File]::SetLastWriteTimeUtc($temp, $Mtime) }
         Move-HordeFileAtomic -From $temp -To $Path
     } finally {
         if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) }
@@ -119,13 +121,13 @@ function Invoke-HordeStatusSet {
     }
     $target = Join-Path $Folder $script:HordeFleetStatusFile
     # The previous bytes, kept so a card that does not read back can be taken away again.
-    $previous = $null
-    if ([System.IO.File]::Exists($target)) { $previous = [System.IO.File]::ReadAllBytes($target) }
+    $previous = $null; $previousTime = $null
+    if ([System.IO.File]::Exists($target)) { $previous = [System.IO.File]::ReadAllBytes($target); $previousTime = [System.IO.File]::GetLastWriteTimeUtc($target) }
     Write-HordeStatusFileAtomic -Path $target -Bytes $bytes
     $back = Read-HordeFleetStatusFolder -Path $Folder
     if (-not $back.written) {
         $undone = "the new file was taken away again (there was no previous card)"
-        if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone = "the previous card was put back" }
+        if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous -Mtime $previousTime; $undone = "the previous card was put back" }
         elseif ([System.IO.File]::Exists($target)) { [System.IO.File]::Delete($target) }
         return [pscustomobject]@{ ok = $false; written = $false; undone = $true; problems = @("read back after the write, the card does not read clean: " + (@($back.problems) -join "; ") + "; " + $undone); lines = $recordLines; message = ""; usage = $false }
     }

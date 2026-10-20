@@ -212,6 +212,8 @@ foreach ($big in @(@{ n = "lane"; a = @{ Lane = ("l" * 9000) } }, @{ n = "blocke
 Write-Host ""
 Write-Host "--- a write that does not read back puts the previous card back ---" -ForegroundColor Cyan
 $dir = New-Lane $cleanCard
+$oldStamp = [datetime]::new(2026, 10, 1, 8, 0, 0, [System.DateTimeKind]::Utc)
+[System.IO.File]::SetLastWriteTimeUtc((Join-Path $dir "status.txt"), $oldStamp)
 $prevBytes = [System.IO.File]::ReadAllBytes((Join-Path $dir "status.txt"))
 $real = ${function:Read-HordeFleetStatusFolder}
 $script:reads = 0; $script:failDir = $dir
@@ -226,6 +228,7 @@ $res = Set-Card $dir -Doing "a doing that cannot be read back"
 Set-Item -Path function:Read-HordeFleetStatusFolder -Value $real
 Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "pretend the file broke a rule") -and (Says $res "previous card was put back")) "a failed read-back is reported, and says the previous card was put back"
 Check ([System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $dir "status.txt"))) -ceq [System.Convert]::ToBase64String($prevBytes)) "   and status.txt holds the previous bytes again"
+Check ((Get-Item -LiteralPath (Join-Path $dir "status.txt")).LastWriteTimeUtc -eq $oldStamp) "   with the previous card's own modified time, not now (the panel's as-of)"
 Check ((Names $dir) -ceq "status.txt") "   with no last-good written and no temp file"
 $dir2 = New-Lane
 function Read-HordeFleetStatusFolder {

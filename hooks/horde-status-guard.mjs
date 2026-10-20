@@ -43,7 +43,7 @@ const CHILD_TIMEOUT_MS = 8000;
 const STATUS_PATH = /[\\/]orcs[\\/][^\\/]+[\\/]status\.txt$/i;
 // A path in a shell command that ends in status.txt: no space, quote or shell punctuation inside it, so
 // an absolute, relative, drive-letter or UNC (\\host\share\...) spelling is all one token.
-const STATUS_TOKEN = /[^\s"'<>|;&()*?]*status\.txt/gi;
+const STATUS_TOKEN = /"([^"]*status\.txt)"|'([^']*status\.txt)'|[^\s"'<>|;&()*?]*status\.txt/gi;
 
 const LOG_FILE =
   process.env.HORDE_STATUS_GUARD_LOG || join(homedir(), "Documents", "Code", ".wezfleet", "accuracy", "status-guard-hook.log");
@@ -183,15 +183,18 @@ async function main() {
   } else if (SHELL_TOOLS.has(input.tool_name)) {
     const command = ti.command;
     if (typeof command !== "string" || !/status\.txt/i.test(command)) return 0;
-    const named = (command.match(STATUS_TOKEN) || []).map((t) => absolute(t, input.cwd)).filter((p) => STATUS_PATH.test(p));
+    // A quoted path may hold spaces, so quoted strings are tokens of their own.
+    const named = [...command.matchAll(STATUS_TOKEN)].map((m) => absolute(m[1] || m[2] || m[0], input.cwd)).filter((p) => STATUS_PATH.test(p));
     const root = findOrcsRoot(input.cwd, named);
     if (!root) return 0;
-    folders = recentFolders(root);
-    // Restore only what the command names, or its own lane; anything else recently changed is only reported.
-    restorable = [];
-    for (const f of named.map((p) => dirname(p))) if (samePath(dirname(f), root)) restorable.push(f);
+    // Only the cards the command names, or its own lane, are looked at: another Orc's bad card is its own
+    // Orc's hook's business, and is neither reported nor restored here.
+    const mine = [];
+    for (const f of named.map((p) => dirname(p))) if (samePath(dirname(f), root)) mine.push(f);
     const own = cwdLane(input.cwd, root);
-    if (own) restorable.push(own);
+    if (own) mine.push(own);
+    folders = recentFolders(root).filter((d) => mine.some((m) => samePath(m, d)));
+    restorable = folders;
   } else {
     return 0;
   }

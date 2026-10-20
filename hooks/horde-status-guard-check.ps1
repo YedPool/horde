@@ -78,8 +78,11 @@ for ($i = 0; $i -lt $list.Count; $i++) {
     $file = Join-Path $dir $script:HordeFleetStatusFile
     if (-not [System.IO.File]::Exists($file)) { continue }
     # The bytes the verdict is made on are read FIRST, so a change after this point is seen at the restore.
+    # A card past the size cap is not read into memory: its length and modified time stand in for its bytes.
     $seen = $null
-    if ((New-Object System.IO.FileInfo($file)).Length -le $script:HordeFleetStatusMostBytes) { $seen = Read-StatusGuardBytes $file }
+    $seenInfo = New-Object System.IO.FileInfo($file)
+    $seenLength = $seenInfo.Length; $seenTicks = $seenInfo.LastWriteTimeUtc.Ticks
+    if ($seenLength -le $script:HordeFleetStatusMostBytes) { $seen = Read-StatusGuardBytes $file }
     $read = Read-HordeFleetStatusFolder -Path $dir
     $good = Join-Path $dir $lastGood
     if ($read.written) {
@@ -100,9 +103,14 @@ for ($i = 0; $i -lt $list.Count; $i++) {
     $outcome = 'left'
     $mayRestore = $allowed.ContainsKey((Get-NormalPath $dir))
     if ($env:HORDE_STATUS_GUARD_TEST_REWRITE) { [System.IO.File]::WriteAllBytes($file, [System.IO.File]::ReadAllBytes($env:HORDE_STATUS_GUARD_TEST_REWRITE)) }
-    if ($null -ne $seen -and [System.IO.File]::Exists($file)) {
-        $now = Read-StatusGuardBytes $file
-        if ($now.Length -ne $seen.Length -or [System.Convert]::ToBase64String($now) -cne [System.Convert]::ToBase64String($seen)) { continue }
+    if ([System.IO.File]::Exists($file)) {
+        if ($null -ne $seen) {
+            $now = Read-StatusGuardBytes $file
+            if ($now.Length -ne $seen.Length -or [System.Convert]::ToBase64String($now) -cne [System.Convert]::ToBase64String($seen)) { continue }
+        } else {
+            $nowInfo = New-Object System.IO.FileInfo($file)
+            if ($nowInfo.Length -ne $seenLength -or $nowInfo.LastWriteTimeUtc.Ticks -ne $seenTicks) { continue }
+        }
     }
     $rejected++
     if (-not $mayRestore) { $outcome = 'reported' }

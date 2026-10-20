@@ -27,18 +27,18 @@
         @{ Name = "powershell-tool-ignored"
            Find = 'new Set(["Bash", "PowerShell"])'
            Replace = 'new Set(["Bash"])' }
-        @{ Name = "orcs-root-env-ignored"
-           Find = 'const env = process.env.HORDE_STATUS_ORCS_ROOT;'
-           Replace = 'const env = null;' }
         @{ Name = "orcs-path-in-command-ignored"
            Find = 'if (isDir(root)) return root;'
            Replace = 'if (false) return root;' }
-        @{ Name = "restore-scope-ignored"
-           Find = 'restorable.join("*") || "-"'
-           Replace = 'folders.join("*")' }
+        @{ Name = "other-cards-checked"
+           Find = 'folders = recentFolders(root).filter((d) => mine.some((m) => samePath(m, d)));'
+           Replace = 'folders = recentFolders(root);' }
+        @{ Name = "quoted-path-split-at-space"
+           Find = '/"([^"]*status\.txt)"|''([^'']*status\.txt)''|'
+           Replace = '/' }
         @{ Name = "own-lane-not-restorable"
-           Find = 'if (own) restorable.push(own);'
-           Replace = 'if (false) restorable.push(own);' }
+           Find = 'if (own) mine.push(own);'
+           Replace = 'if (false) mine.push(own);' }
         @{ Name = "relative-path-not-resolved"
            Find = 'if (!STATUS_PATH.test(absolute(file, input.cwd))) return 0;'
            Replace = 'if (!STATUS_PATH.test(file)) return 0;' }

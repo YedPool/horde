@@ -178,7 +178,7 @@ $r = Hook-Shell "echo hello > status.txt" $s1
 Check ($r.code -eq 2 -and $r.err.Contains((Join-Path $s1 "status.txt"))) "Bash: the recent bad card is rejected, found from the working folder inside orcs"
 Check ((Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "   and restored"
 Check ((Text (Join-Path $s2 "status.txt")) -ceq $badCard -and (Get-Item -LiteralPath (Join-Path $s2 "status.txt")).LastWriteTimeUtc.Ticks -eq $s2before -and -not $r.err.Contains((Join-Path $s2 "status.txt"))) "   the STALE bad card (10 minutes old) is not touched and not named"
-Check ((Text (Join-Path $s3 ".status.last-good.txt")) -ceq $goodCard2) "   a recent clean card of another Orc gets its last-good copy"
+Check (-not [System.IO.File]::Exists((Join-Path $s3 ".status.last-good.txt"))) "   a recent card of another Orc is not looked at at all (no last-good made)"
 Reset-Marks
 New-Orcs "stale"
 $st = Lane "ST"
@@ -191,7 +191,7 @@ $r = Hook-Shell "Set-Content status.txt 'x'" $s1 "PowerShell"
 Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "the PowerShell tool is treated the same way"
 Put (Join-Path $s1 "status.txt") $badCard 3
 $r = Hook-Shell "cat status.txt" $elsewhere -Env @{ HORDE_STATUS_ORCS_ROOT = $shellOrcs }
-Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $badCard -and $r.err.Contains("NOT restored")) "from a folder outside orcs, HORDE_STATUS_ORCS_ROOT finds the card and REPORTS it, but restores nothing the command did not name"
+Check ($r.code -eq 0 -and $r.err -eq "" -and (Text (Join-Path $s1 "status.txt")) -ceq $badCard) "a command that names no card and runs outside every lane ignores another Orc's bad card entirely: no report, no restore"
 Put (Join-Path $s1 "status.txt") $badCard 3
 $r = Hook-Shell ("echo x > " + (Join-Path $s1 "status.txt")) $env:TEMP
 Check ($r.code -eq 2 -and (Text (Join-Path $s1 "status.txt")) -ceq $goodCard) "an orcs path written in the command finds the card, and restores it, when the working folder is elsewhere"
@@ -204,11 +204,23 @@ foreach ($x in @($ka, $la, $ma)) { Put (Join-Path $x ".status.last-good.txt") $g
 $r = Hook-Shell "cat status.txt" $ka
 Check ($r.code -eq 2 -and (Text (Join-Path $ka "status.txt")) -ceq $goodCard) "the working folder's own lane is restored"
 Check ((Text (Join-Path $la "status.txt")) -ceq $badCard -and (Text (Join-Path $ma "status.txt")) -ceq $badCard) "other Orcs' recently changed bad cards are NOT restored"
-Check ($r.err.Contains((Join-Path $la "status.txt")) -and $r.err.Contains("NOT restored")) "   but they are reported, and the report says they were not restored"
+Check (-not $r.err.Contains((Join-Path $la "status.txt")) -and -not $r.err.Contains((Join-Path $ma "status.txt"))) "   and they are not reported either (their own Orc's hook catches them)"
 $r = Hook-Shell ("cat " + (Join-Path $la "status.txt")) $ka
 Check ((Text (Join-Path $la "status.txt")) -ceq $goodCard -and (Text (Join-Path $ma "status.txt")) -ceq $badCard) "a card named by absolute path in the command is restored, an unnamed one still is not"
 $r = Hook-Shell "cat ..\MA\status.txt" $ka
 Check ((Text (Join-Path $ma "status.txt")) -ceq $goodCard) "a card named by a path relative to the working folder is restored"
+
+Write-Host ""
+Write-Host "--- a quoted path with spaces is one path ---" -ForegroundColor Cyan
+New-Orcs "sp ace"
+$sp = Lane "SP"
+Put (Join-Path $sp ".status.last-good.txt") $goodCard
+Put (Join-Path $sp "status.txt") $badCard 3
+$r = Hook-Shell ('cat "' + (Join-Path $sp "status.txt") + '"') $elsewhere
+Check ($r.code -eq 2 -and (Text (Join-Path $sp "status.txt")) -ceq $goodCard) "a double-quoted path with a space in it names the card, which is restored"
+Put (Join-Path $sp "status.txt") $badCard 3
+$r = Hook-Shell ("cat '" + (Join-Path $sp "status.txt") + "'") $elsewhere
+Check ($r.code -eq 2 -and (Text (Join-Path $sp "status.txt")) -ceq $goodCard) "and so does a single-quoted one"
 
 Write-Host ""
 Write-Host "--- a restore keeps the last good card's own time ---" -ForegroundColor Cyan
@@ -230,6 +242,21 @@ Put (Join-Path $rc ".status.last-good.txt") $goodCard 100
 Put (Join-Path $rc "status.txt") $badCard 1
 $r = Hook-File "Write" (Join-Path $rc "status.txt") @{ HORDE_STATUS_GUARD_TEST_REWRITE = $landing }
 Check ($r.code -eq 0 -and (Text (Join-Path $rc "status.txt")) -ceq $goodCard2) "a card that changed between the verdict and the restore is left as it landed (no restore, exit 0)"
+
+Write-Host ""
+Write-Host "--- a card past the size cap is still re-read before the restore ---" -ForegroundColor Cyan
+New-Orcs "big"
+$bg = Lane "BG"
+$bigA = $badCard + ("x" * 9000)
+$bigB = $badCard + ("y" * 9000)
+[System.IO.File]::WriteAllBytes((Join-Path $work "bigB.txt"), $utf8.GetBytes($bigB))
+Put (Join-Path $bg ".status.last-good.txt") $goodCard 100
+Put (Join-Path $bg "status.txt") $bigA 1
+$r = Hook-File "Write" (Join-Path $bg "status.txt")
+Check ($r.code -eq 2 -and (Text (Join-Path $bg "status.txt")) -ceq $goodCard) "CONTROL: an oversize bad card is restored"
+Put (Join-Path $bg "status.txt") $bigA 1
+$r = Hook-File "Write" (Join-Path $bg "status.txt") @{ HORDE_STATUS_GUARD_TEST_REWRITE = (Join-Path $work "bigB.txt") }
+Check ($r.code -eq 0 -and (Text (Join-Path $bg "status.txt")) -ceq $bigB) "an oversize card that changed between the verdict and the restore is left as it landed"
 
 Write-Host ""
 Write-Host "--- a path is resolved against the payload's working folder ---" -ForegroundColor Cyan

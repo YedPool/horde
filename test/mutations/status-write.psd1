@@ -43,8 +43,8 @@
            Find = 'if ($rivals.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "failed-readback-not-undone"
-           Find = 'if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone'
-           Replace = 'if ($false) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous; $undone' }
+           Find = 'if ($null -ne $previous) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous -Mtime'
+           Replace = 'if ($false) { Write-HordeStatusFileAtomic -Path $target -Bytes $previous -Mtime' }
         @{ Name = "readback-skipped-last-good-from-bad"
            Find = 'Write-HordeStatusFileAtomic -Path $target -Bytes $bytes'
            Replace = 'Write-HordeStatusFileAtomic -Path $target -Bytes ([System.Text.Encoding]::ASCII.GetBytes("junk"))' }
