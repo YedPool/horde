@@ -243,6 +243,12 @@ try {
   const pf = await evaluate(`(() => { const w = ${FIND_ROW(40)}; const f = Array.from(w.querySelectorAll('.hd-partfield')); return { n: f.length, v: f.map((x) => x.value), done: w.classList.contains('hd-done') }; })()`);
   check(pf.n === 2 && pf.v[0] === "Yes to a." && pf.v[1] === "Yes to b." && !pf.done, "a tap reopens every part's box with its own answer in it", JSON.stringify(pf));
   const said0 = (await evaluate("window.said")).length;
+  // PART a, UNCHANGED, IS NOT SENT AGAIN: its Send key says nothing to the host (it is already his answer).
+  const sendA = await evaluate(`(() => { const w = ${FIND_ROW(40)}; const s = w.querySelectorAll('.hd-send')[0]; s.scrollIntoView({ block: 'center' }); const r = s.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await touch(sendA.x, sendA.y);
+  await sleep(300); await settle();
+  const sentUnchanged = (await evaluate("window.said")).slice(said0);
+  check(sentUnchanged.length === 0, "Send on a part he did not change sends nothing: it is already his answer to that part", JSON.stringify(sentUnchanged));
   await evaluate(`(() => { const w = ${FIND_ROW(40)}; const f = w.querySelectorAll('.hd-partfield')[1]; f.scrollIntoView({ block: 'center' }); f.focus(); f.select(); return true; })()`);
   await type("No to b.");
   const sendB = await evaluate(`(() => { const w = ${FIND_ROW(40)}; const s = w.querySelectorAll('.hd-send')[1]; s.scrollIntoView({ block: 'center' }); const r = s.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);

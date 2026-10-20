@@ -177,6 +177,24 @@ Check ($null -eq $m[0].PSObject.Properties["changedFrom"] -and $null -eq $m[1].P
 $whole = Say $qP "Yes to both."
 $m = @(Messages-Of $qP)
 Check ($null -eq $m[4].PSObject.Properties["changedFrom"]) "an answer to the whole question is not a change of an answer to a part"
+# ROUND 8: ONLY HIS OWN ANSWERS ARE EARLIER ANSWERS OF HIS. The keeper's words and his acts (park) are stepped over
+# when the answer he replaces is looked for, and the keeper's words are never a change of anything of his.
+$qK = Add-Question "Orc C" "Should the keeper step go ahead?"
+Reply $qK "Which step do you mean?"
+Reply $qK "Take your time."
+$k1 = Say $qK "The first step."
+$m = @(Messages-Of $qK)
+Check ($m.Count -eq 3 -and $null -eq $m[1].PSObject.Properties["changedFrom"] -and $null -eq $m[2].PSObject.Properties["changedFrom"] -and @(Changes-Of $qK).Count -eq 0) "the keeper's words are no change of anything, and before his answer they are no earlier answer of his: his first answer is no change"
+Advance 1
+$k2 = Say $qK "The second step."
+$m = @(Messages-Of $qK)
+Check ([long](Get-HordeTestMember $m[3] "changedFrom") -eq $k1 -and (Get-HordeTestMember $m[3] "changedFromText") -ceq "The first step.") "and his second answer replaces his first, never the keeper's words before it"
+$kPark = Op "say" @{ id = (New-Id); actor = "founder"; number = $qK; speaker = "founder"; route = "window"; text = "Later."; wordingVersion = 1; act = "park" }
+$kUnpark = Op "say" @{ id = (New-Id); actor = "founder"; number = $qK; speaker = "founder"; route = "window"; text = "Now."; wordingVersion = 1; act = "unpark" }
+Advance 1
+$k3 = Say $qK "The third step."
+$m = @(Messages-Of $qK)
+Check ($kPark.value.outcome -ceq "done" -and $kUnpark.value.outcome -ceq "done" -and [long](Get-HordeTestMember $m[-1] "changedFrom") -eq $k2 -and (Get-HordeTestMember $m[-1] "changedFromText") -ceq "The second step." -and @(Changes-Of $qK).Count -eq 2) "his act (park, unpark) between two answers is no earlier answer of his: the third answer replaces the second"
 
 Write-Host ""
 Write-Host "--- accepted while the question is open, refused by name once it is closed ---" -ForegroundColor Cyan
@@ -246,7 +264,7 @@ Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*was ask
 $bad = Change-Reply $qR "C" $r1 "undoing"
 Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*which is not a changed answer of the founder under question*") ("a reply to a FIRST answer is refused: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "maybe"
-Check ($bad.state -ceq "known" -and $bad.value.outcome -ceq "refused") "a reply that is none of the three is refused"
+Check ($bad.state -ceq "known" -and $bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -ceq "request.reply is 'maybe', not one of: not-acted, undoing, cannot-undo") ("a reply that is none of the three is refused by the request's schema, naming the three: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "cannot-undo"
 Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*says why*") ("cannot-undo without why is refused: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "not-acted" -Why "because"

@@ -64,7 +64,9 @@
            Replace = '    if ($Speaker -cne $script:HordeDecisionFirstTurn -or -not $Asks) { return "" }' }
         @{ Name = "the-keepers-note-under-a-closed-question-is-refused-as-a-change"
            Find = '    if ($Speaker -cne $script:HordeDecisionFirstTurn -or $Act -ne "" -or -not $Asks) { return "" }'
-           Replace = '    if ($Act -ne "" -or -not $Asks) { return "" }' }
+           Replace = '    if ($Act -ne "" -or -not $Asks) { return "" }'
+           Expect = "survives"
+           Reason = "Defence in depth: the routes where words replace his answer (window, phone) admit only the founder as speaker (HordeDecisionRoutes), and the say request is refused for any other speaker before the refusal is asked; the keeper's routes (command, chat-recorded) fail the answer-route test on the next line. So no request reaches this rule with a keeper as speaker on an answer route; the check is the rule's own, for the day the route table changes alone." }
         @{ Name = "a-change-to-one-part-is-judged-against-the-whole-question"
            Find = '-and (Test-HordeDecisionMessageAuthorizes -Message $_) -and "$($_.part)" -ceq $Part })'
            Replace = '-and (Test-HordeDecisionMessageAuthorizes -Message $_) })' }
@@ -79,7 +81,9 @@
            Replace = '' }
         @{ Name = "the-closer-is-not-the-one-named"
            Find = '    if ($closer -ne "") { return $closer }'
-           Replace = '' }
+           Replace = ''
+           Expect = "survives"
+           Reason = "Equivalent: closedBy is written in one place only (Step-HordeDecisionAcked), as 'Orc ' plus the label of the Orc that asked - the ack is refused for any other Orc - so it always equals what the askedBy fallthrough returns (Orc <label>, the asker's shown). A close by the warchief writes no closedBy, and a closed question is never acked again, so closedBy and closedBySeat never both stand. The early return is a shortcut to the same words." }
         @{ Name = "the-view-says-nothing-of-who-acted"
            Find = '    if ("$($Question.state)" -cne "open") { $view["actedBy"] = (Get-HordeDecisionActedBy -Question $Question) }'
            Replace = '' }
@@ -98,7 +102,9 @@
            Replace = '$false)' }
         @{ Name = "a-reply-that-is-none-of-the-three-is-taken"
            Find = '    if (-not $script:HordeDecisionChangeReplies.Contains($reply)) {'
-           Replace = '    if ($false) {' }
+           Replace = '    if ($false) {'
+           Expect = "survives"
+           Reason = "Defence in depth: the change-reply request's schema lists the three replies as an enum and refuses any other with 'request.reply is ..., not one of: ...' before the rule runs (test-decisions-change checks that whole finding), so no request reaches this line with a fourth reply. The rule is the fold's own check for the day the schema and the table of replies part." }
         @{ Name = "the-reply-is-not-in-the-history"
            Find = '    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("answer change replied by Orc " + $by + ": " + $script:HordeDecisionChangeReplies[$reply].shown)'
            Replace = '' }
