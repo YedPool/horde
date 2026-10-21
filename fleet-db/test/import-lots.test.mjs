@@ -456,6 +456,7 @@ test('a tier that is not 1 or 2 refuses only its lot, whatever its type', () => 
     const rep = importFleet(db, { lots: r });
     assert.ok(lots(rep, 'tier is not 1 or 2'), JSON.stringify(tier));
     assert.deepEqual(rows(db, 'SELECT id FROM parking_lot').map((x) => x.id), [LOT_B], JSON.stringify(tier));
+    assert.deepEqual(findProblems(db), [], JSON.stringify(tier));
   }
 });
 
@@ -467,6 +468,7 @@ test('a wake member that is not in the lot, or twice in a wake, refuses the lot'
   writeLot(r, '20261016-091500', b);
   assert.ok(lots(importFleet(db, { lots: r }), 'not a member of the lot'));
   assert.equal(count(db, 'parking_lot'), 0);
+  assert.deepEqual(findProblems(db), []);
   const d = fresh().db;
   const r2 = root();
   const b2 = lotB();
@@ -474,6 +476,7 @@ test('a wake member that is not in the lot, or twice in a wake, refuses the lot'
   writeLot(r2, '20261016-091500', b2);
   assert.ok(lots(importFleet(d, { lots: r2 }), 'in the wake twice'));
   assert.equal(count(d, 'wake_member'), 0);
+  assert.deepEqual(findProblems(d), []);
 });
 
 test('a lot with no member is reported', () => {
@@ -483,6 +486,7 @@ test('a lot with no member is reported', () => {
   a.members = [];
   writeLot(r, '20261019-202000', a);
   assert.ok(lots(importFleet(db, { lots: r }), 'holds no member'));
+  assert.deepEqual(findProblems(db), []);
 });
 
 test('a lot, wake or wake member already there with other content is kept and reported', () => {
@@ -503,4 +507,41 @@ test('a lot, wake or wake member already there with other content is kept and re
   assert.ok(lots(rep, 'wake member already in fleet.db with other content'));
   assert.equal(one(db, 'SELECT reason FROM parking_lot').reason, 'hibernate tier 2');
   assert.equal(one(db, 'SELECT outcome FROM wake_member WHERE session_id = ?', S3).outcome, 'woken');
+  assert.equal(one(db, 'SELECT requested_at FROM wake').requested_at, Date.UTC(2026, 9, 16, 11, 0, 0), 'the wake time is kept');
+  assert.deepEqual(findProblems(db), []);
+});
+
+test('a member already there with another orc_id, tier or note is kept and reported', () => {
+  const { db } = fresh();
+  const r = root();
+  const dir = writeLot(r, '20261019-202000', lotA());
+  importFleet(db, { lots: r });
+  const a = lotA();
+  a.members[1].tier = 1;
+  a.members[1].note = 'elsewhere.md';
+  writeTable(path.join(dir, 'parking_lot_member.json'), 'parking_lot_member', a.members);
+  const rep = importFleet(db, { lots: r });
+  assert.ok(lots(rep, 'member already in fleet.db with another orc_id, tier or note'));
+  assert.deepEqual(one(db, 'SELECT tier, note FROM parking_lot_member WHERE session_id = ?', S2), { tier: 2, note: 'lanes/e/PARKED-E.md' });
+  assert.deepEqual(findProblems(db), []);
+});
+
+test('a wake id already there under another lot refuses the lot, and its report lines are dropped with it', () => {
+  const { db } = fresh();
+  const r = root();
+  writeLot(r, '20261016-091500', lotB());
+  importFleet(db, { lots: r });
+  const r2 = root();
+  const a = lotA();
+  // lot A claims the wake id that belongs to lot B, and has a lot whose content differs to make a mismatch line first.
+  a.lot.reason = 'free memory';
+  a.wakes = [{ wake: { id: WAKE_1, lot_id: LOT_A, requested_at: '2026-10-19T21:00:00Z' }, members: [{ wake_id: WAKE_1, session_id: S1, outcome: 'woken' }] }];
+  writeLot(r2, '20261019-202000', a);
+  const rep = importFleet(db, { lots: r2 });
+  assert.ok(lots(rep, 'already in fleet.db under another lot'));
+  assert.equal(count(db, 'parking_lot'), 1);
+  assert.equal(count(db, 'wake_member'), 2, 'nothing was added to the other lot\'s wake');
+  assert.equal(rep.tables.parking_lot.added, 0);
+  assert.ok(!lots(rep, 'stub row made'), 'the refused lot leaves no report line of its own');
+  assert.deepEqual(findProblems(db), []);
 });

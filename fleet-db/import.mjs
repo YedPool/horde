@@ -1358,11 +1358,16 @@ function importLot(c, lot) {
     const state = lotText(m, 'state', mw);
     lotTier(m, mw);
     if (!Object.hasOwn(MEMBER_RANK, state)) refuse(mw + ' ' + sid + ': state ' + String(state).slice(0, 20) + ' is not parked, woken or dropped');
-    const have = db.prepare('SELECT state FROM parking_lot_member WHERE lot_id = ? AND session_id = ?').get(lotId, sid);
+    const have = db.prepare('SELECT state, orc_id, tier, note FROM parking_lot_member WHERE lot_id = ? AND session_id = ?').get(lotId, sid);
+    const orc = lotOrc(c, lotText(m, 'orc_id', mw), hid);
+    const tier = lotTier(m, mw);
+    const note = lotText(m, 'note', mw);
+    if (have !== undefined && (have.orc_id !== orc || have.tier !== tier || have.note !== note)) {
+      rep.unlink('lots', 'member already in fleet.db with another orc_id, tier or note (kept as fleet.db has it)', sid);
+    }
     if (have === undefined) {
-      const orc = lotOrc(c, lotText(m, 'orc_id', mw), hid);
       db.prepare('INSERT INTO parking_lot_member (lot_id, session_id, orc_id, tier, state, note) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(lotId, sid, orc, lotTier(m, mw), state, lotText(m, 'note', mw));
+        .run(lotId, sid, orc, tier, state, note);
       rep.count('parking_lot_member', true);
     } else if (MEMBER_RANK[state] > MEMBER_RANK[have.state]) {
       db.prepare('UPDATE parking_lot_member SET state = ? WHERE lot_id = ? AND session_id = ?').run(state, lotId, sid);
@@ -1387,7 +1392,8 @@ function importLot(c, lot) {
     rep.count('wake', wr.changes === 1);
     if (wr.changes !== 1) {
       const was = db.prepare('SELECT lot_id, requested_at, requested_by_session_id FROM wake WHERE id = ?').get(wid);
-      if (was.lot_id !== lotId || was.requested_at !== at || was.requested_by_session_id !== by) rep.unlink('lots', 'wake already in fleet.db with other content (kept as fleet.db has it)', wid);
+      if (was.lot_id !== lotId) refuse(ww + ': the wake id is already in fleet.db under another lot');
+      if (was.requested_at !== at || was.requested_by_session_id !== by) rep.unlink('lots', 'wake already in fleet.db with other content (kept as fleet.db has it)', wid);
     }
     const wseen = new Set();
     for (const m of w.members) {

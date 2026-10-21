@@ -364,3 +364,11 @@ woken and dropped do not replace each other (a re-park is a new lot, never a mem
 further along than the database is kept as the database has it and reported ("member state in the file is not
 further along ..."). `parking_lot_member` therefore reports a third number, rows moved forward. A second import of
 unchanged files adds 0 to every table and moves 0, and `findProblems` is empty after.
+
+**What is kept and what is refused (review rounds 1 and 2).** A tier outside the integers 1 and 2 refuses its lot (the
+driver would otherwise throw outside the savepoint). A wake member must be a member of the lot and appear once per wake. A
+lot with zero members IS imported and reported ("lot holds no member"): `findProblems` does not flag it and K never writes
+one, so it is a sign of a damaged folder, not a reason to lose the lot row. A lot, wake, wake member or member already in
+fleet.db with other content (members: another orc_id, tier or note) is kept as it is and the difference reported; a wake id
+that already exists under another lot is not a difference but a clash, and refuses the whole lot. A lot's report lines
+(mismatches, stubs, unknown columns) are collected in a report of its own and added to the run's only if the lot commits.

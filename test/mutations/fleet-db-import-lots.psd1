@@ -92,5 +92,11 @@
         @{ Name = "lots-wake-member-mismatch-silent"
            Find = 'was.outcome !== lotText(m, ''outcome'', ww) ||'
            Replace = 'false ||' }
+        @{ Name = "lots-wake-under-another-lot-accepted"
+           Find = 'if (was.lot_id !== lotId) refuse('
+           Replace = 'if (false) refuse(' }
+        @{ Name = "lots-member-mismatch-silent"
+           Find = 'have.orc_id !== orc || have.tier !== tier || have.note !== note'
+           Replace = 'false' }
     )
 }
