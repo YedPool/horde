@@ -1,26 +1,32 @@
-# The repository's text guards on every pull request and on main: test-host-names and
-# test-mutation-specs (CONTRIBUTING 15 rule 9: they read the whole repository, so any pull request can
-# break them - on 2026-10-14 PRs 278, 279 and 288 each merged green on their own suites and left main red
-# on both), plus test-json-parse-allowlist and test-function-names, which are as cheap and as global.
+# The repository's repo-wide guards on every pull request and on main: every guard listed in
+# test\guards.txt, each in Windows PowerShell 5.1 AND in PowerShell 7 (CONTRIBUTING 15 rule 9: they read the
+# whole repository, so any pull request can break them - on 2026-10-14 PRs 278, 279 and 288 each merged
+# green on their own suites and left main red on both; on 2026-10-21 four merges skipped guards and one
+# turned main red).
+#
+# THE LIST IS test\guards.txt AND NOTHING IN THIS FILE: adding a guard is one line there. This workflow
+# only calls tools\CiGuards.ps1, which reads the list through core/GuardList.ps1, as `horde merge` does
+# (cli/Merge.ps1), so the command and CI cannot drift apart. Before T-0247 four guards were named here
+# and two in the command.
 #
 # IT NOTIFIES, IT NEVER BLOCKS (the fleet's standing rule: CI notifies, never blocks). Nothing makes this
 # check required: the repository has no branch protection and no ruleset (its plan refuses branch
 # protection, 403), so GitHub merges a pull request whatever this job says. A red guard turns this job red
-# - the PR shows a red check and its author is told - and that is all it does. horde merge runs the two
-# main guards itself, on the merge result, before it merges.
+# - the PR shows a red check and its author is told - and that is all it does. horde merge runs the same
+# list itself, on the merge result, before it merges.
 #
 # WHAT IS CHECKED: on a pull request, actions/checkout checks out refs/pull/<n>/merge - the PR merged with
 # the current base, the tree that would exist after the merge, not the branch alone (CONTRIBUTING 15
 # rule 2). fetch-depth 0 brings origin/main, which test-host-names compares the port lists with; without
 # it that comparison prints [SKIP].
 #
-# ONE JOB, THE GUARDS ONE AFTER ANOTHER, each allowed to fail so all four always report, then one verdict
-# step that turns the job red if any failed. One job and not four because Windows minutes are billed
-# double on a private repository. A newer push to the same PR cancels the PR's run in progress; a run on
-# main is never cancelled, so every merge to main gets its own verdict.
+# ONE JOB, ONE STEP, because Windows minutes are billed double on a private repository. The runner runs
+# every guard even when an earlier one is red, so one run reports them all, and exits 1 if any is not
+# green. A newer push to the same PR cancels the PR's run in progress; a run on main is never cancelled,
+# so every merge to main gets its own verdict.
 #
 # GREEN IS EXIT 0 AND THE CLOSING BANNER (CONTRIBUTING 15 rule 7: a suite with no closing banner was NOT
-# RUN). Each guard's output is kept in a log, and the verdict reads the last "==== ... ====" line of it.
+# RUN). The runner keeps each guard's output in a log and reads the last "==== ... ====" line of it.
 
 name: guards
 
@@ -39,9 +45,9 @@ concurrency:
 
 jobs:
   guards:
-    name: text guards
+    name: repo-wide guards
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       # actions/checkout v4.2.2, pinned by commit.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -50,60 +56,6 @@ jobs:
           # The guards need no token: nothing here pushes, so none is left in the checkout's git config.
           persist-credentials: false
 
-      - name: test-host-names
-        id: hostnames
-        continue-on-error: true
+      - name: guards (test/guards.txt, in 5.1 and 7)
         shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-host-names.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-host-names.log"); exit $LASTEXITCODE
-
-      - name: test-mutation-specs
-        id: specs
-        continue-on-error: true
-        shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-mutation-specs.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-mutation-specs.log"); exit $LASTEXITCODE
-
-      - name: test-json-parse-allowlist
-        id: jsonparse
-        continue-on-error: true
-        shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-json-parse-allowlist.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-json-parse-allowlist.log"); exit $LASTEXITCODE
-
-      - name: test-function-names
-        id: functionnames
-        continue-on-error: true
-        shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-function-names.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-function-names.log"); exit $LASTEXITCODE
-
-      - name: verdict
-        if: ${{ !cancelled() }}
-        shell: powershell
-        env:
-          HOSTNAMES: ${{ steps.hostnames.outcome }}
-          SPECS: ${{ steps.specs.outcome }}
-          JSONPARSE: ${{ steps.jsonparse.outcome }}
-          FUNCTIONNAMES: ${{ steps.functionnames.outcome }}
-        run: |
-          $rows = [ordered]@{
-            "test-host-names" = $env:HOSTNAMES
-            "test-mutation-specs" = $env:SPECS
-            "test-json-parse-allowlist" = $env:JSONPARSE
-            "test-function-names" = $env:FUNCTIONNAMES
-          }
-          $lines = @("| guard | step | closing banner |", "| --- | --- | --- |")
-          $red = @()
-          foreach ($k in @($rows.Keys)) {
-            $log = Join-Path $env:RUNNER_TEMP ($k + ".log")
-            $banner = "(none: NOT RUN)"
-            if (Test-Path -LiteralPath $log) {
-              $found = @(Get-Content -LiteralPath $log | Where-Object { $_ -match '^==== .+ ====\s*$' } | Select-Object -Last 1)
-              if ($found.Count -gt 0) { $banner = $found[0].Trim() }
-            }
-            $green = ($rows[$k] -eq "success" -and $banner -ne "(none: NOT RUN)" -and $banner -notmatch 'FAILURE')
-            if (-not $green) { $red += $k }
-            $lines += ("| " + $k + " | " + $rows[$k] + " | " + $banner.Replace("|", "/") + " |")
-          }
-          $lines += ""
-          $lines += "This check notifies and never blocks a merge. horde merge runs test-host-names and test-mutation-specs itself before it merges."
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
-          if ($red.Count -gt 0) { Write-Output ("::error::not green: " + ($red -join ", ")); exit 1 }
-          Write-Output "every guard is green"
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools\CiGuards.ps1 -LogFolder (Join-Path $env:RUNNER_TEMP "guards"); exit $LASTEXITCODE
