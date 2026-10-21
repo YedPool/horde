@@ -344,7 +344,7 @@ try {
     $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
     $lk = Invoke-Browser @{ cmd = "lock" }
-    Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
+    Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.published -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list - and its Orcs' published lists - and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), " + $lk.value.published + " published box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
 
     Write-Host ""
@@ -426,7 +426,7 @@ try {
     Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing openedshows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
-    Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
+    Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.published -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }

@@ -337,12 +337,11 @@ function render(h, rec) {
   $("notShown").textContent = notShown;
   if (!d.kinds) { d.kinds = true; bridge.request("kinds").then((k) => d.doc.setKinds(k)); }
   // THE PUBLISHED LISTS beside the questions: a question an item links carries the item's recommendation, and the
-  // item is drawn once, as that question (published-lists.js). A list that is not known draws none.
+  // item is drawn once, as that question (published-lists.js). A read that failed keeps the lists drawn, as it keeps the questions; the draw is the document's (onDraw).
   const known = rec && rec.state === "known" && rec.value;
-  d.value = known ? { published: rec.value.published, questions: rec.value.questions } : null;
+  if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
   const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published) } } : rec;
   const did = d.doc.setList(shown);
-  drawPublishedLists(h.id);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
   // next - the old snapshot, kept - cleared those words at once, so a 401 left old content with no sign.
   say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");
@@ -1227,7 +1226,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

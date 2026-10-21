@@ -7,12 +7,12 @@
     Suite  = "surfaces\pwa\test\test-pwa-browser.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "the-lists-are-never-drawn-on-a-list-that-arrives"
-           Find = '  drawPublishedLists(h.id);'
+        @{ Name = "a-lock-leaves-the-published-lists-on-the-page"
+           Find = 'docs[id].pub.remove(); '
            Replace = '' }
         @{ Name = "the-lists-are-not-kept-for-the-drawing"
-           Find = 'd.value = known ? { published: rec.value.published, questions: rec.value.questions } : null;'
-           Replace = 'd.value = null;' }
+           Find = 'if (known) d.value = { published: rec.value.published, questions: rec.value.questions };'
+           Replace = '' }
         @{ Name = "a-linked-question-keeps-its-own-recommendation"
            Find = 'questions: mergePublished(rec.value.questions, rec.value.published) } } : rec;'
            Replace = 'questions: rec.value.questions } } : rec;' }
