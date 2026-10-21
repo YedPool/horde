@@ -298,7 +298,8 @@ async function main() {
 
   const now = Date.now();
   const state = readState(sid);
-  if (now - state.lastCheckedAt < THROTTLE_MS) return 0;
+  // 0 <= age: a lastCheckedAt in the future (clock rollback, a corrupt file) must not silence the hook until then.
+  if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;
 
   const letter = dutyLetter(sid);
   if (letter === null) { writeState(sid, { ...state, lastCheckedAt: now }); return 0; }

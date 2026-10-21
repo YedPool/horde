@@ -10,8 +10,11 @@
            Find = 'if (input.stop_hook_active) return 0;'
            Replace = 'if (false) return 0;' }
         @{ Name = "throttle-removed"
-           Find = 'if (now - state.lastCheckedAt < THROTTLE_MS) return 0;'
+           Find = 'if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;'
            Replace = 'if (false) return 0;' }
+        @{ Name = "future-last-checked-throttles"
+           Find = 'if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;'
+           Replace = 'if (now - state.lastCheckedAt < THROTTLE_MS) return 0;' }
         @{ Name = "throttle-window-changed"
            Find = 'const THROTTLE_MS = 30 * 60 * 1000;'
            Replace = 'const THROTTLE_MS = 300 * 60 * 1000;' }

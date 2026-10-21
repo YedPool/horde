@@ -167,6 +167,16 @@ $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 5
 $r = Stop-Hook $s
 Check ((Test-Pass $r) -and -not (Ran)) "checked 5 minutes ago: exit 0, silent, nothing spawned (the throttle)"
 Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s -600
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Ran)) "a lastCheckedAt in the FUTURE (clock rollback) does not throttle: the check runs and blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+[System.IO.File]::WriteAllText((State-Path $s), '{"lastCheckedAt":9999999999999,"lastBlockedAt":0}', $utf8)
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Ran)) "a corrupt lastCheckedAt of 9999999999999 does not silence the hook"
+Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 31
 $r = Stop-Hook $s
 Check ($null -ne (Get-Block $r) -and (Ran)) "checked 31 minutes ago: the throttle is over, the check runs and blocks"
