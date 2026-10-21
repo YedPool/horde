@@ -60,6 +60,33 @@
         @{ Name = "timeout-never-fires"
            Find = '}, TIMEOUT_MS);'
            Replace = '}, 600000);' }
+        @{ Name = "home-not-passed-to-horde"
+           Find = '{ windowsHide: true, env: { ...process.env, HORDE_HOME: home }, stdio'
+           Replace = '{ windowsHide: true, stdio' }
+        @{ Name = "home-env-precedence-swapped"
+           Find = 'for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {'
+           Replace = 'for (const v of [process.env.HORDE_HOME, process.env.HORDE_TURN_DUTY_HORDE_HOME]) {' }
+        @{ Name = "home-config-ignored"
+           Find = 'const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));'
+           Replace = 'const cfg = null;' }
+        @{ Name = "home-config-relative-accepted"
+           Find = ' && isAbsolute(h.trim())) return h.trim();'
+           Replace = ') return h.trim();' }
+        @{ Name = "no-home-still-asks"
+           Find = 'if (home === null) {'
+           Replace = 'if (false) {' }
+        @{ Name = "retired-seat-checked"
+           Find = 'if (rec.retired === true || rec.retiredAt) return null;'
+           Replace = 'if (false) return null;' }
+        @{ Name = "reason-claims-never-published"
+           Find = '"no published decisions list was found for Orc " + letter'
+           Replace = '"your list was never published, Orc " + letter' }
+        @{ Name = "home-apostrophe-not-doubled"
+           Find = 'home.replace(/''/g, "''''")'
+           Replace = 'home' }
+        @{ Name = "tell-n-line-dropped"
+           Find = '    "if publish refuses because fleet.db has no row for your Orc, tell N",'
+           Replace = '' }
         @{ Name = "bom-not-stripped"
            Find = 'if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // PS 5.1 redirected stdin carries a BOM'
            Replace = '' }

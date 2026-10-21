@@ -24,15 +24,28 @@
 // every turn. Bad stdin, a state directory that cannot be written: log, exit 0. The hook must never stop a session
 // because the hook itself is broken.
 //
-// KNOWN LIMIT. `horde decisions published` cannot tell "this Orc has never published" from "this Orc has no orc
-// row in fleet.db": both read as no list, and both block (once per 30 minutes) with the publish instruction,
-// whose own refusal then names the missing row.
+// KNOWN LIMITS.
+//   - THROTTLE BY DESIGN: a check passes when the list is under 30 minutes old and the next check is 30 minutes
+//     later, so a list published 29 minutes before a check can be about 60 minutes old before the next check
+//     looks at it. The nudge is for lists that were forgotten, not a freshness guarantee.
+//   - `horde decisions published` answers {lists: []} for a list never published, an Orc with no orc row in
+//     fleet.db and a retired Orc alike. All three block (once per 30 minutes) with a reason that says only that
+//     no list was found in the last 30 minutes, and tells the session to tell N if publish itself refuses for
+//     want of a row. Follow-up: an `orcs` field in decisions-cli.mjs `published --json` (F's code).
 //
-// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
+// THE HORDE HOME. No session has HORDE_HOME, and the verb refuses without it, so the hook resolves it: env
+// HORDE_TURN_DUTY_HORDE_HOME, else HORDE_HOME, else <config dir>\config.json { "hordeHome": "<absolute path>" }
+// (written by the installer; the home moves when fleet.db moves). It is passed to horde as HORDE_HOME and printed in
+// the block text as a runnable PowerShell command. No home found: log, record the check, pass.
+//
+// RETIRED seats (registry rows with retired true) are skipped like a Warg.
+//// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
 // keeps for it. An Orc is role "orchestrator" with its lane letter as label. Any other role (a Warg) is left alone.
 //
 // ENVIRONMENT (the tests set these; production sets none):
 //   HORDE_TURN_DUTY_STATE_DIR   state folder           (default %USERPROFILE%\.horde\turn-duty)
+//   HORDE_TURN_DUTY_CONFIG_DIR  folder of config.json  (default %USERPROFILE%\.horde\turn-duty)
+//   HORDE_TURN_DUTY_HORDE_HOME  the Horde home, ahead of HORDE_HOME and config.json
 //   HORDE_TURN_DUTY_REGISTRY    registry sessions dir  (default %USERPROFILE%\Documents\Code\.wezfleet\registry\sessions)
 //   HORDE_TURN_DUTY_HORDE       the horde command      (default "horde", found on PATH)
 //   HORDE_TURN_DUTY_LOG         log file, full path    (default ...\.wezfleet\accuracy\turn-duty-hook.log)
@@ -42,7 +55,7 @@
 // NOT INSTALLED BY THIS FILE. The settings.json entry is in the pull request notes; a person installs it.
 
 import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
@@ -56,10 +69,26 @@ const LOG_FILE =
 const STATE_DIR = process.env.HORDE_TURN_DUTY_STATE_DIR || join(homedir(), ".horde", "turn-duty");
 const REGISTRY_DIR =
   process.env.HORDE_TURN_DUTY_REGISTRY || join(homedir(), "Documents", "Code", ".wezfleet", "registry", "sessions");
+const CONFIG_DIR = process.env.HORDE_TURN_DUTY_CONFIG_DIR || join(homedir(), ".horde", "turn-duty");
 const HORDE = process.env.HORDE_TURN_DUTY_HORDE || "horde";
 const TIMEOUT_MS = Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) > 0 ? Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) : 8000;
 
-const DECISIONS_REASON = "publish your decisions list with horde decisions publish -File <list.json> (empty list is valid)";
+// The block text. It says what was NOT FOUND, never "never published": `published` answers {lists: []} for a list
+// never published, an Orc with no orc row in fleet.db and a retired Orc alike, so the hook cannot tell them apart.
+// FOLLOW-UP (F's code): an `orcs` field in fleet-db/decisions-cli.mjs `published --json` naming the Orcs that have
+// a row, so this hook can tell "no list" from "no row" and fail open on the second.
+// The command is runnable as printed: PowerShell (Orc sessions run PowerShell), the home set for that one command,
+// since no session has HORDE_HOME of its own.
+function decisionsReason(letter, home) {
+  const quoted = "'" + home.replace(/'/g, "''") + "'";
+  return [
+    "no published decisions list was found for Orc " + letter + " in the last 30 minutes: publish yours with horde decisions publish -File <list.json> (empty list is valid)",
+    "run it in PowerShell as: $env:HORDE_HOME=" + quoted + "; horde decisions publish -File <list.json>",
+    DECISIONS_SHAPE,
+    "if publish refuses because fleet.db has no row for your Orc, tell N",
+  ].join("\n");
+}
+
 const DECISIONS_SHAPE =
   'list.json shape: {"items":[{"questionNumber":12,"text":"one line","recommendation":"optional","importance":"high|normal|low","blocks":"all|part|none"}]} (questionNumber, recommendation, importance, blocks may be left out)';
 
@@ -118,6 +147,7 @@ function writeState(sid, state) {
 function dutyLetter(sid) {
   const rec = readJsonFile(join(REGISTRY_DIR, sid + ".json"));
   if (!rec || typeof rec !== "object") return null; // not in the registry: not a fleet session
+  if (rec.retired === true || rec.retiredAt) return null; // a retired seat is no longer a session with a duty
   if (rec.role !== "orchestrator" && rec.role !== "master") return null; // a Warg (or anything else) has no list
   const label = typeof rec.label === "string" ? rec.label : "";
   if (!ORC_LETTER.test(label)) {
@@ -127,9 +157,23 @@ function dutyLetter(sid) {
   return label;
 }
 
+// ---- where is the Horde home? -----------------------------------------------------------------------------------
+// No session has HORDE_HOME, and `horde decisions published` refuses without it, so the hook finds it itself:
+// HORDE_TURN_DUTY_HORDE_HOME, else HORDE_HOME, else <config dir>\config.json { "hordeHome": "<absolute path>" }, which
+// the installer writes (the home moves when fleet.db does, so it is a file and not code). Null when none is usable.
+function resolveHome() {
+  for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {
+    if (typeof v === "string" && v.trim() !== "") return v.trim();
+  }
+  const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));
+  const h = cfg && typeof cfg === "object" ? cfg.hordeHome : undefined;
+  if (typeof h === "string" && h.trim() !== "" && isAbsolute(h.trim())) return h.trim();
+  return null;
+}
+
 // ---- running horde -------------------------------------------------------------------------------------------
 // Resolves { ok, out, why }. Never rejects. A .cmd is found and run through cmd.exe, as the shell would.
-function runHorde(args) {
+function runHorde(args, home) {
   return new Promise((resolveRun) => {
     let out = "";
     let err = "";
@@ -145,8 +189,8 @@ function runHorde(args) {
     }, TIMEOUT_MS);
     try {
       child = process.platform === "win32"
-        ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", HORDE, ...args], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
-        : spawn(HORDE, args, { stdio: ["ignore", "pipe", "pipe"] });
+        ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", HORDE, ...args], { windowsHide: true, env: { ...process.env, HORDE_HOME: home }, stdio: ["ignore", "pipe", "pipe"] })
+        : spawn(HORDE, args, { env: { ...process.env, HORDE_HOME: home }, stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) { return finish({ ok: false, out: "", why: "could not start horde: " + (e && e.message) }); }
     child.on("error", (e) => finish({ ok: false, out: "", why: "horde error: " + (e && e.code ? e.code : e && e.message) }));
     child.stdout.on("data", (d) => { out += d.toString("utf8"); });
@@ -160,8 +204,8 @@ function runHorde(args) {
 
 // The newest "publishedAt" of this Orc's list in `-Json` output { lists: [ { orc, publishedAt, ... } ] }.
 // Resolves { state: "ok" | "due" | "error", why }.
-async function listAgeCheck(args, letter, now) {
-  const r = await runHorde(args);
+async function listAgeCheck(args, letter, now, home) {
+  const r = await runHorde(args, home);
   if (!r.ok) return { state: "error", why: r.why };
   const jsonLine = r.out.split(/\r?\n/).filter((l) => l.trimStart().startsWith("{")).pop();
   let parsed;
@@ -174,20 +218,20 @@ async function listAgeCheck(args, letter, now) {
   return now - at < FRESH_MS ? { state: "ok", why: "" } : { state: "due", why: "last published more than 30 minutes ago" };
 }
 
-// THE CHECKS. Adding a duty is adding one entry: { name, enabled(), run(letter, now) -> {state, why}, reason }.
+// THE CHECKS. Adding a duty is adding one entry: { name, enabled(), run(letter, now, home) -> {state, why}, reason(letter, home) }.
 const CHECKS = [
   {
     name: "decisions",
     enabled: () => true,
-    run: (letter, now) => listAgeCheck(["decisions", "published", "-Orc", letter, "-Json"], letter, now),
-    reason: DECISIONS_REASON + "\n" + DECISIONS_SHAPE,
+    run: (letter, now, home) => listAgeCheck(["decisions", "published", "-Orc", letter, "-Json"], letter, now, home),
+    reason: decisionsReason,
   },
   {
     // DISABLED until N's numbered-task-list writer exists: it waits for that verb (TASKLIST_VERB above).
     name: "tasklist",
     enabled: () => TASKLIST_WRITER_EXISTS || process.env.HORDE_TURN_DUTY_TEST_TASKLIST === "1",
-    run: (letter, now) => listAgeCheck([...TASKLIST_VERB, "-Orc", letter, "-Json"], letter, now),
-    reason: TASKLIST_REASON,
+    run: (letter, now, home) => listAgeCheck([...TASKLIST_VERB, "-Orc", letter, "-Json"], letter, now, home),
+    reason: () => TASKLIST_REASON,
   },
 ];
 
@@ -206,14 +250,20 @@ async function main() {
   const letter = dutyLetter(sid);
   if (letter === null) { writeState(sid, { ...state, lastCheckedAt: now }); return 0; }
 
+  const home = resolveHome();
+  if (home === null) {
+    logLine("no Horde home found (HORDE_TURN_DUTY_HORDE_HOME, HORDE_HOME, config.json hordeHome); passing");
+    writeState(sid, { ...state, lastCheckedAt: now });
+    return 0;
+  }
   const active = CHECKS.filter((c) => c.enabled());
   const results = await Promise.all(active.map(async (c) => {
-    try { return await c.run(letter, now); } catch (e) { return { state: "error", why: "threw: " + (e && e.message) }; }
+    try { return await c.run(letter, now, home); } catch (e) { return { state: "error", why: "threw: " + (e && e.message) }; }
   }));
   const reasons = [];
   results.forEach((r, i) => {
     if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
-    else if (r.state === "due") reasons.push(active[i].reason);
+    else if (r.state === "due") reasons.push(active[i].reason(letter, home));
   });
 
   const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt };

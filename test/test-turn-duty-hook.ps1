@@ -29,15 +29,21 @@ $stateDir = Join-Path $work "state"
 $registry = Join-Path $work "registry"
 $marker = Join-Path $work "marker.txt"
 $log = Join-Path $work "hook.log"
+$homeMarker = Join-Path $work "home-marker.txt"
+$configDir = Join-Path $work "config"
 New-Item -ItemType Directory -Path $registry -Force | Out-Null
 
-$firstLine = "publish your decisions list with horde decisions publish -File <list.json> (empty list is valid)"
+$home1 = "C:\fleet-home\one"
+$home2 = "C:\fleet-home\two"
+$home3 = "C:\fleet-home\three"
+function First-Line { param([string]$Letter) return ("no published decisions list was found for Orc " + $Letter + " in the last 30 minutes: publish yours with horde decisions publish -File <list.json> (empty list is valid)") }
 
 # THE STAND-IN. TD_MODE answers `decisions published`, TD_TASK answers the (placeholder) task-list verb.
 $standinJs = @'
 import { appendFileSync } from "node:fs";
 const a = process.argv.slice(2);
 if (process.env.TD_MARKER) appendFileSync(process.env.TD_MARKER, a.join(" ") + "\n");
+if (process.env.TD_HOME_MARKER) appendFileSync(process.env.TD_HOME_MARKER, String(process.env.HORDE_HOME) + "\n");
 const mode = (a[0] === "decisions" ? process.env.TD_MODE : process.env.TD_TASK) || "never";
 const orc = a[a.indexOf("-Orc") + 1];
 const list = (who, minutes) => JSON.stringify({ lists: [{ orc: who, snapshot: "s1", publishedAt: new Date(Date.now() - minutes * 60000).toISOString(), count: 0, items: [] }] });
@@ -53,16 +59,20 @@ $standin = Join-Path $work "standin.cmd"
 [System.IO.File]::WriteAllText($standin, ("@`"" + $node.Source + "`" `"" + (Join-Path $work "standin.mjs") + "`" %*`r`n"), $utf8)
 
 function Text { param([string]$Path) return [System.IO.File]::ReadAllText($Path) }
-function Reset-Marks { foreach ($f in @($marker, $log)) { if ([System.IO.File]::Exists($f)) { [System.IO.File]::Delete($f) } } }
+function Reset-Marks { foreach ($f in @($marker, $log, $homeMarker)) { if ([System.IO.File]::Exists($f)) { [System.IO.File]::Delete($f) } } }
 function Ran { return [System.IO.File]::Exists($marker) }
+function Home-Seen { if (-not [System.IO.File]::Exists($homeMarker)) { return "" }; return (Text $homeMarker).Trim() }
+function Put-Config { param([string]$Json) New-Item -ItemType Directory -Path $configDir -Force | Out-Null; [System.IO.File]::WriteAllText((Join-Path $configDir "config.json"), $Json, $utf8) }
+function Clear-Config { if (Test-Path -LiteralPath $configDir) { Remove-Item -LiteralPath $configDir -Recurse -Force } }
 function Log-Lines { if (-not [System.IO.File]::Exists($log)) { return 0 }; return @((Text $log).TrimEnd("`n") -split "`n").Count }
 function State-Path { param([string]$Sid) return (Join-Path $stateDir ($Sid + ".json")) }
 function New-Sid { return [guid]::NewGuid().ToString() }
 function Put-Session {
     # A registry record, in the shape the real ones have (read from the live registry, read only).
-    param([string]$Sid, [string]$Role, [string]$Label, [string]$Parent = "")
+    param([string]$Sid, [string]$Role, [string]$Label, [string]$Parent = "", [switch]$Retired)
     $rec = [ordered]@{ role = $Role; label = $Label; owner = $(if ($Role -eq "master") { "" } else { $Label }) }
     if ($Parent -ne "") { $rec["parent"] = $Parent }
+    if ($Retired) { $rec["retired"] = $true; $rec["retiredAt"] = "2026-10-18T10:00:00.0000000Z" }
     [System.IO.File]::WriteAllText((Join-Path $registry ($Sid + ".json")), (ConvertTo-Json -InputObject $rec), $utf8)
 }
 function Put-State { param([string]$Sid, [int]$CheckedMinutesAgo) New-Item -ItemType Directory -Path $stateDir -Force | Out-Null; $ms = [long]([datetimeoffset]::UtcNow.AddMinutes(-$CheckedMinutesAgo).ToUnixTimeMilliseconds()); [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $ms + ',"lastBlockedAt":0}'), $utf8) }
@@ -85,10 +95,14 @@ function Invoke-Hook {
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_LOG"] = $log
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_TIMEOUT_MS"] = "4000"
     $psi.EnvironmentVariables["TD_MARKER"] = $marker
+    $psi.EnvironmentVariables["TD_HOME_MARKER"] = $homeMarker
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_CONFIG_DIR"] = $configDir
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_HORDE_HOME"] = $home1
+    if ($psi.EnvironmentVariables.ContainsKey("HORDE_HOME")) { [void]$psi.EnvironmentVariables.Remove("HORDE_HOME") }
     $psi.EnvironmentVariables["TD_MODE"] = "never"
     $psi.EnvironmentVariables["TD_TASK"] = "never"
     foreach ($k in @("HORDE_TURN_DUTY_TEST_TASKLIST")) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } }
-    foreach ($k in $Env.Keys) { $psi.EnvironmentVariables[$k] = $Env[$k] }
+    foreach ($k in $Env.Keys) { if ($null -eq $Env[$k]) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } } else { $psi.EnvironmentVariables[$k] = $Env[$k] } }
     $p = [System.Diagnostics.Process]::Start($psi)
     try {
         $bytes = $utf8.GetBytes($Stdin)
@@ -180,8 +194,11 @@ $st = Get-StateObj $s
 Check ($null -ne $b) "an Orc whose list is 45 minutes old is blocked"
 if ($null -ne $b) {
     $lines = @($b.reason -split "`n")
-    Check ($lines[0] -ceq $firstLine) "   the reason's first line is exactly: $firstLine"
-    Check ($lines.Count -eq 2 -and $lines[1] -like 'list.json shape: *"items"*"text"*') "   and one more line gives the file shape"
+    Check ($lines[0] -ceq (First-Line "K")) "   the reason's first line is exactly: no published decisions list was found for Orc K in the last 30 minutes: ..."
+    Check ($b.reason -cnotmatch '(?i)never') "   and it does not claim the list was never published (the verb cannot tell)"
+    Check ($lines.Count -eq 4 -and $lines[1] -ceq ("run it in PowerShell as: `$env:HORDE_HOME='" + $home1 + "'; horde decisions publish -File <list.json>")) "   the second line is the exact runnable command, with the home"
+    Check ($lines[2] -like 'list.json shape: *"items"*"text"*') "   the third line gives the file shape"
+    Check ($lines[3] -ceq "if publish refuses because fleet.db has no row for your Orc, tell N") "   the fourth line says who to tell when publish refuses for want of a row"
     Check (@($b.PSObject.Properties).Count -eq 2) "   the block holds a decision and a reason and nothing else"
 }
 Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -gt 0) "   lastCheckedAt AND lastBlockedAt are recorded"
@@ -205,7 +222,7 @@ $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
-foreach ($kv in @{ HORDE_TURN_DUTY_STATE_DIR = $stateDir; HORDE_TURN_DUTY_REGISTRY = $registry; HORDE_TURN_DUTY_HORDE = $standin; HORDE_TURN_DUTY_LOG = $log; HORDE_TURN_DUTY_TIMEOUT_MS = "4000"; TD_MARKER = $marker; TD_MODE = "never" }.GetEnumerator()) { $psi.EnvironmentVariables[$kv.Key] = $kv.Value }
+foreach ($kv in @{ HORDE_TURN_DUTY_STATE_DIR = $stateDir; HORDE_TURN_DUTY_REGISTRY = $registry; HORDE_TURN_DUTY_HORDE = $standin; HORDE_TURN_DUTY_LOG = $log; HORDE_TURN_DUTY_TIMEOUT_MS = "4000"; TD_MARKER = $marker; TD_MODE = "never"; HORDE_TURN_DUTY_HORDE_HOME = $home1; HORDE_TURN_DUTY_CONFIG_DIR = $configDir }.GetEnumerator()) { $psi.EnvironmentVariables[$kv.Key] = $kv.Value }
 $p = [System.Diagnostics.Process]::Start($psi)
 $errTask = $p.StandardError.ReadToEndAsync()
 $out = $p.StandardOutput.ReadToEnd()
@@ -214,6 +231,76 @@ $r = [pscustomobject]@{ code = $p.ExitCode; err = $errTask.Result; out = $out }
 $p.Dispose()
 Check ($null -ne (Get-Block $r)) "stdin that starts with a byte-order mark is read all the same"
 
+Write-Host ""
+Write-Host "--- a retired registry row is skipped like a Warg ---" -ForegroundColor Cyan
+Reset-Marks
+$sOld = New-Sid; Put-Session $sOld "orchestrator" "K" "parent-1" -Retired
+$sNew = New-Sid; Put-Session $sNew "orchestrator" "K" "parent-1"
+$r = Stop-Hook $sOld
+Check ((Test-Pass $r) -and -not (Ran)) "a retired row (retired true, retiredAt set) of lane K: exit 0, silent, nothing spawned"
+$r = Stop-Hook $sNew
+Check ($null -ne (Get-Block $r) -and (Ran)) "   while the live row of the same lane K beside it is still blocked"
+Reset-Marks
+$sOldT = New-Sid; Put-Session $sOldT "master" "M" -Retired
+$r = Stop-Hook $sOldT
+Check ((Test-Pass $r) -and -not (Ran)) "a retired Thrall row: left alone too"
+
+Write-Host ""
+Write-Host "--- the Horde home: where the hook finds it, and what it does without one ---" -ForegroundColor Cyan
+Clear-Config
+function New-OrcSession { $x = New-Sid; Put-Session $x "orchestrator" "K" "parent-1"; return $x }
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $home1 }
+Check ($null -ne (Get-Block $r) -and (Home-Seen) -ceq $home1) "HORDE_TURN_DUTY_HORDE_HOME alone: horde is run with HORDE_HOME set to it"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_HOME = $home2 }
+$b = Get-Block $r
+Check ($null -ne $b -and (Home-Seen) -ceq $home2) "HORDE_HOME alone: horde is run with it"
+Check ($null -ne $b -and $b.reason -like ("*HORDE_HOME='" + $home2 + "'; horde decisions publish*")) "   and the block text carries that home"
+Reset-Marks
+Put-Config ('{"hordeHome": "' + $home3.Replace("\", "\\") + '"}')
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null }
+$b = Get-Block $r
+Check ($null -ne $b -and (Home-Seen) -ceq $home3) "the config file alone (config.json, hordeHome): horde is run with it"
+Check ($null -ne $b -and $b.reason -like ("*HORDE_HOME='" + $home3 + "'; horde decisions publish*")) "   and the block text carries that home"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $home1; HORDE_HOME = $home2 }
+Check ((Home-Seen) -ceq $home1) "precedence: HORDE_TURN_DUTY_HORDE_HOME beats HORDE_HOME and the config file"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_HOME = $home2 }
+Check ((Home-Seen) -ceq $home2) "precedence: HORDE_HOME beats the config file"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_HOME = "" }
+Check ((Home-Seen) -ceq $home3) "an empty HORDE_HOME is no home: the config file is used"
+Clear-Config
+foreach ($c in @(
+        @{ n = "no home anywhere"; cfg = $null }
+        @{ n = "a config file that is not JSON"; cfg = "{not json" }
+        @{ n = "a config file with no hordeHome"; cfg = '{"other": 1}' }
+        @{ n = "a config file whose hordeHome is not an absolute path"; cfg = '{"hordeHome": "relative\\home"}' }
+    )) {
+    Clear-Config
+    if ($null -ne $c.cfg) { Put-Config $c.cfg }
+    Reset-Marks
+    $s = New-OrcSession
+    $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null }
+    $st = Get-StateObj $s
+    Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1) ("exit 0, silent, nothing spawned, one log line: " + $c.n)
+    Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -eq 0) ("   and the check is recorded: " + $c.n)
+}
+Clear-Config
+Reset-Marks
+$s = New-OrcSession
+$odd = "C:\fleet's home"
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $odd }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason -like ("*HORDE_HOME='C:\fleet''s home'; horde decisions publish*")) "a home with an apostrophe is quoted for PowerShell (the apostrophe doubled)"
 Write-Host ""
 Write-Host "--- the state is written BEFORE the block ---" -ForegroundColor Cyan
 Reset-Marks
@@ -261,12 +348,12 @@ Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "never"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
 $b = Get-Block $r
-Check ($null -ne $b -and $b.reason -match 'numbered task list' -and $b.reason -cnotmatch 'publish your decisions list') "check ON, only the task list due: a block with the task-list reason alone"
+Check ($null -ne $b -and $b.reason -match 'numbered task list' -and $b.reason -cnotmatch 'no published decisions list was found') "check ON, only the task list due: a block with the task-list reason alone"
 Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "age:50"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
 $b = Get-Block $r
-Check ($null -ne $b -and $b.reason -match 'publish your decisions list' -and $b.reason -match 'numbered task list') "both due: one block holding both reasons"
+Check ($null -ne $b -and $b.reason -match 'no published decisions list was found' -and $b.reason -match 'numbered task list') "both due: one block holding both reasons"
 Reset-Marks
 $r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "age:50"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
 Check ((Test-Pass $r) -and -not (Ran)) "   and the stop right after passes"
@@ -274,7 +361,7 @@ Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "dbmissing"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
 $b = Get-Block $r
-Check ($null -ne $b -and $b.reason -match 'publish your decisions list' -and $b.reason -cnotmatch 'numbered task list' -and (Log-Lines) -eq 1) "one check cannot tell (logged), the other is due: the block holds only the due one"
+Check ($null -ne $b -and $b.reason -match 'no published decisions list was found' -and $b.reason -cnotmatch 'numbered task list' -and (Log-Lines) -eq 1) "one check cannot tell (logged), the other is due: the block holds only the due one"
 Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "age:2"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
