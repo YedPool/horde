@@ -1005,7 +1005,7 @@ function Get-HordeDecisionsChannelPublished {
     $problem = ""
     try {
         if ($null -ne $script:HordeDecisionsChannelPublishedReader) { $r = & $script:HordeDecisionsChannelPublishedReader $homeDir }
-        else { $r = Invoke-HordeDecisionNode -NodeArgs @("published", "--json") -HordeHome $homeDir }
+        else { $r = Invoke-HordeDecisionNode -NodeArgs @("published", "--json") -FleetHome $homeDir }
         if ([int]$r.code -ne 0) { $problem = "the published lists could not be read: " + "$($r.err)" }
         else {
             $parsed = ConvertFrom-HordeJson "$($r.out)"
