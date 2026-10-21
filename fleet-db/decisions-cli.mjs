@@ -88,6 +88,8 @@ export function readPublished(db, letter = null) {
   return lives.filter((l) => letter === null || l.letter === letter).map((l) => ({
     orc: l.letter, snapshot: l.id, publishedAt: new Date(l.published_at).toISOString(), confirmedAt: new Date(l.confirmed_at).toISOString(), count: l.item_count,
     items: lines.all(l.id).map((r) => ({ position: r.position, questionNumber: r.question_number, text: r.text, recommendation: r.recommendation, importance: r.importance, blocks: r.blocks })),
+    // The Orc's rank (thrall or orc), last so every earlier field keeps its place: the phone names the Thrall's lane by it.
+    rank: l.rank,
   }));
 }
 

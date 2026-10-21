@@ -405,6 +405,13 @@ const commands = {
   async waitText(c) {
     if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
     const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // EACH ORC'S PUBLISHED LIST (published-lists.js): the words the published-lists box of the horde shown holds, waited for
+  // until c.text is in them. { found, text, listed }: listed is what the question list shows beside them.
+  async waitPublished(c) {
+    const box = "(document.querySelector('#lists .published-lists:not([hidden])') || { innerText: '' }).innerText";
+    const found = await until(box + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
+    return { found: !!found, text: await evaluate(box), listed: await evaluate(listed) };
+  },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);

@@ -959,6 +959,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (v) for (const q of v.questions) pageKeyByNumber[q.question.number] = q.pageKey;
       return {
         snapshot: v ? v.snapshot : "", seq: v ? v.seq : -1, questions: v ? v.questions.map((q) => q.question) : [], pageKeyByNumber,
+        published: v ? v.published : null,
         withheld: v ? v.withheld : [], notShown: v ? P.withheldWords(v.withheld) : "", counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
         anomalies, stale, mode: s.mode, relayDown: said.length > 0, diagnostics: said.concat(diagnostics.splice(0))
       };

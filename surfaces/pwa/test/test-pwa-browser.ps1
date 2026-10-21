@@ -238,12 +238,38 @@ try {
     Check ($p2.ok -and $p2.value -eq 1) ("and that announcement was one passkey prompt (" + $(if ($p2.ok) { $p2.value } else { $p2.reason }) + ")")
     $box = Invoke-Browser @{ cmd = "announceBox" }
     Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet") -and $box.value.buttons -eq 0) ("until the machine answers, the horde's own view says so, and offers no button (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
+    # EACH ORC'S PUBLISHED LIST (T-0328): fleet.db in the machine's home holds the Thrall's list of three - one
+    # linking question 1, the question the store holds - and Orc F's empty one; Orc G never published. The run
+    # below reads them from the file (read only) and seals them into the snapshot with the question.
+    $seedJs = Join-Path $root "test\fixtures\phone-published-seed.mjs"
+    $pubFile = Join-Path $work "thrall-items.json"
+    [System.IO.File]::WriteAllText($pubFile, '[{"text":"Sales queue: forward the contract page?","recommendation":"yes, today","importance":"high","blocks":"part"},{"questionNumber":1,"text":"Closing sound: play it?","recommendation":"play it, short","importance":"normal","blocks":"none"},{"text":"Notifications on fleet.db?","importance":"low"}]', $utf8)
+    $emptyFile = Join-Path $work "f-items.json"
+    [System.IO.File]::WriteAllText($emptyFile, '[]', $utf8)
+    & $node.Source $seedJs seed $hh
+    $seeded = ($LASTEXITCODE -eq 0)
+    if ($seeded) { & $node.Source $seedJs publish $hh thrall $pubFile; $seeded = ($LASTEXITCODE -eq 0) }
+    if ($seeded) { & $node.Source $seedJs publish $hh F $emptyFile; $seeded = ($LASTEXITCODE -eq 0) }
+    Check $seeded "CONTROL: fleet.db in the machine's home holds the Thrall's published list of three (one linking question 1) and Orc F's empty one"
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the app's key and sends the snapshot (exit " + $run.code + ")")
     $seen = Invoke-Browser @{ cmd = "waitText"; text = $title }
     Check ($seen.ok -and $seen.value.found) "the question appears in the app, drawn by list.js, without a reload"
     $box = Invoke-Browser @{ cmd = "announceBox" }
     Check ($box.ok -and -not $box.value.shown) "and once it has, the offer to announce goes"
+    # The founder's gap: the questions were on his phone and the Orcs' published lists were not.
+    $pl = Invoke-Browser @{ cmd = "waitPublished"; text = "Sales queue: forward the contract page?" }
+    $plText = $(if ($pl.ok) { $pl.value.text } else { "" })
+    Check ($pl.ok -and $pl.value.found -and $plText.Contains("Thrall: published list") -and $plText.Contains("Recommended: yes, today") -and $plText.Contains("importance high - blocks part of the work") -and $plText.Contains("Notifications on fleet.db?")) ("EACH ORC'S PUBLISHED LIST is on the phone beside the questions: the Thrall's items with their recommendation, importance and blocking (" + ($plText -replace "\s+", " ") + ")")
+    Check ($plText -match 'Published .+ - checked ') "and its published time and the time it was checked"
+    Check ($plText.Contains("Orc F published an empty list: nothing waits on you from here.")) "AN ORC WITH AN EMPTY LIST: the phone says so in plain words"
+    Check (-not $plText.Contains("Orc G") -and -not $plText.Contains("Closing sound: play it?")) "an Orc that never published is not drawn as a list, and the item that links question 1 is not drawn twice"
+    Check ($pl.ok -and $pl.value.listed.Contains($title) -and $pl.value.listed.Contains("play it, short")) "and that question, shown once, carries the published item's recommendation"
+    [System.IO.File]::WriteAllText($pubFile, '[{"text":"Sales queue: forward the contract page, v3?","recommendation":"yes, today","importance":"high","blocks":"part"},{"questionNumber":1,"text":"Closing sound: play it?","recommendation":"play it, short","importance":"normal","blocks":"none"}]', $utf8)
+    & $node.Source $seedJs publish $hh thrall $pubFile
+    $run = Invoke-Run -Turns 1
+    $pl2 = Invoke-Browser @{ cmd = "waitPublished"; text = "contract page, v3?" }
+    Check ($run.code -eq 0 -and $pl2.ok -and $pl2.value.found -and -not $pl2.value.text.Contains("Notifications on fleet.db?")) ("a list published again reaches the phone without a reload, and the item it dropped is gone (exit " + $run.code + ")")
     $shot1 = Save-Shot "phone-list"
 
     Write-Host ""

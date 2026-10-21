@@ -133,11 +133,16 @@ function Invoke-HordeDecisionNode {
     # Run fleet-db/decisions-cli.mjs with -NodeArgs; { code; out; err }. Node is checked first, in one sentence, as
     # cli/commands/db.ps1 checks it, and HORDE_HOME must be named: fleet.db is the fleet's one database and is
     # never made in a default folder. The streams are read through the process API (CONTRIBUTING 12).
-    param([Parameter(Mandatory = $true)][string[]]$NodeArgs)
-    if ("$env:HORDE_HOME".Trim() -eq "") { throw "horde decisions publish needs HORDE_HOME set to the Horde home: fleet.db is the fleet's one database and is never made in a default folder" }
+    # -HordeHome: a caller that holds its own home (the relay's decisions channel, which reads the lists for the
+    # phone) names it and the environment is not asked; the command line leaves it out, as before.
+    param([Parameter(Mandatory = $true)][string[]]$NodeArgs, [string]$HordeHome = "")
     $root = Split-Path -Parent $PSScriptRoot
-    . (Join-Path $root "core\Home.ps1")
-    $hordeHome = Get-HordeHome
+    $hordeHome = $HordeHome
+    if ($hordeHome.Trim() -eq "") {
+        if ("$env:HORDE_HOME".Trim() -eq "") { throw "horde decisions publish needs HORDE_HOME set to the Horde home: fleet.db is the fleet's one database and is never made in a default folder" }
+        . (Join-Path $root "core\Home.ps1")
+        $hordeHome = Get-HordeHome
+    }
     $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $node) { throw "fleet.db needs Node.js 24 or later, and node is not installed or not on this machine's PATH" }
     $major = 0

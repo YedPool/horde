@@ -160,7 +160,7 @@ export function createBridge(phone, options = {}) {
     if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };
     // notShown: the one line for what the snapshot on screen leaves out, "" for nothing (phone-core.js).
     // It is a member the document does not read (list.js): the page shows it above the list (app.js).
-    return { state: "known", reason: "", value: { outcome: "done", questions: withAnswers(view.questions, answers), notShown: typeof view.notShown === "string" ? view.notShown : "", counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
+    return { state: "known", reason: "", value: { outcome: "done", questions: withAnswers(view.questions, answers), notShown: typeof view.notShown === "string" ? view.notShown : "", published: Array.isArray(view.published) ? view.published : null, counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
   }
   async function chatRecord() {
     if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
