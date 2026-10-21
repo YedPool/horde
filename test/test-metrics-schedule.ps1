@@ -172,8 +172,11 @@ try {
         Check ($ok -and $calls.Count -eq 1) "a marker home that no longer exists is replaced"
         $calls.Clear()
         [System.IO.File]::WriteAllText((Join-Path $bootJob.hordeHome "fleet.db"), "x")
-                $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask $bootJob.hordeHome) } -Register $keep } catch { $ok = $false }
+        $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask $bootJob.hordeHome) } -Register $keep } catch { $ok = $false }
         Check ($ok -and $calls.Count -eq 1) "CONTROL: the same home (even with a fleet.db) is replaced: a plain reinstall"
+        $calls.Clear()
+        $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask ($bootJob.hordeHome.ToUpperInvariant() + "\")) } -Register $keep } catch { $ok = $false }
+        Check ($ok -and $calls.Count -eq 1) "CONTROL: the same home spelled in upper case with a trailing separator is still the same home"
         $notMine = [pscustomobject]@{ Author = "Someone"; Description = "their own task"; Principal = [pscustomobject]@{ LogonType = "S4U" } }
         $calls.Clear()
         Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $notMine } -Register $keep } "was not made by Horde") "CONTROL: a task Horde did not make is still left alone"
