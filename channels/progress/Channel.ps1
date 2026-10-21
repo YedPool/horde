@@ -83,20 +83,8 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Secrets.ps1")
 
 $script:HordeProgressChannelFolder = $PSScriptRoot
-$script:HordeProgressChannelSettings = New-HordeModuleSettings -Module "relay-progress" -Settings @(
-    @{ name = "progressFile"; kind = "folder"; default = ""; what = "The progress changelog to follow, as an absolute path; empty means progress\changelog.jsonl under Horde's home." },
-    # 200 entries is several working days of a fleet that writes a few tens a day: what a phone just
-    # paired needs to pick up the thread, in two or three envelopes.
-    @{ name = "backfillEntries"; kind = "whole"; default = 200; min = 0; max = 5000; what = "How many of the newest entries a phone key newly trusted, or the first look ever, is sent." },
-    # 16,384 is the floor: an entry at its largest (a title of 100 and a text of 2,000 characters, every
-    # one a six-byte escape) is about 13,000 bytes, so a page always holds at least one.
-    @{ name = "pageBytes"; kind = "whole"; default = 262144; min = 16384; max = 1048576; what = "The largest body of one envelope of entries, in bytes; a longer batch is sent as more envelopes." },
-    @{ name = "readBytes"; kind = "whole"; default = 1048576; min = 131072; max = 33554432; what = "The most bytes of the changelog read in one look." },
-    @{ name = "sendIntervalMs"; kind = "whole"; default = 2000; min = 0; max = 600000; what = "The shortest time between two sends of entries, in milliseconds: lines written meanwhile go together." },
-    # 100: the header, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes. 1,000 is the ceiling because the
-    # hosted relay's mailbox holds 2,000 envelopes for every channel of every machine of the horde.
-    @{ name = "keepEnvelopes"; kind = "whole"; default = 100; min = 1; max = 1000; what = "How many of this machine's newest progress envelopes stay in the phone's mailbox; older ones are deleted from the relay, so this is how far back the log goes on the phone." }
-)
+# The settings and the file they name are channels/progress/Settings.ps1 (it says why).
+. (Join-Path $PSScriptRoot "Settings.ps1")
 $script:HordeProgressChannelKinds = @("decision", "result", "merged", "blocked", "waiting", "started", "progress", "done", "note")
 $script:HordeProgressChannelNoticeCodes = @("file-replaced", "following", "lines-skipped")
 # An id: printable ASCII with no space, quote or backslash, so it is written into JSON as it stands.
@@ -112,8 +100,6 @@ $script:HordeProgressChannelIdsKept = 5000
 # The most left-out lines one turn names one by one; the rest are counted.
 $script:HordeProgressChannelSaidLines = 50
 
-function Get-HordeProgressChannelSettingsDeclaration { return $script:HordeProgressChannelSettings }
-
 function Get-HordeProgressChannelHome {
     param($Context)
     if ("$($Context.hordeHome)" -ne "") { return $Context.hordeHome }
@@ -125,13 +111,6 @@ function Get-HordeProgressChannelSettings {
     $s = Get-HordeModuleSettings -Declaration $script:HordeProgressChannelSettings -HordeHome (Get-HordeProgressChannelHome $Context)
     if ($s.state -ceq "refused") { return (New-HordeUnknown -Reason (@($s.findings) -join " ")) }
     return (New-HordeKnown -Value $s.values)
-}
-
-function Get-HordeProgressChannelFilePath {
-    # The changelog this home follows (WHICH FILE, in the header).
-    param([Parameter(Mandatory = $true)][string]$HordeHome, [AllowEmptyString()][string]$Setting = "")
-    if ($Setting -cne "") { return $Setting }
-    return [System.IO.Path]::Combine($HordeHome, "progress", "changelog.jsonl")
 }
 
 function Get-HordeProgressChannelStatePath {

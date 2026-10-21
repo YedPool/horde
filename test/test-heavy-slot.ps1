@@ -247,6 +247,18 @@ try {
     $amp = Start-ArgsGate -Tag "argsfile-amp" -Pass @("-ArgsFile", $file) -Suite "suite-text.ps1"
     Check ($amp.ExitCode -eq 126 -and (Get-GateText "argsfile-amp") -match "cmd's line cannot carry") ("an argument holding & is refused with 126, saying why (" + $amp.ExitCode + ")")
     Check (-not (Test-Path -LiteralPath $alog) -and -not (Test-Path -LiteralPath $marker)) "and neither the run nor a second command started"
+    # A LINE BREAK ends cmd's line where it stands, so the -Log after it would never reach the run:
+    # refused, in words, nothing run (review of PR 316). The JSON escape \n puts a real line break in.
+    [System.IO.File]::WriteAllText($file, ('["-Text", "one\ntwo", "-Log", "' + ($alog -replace '\\', '\\') + '"]'))
+    $nl = Start-ArgsGate -Tag "argsfile-newline" -Pass @("-ArgsFile", $file) -Suite "suite-text.ps1"
+    Check ($nl.ExitCode -eq 126 -and (Get-GateText "argsfile-newline") -match "control character" -and -not (Test-Path -LiteralPath $alog)) ("an argument holding a line break is refused with 126, saying why, and nothing runs (" + $nl.ExitCode + ")")
+    # A MISSING FILE is said to be missing, not bad JSON: a typo in the path must read as one.
+    $nx = Start-ArgsGate -Tag "argsfile-missing" -Pass @("-ArgsFile", (Join-Path $work "no-such-args.json"))
+    Check ($nx.ExitCode -eq 126 -and (Get-GateText "argsfile-missing") -match "cannot be read") ("a missing -ArgsFile is refused with 126 as one that cannot be read (" + $nx.ExitCode + ")")
+    # NOT AN ARRAY: one bare JSON string would pass as a one-argument list; the header says an array.
+    [System.IO.File]::WriteAllText($file, '"-Suite"')
+    $ns = Start-ArgsGate -Tag "argsfile-bare" -Pass @("-ArgsFile", $file)
+    Check ($ns.ExitCode -eq 126 -and (Get-GateText "argsfile-bare") -match "not a JSON array") ("an -ArgsFile holding one bare string, not an array, is refused with 126 (" + $ns.ExitCode + ")")
 
     Write-Host ""
     Write-Host "--- a run past its time is ended with what it started ---" -ForegroundColor Cyan

@@ -41,7 +41,8 @@
         "id": {"$ref": "#/definitions/id"},
         "actor": {"$ref": "#/definitions/actor"},
         "number": {"$ref": "#/definitions/number"},
-        "outcome": {"type": "string", "description": "What was done, in plain words."}
+        "outcome": {"type": "string", "description": "What was done, in plain words."},
+        "callerSeat": {"type": "string", "enum": ["warchief"], "description": "Set only by the command line after it proved the calling session holds the warchief's seat; a close over a change its Orc never replied to is taken only with it."}
       }
     },
     "reopen": {
@@ -66,6 +67,54 @@
         "number": {"$ref": "#/definitions/number"},
         "importance": {"type": "string", "enum": ["high", "normal", "low"]},
         "blocks": {"type": "string", "enum": ["all", "part", "none"]}
+      }
+    },
+    "route": {
+      "type": "object",
+      "description": "Record that one answer of the founder's was sent to the seat of whoever asked, or that the seat was reminded once (decisions/Route.ps1 makes this request after the messenger took the notice). Refused for a record that is not his answer under the question, and for an answer already routed for the same purpose.",
+      "required": ["id", "actor", "number", "answer", "purpose", "seat", "resolved", "notice"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the founder's answer."},
+        "purpose": {"type": "string", "enum": ["answer", "nudge", "closed"]},
+        "seat": {"type": "string", "enum": ["orc", "warchief"]},
+        "label": {"type": "string", "pattern": "^([A-Z]{1,2}([1-9][0-9]{0,3})?)?$"},
+        "sessionId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "resolved": {"type": "boolean"},
+        "notice": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "note": {"type": "string", "description": "One line, or left out."},
+        "analyst": {"type": "string", "description": "One line, or left out."}
+      }
+    },
+    "ack": {
+      "type": "object",
+      "description": "The Orc that asked a question acknowledges the founder's answer, and the question is closed with it as the closer. The caller proves which Orc it is (decisions/Console.ps1, from the session's own fleet label); the rules hold that Orc to the question's askedBy. Left without an answer, the one that stands now is the one acknowledged.",
+      "required": ["id", "actor", "number", "by"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The acknowledging Orc's lane letter."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the answer the Orc was sent: the routed notice names it. Left out, the answer that stands now."}
+      }
+    },
+    "change-reply": {
+      "type": "object",
+      "description": "The Orc that asked a question says what became of its work when the founder changed his answer: reply is not-acted (using the new answer), undoing, or cannot-undo (with why). The caller proves which Orc it is (decisions/Console.ps1); the rules hold that Orc to the question's askedBy and the answer to a changed answer of the founder's.",
+      "required": ["id", "actor", "number", "by", "answer", "reply"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "by": {"type": "string", "pattern": "^[A-Z]$", "description": "The replying Orc's lane letter."},
+        "answer": {"type": "integer", "minimum": 1, "description": "The sequence number of the changed answer the Orc was sent: the routed notice names it."},
+        "reply": {"type": "string", "enum": ["not-acted", "undoing", "cannot-undo"]},
+        "why": {"type": "string", "description": "One line, only with cannot-undo: why the work cannot be undone."}
       }
     },
     "list": {

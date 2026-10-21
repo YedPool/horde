@@ -122,7 +122,7 @@ $script:HordeWezfleetWakerDetailChars = 120
 # that), and form C.
 # The budget a nudge is given, in one place: the table below and the function that resets it both read it.
 $script:HordeWezfleetWakerNudgeBudget = 60
-$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = $script:HordeWezfleetWakerNudgeBudget }
+$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = $script:HordeWezfleetWakerNudgeBudget; exit = 120 }
 # RULE 3, the wait after each consecutive failure of a read.
 $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
 # How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
@@ -154,9 +154,9 @@ function Set-HordeWezfleetWakerRoot {
 
 function Set-HordeWezfleetWakerDeadlines {
     # For tests: the deadlines of rule 4, in seconds, so a case that waits one out waits a second or two.
-    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = $script:HordeWezfleetWakerNudgeBudget)
-    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeBudgetSeconds -lt 1) { throw "a deadline is at least 1 s" }
-    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudgeBudget = $NudgeBudgetSeconds }
+    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = $script:HordeWezfleetWakerNudgeBudget, [int]$ExitSeconds = 120)
+    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeBudgetSeconds -lt 1 -or $ExitSeconds -lt 1) { throw "a deadline is at least 1 s" }
+    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudgeBudget = $NudgeBudgetSeconds; exit = $ExitSeconds }
 }
 
 function Set-HordeWezfleetWakerSnapshotFault {
@@ -889,6 +889,38 @@ function Send-HordeWezfleetWakerNudge {
     return (New-HordeKnown -Value ([pscustomobject]$answer) -ObservedAt $at)
 }
 
+# THE PORT'S EXIT (hibernation, fleet/Hibernate.ps1): the fleet's own checked path for a slash command,
+#   box slash <id> /exit -Expect exit -Reason "<why>"
+# read from the fleet's code (lib\Box.ps1 and commands\box.ps1, 2026-10-16). It refuses unless the
+# caller is the master or an orchestrator (identified by the session id in its environment, which this
+# waker's child inherits), and refuses the caller's own box and the master's box to an orchestrator.
+# It reads the box and types nothing unless the box is empty and the session idle; it types the name,
+# reads what the session's own menu says the command does, and submits only if that says "exit" as a
+# whole word, else removes what it typed. Every action is on the fleet's audit record first. Its exits:
+# 0 submitted; 6 typed and NOT removed (left-behind); 1, 3, 4, 5 and 7 nothing submitted and nothing left
+# (refused). It prints text, not JSON, so its first line is the reason. NEVER kill-pane, never Escape:
+# a session asked to exit and still running is looked at again, never sent the command a second time.
+# THE DEADLINE, 120 s (the deadlines table, exit): the verb waits for the menu (a few seconds), settles
+# and submits; killing it is for a process that hung, and a kill is answered killed - the box may hold
+# the typed command.
+
+function Send-HordeWezfleetWakerExit {
+    # The port's Exit (above). -Reason goes on the fleet's audit record beside the action.
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$Reason)
+    $at = Get-HordeWezfleetWakerTime
+    $run = Start-HordeWezfleetWakerProcess -Argv @("box", "slash", $Id, "/exit", "-Expect", "exit", "-Reason", $Reason) -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.exit
+    $cut = $run.PSObject.Properties["stopped"]
+    if ($run.timedOut -or ($null -ne $cut -and $cut.Value -eq $true)) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed"; reason = ("box slash was stopped part-way, so its box may hold the typed command: " + $run.reason); at = $at }) -ObservedAt $at) }
+    if (-not $run.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "refused"; reason = ("the fleet's command did not run, so nothing was typed: " + $run.reason); at = $at }) -ObservedAt $at) }
+    $said = ConvertTo-HordeWezfleetWakerLine ("" + $run.stdout + "`n" + $run.stderr) -Max $script:HordeWezfleetWakerDetailChars -Tool
+    $code = [int]$run.exit
+    if ($code -eq 0) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "submitted"; reason = $said; at = $at }) -ObservedAt $at) }
+    if ($code -eq 6) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "left-behind"; reason = ("box slash exit 6: " + $said); at = $at }) -ObservedAt $at) }
+    if (@(1, 3, 4, 5, 7) -contains $code) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "refused"; reason = ("box slash exit " + $code + ": " + $(if ($said -ne "") { $said } else { "no words" })); at = $at }) -ObservedAt $at) }
+    # An exit code the verb does not document: what it did to the box is not known.
+    return (New-HordeUnknown -Reason ("box slash answered exit " + $code + ", which it does not document, so whether the command was typed is not known: " + $said) -ObservedAt $at)
+}
+
 $null = Register-HordeWaker -Name "wezfleet" `
     -Targets { Get-HordeWezfleetWakerTargets } `
     -State { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id } `
@@ -896,4 +928,5 @@ $null = Register-HordeWaker -Name "wezfleet" `
     -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
     -Source { Get-HordeWezfleetWakerSource } `
     -Reserved { Get-HordeWezfleetWakerReservedLabels } `
-    -Begin { Clear-HordeWezfleetWakerPass }
+    -Begin { Clear-HordeWezfleetWakerPass } `
+    -Exit { param([string]$Id, [string]$Reason) Send-HordeWezfleetWakerExit -Id $Id -Reason $Reason }

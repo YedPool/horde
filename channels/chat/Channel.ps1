@@ -135,6 +135,8 @@
 foreach ($chatAdapterFile in @(Get-HordeConversationAdapterFiles)) {
     if (@(Get-HordeConversationAdapterNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatAdapterFile))) { . $chatAdapterFile }
 }
+. (Join-Path $PSScriptRoot "Photo.ps1")
+. (Join-Path $PSScriptRoot "Pointer.ps1")
 foreach ($chatMessengerFile in @(Get-HordeMessengerFiles)) {
     if (@(Get-HordeMessengerNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatMessengerFile))) { . $chatMessengerFile }
 }
@@ -156,7 +158,16 @@ $script:HordeChatChannelSettings = New-HordeModuleSettings -Module "relay-chat" 
     @{ name = "ttlSeconds"; kind = "whole"; default = 86400; min = 60; max = 604800; what = "How long a line may wait in the Thrall's mailbox, in seconds." },
     @{ name = "clearTries"; kind = "whole"; default = 60; min = 1; max = 100000; what = "How many turns in a row a session cleared from under the cursor is asked for again, while it cannot be read, before its unread tail is left." },
     @{ name = "linesPerMinute"; kind = "whole"; default = 20; min = 1; max = 600; what = "The most of the founder's lines posted to the Thrall in any 60 seconds; one past it waits." },
-    @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the founder's lines are from: F, unless the person who sends them wears another." }
+    @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the founder's lines are from: F, unless the person who sends them wears another." },
+    # PHOTOS (channels/chat/Photo.ps1). 2 MiB is the coordinator's cap (2026-10-14); the phone makes about 1 MB.
+    @{ name = "photoMaxBytes"; kind = "whole"; default = 2097152; min = 65536; max = 2097152; what = "The largest photo the founder may send from the phone, in bytes, after the phone shrinks it." },
+    @{ name = "photoWindowSeconds"; kind = "whole"; default = 3600; min = 60; max = 3600; what = "How long after the phone signs a photo its parts may come, in seconds; a photo not whole by then is dropped." },
+    @{ name = "photosPerMinute"; kind = "whole"; default = 3; min = 1; max = 30; what = "The most photos taken from the phone in any 60 seconds; one past it waits." },
+    # 100 a day: the founder asked for generous budgets (2026-10-14). At 2 MiB a photo is 44 parts and its
+    # manifest, so 100 are at most about 8,800 relay requests a day, inside the account's 20,000.
+    @{ name = "photosPerDay"; kind = "whole"; default = 100; min = 1; max = 1000; what = "The most photos taken from the phone in any 24 hours; one past it is refused." },
+    @{ name = "photoKeepDays"; kind = "whole"; default = 30; min = 1; max = 3650; what = "How many days a photo stays in the photo inbox before it is deleted." },
+    @{ name = "photoInbox"; kind = "folder"; default = ""; what = "The folder photos from the phone are saved in, as an absolute path; empty means inbox\photos under Horde's home." }
 )
 $script:HordeChatChannelLineMembers = @("v", "messageId", "horde", "machine", "session", "text")
 $script:HordeChatChannelIdDomain = "horde-relay/chat/v1 line id"
@@ -321,13 +332,20 @@ function Get-HordeChatChannelLineMark {
 
 function Select-HordeChatChannelShown {
     # The turns the phone is shown, of those read (A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN):
-    # user, assistant and system as they are; a delivered turn as the founder's line when it is one this
+    # user, assistant and system as they are (a wezfleet pointer or relay line as a marker, no words); a delivered turn as the founder's line when it is one this
     # machine posted, word for word; any other delivered turn not at all.
     param([object[]]$Turns, [string[]]$Lines)
     $byId = @{}
     foreach ($l in @($Lines)) { $p = $l.Split([char]':'); $byId[$p[0]] = [pscustomobject]@{ length = [int]$p[1]; mark = $l } }
     $out = New-Object System.Collections.ArrayList
     foreach ($t in @($Turns)) {
+        # A WEZFLEET POINTER OR RELAY LINE IS A MARKER: its time, none of its words (channels/chat/Pointer.ps1).
+        if (($t.role -ceq "user" -or $t.role -ceq "delivered") -and (Test-HordeChatPointerLine -Text ([string]$t.text))) {
+            $mk = [ordered]@{ role = "marker"; text = ""; turnId = $t.turnId; source = $t.source }
+            if ($null -ne $t.PSObject.Properties["time"]) { $mk["time"] = $t.time }
+            [void]$out.Add([pscustomobject]$mk)
+            continue
+        }
         if ($t.role -cne "delivered") { [void]$out.Add($t); continue }
         $text = [string]$t.text
         $at = $text.IndexOf("FOUNDER LINE from the phone (line ", [System.StringComparison]::Ordinal)
@@ -403,8 +421,11 @@ function ConvertTo-HordeChatChannelEntries {
 function New-HordeChatChannelPages {
     # The bodies of one batch of turns: as many as it needs, each within -Budget bytes. One body even
     # with no turn: the session is announced.
-    param($Context, [string]$Session, [bool]$Backfill, [object[]]$Turns, [long]$Budget)
-    $front = '{"v":1,"kind":"chat-turns","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"backfill":' + $(if ($Backfill) { "true" } else { "false" }) + ',"turns":['
+    param($Context, [string]$Session, [bool]$Backfill, [object[]]$Turns, [long]$Budget, [long]$PhotoBytes = 0, [long]$PhotoWindowMs = 0)
+    # photoBytes: this machine takes photos up to that many bytes (Photo.ps1). A phone offers its picture
+    # button only to a machine that says so; a phone older than the member reads past it.
+    # photoWindowMs: the longest window a photo may name (photoWindowSeconds): the phone asks for no more.
+    $front = '{"v":1,"kind":"chat-turns","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"backfill":' + $(if ($Backfill) { "true" } else { "false" }) + $(if ($PhotoBytes -gt 0) { ',"photoBytes":' + $PhotoBytes + $(if ($PhotoWindowMs -gt 0) { ',"photoWindowMs":' + $PhotoWindowMs } else { '' }) } else { '' }) + ',"turns":['
     $back = ']}'
     $room = $Budget - $front.Length - $back.Length
     $pages = New-Object System.Collections.ArrayList
@@ -498,6 +519,22 @@ function Get-HordeChatChannelPhones {
 }
 
 function Invoke-HordeChatChannelTick {
+    # OUT: the Thrall's turns (Invoke-HordeChatChannelTurnsTick), then the photos from the phone that are
+    # whole, waiting or out of time (Photo.ps1, Invoke-HordeChatPhotoTick). { lines; failed }.
+    param($Context)
+    $t = Invoke-HordeChatChannelTurnsTick -Context $Context
+    $m = Get-HordeChatChannelMemory -Context $Context
+    if (-not $m.ok) { return $t }
+    $set = Get-HordeChatChannelSettings -Context $Context
+    if ($set.state -cne "known") { return $t }
+    $photo = @()
+    try { $photo = @(Invoke-HordeChatPhotoTick -Context $Context -Mine $m.mine -Settings $set.value) }
+    catch { $photo = @("photos failed: " + $_.Exception.Message) }
+    if ($photo.Count -eq 0) { return $t }
+    return [pscustomobject]@{ lines = @(@($t.lines) + $photo); failed = [bool]$t.failed }
+}
+
+function Invoke-HordeChatChannelTurnsTick {
     # OUT, in the header: { lines; failed }.
     param($Context)
     $m = Get-HordeChatChannelMemory -Context $Context
@@ -596,7 +633,7 @@ function Invoke-HordeChatChannelTick {
     $count = 0
     foreach ($b in $batches) {
         $budget = [long][System.Math]::Min([double]$set.pageBytes, [double](Get-HordeRelayChannelBodyBudget -Context $Context -Recipients @($b.phones).Count))
-        $bodies = New-HordeChatChannelPages -Context $Context -Session $source.session -Backfill $b.backfill -Turns @($b.turns) -Budget $budget
+        $bodies = New-HordeChatChannelPages -Context $Context -Session $source.session -Backfill $b.backfill -Turns @($b.turns) -Budget $budget -PhotoBytes $(if ((Get-HordeChatPhotoRuntimeRefusal) -ceq "") { [long]$set.photoMaxBytes } else { [long]0 }) -PhotoWindowMs ([long]$set.photoWindowSeconds * 1000)
         $saved = Save-HordeChatChannelBodies -Context $Context -Kind "turns" -Bodies $bodies -Phones @($b.phones)
         foreach ($k in $saved.keys) { [void]$keys.Add($k) }
         if (-not $saved.ok) {
@@ -722,8 +759,10 @@ function Send-HordeChatChannelReceipt {
 }
 
 function Invoke-HordeChatChannelAccept {
-    # One opened line, to the Thrall (IN, in the header). { outcome; reason }.
+    # One opened line, to the Thrall (IN, in the header), or one photo's manifest (Photo.ps1). { outcome;
+    # reason }.
     param($Context, $Item)
+    if ("$($Item.kind)" -ceq "photo") { return (Invoke-HordeChatPhotoAccept -Context $Context -Item $Item) }
     $r = Read-HordeChatChannelLine -Body $Item.body
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = $r.reason } }
     $line = $r.value
@@ -795,7 +834,11 @@ function Invoke-HordeChatChannelAccept {
     }
 }
 
-$null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name "chat" -Kinds @("line") -Senders "founder" `
+$null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name "chat" -Kinds @("line", "photo") -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeChatChannelAccept -Context $Context -Item $Item) } `
     -Tick { param($Context) return (Invoke-HordeChatChannelTick -Context $Context) } `
     -Glance { param($Context) return (Test-HordeChatChannelGlance -Context $Context) }
+# A PHOTO'S PARTS are a data kind (channels/Port.ps1, DATA KINDS): unsigned, never an envelope, handed to
+# Photo.ps1's sink alone, which can make them nothing but bytes vouched for by a signed manifest.
+$null = Register-HordeRelayDataKind -Folder $script:HordeChatChannelFolder -Name "photo-part" -Channel "chat" `
+    -Take { param($Context, $Text) return (Receive-HordeChatPhotoPart -Context $Context -Text $Text) }

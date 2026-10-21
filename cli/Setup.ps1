@@ -244,6 +244,35 @@ function Get-HordeSetupStepCode {
             return (New-HordeSetupResult $true ("Windows " + $p.windowsMajor + " (build " + $p.windowsBuild + "), Windows PowerShell " + $p.version))
         }
         fix = $null }
+    $code["store-updates-off"] = [pscustomobject]@{ deferred = $true
+        check = {
+            param($Ctx)
+            $d = Get-HordeSetupStorePolicyDecision -Policy (& $Ctx.probes.storePolicy) -Elevated ([bool](& $Ctx.probes.elevated))
+            return (New-HordeSetupResult $d.done $d.said @() $d.next)
+        }
+        fix = {
+            param($Ctx)
+            # NEVER SILENT AND NEVER ELEVATES BY ITSELF: not elevated, nothing is tried and the check's
+            # one sentence says what an elevated run will set.
+            if (-not (& $Ctx.probes.elevated)) { return $null }
+            try { & $Ctx.probes.setStorePolicy } catch { return (New-HordeSetupResult $false ("setting the Store policy failed: " + $_.Exception.Message)) }
+            return (New-HordeSetupResult $true "set the Store policy AutoDownload to 2: Store automatic updates are off")
+        } }
+    $code["powershell-msi"] = [pscustomobject]@{ deferred = $true
+        check = {
+            param($Ctx)
+            $d = Get-HordeSetupPowerShellDecision -Resolved (& $Ctx.probes.pwshResolved) -MsiPath (Get-HordeSetupMsiPwshPath) -MsiVersion (& $Ctx.probes.msiVersion) -Elevated ([bool](& $Ctx.probes.elevated))
+            return (New-HordeSetupResult $d.done $d.said $d.notes $d.next)
+        }
+        fix = {
+            param($Ctx)
+            # Installing into Program Files needs an elevated run; never elevates by itself. The Store
+            # copy is never uninstalled here (it would close every pwsh.exe running from it).
+            if (-not (& $Ctx.probes.elevated)) { return $null }
+            $r = & $Ctx.probes.installMsi (Get-HordeSetupMsiPwshPath)
+            if (-not $r.ok) { return (New-HordeSetupResult $false ("installing the PowerShell 7 MSI failed: " + $r.reason)) }
+            return (New-HordeSetupResult $true ("installed PowerShell " + $r.version + " from the MSI at " + (Get-HordeSetupMsiPwshPath)))
+        } }
     $code["home"] = [pscustomobject]@{
         check = { param($Ctx) $(if ([System.IO.Directory]::Exists($Ctx.home)) { New-HordeSetupResult $true $Ctx.home } else { New-HordeSetupResult $false ("there is no folder " + $Ctx.home) }) }
         fix = { param($Ctx) [void][System.IO.Directory]::CreateDirectory($Ctx.home); New-HordeSetupResult $true ($Ctx.home + " (made just now)") } }
@@ -458,6 +487,15 @@ function Get-HordeSetupReport {
     if ($man.state -cne "known") { throw $man.reason }
     $code = Get-HordeSetupStepCode
     $p = Get-HordeSetupDefaultProbes
+    $storeProbes = Get-HordeSetupStoreDefaultProbes
+    foreach ($k in @($storeProbes.Keys)) { $p[$k] = $storeProbes[$k] }
+    # The pretend machine (cli/SetupStore.ps1): the report names it (first line, and the fakeMachine field of -Json), so a run on it is never taken for a real one.
+    $fakeMachine = "" + $env:HORDE_SETUP_FAKE_MACHINE
+    if ($fakeMachine -ne "") {
+        if (-not [System.IO.File]::Exists($fakeMachine)) { throw ("HORDE_SETUP_FAKE_MACHINE names no file: " + $fakeMachine) }
+        $fakeProbes = Get-HordeSetupFakeStoreProbes -Path $fakeMachine
+        foreach ($k in @($fakeProbes.Keys)) { $p[$k] = $fakeProbes[$k] }
+    }
     foreach ($k in @($Probes.Keys)) { $p[$k] = $Probes[$k] }
     $lines = New-Object System.Collections.ArrayList
     $machine = "" + $env:COMPUTERNAME
@@ -465,7 +503,42 @@ function Get-HordeSetupReport {
     $ctx = [pscustomobject]@{ home = $HordeHome; root = $Root; relay = ""; origin = ""; beforeDeploy = ""; horde = $Horde; machine = $machine
         label = $(if ($Label -ne "") { $Label } else { "Phone" }); probes = $p; state = @{}; elevated = (Get-HordeSetupElevatedCommand -Root $Root -HordeHome $HordeHome)
         say = $Say; inputFile = $InputFile; openPicture = $OpenPicture }
-    $finish = { [pscustomobject]@{ home = $HordeHome; relay = $ctx.relay; origin = $ctx.origin; manifestVersion = $man.value.manifestVersion; steps = @($lines.ToArray()); next = $(if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].state -ceq "todo") { $lines[$lines.Count - 1].next } else { "" }) } }
+    # ONE STEP, CHECKED AND FIXED: its report line (state done, fixed or todo). A fix is believed only
+    # when the check then passes: "fixed" is never a guess.
+    $evalStep = {
+        param($step, $c)
+        $r = & $c.check $ctx
+        if ($r.done) { return (New-HordeSetupLine $step.id $step.title "done" $r.said "" $r.notes) }
+        if ($null -ne $c.fix -and -not $Check -and @($NoFix) -cnotcontains $step.id) {
+            $f = & $c.fix $ctx
+            if ($null -ne $f -and $f.done) {
+                $again = & $c.check $ctx
+                if ($again.done) { return (New-HordeSetupLine $step.id $step.title "fixed" $f.said "" $again.notes) }
+                $r = New-HordeSetupResult $false ($f.said + "; and yet: " + $again.said) $again.notes $again.next
+            } elseif ($null -ne $f) { $r = New-HordeSetupResult $false ($r.said + "; setup tried: " + $f.said) $r.notes $r.next }
+        }
+        $next = $(if ($r.next -ne "") { $r.next } else { Expand-HordeSetupText -Text $step.manual -Ctx $ctx })
+        return (New-HordeSetupLine $step.id $step.title "todo" $r.said $next $r.notes)
+    }
+    # THE DEFERRED STEPS (the Store and PowerShell 7, which need one elevated run) never stop the walk:
+    # every other step is checked and fixed first, and these are looked at last, whether the walk
+    # finished or stopped at a step of its own, so an outstanding one is always in the summary. Not when
+    # the machine failed its requirements: nothing else is looked at then.
+    $deferredDone = @{ ran = $false }
+    $finish = {
+        if (-not $deferredDone.ran) {
+            $deferredDone.ran = $true
+            $unsupported = ($lines.Count -gt 0 -and $lines[0].id -ceq "requirements" -and $lines[0].state -ceq "todo")
+            if (-not $unsupported) {
+                foreach ($ds in @($man.value.steps)) {
+                    $dc = $code[$ds.id]
+                    if ($null -ne $dc.PSObject.Properties["deferred"] -and $dc.deferred) { [void]$lines.Add((& $evalStep $ds $dc)) }
+                }
+            }
+        }
+        $outstanding = @($lines.ToArray() | Where-Object { $_.state -ceq "todo" })
+        [pscustomobject]@{ home = $HordeHome; relay = $ctx.relay; origin = $ctx.origin; manifestVersion = $man.value.manifestVersion; fakeMachine = $fakeMachine; steps = @($lines.ToArray()); next = (@($outstanding | ForEach-Object { $_.next } | Select-Object -Unique) -join " ; ") }
+    }
     $rs = $null
     foreach ($step in @($man.value.steps)) {
         if ($step.path -ceq "operator" -and -not $Operator) { continue }
@@ -484,6 +557,7 @@ function Get-HordeSetupReport {
             $ctx.beforeDeploy = "" + $rs.value.beforeDeploy
         }
         $c = $code[$step.id]
+        if ($null -ne $c.PSObject.Properties["deferred"] -and $c.deferred) { continue }
         if ($null -ne $c.PSObject.Properties["expand"]) {
             foreach ($s in @($rs.value.steps)) {
                 [void]$lines.Add((New-HordeSetupLine ($step.id + ":" + $s.name) $s.name $(if ($s.done) { "done" } else { "todo" }) $s.said $s.next @($s.notes)))
@@ -491,20 +565,9 @@ function Get-HordeSetupReport {
             }
             continue
         }
-        $r = & $c.check $ctx
-        if ($r.done) { [void]$lines.Add((New-HordeSetupLine $step.id $step.title "done" $r.said "" $r.notes)); continue }
-        if ($null -ne $c.fix -and -not $Check -and @($NoFix) -cnotcontains $step.id) {
-            $f = & $c.fix $ctx
-            if ($null -ne $f -and $f.done) {
-                # A fix is believed only when the check then passes: "fixed" is never a guess.
-                $again = & $c.check $ctx
-                if ($again.done) { [void]$lines.Add((New-HordeSetupLine $step.id $step.title "fixed" $f.said "" $again.notes)); continue }
-                $r = New-HordeSetupResult $false ($f.said + "; and yet: " + $again.said) $again.notes $again.next
-            } elseif ($null -ne $f) { $r = New-HordeSetupResult $false ($r.said + "; setup tried: " + $f.said) $r.notes $r.next }
-        }
-        $next = $(if ($r.next -ne "") { $r.next } else { Expand-HordeSetupText -Text $step.manual -Ctx $ctx })
-        [void]$lines.Add((New-HordeSetupLine $step.id $step.title "todo" $r.said $next $r.notes))
-        return (& $finish)
+        $line = & $evalStep $step $c
+        [void]$lines.Add($line)
+        if ($line.state -ceq "todo") { return (& $finish) }
     }
     return (& $finish)
 }
@@ -514,6 +577,7 @@ function Format-HordeSetupReport {
     # thing to do, or that every step is done.
     param([Parameter(Mandatory = $true)]$Report)
     $out = New-Object System.Collections.ArrayList
+    if ("" + $Report.fakeMachine -ne "") { [void]$out.Add("horde setup: using the pretend machine in " + $Report.fakeMachine + " (HORDE_SETUP_FAKE_MACHINE); nothing real is read or changed for the Store and PowerShell 7 steps") }
     [void]$out.Add("horde setup: the first run of Horde on this machine, step by step")
     foreach ($s in @($Report.steps)) {
         [void]$out.Add("  " + $(switch -CaseSensitive ($s.state) { "done" { "done  " } "fixed" { "fixed " } default { "TO DO " } }) + $s.title + ": " + $s.said)

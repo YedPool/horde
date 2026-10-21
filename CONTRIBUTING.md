@@ -301,16 +301,28 @@ its branch can break main when main moved under it").
    edited config, schema or data file that is not itself a target; a guard inserted above a mutant
    whose own line did not change; and a suite edited to catch less. The review of its pull request
    (#63) probed the first three, and each time the affected mutants were skipped and the run
-   exited 0. It proves only the mutants on touched lines and never stands in for the full specs:
-   **a pull request may not merge on `-Changed` results alone.**
-2. **The full suite and the full mutation specs run once per pull request**, on its final head, and
-   on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
-   on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
-   the merged tree is green. Why once and not never: first, `-Changed` is blind to every change
-   that is not on a mutant's own line (rule 1), and only the full specs see those. Second, a spec
-   on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
+   exited 0. It proves only the mutants on touched lines and never stands in for the
+   changed-target specs: **a pull request may not merge on `-Changed` results alone.**
+2. **The full suite and the changed-target mutation specs run once per pull request**, on its
+   final head, and on the **merge result** with current `main` (`git merge-tree`, or a throwaway
+   merge commit) - not on the branch alone. The changed-target specs are every spec whose
+   `Target`, `Suite` or spec file the pull request changes, so a suite edited to catch less reruns
+   its specs. "Mergeable" on GitHub means the text merges; it says nothing about whether the merged
+   tree is green. Why whole specs run at all, and not only `-Changed`: first, `-Changed` is blind
+   to every change that is not on a mutant's own line (rule 1): whole specs see those on their own
+   targets, and the nightly sweep sees the rest. Second, a spec on `main` can break without anyone
+   running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
+
+   **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
+   It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
+   request's gate held that slot for over an hour and a half, and about ten runs from other
+   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets and
+   suites; the nightly sweep covers what they cannot see, an edited helper or config that is no
+   spec's target, and a spec broken on `main`, within a day. Until the nightly run is live, the
+   sweep is run by hand once a night.
+   A pull request body names the specs it ran and says the full sweep is left to the nightly run.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
@@ -330,8 +342,8 @@ its branch can break main when main moved under it").
 6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
    A few times a day the ready pull requests are merged together:
    - build the combined tree: `main` plus every ready pull request, in order;
-   - run the touched suites, the full suite once, and the full mutation specs once for the pull
-     requests in the batch, on that tree;
+   - run the touched suites, the full suite once, and the changed-target mutation specs once for
+     the pull requests in the batch, on that tree;
    - merge in order, with merge commits only (rule 4).
 
    The combined tree is the true merge result, so this run is the once-per-pull-request run of
@@ -356,3 +368,22 @@ its branch can break main when main moved under it").
    targeted set**, and run on the final head, in a clean tree, before every merge, by any Orc. They
    are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
    278, 279 and 288 each merged green on their own suites and left `main` red on both.
+
+## 16. Horde never depends on a Microsoft Store package
+
+Horde does not run, launch or require anything installed as a Microsoft Store (MSIX/AppX) package:
+not PowerShell 7, not Node, not Python, not a terminal. Use the vendor's MSI or installer and start
+it by its full path (`C:\Program Files\PowerShell\7\pwsh.exe`, never whatever `pwsh` the search path
+finds first), and keep the Store's automatic updates off.
+
+Why (2026-10-16, 13:58): the Store auto-updated PowerShell 7 (`Microsoft.PowerShell`, running from
+`C:\Program Files\WindowsApps\...`). An update closes every running process of the package, so every
+`pwsh.exe` was closed at once, and because the terminal's panes ran `pwsh`, every fleet session died
+with it. A Store package also cannot be pinned to a version, and its alias can hide the MSI copy.
+
+`horde setup` holds this rule in two steps of `setup/steps.json`: `store-updates-off` (the policy
+`HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore` `AutoDownload` = 2; setting it needs an elevated run
+and setup says so rather than do it silently) and `powershell-msi` (installs the MSI by the hash the
+winget source publishes when `pwsh` is missing or is the Store copy). Setup never uninstalls the Store
+copy, because removing it closes the `pwsh.exe` running from it: remove it by hand when no session
+runs on it. `test\test-setup-store.ps1` and `test\e2e\e2e-setup-store.ps1` hold both steps.

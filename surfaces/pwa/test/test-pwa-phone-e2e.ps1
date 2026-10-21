@@ -25,6 +25,9 @@
 #   8. the chat: the Thrall's last turns (a synthetic fleet, test/lib/ChatFleet.ps1) reach the app; a
 #      recovery session cannot write; the founder's line, sent through the bridge and signed by the
 #      passkey, is posted to the Thrall once, and the receipt shows in the app's own words;
+#  8b. a photo: one manifest signed by the passkey and its parts, through the bridge; the real run writes
+#      it whole to the inbox under its own name and posts one line naming it; the app shows it delivered;
+#      a PDF is refused on the phone;
 #  10. an answer the relay loses (the founder's decisions/16, 2026-10-14): the app shows it answered and
 #      sent; the run reports its seq missing; the app sends it again in a new envelope; it lands once
 #      and the app says applied.
@@ -258,6 +261,29 @@ try {
     $chat = Invoke-App @{ cmd = "chat"; id = $hid }
     $lines = @(); if ($chat.ok) { $lines = @($chat.value.items | Where-Object { $_.kind -ceq "line" }) }
     Check ($lines.Count -eq 1 -and $lines[0].text -ceq "Ship the third one." -and $lines[0].status -ceq "accepted" -and $lines[0].words.StartsWith("Sent")) ("the app shows his line once, with the receipt in its own words (" + $(if ($lines.Count) { $lines[0].words } else { "none" }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 8b. a photo: one passkey tap, its parts through the relay, whole in the PC's inbox, one line to the Thrall ---" -ForegroundColor Cyan
+    $offer = Invoke-App @{ cmd = "chat"; id = $hid }
+    Check ($offer.ok -and [long]$offer.value.photoBytes -eq 2097152) ("the run's turns tell the app this PC takes photos, up to 2 MiB (" + $(if ($offer.ok) { $offer.value.photoBytes } else { $offer.reason }) + ")")
+    # Made-up bytes that start as a JPEG: the PC reads only their first bytes, and the digests.
+    $img = New-Object byte[] 150000
+    (New-Object System.Random 11).NextBytes($img)
+    $img[0] = 0xFF; $img[1] = 0xD8; $img[2] = 0xFF; $img[3] = 0xE0
+    $photoIdE = ([guid]::NewGuid().ToString("N"))
+    $ph = Invoke-App @{ cmd = "photo"; b64 = (ConvertTo-HordeRelayBase64Url -Bytes $img); id = $photoIdE }
+    Check ($ph.ok -and $ph.value.ok -eq $true -and $ph.value.parts -eq 4) ("the app signs one manifest and puts four parts (" + $(if ($ph.ok) { ConvertTo-Json $ph.value -Compress } else { $ph.reason }) + ")")
+    $run = Invoke-Run -Turns 2
+    $inbox = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    Check ($inbox.Count -eq 1 -and $inbox[0].Name -cmatch '\Aphoto-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}\.jpg\z' -and [System.Linq.Enumerable]::SequenceEqual([byte[]][System.IO.File]::ReadAllBytes($inbox[0].FullName), [byte[]]$img)) ("the real run writes it whole to the inbox under its own name (" + (@($inbox | ForEach-Object { $_.Name }) -join ",") + ")")
+    $photoPosts = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone (photo " + $photoIdE + ")") })
+    Check ($photoPosts.Count -eq 1 -and $inbox.Count -eq 1 -and $photoPosts[0].body.Contains($inbox[0].FullName) -and $photoPosts[0].to -ceq $thrall.state.session) ("and posts ONE line to the Thrall naming the file's path (" + $photoPosts.Count + ")")
+    $null = Invoke-App @{ cmd = "refresh"; id = $hid }
+    $chat = Invoke-App @{ cmd = "chat"; id = $hid }
+    $photos = @(); if ($chat.ok) { $photos = @($chat.value.items | Where-Object { $_.kind -ceq "photo" }) }
+    Check ($photos.Count -eq 1 -and $photos[0].code -ceq "delivered" -and $inbox.Count -eq 1 -and $photos[0].file -ceq $inbox[0].Name) ("the app shows the photo once, delivered, with the PC's file name (" + $(if ($photos.Count) { $photos[0].words } else { "none" }) + ")")
+    $pdf = Invoke-App @{ cmd = "photo"; b64 = (ConvertTo-HordeRelayBase64Url -Bytes ([System.Text.Encoding]::ASCII.GetBytes("%PDF-1.7 not a photo"))); id = ([guid]::NewGuid().ToString("N")) }
+    Check ($pdf.ok -and $pdf.value.ok -eq $false -and $pdf.value.reason.Contains("not a picture")) "a PDF is refused on the phone in a plain line, and nothing is sent"
 
     Write-Host ""
     Write-Host "--- 9. the progress log: a changelog on the machine, read by the app in the order written, his place kept ---" -ForegroundColor Cyan

@@ -132,7 +132,7 @@ function Read-HordeConfigKeysText {
     param([Parameter(Mandatory = $true)][string]$Text)
     $problems = New-Object System.Collections.ArrayList
     foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { [void]$problems.Add("" + $d) }
-    $t = $Text | ConvertFrom-Json
+    $t = ConvertFrom-HordeJson -Text $Text
     $rows = Get-HordeAgentProp $t "keys"
     if ($rows -isnot [System.Array] -or @($rows).Count -eq 0) { throw "the settings registry must hold a non-empty keys list" }
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -189,7 +189,7 @@ function Read-HordeEngineLayerText {
     # One layer document from its text: { layer; source; text; doc }. The text is kept for
     # Test-HordeEngineConfig and the parsed doc for Resolve-HordeEngine; parsing is not checking.
     param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Layer, [Parameter(Mandatory = $true)][string]$Source)
-    return [pscustomobject]@{ layer = $Layer; source = $Source; text = $Text; doc = ($Text | ConvertFrom-Json) }
+    return [pscustomobject]@{ layer = $Layer; source = $Source; text = $Text; doc = (ConvertFrom-HordeJson -Text $Text) }
 }
 
 function Get-HordeBuiltinLayer {
@@ -297,7 +297,7 @@ function Test-HordeEngineConfig {
         elseif ($txt -cmatch '[^\x00-\x7F]') { Add-Finding "not-ascii" $src '$' "the text holds a character that is not ASCII (CONTRIBUTING 13)" }
         foreach ($d in @(Find-HordeJsonDuplicateKey -Text ("" + $doc.text))) { if ($null -ne $d) { Add-Finding "duplicate-key" $src '$' ("" + $d) } }
         $parsed = $null
-        try { $parsed = ("" + $doc.text) | ConvertFrom-Json } catch { Add-Finding "not-json" $src '$' "the text is not JSON"; continue }
+        try { $parsed = ConvertFrom-HordeJson -Text ("" + $doc.text) } catch { Add-Finding "not-json" $src '$' "the text is not JSON"; continue }
         foreach ($p in @(Find-HordeSecretPaths -Value $parsed)) { Add-Finding "secret" $src $p "this string is shaped like a key or token; a configuration names a variable, never a secret, and the value is not shown" }
         $bad = @(Test-HordeSchema -Value $parsed -Schema $schema)
         foreach ($p in $bad) { Add-Finding "schema" $src $p ("" + $p) }

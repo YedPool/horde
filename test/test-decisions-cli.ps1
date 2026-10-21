@@ -185,12 +185,13 @@ $setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Autom
 Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
 # Every verb is an operation - its own name, or the one its entry names - and every operation has a verb.
 $operationNames = @(Get-HordeDecisionOperations | ForEach-Object { $_.name })
-$verbOperations = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens -and -not (Get-HordeDecisionCommandVerb -Verb $_).notifies } | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
+$verbOperations = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens -and -not (Get-HordeDecisionCommandVerb -Verb $_).notifies -and -not (Get-HordeDecisionCommandVerb -Verb $_).publishes } | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
 $thenOperations = @($verbNames | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("then")) { "$($entry.then)" } })
 Check (@(@($verbOperations) + @($thenOperations) | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0 -and @($operationNames | Where-Object { $verbOperations -cnotcontains $_ -and $thenOperations -cnotcontains $_ }).Count -eq 0) ("every verb is an operation, and every operation is a verb's own or what a verb asks for once its lines are out (" + (@(@($verbOperations) + @($thenOperations) | Sort-Object -Unique) -join ",") + ")")
 Check (($thenOperations -join ",") -ceq "mark-read" -and "$($script:HordeDecisionCommandVerbs['inbox'].then)" -ceq "mark-read") "inbox reads, and then asks for mark-read: two operations, in that order"
 Check ((@($verbNames | Where-Object { $script:HordeDecisionCommandVerbs[$_].ContainsKey("says") }) -join ",") -ceq "answer,reply" -and $script:HordeDecisionCommandVerbs["answer"].says.speaker -ceq "founder" -and $script:HordeDecisionCommandVerbs["answer"].says.route -ceq "chat-recorded" -and $script:HordeDecisionCommandVerbs["reply"].says.speaker -ceq "warchief" -and $script:HordeDecisionCommandVerbs["reply"].says.route -ceq "command") "answer is the founder's words recorded from chat, and reply is the warchief's own: who speaks is the verb's, never a flag's"
 Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).opens }) -join ",") -ceq "open" -and $verbNames[$verbNames.Count - 1] -ceq "open") "but for open, a verb that is no operation: it opens a window that calls them"
+Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).publishes }) -join ",") -ceq "publish,published") "publish and published are verbs that are no operation: the lists live in fleet.db (decisions/Publish.ps1)"
 Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).notifies }) -join ",") -ceq "notify" -and $verbNames[$verbNames.Count - 2] -ceq "notify") "and notify, the other: it reads the inbox and rings, through decisions/Notify.ps1"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
@@ -423,6 +424,25 @@ $nNumber = Invoke-Decisions @("notify", "3") $notifyEnv
 Check ($nNumber.code -ne 0 -and $nNumber.out -like "*decisions notify takes no question number*") "notify takes no question number"
 $nJson = Invoke-Decisions @("notify", "-Json") $notifyEnv
 Check ($nJson.code -ne 0 -and $nJson.out -like "*-Json does not belong to decisions notify*Usage: horde decisions notify ``[-Once``]*") "and no flag but -Once, answered with its usage"
+
+Write-Host ""
+Write-Host "--- route and ack, through the real command: nobody reachable is said, and nothing is recorded ---" -ForegroundColor Cyan
+# The same home: its question 1 was asked by "orc-a", which names no Orc, so the router sends it to the
+# warchief - whose seat this fleet-less home cannot have. decisions/Route.ps1's own suite,
+# test/test-decisions-route.ps1, drives every send with stand-ins; this proves the verbs reach it.
+$routeRun = Invoke-Decisions @("route") $notifyEnv
+$routeKinds = @(Get-ChildItem -LiteralPath (Join-Path $notifyHome "store\decisions") -Filter "*.json" | ForEach-Object { (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName))).kind })
+Check ($routeRun.code -eq 0 -and $routeRun.out.Trim() -clike "pending:*" -and $routeRun.out -notlike "*messenger * answered*" -and $routeKinds -cnotcontains "answer-routed") ("route: one pass, pending because nobody can be reached here, no post tried and nothing recorded, exit 0 (" + $routeRun.out.Trim() + ")")
+$routeNumber = Invoke-Decisions @("route", "1") $notifyEnv
+Check ($routeNumber.code -ne 0 -and $routeNumber.out -like "*decisions route takes no question number*") "route takes no question number"
+# ACK IS THE ASKING ORC'S, PROVEN FROM ITS OWN SESSION: whatever session this suite runs inside, if any,
+# it is not the Orc 'orc-a' names (nobody), so the question stays open - refused as unproven, as no
+# Orc's lane, or as not the Orc that asked.
+$ackRun = Invoke-Decisions @("ack", "1") $notifyEnv
+$ackKinds = @(Get-ChildItem -LiteralPath (Join-Path $notifyHome "store\decisions") -Filter "*.json" | ForEach-Object { (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName))).kind })
+Check ($ackRun.code -eq 1 -and ($ackRun.out -like "*decisions ack is run by the Orc that asked*" -or $ackRun.out -like "*only the Orc that asked it acknowledges its answer*") -and $ackKinds -cnotcontains "question-acked" -and $ackKinds -cnotcontains "question-closed") ("ack: refused for a question no proven Orc asked, exit 1, and it stays open (" + $ackRun.out.Trim() + ")")
+$ackNoNumber = Invoke-Decisions @("ack") $notifyEnv
+Check ($ackNoNumber.code -ne 0 -and $ackNoNumber.out -like "*decisions ack needs the question's number*") "ack needs the question's number"
 
 Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan
