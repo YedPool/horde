@@ -22,8 +22,8 @@
            Find = '&& db.prepare(''SELECT 1 FROM session WHERE id = ?'').get(input.sessionId))'
            Replace = ')' }
         @{ Name = "unchanged-reported-as-published"
-           Find = 'r.unchanged ? ''unchanged (snapshot '''
-           Replace = 'false ? ''unchanged (snapshot ''' }
+           Find = 'r.unchanged ? ''unchanged, confirmed '''
+           Replace = 'false ? ''unchanged, confirmed ''' }
         @{ Name = "one-items"
            Find = 'n + (n === 1 ? '' item'' : '' items'')'
            Replace = 'n + '' items''' }

@@ -65,7 +65,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 4, created\)') ("init creates the file at schema 4 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 5, created\)') ("init creates the file at schema 5 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -73,7 +73,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 4, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 5, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
@@ -216,6 +216,19 @@ Check ($pOk.code -eq 0 -and $pOk.out -cmatch 'published 1 item \(snapshot ') ("a
 $listed = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
 Check ($listed.code -eq 0 -and $listed.out -like "*Does the fixture question import?*" -and $listed.out -like "*question 31*") ("and horde decisions published shows the line with its question number (" + $listed.code + ")")
 Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is sound with the list in it"
+# The same list again records a confirm (T-0299): unchanged, no new snapshot, and a later confirmed time.
+$pj1 = Invoke-NodeCli @($decCli, "published", "--json") $impHome
+Start-Sleep -Milliseconds 1100
+$pAgain = Invoke-NodeCli @($decCli, "publish", $pubOk) $impHome
+Check ($pAgain.code -eq 0 -and $pAgain.out -cmatch 'unchanged, confirmed \d{4}-\d\d-\d\dT[\d:.]+Z \(snapshot ') ("the same list published twice says unchanged and names the confirm time (" + $pAgain.code + ": " + $pAgain.out.Trim() + ")")
+$pj2 = Invoke-NodeCli @($decCli, "published", "--json") $impHome
+$l1 = (($pj1.out.Trim() -split "`n")[0] | ConvertFrom-Json).lists[0]
+$l2 = (($pj2.out.Trim() -split "`n")[0] | ConvertFrom-Json).lists[0]
+Check ($l1.snapshot -eq $l2.snapshot -and $l1.publishedAt -eq $l2.publishedAt) "and the list is the same snapshot, published at the same time"
+Check ([datetime]$l2.confirmedAt -gt [datetime]$l1.confirmedAt -and [datetime]$l1.confirmedAt -ge [datetime]$l1.publishedAt) ("and published --json shows a later confirmedAt (" + $l1.confirmedAt + " then " + $l2.confirmedAt + ")")
+$listed2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
+$c2 = [regex]::Match($pj2.out, 'confirmedAt\W+([0-9TZ:.-]+)').Groups[1].Value
+Check ($listed2.code -eq 0 -and $c2 -ne "" -and $listed2.out -like ("*confirmed " + $c2 + "*")) "and horde decisions published prints the confirm time"
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan
