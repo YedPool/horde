@@ -2,9 +2,10 @@
 # tools\Mutate.ps1 -Changed <base-ref>. Dot-sourced by tools\Mutate.ps1; no side effects on load.
 #
 # WHY. A review round that reruns every mutation spec reruns hundreds of mutants on lines the round
-# never touched (the founder's decision of 2026-10-02: each review round tests only what changed, and
-# the full specs run once per PR, on its final head). So a round runs only the mutants whose find
-# string sits in a line the diff added or modified.
+# never touched (the founder's decision of 2026-10-02: each review round tests only what changed;
+# the changed-target specs run once per PR, on its final head, and every spec nightly since
+# 2026-10-21).
+# So a round runs only the mutants whose find string sits in a line the diff added or modified.
 #
 # WHAT IS SELECTED, and why each rule leans towards running:
 #   - A mutant whose find string sits on a line the diff added or modified, in a file the diff touched.
@@ -30,13 +31,14 @@
 # relative settings explicitly, and a diff that is not empty but does not parse whole is an error
 # (Get-HordeDiffParseProblem), never "the diff is empty".
 # NOT SELECTED: a change to a suite alone, or to test\lib, does not reselect the mutants of the code
-# it tests. A suite edited to catch less is found by the full specs run once per PR on the merge
-# result (CONTRIBUTING, "Test levels and merging"); that run, not this selection, is the merge gate.
+# it tests. A suite edited to catch less is found by the changed-target specs, which include every
+# spec whose Suite the PR changes, run once per PR on the merge result (CONTRIBUTING, "Test levels
+# and merging"); that run, not this selection, is the merge gate.
 #
 # ZERO IS NOT A PASS when it should not be zero. A diff that touches a mutation target yet selects no
 # mutant means the change has no mutant on any line it touched: Get-HordeSelectionVerdict says so and
-# fails, and the author adds mutants or runs the full specs. An empty diff, or one that touches no
-# target, selects none and says so.
+# fails, and the author adds mutants or runs that target's whole specs. An empty diff, or one that
+# touches no target, selects none and says so.
 
 function ConvertTo-HordeDiffKey {
     # One spelling for a repository path, whichever tool wrote it: forward slashes, no leading "./",
