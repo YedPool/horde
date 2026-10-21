@@ -81,7 +81,7 @@ const TIMEOUT_MS = Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) > 0 ? Number(p
 // since no session has HORDE_HOME of its own.
 function decisionsReason(letter, home) {
   // PowerShell ends a single-quoted string on the curly quotes too, so each is doubled like the apostrophe.
-  const quoted = "'" + home.replace(/['‘’‚‛]/g, "$&$&") + "'";
+  const quoted = "'" + home.replace(/['\u2018\u2019\u201A\u201B]/g, "$&$&") + "'";
   return [
     "no published decisions list was found for Orc " + letter + " in the last 30 minutes: publish yours with horde decisions publish -File <list.json> (empty list is valid)",
     "run it in PowerShell as: $env:HORDE_HOME=" + quoted + "; horde decisions publish -File <list.json>",
@@ -279,7 +279,9 @@ async function main() {
   const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt };
   const saved = writeState(sid, next); // BEFORE the block is printed
   if (reasons.length === 0 || !saved) return 0;
-  process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }));
+  // ASCII ON THE WIRE: a home may hold a non-ASCII character, and a reader that decodes stdout with another code
+// page (Windows PowerShell 5.1) would mangle it; JSON escapes keep the bytes ASCII and the text exact.
+process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")));
   return 0;
 }
 
