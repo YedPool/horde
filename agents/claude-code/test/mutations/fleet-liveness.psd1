@@ -106,8 +106,14 @@
            Find = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) -Resumed (Read-ClaudeCodeFleetResumeArgv) }'
            Replace = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) }' }
         @{ Name = "blind-row-ignored"
-           Find = 'if ("" + $p.commandLine -eq "") { [void]$blind.Add("" + $p.pid); continue }'
-           Replace = 'if ("" + $p.commandLine -eq "") { continue }' }
+           Find = 'if ([string]::IsNullOrWhiteSpace("" + $p.commandLine)) { [void]$blind.Add("" + $p.pid); continue }'
+           Replace = 'if ([string]::IsNullOrWhiteSpace("" + $p.commandLine)) { continue }' }
+        @{ Name = "blind-means-empty-only"
+           Find = 'if ([string]::IsNullOrWhiteSpace("" + $p.commandLine)) { [void]$blind.Add("" + $p.pid); continue }'
+           Replace = 'if ("" + $p.commandLine -eq "") { [void]$blind.Add("" + $p.pid); continue }' }
+        @{ Name = "blind-reason-loses-hand-advice"
+           Find = ', which may be this session; resume it by hand if it is not"'
+           Replace = '"' }
         @{ Name = "session-id-flag-ignored"
            Find = ' -or $a -ieq "--session-id") {'
            Replace = ') {' }

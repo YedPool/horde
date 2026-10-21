@@ -229,13 +229,13 @@ function Read-ClaudeCodeFleetResumeArgv {
         # A harness process whose command line came back empty (another user's, or elevated) may be the very
         # resume that is wanted: the listing is partly unreadable, and a session with no control file is then
         # unknown, never stopped. Ids found in the other rows still count.
-        if ("" + $p.commandLine -eq "") { [void]$blind.Add("" + $p.pid); continue }
+        if ([string]::IsNullOrWhiteSpace("" + $p.commandLine)) { [void]$blind.Add("" + $p.pid); continue }
         foreach ($id in @(Get-ClaudeCodeFleetResumeIds -Argv @(Split-ClaudeCodeFleetCommandLine -Line $p.commandLine))) {
             if (-not $resumed.ContainsKey($id)) { $resumed[$id] = "" + $p.pid }
         }
     }
     $err = ""
-    if ($blind.Count -gt 0) { $err = "the process listing is partly unreadable: no command line for harness process " + ($blind -join ", ") }
+    if ($blind.Count -gt 0) { $err = "the process listing is partly unreadable: no command line for harness process " + ($blind -join ", ") + ", which may be this session; resume it by hand if it is not" }
     return [pscustomobject]@{ resumed = $resumed; error = $err }
 }
 

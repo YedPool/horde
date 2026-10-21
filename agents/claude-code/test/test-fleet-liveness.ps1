@@ -245,10 +245,10 @@ Check ((Verdict $snap2 $NOTMINE "C:\work\hand").state -ceq "stopped") "CONTROL: 
 # (erring toward running is the safe side), so unlike every other flag's value it counts.
 # a harness process with no readable command line (another user's, elevated) may be the very resume: the
 # listing is partly unreadable, so a session with no control file is unknown, never stopped
-foreach ($blank in @($null, "")) {
+foreach ($blank in @($null, "", "   ", "`t `r`n")) {
     $snapB = Snap-With @((Proc 64 "claude.exe" $blank))
     $v = Verdict $snapB $HAND "C:\work\hand"
-    Check ($v.state -ceq "unknown" -and $v.kind -ceq "reading" -and $v.reason -like "*64*") ("a harness process with no readable command line makes a session with no control file unknown (" + $v.state + "/" + $v.kind + ")")
+    Check ($v.state -ceq "unknown" -and $v.kind -ceq "reading" -and $v.reason -like "*harness process 64*" -and $v.reason -like "*resume it by hand if it is not*") ("a harness process with no readable command line makes a session with no control file unknown (" + $v.state + "/" + $v.kind + ")")
 }
 Check ((Verdict $snapB $LIVE "C:\work\live").state -ceq "running") "CONTROL: a live control file needs no command line"
 $snapB2 = Snap-With @((Proc 64 "claude.exe" $null), (Proc 65 "claude.exe" ($exe + " --resume " + $HAND)))
