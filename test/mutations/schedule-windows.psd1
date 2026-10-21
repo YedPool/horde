@@ -23,9 +23,6 @@
         @{ Name = "foreign-task-removed"
            Find = '    if (-not (Test-HordeTaskMarked $t)) { throw ("the task '''
            Replace = '    if ($false) { throw ("the task ''' }
-        @{ Name = "other-home-taken-over"
-           Find = 'if ($oldHome -cne $Job.hordeHome) { throw'
-           Replace = 'if ($false) { throw' }
         @{ Name = "author-not-set"
            Find = '    $task.Author = $script:HordeTaskAuthor'
            Replace = '' }

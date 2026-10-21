@@ -602,7 +602,7 @@ function Invoke-HordeServiceSchedule {
                 $when = $(if ($null -ne $v.PSObject.Properties["atStartup"] -and $v.atStartup -eq $true) { "at start-up and " } elseif ($null -ne $v.PSObject.Properties["atLogon"] -and $v.atLogon -eq $true) { "at sign-in and " } else { "" })
                 $as = $(if ($null -ne $v.PSObject.Properties["runsAs"] -and "" + $v.runsAs -ne "") { ", as " + $v.runsAs } else { "" })
                 [void]$lines.Add((& $where $b.name) + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", " + $when + "every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $as + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" }))
-                [void]$lines.Add("    serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt))
+                [void]$lines.Add("    registered under the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt))
             }
             if ($none -eq 2) { [void]$lines.Add("neither job is installed: no service is being supervised") }
             elseif ($none -eq 1) { [void]$lines.Add("ONE OF THE TWO JOBS IS MISSING: horde services schedule installs both") }

@@ -95,6 +95,8 @@ try {
     }
     $beatFile = Join-Path (Join-Path $oldHome "relay") "run-heartbeat.json"
     $env:HORDE_HOME = $oldHome
+    # The guard compares POINTER-level homes (HORDE_HOME in this process is ignored), so the old home is named by a pointer.
+    [System.IO.File]::WriteAllText((Join-Path $env:USERPROFILE ".horde-home.json"), ('{"v":1,"hordeHome":"' + $oldHome.Replace("\", "\\") + '"}'))
     Put-Definition
     Check (@(Get-HordeRunningHordeServices -Home2 $oldHome).Count -eq 0) "CONTROL: a defined service with no heartbeat is not running"
     Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome } "")) "and home set is not refused"
@@ -122,12 +124,17 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $env:USERPROFILE ".horde-home.json"), ('{"v":1,"hordeHome":"' + $oldHome.Replace("\", "\\") + '"}'))
     Check ((Resolve-HordeHome).source -ceq "pointer" -and (Get-HordeHomeAfterClear) -eq (Join-Path $env:USERPROFILE ".horde")) "the pointer names the old home, and clear would leave the default"
     Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "home clear is refused") "home clear is refused while a service runs under the pointer's home"
-    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(5) } "clears in about 17? s") "the refusal says how long until the heartbeat goes stale (about 175 s for a 60 s tick, 5 s after the beat)"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(5) } "clears in about 176 s") "the refusal says how long until the heartbeat goes stale (a 60 s tick goes stale after 180 s; 5 s after the beat that is 176 s)"
     Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(5) } "Stopped just now?") "and asks if it was stopped just now"
     Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(400) } "")) "once the heartbeat is older than its stale time (a stubbed clock), set is no longer refused"
     Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear -Now $t0.AddSeconds(400) } "")) "and neither is clear"
+    # HORDE_HOME in THIS process does not matter: the pointer decides for every reader without it.
     $env:HORDE_HOME = $oldHome
-    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "")) "with HORDE_HOME set, clear changes nothing and is not refused"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "home clear is refused") "with HORDE_HOME set here, clear is still refused: it moves every reader without it"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome } "home set is refused") "and so is set"
+    $env:HORDE_HOME = $homeA
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "home clear is refused") "whatever HORDE_HOME names"
+    $env:HORDE_HOME = ""
     Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".horde-home.json") -Force
     $env:HORDE_HOME = $homeA
 

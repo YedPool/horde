@@ -467,7 +467,7 @@ function Invoke-HordeMetricsSchedule {
             $v = $st.value
             $fmt = { param($t) if ($null -eq $t) { "never" } else { $t.ToString("yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture) } }
             $lines += ($where + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", every " + $v.everyMinutes + " minutes, logon " + $v.logonType + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" }))
-            $lines += ("serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + " (result " + $v.lastResult + "), next run " + (& $fmt $v.nextRunAt))
+            $lines += ("registered under the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + " (result " + $v.lastResult + "), next run " + (& $fmt $v.nextRunAt))
             return $lines
         }
     }

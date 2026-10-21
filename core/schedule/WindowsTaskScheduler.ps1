@@ -178,8 +178,14 @@ function Install-HordeTaskSchedulerJob {
     $old = & $Find $Job.name $Job.folder
     if ($null -ne $old) {
         if (-not (Test-HordeTaskMarked $old)) { throw ("a task named '" + $Job.name + "' in \" + $Job.folder + "\ was not made by Horde; it was left alone") }
-        $oldHome = (Read-HordeJobMarker -Description $old.Description).home
-        if ($oldHome -cne $Job.hordeHome) { throw ("the task '" + $Job.name + "' serves the Horde home " + $oldHome + "; remove it first to serve " + $Job.hordeHome) }
+        # NO "SERVES ANOTHER HOME" REFUSAL (T-0299, one-home flip). This check once refused to replace a task whose marker
+        # named another home, because the task BAKED that home in and replacing it would have moved someone else's work.
+        # A task no longer bakes a home: it runs as the user who registers it and resolves HORDE_HOME, then the pointer, at
+        # each run, so the home in its marker is a label (where it was registered), not what it serves. After horde home set
+        # the old task's marker names the old home, and the one elevated re-register must replace it, not be refused. What
+        # still protects other people's tasks is the rest of this function: only a task made by Horde (author and marker,
+        # checked above) is ever replaced, a task registers and replaces only under the account that runs it, and suites
+        # use their own folder (HordeTest). The new marker records the home resolved now.
     }
     $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $task = New-HordeTaskSchedulerTask -Job $Job -UserId $user

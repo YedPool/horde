@@ -102,9 +102,8 @@ function Get-HordeRunningHordeServices {
 }
 
 function Get-HordeHomeAfterClear {
-    # The home `horde home clear` would leave: HORDE_HOME if set (then clear changes nothing), else the default.
-    $set = "$env:HORDE_HOME".Trim()
-    if ($set -ne "") { return $set }
+    # The home `horde home clear` would leave for every reader without HORDE_HOME: the default. (HORDE_HOME in THIS process
+    # does not matter: clear removes the pointer for everyone else.)
     return (Join-Path (Get-HordeProfileDir) ".horde")
 }
 
@@ -114,8 +113,17 @@ function Assert-HordeNoServiceRunsOnOldHome {
     # pointer, start. Setting the pointer first, or editing a definition first, sends the stop to the wrong home while
     # the process runs on, so the relay runs twice or the stop does nothing.
     param([Parameter(Mandatory = $true)][string]$NewHome, [ValidateSet("set", "clear")][string]$Verb = "set", [datetime]$Now = [datetime]::UtcNow)
+    # THE POINTER-LEVEL HOMES, ignoring HORDE_HOME in this process: the pointer decides for every reader without it, and
+    # those are the processes a set or clear moves. Old = the pointer's home if there is a good pointer, else the default.
+    # A bad or unreadable pointer, or no profile folder at all: the guard cannot tell and says nothing (it fails open).
     $old = ""
-    try { $old = (Resolve-HordeHome).path } catch { return }
+    $pointer = Get-HordeHomePointerPath
+    if ($null -eq $pointer) { return }
+    if (Test-Path -LiteralPath $pointer) {
+        $read = Read-HordeHomePointer -File $pointer
+        if (-not $read.ok) { return }
+        $old = $read.home
+    } else { $old = Join-Path (Get-HordeProfileDir) ".horde" }
     if ((ConvertTo-HordeHomeComparable $old) -ieq (ConvertTo-HordeHomeComparable $NewHome)) { return }
     $running = @(Get-HordeRunningHordeServices -Home2 $old -Now $Now)
     if ($running.Count -gt 0) {

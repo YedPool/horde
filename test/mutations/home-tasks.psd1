@@ -43,6 +43,9 @@
         @{ Name = "clear-target-is-not-the-default"
            Find = 'return (Join-Path (Get-HordeProfileDir) ".horde")'
            Replace = 'return $set' }
+        @{ Name = "guard-uses-the-process-home"
+           Find = '        $old = $read.home'
+           Replace = '        $old = (Resolve-HordeHome).path' }
         @{ Name = "no-task-reported"
            Find = 'if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
            Replace = 'if ($false) {' }

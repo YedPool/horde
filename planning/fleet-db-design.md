@@ -423,7 +423,7 @@ writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home
   (`cli/ServicesTend.ps1`, which `cli/Setup.ps1`'s elevated command also registers) and the meter's two tasks
   (`fleet-metrics/register-schedule.ps1`) NO LONGER BAKE THE HOME. Each run resolves it like any command: HORDE_HOME, then
   the pointer, then the default. The job's description still records the home it was registered under (the marker), which is
-  data for status and for the "remove it first to serve another home" refusal, not what the run uses.
+  data for status, not what the run uses (the scheduler no longer refuses to replace a task over it).
   **A task that runs as a different account (SYSTEM, another profile) cannot see this user's pointer** and would need a home
   baked in or its own pointer; none of Horde's tasks is registered that way today, and the elevated command of
   `cli/Setup.ps1` (a prompt that may be another admin account) still passes the resolved home to that one short-lived
@@ -454,7 +454,8 @@ only changes when re-registered): `horde metrics schedule remove` then `install`
 `schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
 `register-schedule.ps1` for the meter. A task registered since this change bakes none and needs nothing: it resolves the
 home at each run, so it is correct even though its marker still names the home it was registered under (its marker is
-informational; only a reinstall under another home asks for a remove first). **The metrics task of lane L needs the
+informational: the scheduler no longer refuses to replace a Horde task whose marker names another home, because a task no longer
+bakes a home in, so the one elevated re-register after the flip replaces the old task and writes the new marker). **The metrics task of lane L needs the
 founder's elevated run; L files that.** (9) `horde home` lists every task under `\Horde\` that BAKES a home other than
 the effective one (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes
 on); it should say none bakes in another home.
