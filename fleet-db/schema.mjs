@@ -785,7 +785,7 @@ export const MIGRATIONS = [
        AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,
     CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
        AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0
-      WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes
+      WHEN a.signed_by IS NULL AND qn.needs_passkey = 1 THEN 0 ELSE 1 END AS authorizes
   FROM answer a JOIN question qn ON qn.id = a.question_id;
   `,
 ];
