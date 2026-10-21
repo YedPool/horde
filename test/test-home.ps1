@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 
 $origHome = $env:HORDE_HOME
 $origProfile = $env:USERPROFILE
+$origFallback = $script:HordeProfileFallback
 try {
     Write-Host ""
     Write-Host "--- the home ---" -ForegroundColor Cyan
@@ -35,7 +36,9 @@ try {
     Check ((Get-HordeHome) -eq "D:\horde\home") "CONTROL: a drive path with forward slashes is still accepted"
     $env:HORDE_HOME = ""
     $env:USERPROFILE = ""
-    Check (Throws { Get-HordeHome } "no home") "with neither variable there is no home, and it says so"
+    # The system's answer is replaced everywhere here, so the real profile (and its pointer) is never asked about.
+    $script:HordeProfileFallback = { "" }
+    Check (Throws { Get-HordeHome } "no home") "with neither variable, and no profile from the system either, there is no home, and it says so"
     $env:HORDE_HOME = $fake
     $null = Get-HordeHome
     Check (-not (Test-Path -LiteralPath $fake)) "finding the home does not create it"
@@ -147,8 +150,26 @@ try {
     $r = Set-HordeHomePointer -Path $homeB
     Check ($r.old -eq "" -and (Get-HordeHome) -eq $homeB) "set mends a bad pointer (old is empty: none could be resolved)"
     $env:USERPROFILE = ""
+    $script:HordeProfileFallback = { "" }
     Check (Throws { Set-HordeHomePointer -Path $homeA } "USERPROFILE") "with no user profile there is no place for a pointer"
+    # USERPROFILE EMPTY (a scheduled task without a loaded profile): the system's answer for the profile is used, before refusing.
+    $sysProfile = Join-Path $work "system-profile"
+    New-Item -ItemType Directory -Path $sysProfile -Force | Out-Null
+    $script:HordeProfileFallback = { $sysProfile }
+    $env:USERPROFILE = ""
+    $env:HORDE_HOME = ""
+    Check ((Get-HordeProfileDir) -eq $sysProfile) "USERPROFILE empty: the profile folder is the system's answer"
+    Check ((Get-HordeHomePointerPath) -eq (Join-Path $sysProfile ".horde-home.json")) "and the pointer is looked for there"
+    Check ((Get-HordeHome) -eq (Join-Path $sysProfile ".horde") -and (Resolve-HordeHome).source -ceq "default") "no pointer there: the default home under that profile, not a refusal"
+    [System.IO.File]::WriteAllText((Join-Path $sysProfile ".horde-home.json"), (Pointer-Json $homeA), $utf8)
+    Check ((Resolve-HordeHome).path -eq $homeA -and (Resolve-HordeHome).source -ceq "pointer") "a pointer in that profile is followed"
+    $script:HordeProfileFallback = { throw "the system cannot say" }
+    Check (Throws { Get-HordeHome } "no home") "a system that cannot answer is the old refusal, not a crash"
+    $script:HordeProfileFallback = { "" }
+    $env:USERPROFILE = $prof
+    Check ((Get-HordeProfileDir) -eq $prof) "CONTROL: USERPROFILE set wins over the system's answer"
 } finally {
+    $script:HordeProfileFallback = $origFallback
     $env:HORDE_HOME = $origHome
     $env:USERPROFILE = $origProfile
     if ((Split-Path -Leaf $work) -match '\Ahorde-home-pointer-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }

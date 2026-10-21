@@ -16,6 +16,9 @@
         @{ Name = "rooted-test-too-loose"
            Find = 'return process.platform === ''win32'' ? /^([A-Za-z]:[\\/]|\\\\[^\\/])/.test(s) : path.isAbsolute(s);'
            Replace = 'return path.isAbsolute(s);' }
+        @{ Name = "homedir-fallback-dropped"
+           Find = 'return p !== '''' ? p : os.homedir();'
+           Replace = 'return p;' }
         @{ Name = "relative-horde-home-accepted"
            Find = 'if (!isRootedPath(raw)) {'
            Replace = 'if (false) {' }

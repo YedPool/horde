@@ -18,6 +18,9 @@
         @{ Name = "set-hides-the-new-home"
            Find = 'Write-Output ("new home: " + $r.new)'
            Replace = '' }
+        @{ Name = "set-skips-the-running-service-check"
+           Find = 'Assert-HordeNoServiceRunsOnOldHome -NewHome $Path'
+           Replace = '' }
         @{ Name = "clear-does-not-remove"
            Find = '$r = Clear-HordeHomePointer'
            Replace = '$r = [pscustomobject]@{ removed = $true; file = "" }' }

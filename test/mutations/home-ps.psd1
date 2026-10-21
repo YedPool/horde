@@ -17,10 +17,10 @@
            Replace = 'if ($false) {' }
         @{ Name = "bad-pointer-skipped"
            Find = 'if (-not $r.ok) { throw $r.message }'
-           Replace = 'if (-not $r.ok) { return [pscustomobject]@{ path = (Join-Path "$env:USERPROFILE".Trim() ".horde"); source = "default" } }' }
+           Replace = 'if (-not $r.ok) { return [pscustomobject]@{ path = (Join-Path (Get-HordeProfileDir) ".horde"); source = "default" } }' }
         @{ Name = "default-folder-changed"
-           Find = 'return [pscustomobject]@{ path = (Join-Path "$env:USERPROFILE".Trim() ".horde"); source = "default" }'
-           Replace = 'return [pscustomobject]@{ path = (Join-Path "$env:USERPROFILE".Trim() ".horde2"); source = "default" }' }
+           Find = 'return [pscustomobject]@{ path = (Join-Path (Get-HordeProfileDir) ".horde"); source = "default" }'
+           Replace = 'return [pscustomobject]@{ path = (Join-Path (Get-HordeProfileDir) ".horde2"); source = "default" }' }
         @{ Name = "non-ascii-accepted"
            Find = 'if ($b -gt 0x7E -or ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D))'
            Replace = 'if ($false)' }
@@ -57,6 +57,9 @@
         @{ Name = "horde-home-rooted-test-too-loose"
            Find = 'if (-not (Test-HordeHomeRooted $set)) { throw' 
            Replace = 'if (-not [System.IO.Path]::IsPathRooted($set)) { throw' }
+        @{ Name = "profile-fallback-dropped"
+           Find = 'if ($p -eq "") { try { $p = ("" + (& $script:HordeProfileFallback)).Trim() } catch { $p = "" } }'
+           Replace = '' }
         @{ Name = "clear-leaves-the-pointer"
            Find = 'Remove-Item -LiteralPath $file -Force; $removed = $true'
            Replace = '$removed = $true' }

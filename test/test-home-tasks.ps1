@@ -57,23 +57,61 @@ try {
 
     Write-Host ""
     Write-Host "--- the check ---" -ForegroundColor Cyan
+    # A correct task that was registered under the OLD home and bakes none: it resolves the home at each run, so it is not stale.
+    $unbakedOld = New-HordeScheduledJob -Name "unbaked old" -Folder "HordeTest" -Script "C:\x\horde.ps1" -Arguments @("metrics", "collect") -HordeHome $homeB
+    # A task that bakes the EFFECTIVE home is right, and is not named either.
+    $bakedGood = New-HordeScheduledJob -Name "baked good" -Folder "HordeTest" -Script "C:\x\horde.ps1" -Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $homeA } -HordeHome $homeA
     $tasks = @(
+        (New-FakeTask "BakedGood" $bakedGood.description (ConvertTo-HordeTaskAction -Job $bakedGood).arguments)
+        (New-FakeTask "UnbakedOldMarker" $unbakedOld.description (ConvertTo-HordeTaskAction -Job $unbakedOld).arguments)
         (New-FakeTask "Fine" $none.description (ConvertTo-HordeTaskAction -Job $none).arguments)
         (New-FakeTask "Baked" $oldJob.description $bakedArgs)
         (New-FakeTask "Meter" "x" ('--headless "p" -EncodedCommand ' + (Encode-Command $plain)))
     )
     $r = Get-HordeHomeTaskFindings -Effective $homeA -ListTasks { $tasks }
-    Check ($r.checked -and @($r.lines).Count -eq 3) ("three findings: the baked job (action and marker) and the meter task, not the fine one (" + @($r.lines).Count + ")")
+    Check ($r.checked -and @($r.lines).Count -eq 2) ("two findings: the baked job and the meter task; not the fine one, and not the unbaked one registered under the old home (" + @($r.lines).Count + ")")
     Check (@($r.lines | Where-Object { $_ -like "*\Horde\Baked is baked into its action the home *homeB*not *homeA*" }).Count -eq 1) "the baked job is named with the home it keeps"
     Check (@($r.lines | Where-Object { $_ -like "*\Horde\Meter is baked*" }).Count -eq 1) "and the meter task"
     Check (@($r.lines | Where-Object { $_ -like "*\Horde\Fine*" }).Count -eq 0) "a task on the effective home is not named"
+    Check (@($r.lines | Where-Object { $_ -like "*BakedGood*" }).Count -eq 0) "a task that bakes the effective home is not named"
+    Check (@($r.lines | Where-Object { $_ -like "*UnbakedOldMarker*" }).Count -eq 0) "an unbaked task whose marker names the old home is NOT named: it follows the pointer, so it is not stale"
     $r = Get-HordeHomeTaskFindings -Effective ($homeA + "\") -ListTasks { @($tasks[0]) }
-    Check ($r.checked -and ($r.lines -join " ") -like "*none names another home*") "a trailing separator on the effective home makes no difference"
+    Check ($r.checked -and ($r.lines -join " ") -like "*none bakes in another home*") "a trailing separator on the effective home makes no difference"
     $r = [pscustomobject]@{ checked = $true; lines = @("threw") }
     try { $r = Get-HordeHomeTaskFindings -Effective $homeA -ListTasks { throw "Access is denied." } } catch { }
     Check (-not $r.checked -and @($r.lines).Count -eq 1 -and $r.lines[0] -like "tasks: not checked*Access is denied*") "a refused query is one line and does not throw"
     $r = Get-HordeHomeTaskFindings -Effective $homeA -ListTasks { @() }
-    Check ($r.checked -and $r.lines[0] -like "*0 under*none names another home*") "no tasks: said so"
+    Check ($r.checked -and $r.lines[0] -like "*0 under*none bakes in another home*") "no tasks: said so"
+
+    Write-Host ""
+    Write-Host "--- a service still running blocks home set ---" -ForegroundColor Cyan
+    $oldHome = Join-Path $work "svc-old"
+    $newHome = Join-Path $work "svc-new"
+    New-Item -ItemType Directory -Path (Join-Path $oldHome "settings"), $newHome -Force | Out-Null
+    function Put-Definition { param([bool]$Enabled = $true)
+        $d = [ordered]@{ checkout = $root; hordeHome = $oldHome; enabled = $Enabled; start = [ordered]@{ kind = "horde"; words = @("relay", "run") }; stop = [ordered]@{ kind = "horde"; words = @("relay", "stop"); waitSeconds = 30 }; alive = [ordered]@{ heartbeat = "relay/run-heartbeat.json"; tickSeconds = 60 } }
+        $text = ConvertTo-Json -Depth 8 -InputObject ([ordered]@{ schemaVersion = 1; settings = [ordered]@{ "relay-runner" = $d } })
+        [System.IO.File]::WriteAllText((Join-Path (Join-Path $oldHome "settings") "service-definitions.json"), $text, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $beatFile = Join-Path (Join-Path $oldHome "relay") "run-heartbeat.json"
+    $env:HORDE_HOME = $oldHome
+    Put-Definition
+    Check (@(Get-HordeRunningHordeServices -Home2 $oldHome).Count -eq 0) "CONTROL: a defined service with no heartbeat is not running"
+    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome } "")) "and home set is not refused"
+    Write-HordeHeartbeat -Path $beatFile -At ([datetime]::UtcNow) -ProcessId 4242 -TickSeconds 60
+    $run = @(Get-HordeRunningHordeServices -Home2 $oldHome)
+    Check ($run.Count -eq 1 -and $run[0].name -ceq "relay-runner") "a fresh heartbeat of a horde-kind service: running"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome } "relay-runner") "home set is refused while it runs under the current home, naming it"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome } "horde services stop") "and the refusal says how: stop it first, then change the definition, then set"
+    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome ($oldHome + "\") } "")) "setting the home it already is, is not refused"
+    Write-HordeHeartbeat -Path $beatFile -At ([datetime]::UtcNow.AddHours(-2)) -ProcessId 4242 -TickSeconds 60
+    Check (@(Get-HordeRunningHordeServices -Home2 $oldHome).Count -eq 0) "a stale heartbeat is a service that is not running"
+    Write-HordeHeartbeat -Path $beatFile -At ([datetime]::UtcNow) -ProcessId 4242 -TickSeconds 60
+    Put-Definition -Enabled $false
+    Check (@(Get-HordeRunningHordeServices -Home2 $oldHome).Count -eq 0) "a disabled service is not counted"
+    Remove-Item -LiteralPath (Join-Path (Join-Path $oldHome "settings") "service-definitions.json") -Force
+    Check (@(Get-HordeRunningHordeServices -Home2 $oldHome).Count -eq 0) "no definitions file: nothing running, and no throw"
+    $env:HORDE_HOME = $homeA
 
     Write-Host ""
     Write-Host "--- the lines horde home prints ---" -ForegroundColor Cyan

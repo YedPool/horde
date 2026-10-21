@@ -14,6 +14,8 @@ $HordeCommand = @{
         if ($PSBoundParameters.ContainsKey("Path") -and $Verb -ne "set") { throw "-Path belongs to home set, not to home or home clear" }
         if ($Verb -eq "set") {
             if (-not $PSBoundParameters.ContainsKey("Path")) { throw "home set needs -Path, the absolute folder of the Horde home" }
+            # A horde-kind service still running under the current home is a refusal, before anything is written.
+            Assert-HordeNoServiceRunsOnOldHome -NewHome $Path
             $r = Set-HordeHomePointer -Path $Path
             Write-Output ("old home: " + $(if ($r.old -ne "") { $r.old } else { "(none could be resolved)" }))
             Write-Output ("new home: " + $r.new)

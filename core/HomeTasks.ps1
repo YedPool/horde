@@ -9,6 +9,8 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path $PSScriptRoot "Home.ps1")
+. (Join-Path $PSScriptRoot "Services.ps1")
+. (Join-Path $PSScriptRoot "Heartbeat.ps1")
 
 function ConvertTo-HordeHomeComparable {
     # A path made comparable: full path, no trailing separator. Text that is not a path comes back as it was.
@@ -64,14 +66,54 @@ function Get-HordeHomeTaskFindings {
         if ($acts.Count -gt 0) { $args2 = "" + $acts[0].Arguments }
         $seen = @{}
         foreach ($r in @(Get-HordeTaskNamedHomes -Description ("" + $t.Description) -Arguments $args2)) {
-            if ((ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {
+            # ONLY A BAKED HOME IS A FINDING. A task that bakes none resolves the home at each run, so the home in its
+            # marker (where it was registered) says nothing about where it runs; flagging it would call a correct task stale.
+            if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {
                 $seen[$r.how] = $true
-                [void]$lines.Add("task " + $t.TaskPath + $t.TaskName + " is " + $r.how + " the home " + $r.home + ", not " + $Effective + $(if ($r.how -ceq "baked into its action") { " (it keeps that home whatever the pointer says; re-register it)" } else { " (re-register it to follow the new home)" }))
+                [void]$lines.Add("task " + $t.TaskPath + $t.TaskName + " is " + $r.how + " the home " + $r.home + ", not " + $Effective + " (it keeps that home whatever the pointer says; re-register it)")
             }
         }
     }
-    if ($lines.Count -eq 0) { [void]$lines.Add("tasks: " + @($found).Count + " under \Horde\, none names another home") }
+    if ($lines.Count -eq 0) { [void]$lines.Add("tasks: " + @($found).Count + " under \Horde\, none bakes in another home") }
     return [pscustomobject]@{ lines = @($lines.ToArray()); checked = $true }
+}
+
+function Get-HordeRunningHordeServices {
+    # The horde-kind services of the definitions in -Home whose heartbeat says they are running now: { name; beat }
+    # rows. `horde services stop` runs a service's stop command with the definition's hordeHome, so a service must be
+    # stopped BEFORE the home is moved (planning/fleet-db-design.md). Read only. A definitions file or heartbeat that
+    # cannot be read gives no row (the caller cannot tell, and says nothing rather than refuse on a guess).
+    param([Parameter(Mandatory = $true)][string]$Home2, [datetime]$Now = [datetime]::UtcNow)
+    $rows = New-Object System.Collections.ArrayList
+    $defs = $null
+    try { $defs = Get-HordeServiceDefinitions -HordeHome $Home2 } catch { return @() }
+    if ($null -eq $defs -or "$($defs.state)" -ceq "refused") { return @() }
+    foreach ($d in @($defs.services)) {
+        if ($null -eq $d -or $d.enabled -ne $true -or $null -eq $d.alive) { continue }
+        $horde = ($null -ne $d.start -and "$($d.start.kind)" -ceq "horde") -or ($null -ne $d.stop -and "$($d.stop.kind)" -ceq "horde")
+        if (-not $horde) { continue }
+        try {
+            $beat = Read-HordeHeartbeat -Path $d.alive.path
+            $v = Get-HordeHeartbeatVerdict -Heartbeat $beat -Now $Now -DefaultTickSeconds ([int]$d.alive.tickSeconds)
+            if ($v.state -ceq "known" -and $v.value.fresh -eq $true) { [void]$rows.Add([pscustomobject]@{ name = "$($d.name)"; ageSeconds = $v.value.ageSeconds }) }
+        } catch { }
+    }
+    return @($rows.ToArray())
+}
+
+function Assert-HordeNoServiceRunsOnOldHome {
+    # Throws when a horde-kind service of the CURRENT home is running and -NewHome is a different folder. The flip order
+    # is: stop each service (its definition still names the old home), change the definitions' hordeHome, set the
+    # pointer, start. Setting the pointer first, or editing a definition first, sends the stop to the wrong home while
+    # the process runs on, so the relay runs twice or the stop does nothing.
+    param([Parameter(Mandatory = $true)][string]$NewHome)
+    $old = ""
+    try { $old = (Resolve-HordeHome).path } catch { return }
+    if ((ConvertTo-HordeHomeComparable $old) -ieq (ConvertTo-HordeHomeComparable $NewHome)) { return }
+    $running = @(Get-HordeRunningHordeServices -Home2 $old)
+    if ($running.Count -gt 0) {
+        throw ("home set is refused: " + (@($running | ForEach-Object { $_.name }) -join ", ") + " (a horde-kind service, running under " + $old + ") would be left running on the old home. Stop each with horde services stop <name> first (while its definition still names the old home), then change the definitions' hordeHome, then run home set, then horde services start <name>")
+    }
 }
 
 function Get-HordeHomeCheckLines {

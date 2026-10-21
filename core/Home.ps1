@@ -27,9 +27,23 @@
 . (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 
+# THE USER PROFILE. A scheduled task that runs without a loaded profile (S4U) may have no USERPROFILE in its
+# environment, and the tasks Horde registers no longer bake the home in, so they must still find the pointer: when
+# USERPROFILE is empty the profile folder is asked of the system, as core/home.mjs asks os.homedir(). ASSUMPTION
+# (planning/fleet-db-design.md): the system's answer for the account a task runs as is the profile that holds that
+# account's pointer. A test replaces this block, so it never asks about the real profile.
+$script:HordeProfileFallback = { [System.Environment]::GetFolderPath("UserProfile") }
+
+function Get-HordeProfileDir {
+    # The user's profile folder: USERPROFILE, else the system's answer; "" when neither gives one.
+    $p = "$env:USERPROFILE".Trim()
+    if ($p -eq "") { try { $p = ("" + (& $script:HordeProfileFallback)).Trim() } catch { $p = "" } }
+    return $p
+}
+
 function Get-HordeHomePointerPath {
-    # %USERPROFILE%\.horde-home.json, or $null when USERPROFILE is empty. The one pointer path rule (core/home.mjs).
-    $profileDir = "$env:USERPROFILE".Trim()
+    # <profile>\.horde-home.json, or $null when there is no profile folder. The one pointer path rule (core/home.mjs).
+    $profileDir = Get-HordeProfileDir
     if ($profileDir -eq "") { return $null }
     return (Join-Path $profileDir ".horde-home.json")
 }
@@ -82,7 +96,7 @@ function Resolve-HordeHome {
         if (-not $r.ok) { throw $r.message }
         return [pscustomobject]@{ path = $r.home; source = "pointer" }
     }
-    return [pscustomobject]@{ path = (Join-Path "$env:USERPROFILE".Trim() ".horde"); source = "default" }
+    return [pscustomobject]@{ path = (Join-Path (Get-HordeProfileDir) ".horde"); source = "default" }
 }
 
 function Get-HordeHome {

@@ -20,10 +20,25 @@
            Find = 'foreach ($m in [regex]::Matches($text, "\`$env:HORDE_HOME = ''((?:[^'']|'''')*)''")) {'
            Replace = 'foreach ($m in @()) {' }
         @{ Name = "every-task-reported"
-           Find = 'if ((ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
-           Replace = 'if ($true -and -not $seen.ContainsKey($r.how)) {' }
+           Find = 'if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
+           Replace = 'if ($r.how -ceq "baked into its action" -and $true -and -not $seen.ContainsKey($r.how)) {' }
+        @{ Name = "unbaked-task-flagged-by-its-marker"
+           Find = 'if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
+           Replace = 'if ((ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {' }
+        @{ Name = "stale-heartbeat-counts-as-running"
+           Find = 'if ($v.state -ceq "known" -and $v.value.fresh -eq $true) {'
+           Replace = 'if ($v.state -ceq "known") {' }
+        @{ Name = "disabled-service-counts-as-running"
+           Find = 'if ($null -eq $d -or $d.enabled -ne $true -or $null -eq $d.alive) { continue }'
+           Replace = 'if ($null -eq $d -or $null -eq $d.alive) { continue }' }
+        @{ Name = "running-service-allowed"
+           Find = 'if ($running.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "same-home-refused"
+           Find = 'if ((ConvertTo-HordeHomeComparable $old) -ieq (ConvertTo-HordeHomeComparable $NewHome)) { return }'
+           Replace = '' }
         @{ Name = "no-task-reported"
-           Find = 'if ((ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
+           Find = 'if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
            Replace = 'if ($false) {' }
         @{ Name = "refused-query-throws"
            Find = '        return [pscustomobject]@{ lines = @("tasks: not checked (the Task Scheduler query was refused or failed: " + $why + "; try from an elevated prompt)"); checked = $false }'

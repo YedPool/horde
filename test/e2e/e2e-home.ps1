@@ -93,6 +93,22 @@ $r = Invoke-Home @("db", "status")
 Check ($r.code -eq 0 -and $r.out -like ("*" + (Join-Path $homeB "fleet.db") + "*")) "the next call follows the new pointer"
 
 Write-Host ""
+Write-Host "=== a running service blocks set until it is stopped ===" -ForegroundColor Cyan
+New-Item -ItemType Directory -Path (Join-Path $homeB "settings"), (Join-Path $homeB "relay") -Force | Out-Null
+$svc = [ordered]@{ checkout = $root; hordeHome = $homeB; enabled = $true; start = [ordered]@{ kind = "horde"; words = @("relay", "run") }; stop = [ordered]@{ kind = "horde"; words = @("relay", "stop"); waitSeconds = 30 }; alive = [ordered]@{ heartbeat = "relay/run-heartbeat.json"; tickSeconds = 60 } }
+[System.IO.File]::WriteAllText((Join-Path (Join-Path $homeB "settings") "service-definitions.json"), (ConvertTo-Json -Depth 8 -InputObject ([ordered]@{ schemaVersion = 1; settings = [ordered]@{ "relay-runner" = $svc } })), $utf8)
+$beat = Join-Path (Join-Path $homeB "relay") "run-heartbeat.json"
+[System.IO.File]::WriteAllText($beat, ('{"at":"' + [datetime]::UtcNow.ToString("o") + '","pid":4242,"tickSeconds":60,"pass":1}'), $utf8)
+$before = Pointer-Text
+$r = Invoke-Home @("home", "set", "-Path", $homeA)
+Check ($r.code -ne 0 -and $r.out -like "*home set is refused*relay-runner*horde services stop*") "home set while a horde-kind service runs under the current home is refused, naming it and the order"
+Check ((Pointer-Text) -ceq $before) "and the pointer is left as it was"
+Remove-Item -LiteralPath $beat -Force
+$r = Invoke-Home @("home", "set", "-Path", $homeA)
+Check ($r.code -eq 0 -and $r.out -like ("*new home: " + $homeA + "*")) "once the service is stopped (no fresh heartbeat), home set goes through"
+$r = Invoke-Home @("home", "set", "-Path", $homeB)
+
+Write-Host ""
 Write-Host "=== a bad pointer is refused by name ===" -ForegroundColor Cyan
 foreach ($bad in @('{"v":2,"hordeHome":"x"}', 'not json', '{"v":1,"hordeHome":"relative"}', ('{"v":1,"hordeHome":"' + (Join-Path $script:work "gone").Replace("\", "\\") + '"}'))) {
     [System.IO.File]::WriteAllText($pointer, $bad, $utf8)
@@ -114,8 +130,6 @@ Check ($r.code -eq 0 -and $r.out -like "*no pointer to remove*") "clear again is
 [System.IO.File]::WriteAllText($pointer, "garbage", $utf8)
 $r = Invoke-Home @("home", "clear")
 Check ($r.code -eq 0 -and $r.out -like "*pointer removed*") "clear removes even a bad pointer"
-$r = Invoke-Home @("home") @{ HORDE_HOME = ""; USERPROFILE = "" }
-Check ($r.code -ne 0 -and $r.out -like "*no home*") "with no profile and nothing set there is no home, and it says so"
 $r = Invoke-Home @("home", "nonsense")
 Check ($r.code -ne 0) "an unknown verb is refused"
 

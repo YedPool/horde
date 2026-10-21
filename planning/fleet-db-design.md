@@ -432,18 +432,38 @@ writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home
   `Invoke-HordeServiceHordeCommand`, `cli/commands/db.ps1`, `meter.ps1`, `decisions/Publish.ps1`) keep receiving the home the
   command resolved at that moment; nothing of theirs outlives the command.
 - *Long-lived services* (`cli/ServicesAct.ps1` start of a horde-kind service; the home is the definition's `hordeHome`,
-  `core/Services.ps1`) take the home WHEN THEY START. The flip restarts them: `horde services stop <name>` then
-  `horde services start <name>` for each, after the definitions file of the new home names the new `hordeHome`.
+  `core/Services.ps1`) take the home WHEN THEY START, and **`horde services stop` runs the stop command with the
+  definition's `hordeHome`** (`cli/ServicesAct.ps1`). So the ORDER MATTERS: a service must be stopped while its definition
+  still names the home it runs on. Editing the definition first sends the stop to the new home while the process runs on
+  the old one (a relay running twice, or a stop that does nothing). `horde home set` therefore REFUSES while a
+  horde-kind service of the current home has a fresh heartbeat (it names the service and the order), rather than guess:
+  the heartbeat is the supervisor's own test for "running", and a refusal costs one stop, where a wrong set costs a double
+  relay. The check reads the CURRENT home's definitions only; a definition already edited to the new home before the stop
+  is not seen, which is why the order below is the rule.
+- *Sessions through the SSH listener* (`transports/ssh/Listen.ps1`) get `SetEnv HORDE_HOME=<home>` from the sshd config
+  that `horde listen` wrote, so an SSH session keeps the old home until `horde listen` is run again; `horde home` does
+  not read that config (documented only).
 
-**The flip, in full.** (1) Put `fleet.db` in the new home. (2) `horde home set -Path <new home>`: this process and every
-new or running reader follow at their next call. (3) Unset HORDE_HOME wherever it is set (`horde home` warns while it is, in
-this process). (4) Re-register each task registered before this change, because a task only changes when re-registered and
-those still carry a baked HORDE_HOME and their old marker: `horde metrics schedule remove` then `install`, `horde services
-unschedule` then `schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
-`register-schedule.ps1` for the meter. **The metrics task of lane L needs the founder's elevated run; L files that.**
-(5) Restart the long-lived services (above). (6) `horde home` lists every task under `\Horde\` whose action or marker still
-names another home (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes on);
-run it after `set` and again after the re-registers: it should say none names another home.
+**The flip, in full.** (1) Put `fleet.db` in the new home. (2) Stop each horde-kind service while its definition still
+names the old home: `horde services stop <name>`. (3) Change the definitions' `hordeHome` (in the new home's
+`settings\service-definitions.json`). (4) `horde home set -Path <new home>`: this process and every new or running reader
+follow at their next call; it refuses if a service still runs. (5) Unset HORDE_HOME wherever it is set (`horde home`
+warns while it is, in this process). (6) `horde services start <name>` for each service. (7) Re-run `horde listen` so the
+SSH sessions get the new home. (8) Re-register each task that BAKES a home (those registered before this change; a task
+only changes when re-registered): `horde metrics schedule remove` then `install`, `horde services unschedule` then
+`schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
+`register-schedule.ps1` for the meter. A task registered since this change bakes none and needs nothing: it resolves the
+home at each run, so it is correct even though its marker still names the home it was registered under (its marker is
+informational; only a reinstall under another home asks for a remove first). **The metrics task of lane L needs the
+founder's elevated run; L files that.** (9) `horde home` lists every task under `\Horde\` that BAKES a home other than
+the effective one (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes
+on); it should say none bakes in another home.
+
+**The user profile a task sees.** The tasks that no longer bake the home find the pointer through the user's profile
+folder. A scheduled task run as S4U may have no loaded profile, hence possibly no USERPROFILE in its environment, so when
+USERPROFILE is empty `core/Home.ps1` asks the system (`[Environment]::GetFolderPath('UserProfile')`) and `core/home.mjs`
+asks `os.homedir()`, before refusing. ASSUMPTION: the system's answer for the account a task runs as is the profile folder
+that holds that account's pointer (true for a task that runs as the user who registered it, which is all of Horde's).
 
 **The rooted test.** Both languages refuse a HORDE_HOME that is not a drive path or a UNC path: `\x` and `C:x` (which .NET's
 IsPathRooted accepts) are refused by `core/Home.ps1` through `Test-HordeHomeRooted`, as `core/home.mjs` refuses them.

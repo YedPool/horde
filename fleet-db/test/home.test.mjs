@@ -29,6 +29,14 @@ test('the pointer file is <USERPROFILE>\\.horde-home.json', () => {
   assert.equal(pointerPath({ USERPROFILE: 'C:\\somebody' }), path.join('C:\\somebody', '.horde-home.json'));
 });
 
+test('USERPROFILE empty or missing (a task without a loaded profile): the system\'s home folder is used, before refusing', () => {
+  // Only the path is asked for: reading the pointer there would read the real profile (CONTRIBUTING 9).
+  for (const env of [{}, { USERPROFILE: '' }, { USERPROFILE: '   ' }]) {
+    assert.equal(pointerPath(env), path.join(os.homedir(), POINTER_NAME), JSON.stringify(env));
+  }
+  assert.equal(pointerPath({ USERPROFILE: 'C:\\somebody' }), path.join('C:\\somebody', POINTER_NAME), 'USERPROFILE set still wins');
+});
+
 test('HORDE_HOME wins over the pointer', () => {
   const r = rig();
   r.pointAt(r.homeB);
