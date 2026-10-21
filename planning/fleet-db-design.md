@@ -372,3 +372,45 @@ one, so it is a sign of a damaged folder, not a reason to lose the lot row. A lo
 fleet.db with other content (members: another orc_id, tier or note) is kept as it is and the difference reported; a wake id
 that already exists under another lot is not a difference but a clash, and refuses the whole lot. A lot's report lines
 (mismatches, stubs, unknown columns) are collected in a report of its own and added to the run's only if the lot commits.
+
+## One home (pointer file) (T-0299; M's ruling of 2026-10-21)
+
+Where Horde's home is (fleet.db, metrics, turn-duty, notices, wake, lots) used to be worked out in several places, each its own
+way: `core/Home.ps1` (HORDE_HOME, else `%USERPROFILE%\.horde`), `fleet-db/store.mjs` and `fleet-metrics/home.mjs` (HORDE_HOME or
+refuse), `hooks/horde-turn-duty.mjs` (its own variables, config.json, and a state folder fixed under `%USERPROFILE%\.horde`). The
+real home is a different folder from `%USERPROFILE%\.horde`, so some writers used one and some the other, and an environment
+variable set at user level reaches only processes started afterwards, so running sessions, hooks and scheduled tasks would have
+kept the old folder for days. The home now resolves the same way everywhere, from one source, so one step flips the whole fleet.
+
+**The pointer file.** `%USERPROFILE%\.horde-home.json`, outside any home, exactly `{"v":1,"hordeHome":"<absolute path>"}`, ASCII.
+It is a file and it is read on every call, so a running process sees a change at its next call.
+
+**The order, the same in every resolver** (`core/Home.ps1`, and for node the one module `core/home.mjs`, which
+`fleet-db/store.mjs`, `fleet-metrics/home.mjs` and the turn-duty hook import):
+
+1. `HORDE_HOME`, if set (absolute, else refused, as before; the tests rely on it);
+2. the pointer file, if there is one;
+3. PowerShell only: `%USERPROFILE%\.horde`, as before. The node resolvers have no third step and refuse when neither (1) nor (2)
+   names a home: a silent fallback would split the data.
+
+**A bad pointer is refused, never skipped**, with a message that names the file: unreadable, not JSON, not ASCII (a byte-order mark
+included), `v` not 1, no `hordeHome`, a relative `hordeHome`, or a folder that does not exist. Skipping it would send this program
+to another folder than the ones that read the pointer, and nothing would say so. (The hook cannot refuse a stop; it logs the
+refusal by name and passes, and does not fall through to config.json.)
+
+**The turn-duty hook** keeps `HORDE_TURN_DUTY_HORDE_HOME` first and `config.json` `hordeHome` as the last fallback (K's), with
+the rule above between them. Its state and config folders default to `<resolved home>\turn-duty` when a home resolves, else the old
+`%USERPROFILE%\.horde\turn-duty`; the `HORDE_TURN_DUTY_STATE_DIR` and `_CONFIG_DIR` overrides stay.
+
+**The verb.** `horde home` prints the home and which source gave it (HORDE_HOME, pointer, default). `horde home set -Path <abs>`
+writes the pointer atomically (a temp file in the profile folder, then a rename over the pointer: a reader sees the old pointer or
+the new one) and prints the old and the new home; it refuses a relative path, a folder that does not exist, a folder without
+`fleet.db`, and a path the ASCII pointer cannot hold. `horde home clear` removes the pointer and prints what the home is now.
+`horde db` and `horde decisions publish` still refuse to make fleet.db in a default folder: they need the source to be HORDE_HOME
+or the pointer.
+
+**Flip and rollback.** Flip: copy or move the data so the new home holds `fleet.db`, then `horde home set -Path <new home>`. Every
+resolver follows at its next call; nothing is restarted. Rollback: `horde home set -Path <old home>`, or `horde home clear` to go
+back to the default. There is no migration of data and `node.json` handling (`core/Device.ps1`) is unchanged. A machine whose
+environment already sets HORDE_HOME keeps using it: the variable wins, so unset it (or set it to the same folder) for the pointer
+to take effect in those processes.
