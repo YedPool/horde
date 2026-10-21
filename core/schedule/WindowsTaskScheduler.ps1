@@ -163,6 +163,14 @@ function New-HordeTaskSchedulerTask {
     return $task
 }
 
+function ConvertTo-HordeTaskHomeKey {
+    # A home made comparable: full path, no trailing separator, lower case (Windows paths ignore case).
+    param([string]$Path)
+    $p = "$Path".Trim()
+    try { $p = [System.IO.Path]::GetFullPath($p) } catch { }
+    return $p.TrimEnd('\', '/').ToLowerInvariant()
+}
+
 function Install-HordeTaskSchedulerJob {
     # -Find and -Register are the scheduler, handed in so a suite can install against a stand-in:
     # -Find { param($Name, $Folder) } answers the task there, or $null (Get-HordeTaskSchedulerTask);
@@ -178,14 +186,19 @@ function Install-HordeTaskSchedulerJob {
     $old = & $Find $Job.name $Job.folder
     if ($null -ne $old) {
         if (-not (Test-HordeTaskMarked $old)) { throw ("a task named '" + $Job.name + "' in \" + $Job.folder + "\ was not made by Horde; it was left alone") }
-        # NO "SERVES ANOTHER HOME" REFUSAL (T-0299, one-home flip). This check once refused to replace a task whose marker
-        # named another home, because the task BAKED that home in and replacing it would have moved someone else's work.
-        # A task no longer bakes a home: it runs as the user who registers it and resolves HORDE_HOME, then the pointer, at
-        # each run, so the home in its marker is a label (where it was registered), not what it serves. After horde home set
-        # the old task's marker names the old home, and the one elevated re-register must replace it, not be refused. What
-        # still protects other people's tasks is the rest of this function: only a task made by Horde (author and marker,
-        # checked above) is ever replaced, a task registers and replaces only under the account that runs it, and suites
-        # use their own folder (HordeTest). The new marker records the home resolved now.
+        # A NARROW "SERVES ANOTHER HOME" REFUSAL (T-0299). A task bakes no home any more, so its marker is a label of where it
+        # was registered, and the one elevated re-register after horde home set must be able to replace it: the old marker names
+        # the OLD home, which holds no fleet.db (fleet.db lives in the new home), so that move passes. What the refusal still
+        # stops is a developer's or test's scratch install: horde metrics schedule install with HORDE_HOME set to a scratch
+        # home would replace the REAL \Horde\ task, whose action still names this checkout's script, and relabel it to the
+        # scratch home. So it refuses when the existing task's marker names a home that (a) holds a fleet.db (so it still
+        # exists) and (b) differs from the home this install resolves, and says so by both homes. -TakeOver (Job.takeOver)
+        # replaces it on purpose. A marker home that is gone, or holds no fleet.db, or is the same home, is replaced.
+        $oldHome = (Read-HordeJobMarker -Description $old.Description).home
+        $takeOver = ($null -ne $Job.PSObject.Properties["takeOver"] -and $Job.takeOver -eq $true)
+        $differs = ($oldHome -ne "" -and (ConvertTo-HordeTaskHomeKey $oldHome) -cne (ConvertTo-HordeTaskHomeKey $Job.hordeHome))
+        $oldHolds = ($differs -and (Test-Path -LiteralPath (Join-Path $oldHome "fleet.db") -PathType Leaf))
+        if ($oldHolds -and -not $takeOver) { throw ("the task '" + $Job.name + "' in \" + $Job.folder + "\ is registered under the Horde home " + $oldHome + ", which still holds a fleet.db, and this install resolves the home " + $Job.hordeHome + "; it was left alone. Pass -TakeOver to replace it on purpose (a scratch install over the real task would relabel it)") }
     }
     $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $task = New-HordeTaskSchedulerTask -Job $Job -UserId $user

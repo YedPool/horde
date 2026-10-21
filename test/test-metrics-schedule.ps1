@@ -140,12 +140,40 @@ try {
         $otherHomeJob = New-HordeScheduledJob -Name ($testName + " boot") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome (Join-Path $env:TEMP ($testName + " other home")) -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled
         $oldOtherHome = [pscustomobject]@{ Author = "Horde"; Description = $otherHomeJob.description; Principal = [pscustomobject]@{ LogonType = "S4U" } }
         $calls.Clear()
-        # T-0299: the marker's home is a label, not a bake, so a Horde task registered under the OLD home is replaced (the one
+        # T-0299: the marker's home is a label, not a bake, so a Horde task registered under an OLD home (one with no fleet.db) is replaced (the one
         # re-register after horde home set), and the new task's marker names the home resolved now.
         $threw = $false
         try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldOtherHome } -Register $keep } catch { $threw = $true }
         Check (-not $threw -and $calls.Count -eq 1) "a Horde task registered under another home is REPLACED (the flip's re-register), not refused"
         Check ($calls.Count -eq 1 -and (Read-HordeJobMarker -Description $calls[0].task.Description).home -ceq $bootJob.hordeHome) "and the new task's marker names the home resolved now"
+        # THE NARROW REFUSAL: a Horde task whose marker home still exists, holds a fleet.db and differs from the home this install
+        # resolves is not replaced (a scratch install over the real task); -TakeOver replaces it on purpose.
+        $holdHome = Join-Path $work "marker-home-with-db"
+        $bareHome = Join-Path $work "marker-home-bare"
+        New-Item -ItemType Directory -Path $holdHome, $bareHome -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $holdHome "fleet.db"), "x")
+        function New-OldTask { param([string]$MarkerHome) $j = New-HordeScheduledJob -Name ($testName + " boot") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome $MarkerHome -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled; return [pscustomobject]@{ Author = "Horde"; Description = $j.description; Principal = [pscustomobject]@{ LogonType = "S4U" } } }
+        $oldHolds = New-OldTask $holdHome
+        $calls.Clear()
+        Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldHolds } -Register $keep } "-TakeOver") "scratch home over a task whose marker home holds a fleet.db: refused, and the message names the switch"
+        Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldHolds } -Register $keep } $holdHome) "and names the home it is registered under"
+        Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldHolds } -Register $keep } $bootJob.hordeHome) "and the home this install resolves"
+        Check ($calls.Count -eq 0) "CONTROL: and the scheduler was never asked"
+        $takeJob = New-HordeScheduledJob -Name ($testName + " boot") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome $bootJob.hordeHome -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled -TakeOver
+        Check ($takeJob.takeOver -eq $true -and $bootJob.takeOver -eq $false) "-TakeOver is carried on the job, off by default"
+        $calls.Clear()
+        $ok = $true; try { Install-HordeTaskSchedulerJob -Job $takeJob -Find { param($Name, $Folder) return $oldHolds } -Register $keep } catch { $ok = $false }
+        Check ($ok -and $calls.Count -eq 1) "the same install with -TakeOver replaces it"
+        $calls.Clear()
+        $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask $bareHome) } -Register $keep } catch { $ok = $false }
+        Check ($ok -and $calls.Count -eq 1) "a marker home that exists but holds no fleet.db (the move case: the old home) is replaced"
+        $calls.Clear()
+        $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask (Join-Path $work "marker-home-gone")) } -Register $keep } catch { $ok = $false }
+        Check ($ok -and $calls.Count -eq 1) "a marker home that no longer exists is replaced"
+        $calls.Clear()
+        [System.IO.File]::WriteAllText((Join-Path $bootJob.hordeHome "fleet.db"), "x")
+                $ok = $true; try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return (New-OldTask $bootJob.hordeHome) } -Register $keep } catch { $ok = $false }
+        Check ($ok -and $calls.Count -eq 1) "CONTROL: the same home (even with a fleet.db) is replaced: a plain reinstall"
         $notMine = [pscustomobject]@{ Author = "Someone"; Description = "their own task"; Principal = [pscustomobject]@{ LogonType = "S4U" } }
         $calls.Clear()
         Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $notMine } -Register $keep } "was not made by Horde") "CONTROL: a task Horde did not make is still left alone"

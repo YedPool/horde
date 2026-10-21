@@ -155,6 +155,8 @@ try {
     $env:HORDE_HOME = $homeA
     $collect = New-HordeCollectJob -HordeScript (Join-Path $root "horde.ps1") -Name "x TEST" -Folder "HordeTest" -Disabled
     Check (-not $collect.environment.ContainsKey("HORDE_HOME")) "the metrics collect job has no HORDE_HOME in its environment"
+    $takenCollect = New-HordeCollectJob -HordeScript (Join-Path $root "horde.ps1") -Name "x TEST" -Folder "HordeTest" -Disabled -TakeOver
+    Check ($takenCollect.takeOver -eq $true -and $collect.takeOver -eq $false) "the metrics collect job carries -TakeOver, off by default"
     $acts = @(Get-HordeTaskNamedHomes -Description "own task" -Arguments (ConvertTo-HordeTaskAction -Job $collect).arguments)
     Check (@($acts | Where-Object { $_.how -ceq "baked into its action" }).Count -eq 0) "the metrics collect job's action holds no HORDE_HOME"
     $meter = Get-Content -LiteralPath (Join-Path $root "fleet-metrics\register-schedule.ps1") -Raw
