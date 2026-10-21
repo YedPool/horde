@@ -284,12 +284,19 @@ foreach ($c in @(
         @{ n = "a config file that is not JSON"; cfg = "{not json" }
         @{ n = "a config file with no hordeHome"; cfg = '{"other": 1}' }
         @{ n = "a config file whose hordeHome is not an absolute path"; cfg = '{"hordeHome": "relative\\home"}' }
+        # THE SAME RULE FOR THE ENVIRONMENT (second review of T-0319): a relative or drive-rooted home would resolve
+        # against the hook's folder, and a line break would split the printed command.
+        @{ n = "a relative HORDE_HOME"; cfg = $null; env = @{ HORDE_HOME = "relative\home" } }
+        @{ n = "a drive-rooted HORDE_HOME with no drive"; cfg = $null; env = @{ HORDE_HOME = "\rooted\home" } }
+        @{ n = "a HORDE_TURN_DUTY_HORDE_HOME holding a line break"; cfg = $null; env = @{ HORDE_TURN_DUTY_HORDE_HOME = ("C:\a" + [char]10 + "b") } }
     )) {
     Clear-Config
     if ($null -ne $c.cfg) { Put-Config $c.cfg }
     Reset-Marks
     $s = New-OrcSession
-    $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null }
+    $envFor = @{ HORDE_TURN_DUTY_HORDE_HOME = $null }
+    if ($null -ne $c.env) { foreach ($k in $c.env.Keys) { $envFor[$k] = $c.env[$k] } }
+    $r = Stop-Hook $s $envFor
     $st = Get-StateObj $s
     Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1) ("exit 0, silent, nothing spawned, one log line: " + $c.n)
     Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -eq 0) ("   and the check is recorded: " + $c.n)
@@ -301,6 +308,12 @@ $odd = "C:\fleet's home"
 $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $odd }
 $b = Get-Block $r
 Check ($null -ne $b -and $b.reason -like ("*HORDE_HOME='C:\fleet''s home'; horde decisions publish*")) "a home with an apostrophe is quoted for PowerShell (the apostrophe doubled)"
+Reset-Marks
+$s = New-OrcSession
+$curly = [string][char]0x2019
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = ("C:\fleet" + $curly + "s home") }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason.Contains("HORDE_HOME='C:\fleet" + $curly + $curly + "s home'")) "a curly apostrophe, which PowerShell also reads as a quote, is doubled too"
 Write-Host ""
 Write-Host "--- the state is written BEFORE the block ---" -ForegroundColor Cyan
 Reset-Marks

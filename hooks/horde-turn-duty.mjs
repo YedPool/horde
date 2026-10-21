@@ -80,7 +80,8 @@ const TIMEOUT_MS = Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) > 0 ? Number(p
 // The command is runnable as printed: PowerShell (Orc sessions run PowerShell), the home set for that one command,
 // since no session has HORDE_HOME of its own.
 function decisionsReason(letter, home) {
-  const quoted = "'" + home.replace(/'/g, "''") + "'";
+  // PowerShell ends a single-quoted string on the curly quotes too, so each is doubled like the apostrophe.
+  const quoted = "'" + home.replace(/['‘’‚‛]/g, "$&$&") + "'";
   return [
     "no published decisions list was found for Orc " + letter + " in the last 30 minutes: publish yours with horde decisions publish -File <list.json> (empty list is valid)",
     "run it in PowerShell as: $env:HORDE_HOME=" + quoted + "; horde decisions publish -File <list.json>",
@@ -161,14 +162,23 @@ function dutyLetter(sid) {
 // No session has HORDE_HOME, and `horde decisions published` refuses without it, so the hook finds it itself:
 // HORDE_TURN_DUTY_HORDE_HOME, else HORDE_HOME, else <config dir>\config.json { "hordeHome": "<absolute path>" }, which
 // the installer writes (the home moves when fleet.db does, so it is a file and not code). Null when none is usable.
+// A home is usable only when it is a full path (a drive and a separator, or UNC) on one line: a relative or
+// drive-rooted one would resolve against the hook's folder, not the session's, and a line break would split
+// the printed command. The same rule for every source.
+function usableHome(v) {
+  if (typeof v !== "string") return null;
+  const h = v.trim();
+  if (h === "" || /[\r\n]/.test(h) || !/^([A-Za-z]:[\\/]|\\\\[^\\])/.test(h)) return null;
+  return h;
+}
+
 function resolveHome() {
   for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {
-    if (typeof v === "string" && v.trim() !== "") return v.trim();
+    const h = usableHome(v);
+    if (h) return h;
   }
   const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));
-  const h = cfg && typeof cfg === "object" ? cfg.hordeHome : undefined;
-  if (typeof h === "string" && h.trim() !== "" && isAbsolute(h.trim())) return h.trim();
-  return null;
+  return usableHome(cfg && typeof cfg === "object" ? cfg.hordeHome : undefined);
 }
 
 // ---- running horde -------------------------------------------------------------------------------------------
