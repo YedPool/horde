@@ -91,8 +91,8 @@
            Find = 'elseif ($a.StartsWith("--resume=", [System.StringComparison]::OrdinalIgnoreCase))'
            Replace = 'elseif ($false)' }
         @{ Name = "resume-short-flag-ignored"
-           Find = 'if ($a -ieq "--resume" -or $a -ieq "-r") {'
-           Replace = 'if ($a -ieq "--resume") {' }
+           Find = 'if ($a -ieq "--resume" -or $a -ieq "-r" -or $a -ieq "--session-id") {'
+           Replace = 'if ($a -ieq "--resume" -or $a -ieq "--session-id") {' }
         @{ Name = "id-anywhere-counts"
            Find = '{ $cand = $a.Substring(9) }'
            Replace = '{ $cand = $a.Substring(9) } elseif ($a.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern) { $cand = $a }' }
@@ -105,5 +105,14 @@
         @{ Name = "adapter-snapshot-skips-listing"
            Find = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) -Resumed (Read-ClaudeCodeFleetResumeArgv) }'
            Replace = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) }' }
+        @{ Name = "blind-row-ignored"
+           Find = 'if ("" + $p.commandLine -eq "") { [void]$blind.Add("" + $p.pid); continue }'
+           Replace = 'if ("" + $p.commandLine -eq "") { continue }' }
+        @{ Name = "session-id-flag-ignored"
+           Find = ' -or $a -ieq "--session-id") {'
+           Replace = ') {' }
+        @{ Name = "session-id-equals-ignored"
+           Find = 'elseif ($a.StartsWith("--session-id=", [System.StringComparison]::OrdinalIgnoreCase))'
+           Replace = 'elseif ($false)' }
     )
 }

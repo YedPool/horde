@@ -107,7 +107,7 @@ $asleep = Get-HordeFleetAsleep -HordeHome $hh -Agent $agent -HostAdapter $hostA.
 Check ($asleep.state -ceq "known" -and -not $asleep.value.ContainsKey($ids["E"]) -and -not $asleep.value.ContainsKey($ids["H"]) -and $asleep.value.ContainsKey($ids["X"])) "the wake watcher's reading agrees: only X is asleep"
 $world.procs.Clear()
 Add-Proc 5 "claude.exe" ($exe + " --add-dir C:\work\" + $ids["E"])
-Add-Proc 7 "claude.exe" ($exe + " --session-id " + $ids["H"])
+Add-Proc 7 "claude.exe" ($exe + " --name " + $ids["H"])
 Add-Proc 6 "claude.exe" ($exe + " --resume " + $ids["X"] + ' "look at ' + $ids["H"] + '"')
 $lot = Lot-Of $hh
 Check ((Member-Of $lot "E").state -ceq "asleep" -and (Member-Of $lot "H").state -ceq "asleep" -and (Member-Of $lot "X").state -ceq "still-awake") "an id that merely appears in a path or in a prompt after another id's --resume does not count"
@@ -154,6 +154,34 @@ Check ($o.outcome -ceq "parked") "and once that process is gone it is exited"
 $world.listing = "unreadable"
 $o = Exit-Step
 Check ($o.outcome -ceq "not-yet") ("an unreadable process table is never read as exited (" + $o.outcome + ")")
+
+Section "fleet hibernate chooses a session resumed by hand: the record and the exit check (T-0320)"
+# The candidate runs by argv alone, so the harness names no process for it: the record holds no process
+# field (it is optional everywhere it is read), and the exit check then asks the verdict with no process.
+. (Join-Path $root "fleet\Hibernation.ps1")
+$wf = Join-Path $work "wezfleet"
+$regDir = Join-Path $wf "registry\sessions"
+[void](New-Item -ItemType Directory -Path $regDir -Force)
+$rec = [ordered]@{ claudeSessionId = $ids["E"]; origin = "user"; fleetSessionId = ""; pane = "5"; instance = "inst-1"; cwd = $cwds["E"]; transcriptPath = (Join-Path $work "E.jsonl"); owner = ""; label = "E"; role = "orchestrator" }
+[System.IO.File]::WriteAllText((Join-Path $regDir ($ids["E"] + ".json")), (ConvertTo-Json -InputObject $rec))
+$recDeps = [pscustomobject]@{ Now = { [datetime]::new(2026, 10, 21, 20, 30, 0, [System.DateTimeKind]::Utc) }; Agent = $agent; Host = $hostA.value; Registry = { Read-HordeRegistry -Root $wf }.GetNewClosure() }
+$selection = [pscustomobject][ordered]@{ kind = "all"; labels = @(); exclude = @() }
+Reset-World
+Add-Proc 28356 "claude.exe" ($exe + " --resume " + $ids["E"])
+$hh = New-Home
+$r = Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $selection -HordeHome $hh
+$sess = @($r.record.sessions)
+Check ($sess.Count -eq 1 -and $sess[0].sessionId -ceq $ids["E"]) "a session that runs by argv alone is a candidate and is recorded"
+Check ($null -eq $sess[0].PSObject.Properties["process"]) "its record holds no process field, because the harness names no process for it"
+$o = Exit-Step
+Check ($o.outcome -ceq "not-yet") "and its exit check waits while that process runs (no process field needed)"
+Reset-World
+$hh = New-Home
+Check (Throws { Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $selection -HordeHome $hh } "no running session") "with no control file named and nothing resuming it, nothing runs, so the record is refused rather than guessed"
+Reset-World
+$world.listing = "unreadable"
+$hh = New-Home
+Check (Throws { Invoke-HordeFleetRecord -Deps $recDeps -Selector (New-HordeFleetSelectorAll) -Selection $selection -HordeHome $hh } "cannot be read") "an unreadable process listing fails the record closed"
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 Complete-HordeSuite -Success "a session resumed by hand with no control file is never asleep, never started a second time and never seen exited while its process runs"

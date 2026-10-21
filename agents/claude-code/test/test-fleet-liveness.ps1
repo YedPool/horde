@@ -210,7 +210,7 @@ Check ($v.state -ceq "stopped") "CONTROL: a dead control file with no resuming p
 $snapD = Snap-With @((Proc 77 "claude.exe" ($exe + " --resume " + $DEAD)))
 Check ((Verdict $snapD $DEAD "C:\work\dead").state -ceq "running") "a session whose control file is dead but whose id a process resumes is running"
 # the other argv forms and the id's case
-foreach ($form in @(@("--resume=" + $HAND), @("-r", $HAND), @("--resume", $HAND.ToUpperInvariant()), @("--resume=" + $HAND.ToUpperInvariant()), @("--model", "x", "-r", $HAND))) {
+foreach ($form in @(@("--resume=" + $HAND), @("-r", $HAND), @("--resume", $HAND.ToUpperInvariant()), @("--resume=" + $HAND.ToUpperInvariant()), @("--model", "x", "-r", $HAND), @("--session-id", $HAND), @("--session-id=" + $HAND), @("--session-id=" + $HAND.ToUpperInvariant()))) {
     $line = $exe + " " + ($form -join " ")
     $v = Verdict (Snap-With @((Proc 31 "claude.exe" $line))) $HAND "C:\work\hand"
     Check ($v.state -ceq "running" -and $v.pid -ceq "31") ("the form '" + ($form -join " ") + "' resumes the session (" + $v.state + ")")
@@ -220,7 +220,8 @@ $elsewhere = @(
     @("a path", ($exe + ' --add-dir "C:\work\' + $HAND + '"')),
     @("a prompt text after --resume of another id", ($exe + " --resume " + $NOTMINE + ' "please look at ' + $HAND + '"')),
     @("a prompt that says --resume", ($exe + ' "claude --resume ' + $HAND + '"')),
-    @("another flag's value", ($exe + " --session-id " + $HAND)),
+    @("another flag's value", ($exe + " --name " + $HAND)),
+    @("a continue flag (it names no id)", ($exe + " --continue " + $HAND)),
     @("the id as a bare argument", ($exe + " " + $HAND)),
     @("--resume with no id then the id as a prompt", ($exe + " --resume --print " + $HAND)),
     @("a longer word", ($exe + " --resumed " + $HAND)),
@@ -240,9 +241,20 @@ Check ($v.state -ceq "running") "the process image is matched without regard to 
 $snap2 = Snap-With @((Proc 61 "claude.exe" ($exe + " --resume " + $HAND)), (Proc 62 "claude.exe" ($exe + " --resume " + $HAND2)), (Proc 63 "node.exe" "node x"))
 Check ((Verdict $snap2 $HAND "C:\work\hand").pid -ceq "61" -and (Verdict $snap2 $HAND2 "C:\work\hand").pid -ceq "62") "two resuming processes each keep their own session"
 Check ((Verdict $snap2 $NOTMINE "C:\work\hand").state -ceq "stopped") "CONTROL: a third id is still stopped"
-# a process with no command line (the listing could not give it) reads as no resume, not as an error
-$v = Verdict (Snap-With @((Proc 64 "claude.exe" $null))) $HAND "C:\work\hand"
-Check ($v.state -ceq "stopped") "a harness process with no readable command line resumes nothing"
+# --session-id STARTS a session with that id; a process running under it is a reason not to start another
+# (erring toward running is the safe side), so unlike every other flag's value it counts.
+# a harness process with no readable command line (another user's, elevated) may be the very resume: the
+# listing is partly unreadable, so a session with no control file is unknown, never stopped
+foreach ($blank in @($null, "")) {
+    $snapB = Snap-With @((Proc 64 "claude.exe" $blank))
+    $v = Verdict $snapB $HAND "C:\work\hand"
+    Check ($v.state -ceq "unknown" -and $v.kind -ceq "reading" -and $v.reason -like "*64*") ("a harness process with no readable command line makes a session with no control file unknown (" + $v.state + "/" + $v.kind + ")")
+}
+Check ((Verdict $snapB $LIVE "C:\work\live").state -ceq "running") "CONTROL: a live control file needs no command line"
+$snapB2 = Snap-With @((Proc 64 "claude.exe" $null), (Proc 65 "claude.exe" ($exe + " --resume " + $HAND)))
+Check ((Verdict $snapB2 $HAND "C:\work\hand").state -ceq "running") "an id found in a readable row is still running, whatever the blind row"
+Check ((Verdict $snapB2 $NOTMINE "C:\work\hand").state -ceq "unknown") "and one found nowhere is unknown while a row is blind"
+Check ((Verdict (Snap-With @((Proc 66 "pwsh.exe" $null))) $HAND "C:\work\hand").state -ceq "stopped") "CONTROL: a blind row of another program does not matter"
 # listing unreadable: unknown, never stopped, for a session with no control file
 $bad = New-HordeUnknown -Reason "CIM refused"
 $snapU = New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart) -Resumed (Read-ClaudeCodeFleetResumeArgv -Table { $bad })

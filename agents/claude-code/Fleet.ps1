@@ -141,6 +141,13 @@ function Get-ClaudeCodeFleetRecordState {
 # process is collected. WHY THIS ONLY ARGUES AGAINST "STOPPED": after /clear or a compaction the process
 # keeps its old --resume id while the live id changes, so argv cannot prove which id is live - but it does
 # prove that something resumed from that id is running, and that is enough to never call it stopped.
+# THE IMAGE IS THE ADAPTER'S processImage (names.txt: claude.exe, the npm launcher starts the binary
+# directly), kept here as the one place this file names it. WHAT IT MISSES: a harness started some other
+# way - the "command" setting (claude-code-fleet.json) naming a program that runs node on the harness's
+# script, so the process image is node.exe - is not seen, and a session resumed that way with no control
+# file still reads stopped. Deriving the image from the setting would not help: it names the launcher, not
+# the process the launcher ends up as. A command-line search across every image would match any program
+# that merely mentions --resume (an editor, a shell), so the narrower, wrong-in-one-known-way rule stays.
 $script:ClaudeCodeFleetProcessImage = "claude.exe"
 
 function Split-ClaudeCodeFleetCommandLine {
@@ -179,16 +186,21 @@ function Split-ClaudeCodeFleetCommandLine {
 
 function Get-ClaudeCodeFleetResumeIds {
     # The session ids (lower-cased) that -Argv resumes: the argument after --resume or -r, or the value of
-    # --resume=<id>. Only an argument in that place counts, and only when it is a uuid: an id elsewhere
-    # (a path, a prompt text, the id after another flag) is not a resume of it.
+    # --resume=<id>, and the id after --session-id (also --session-id=<id>), which STARTS a session with
+    # that id: it is not a resume, but a process running under that id is just as much a reason never to
+    # start a second copy, and erring toward "running" is the safe side. -c / --continue names no id (the
+    # harness picks the newest conversation of the folder), so nothing can be collected from it. Only an
+    # argument in that place counts, and only when it is a uuid: an id elsewhere (a path, a prompt text,
+    # the id after any other flag) is not a resume of it.
     param([string[]]$Argv = @())
     $ids = New-Object System.Collections.ArrayList
     $list = @($Argv)
     for ($i = 0; $i -lt $list.Count; $i++) {
         $a = "" + $list[$i]
         $cand = $null
-        if ($a -ieq "--resume" -or $a -ieq "-r") { if ($i + 1 -lt $list.Count) { $cand = "" + $list[$i + 1] } }
+        if ($a -ieq "--resume" -or $a -ieq "-r" -or $a -ieq "--session-id") { if ($i + 1 -lt $list.Count) { $cand = "" + $list[$i + 1] } }
         elseif ($a.StartsWith("--resume=", [System.StringComparison]::OrdinalIgnoreCase)) { $cand = $a.Substring(9) }
+        elseif ($a.StartsWith("--session-id=", [System.StringComparison]::OrdinalIgnoreCase)) { $cand = $a.Substring(13) }
         if ($null -ne $cand -and $cand.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern) { [void]$ids.Add($cand.ToLowerInvariant()) }
     }
     return $ids.ToArray()
@@ -211,13 +223,20 @@ function Read-ClaudeCodeFleetResumeArgv {
     }
     $rows = $answer.value
     if ($rows -is [System.Collections.IDictionary]) { $rows = @($rows.Values) }
+    $blind = New-Object System.Collections.ArrayList
     foreach ($p in @($rows)) {
         if ($null -eq $p -or "" + $p.name -ine $script:ClaudeCodeFleetProcessImage) { continue }
+        # A harness process whose command line came back empty (another user's, or elevated) may be the very
+        # resume that is wanted: the listing is partly unreadable, and a session with no control file is then
+        # unknown, never stopped. Ids found in the other rows still count.
+        if ("" + $p.commandLine -eq "") { [void]$blind.Add("" + $p.pid); continue }
         foreach ($id in @(Get-ClaudeCodeFleetResumeIds -Argv @(Split-ClaudeCodeFleetCommandLine -Line $p.commandLine))) {
             if (-not $resumed.ContainsKey($id)) { $resumed[$id] = "" + $p.pid }
         }
     }
-    return [pscustomobject]@{ resumed = $resumed; error = "" }
+    $err = ""
+    if ($blind.Count -gt 0) { $err = "the process listing is partly unreadable: no command line for harness process " + ($blind -join ", ") }
+    return [pscustomobject]@{ resumed = $resumed; error = $err }
 }
 
 function New-ClaudeCodeFleetSnapshot {

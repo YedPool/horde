@@ -20,8 +20,8 @@
            Find = 'elseif ($a.StartsWith("--resume=", [System.StringComparison]::OrdinalIgnoreCase))'
            Replace = 'elseif ($false)' }
         @{ Name = "resume-short-flag-ignored"
-           Find = 'if ($a -ieq "--resume" -or $a -ieq "-r") {'
-           Replace = 'if ($a -ieq "--resume") {' }
+           Find = 'if ($a -ieq "--resume" -or $a -ieq "-r" -or $a -ieq "--session-id") {'
+           Replace = 'if ($a -ieq "--resume" -or $a -ieq "--session-id") {' }
         @{ Name = "id-anywhere-counts"
            Find = '{ $cand = $a.Substring(9) }'
            Replace = '{ $cand = $a.Substring(9) } elseif ($a.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern) { $cand = $a }' }
