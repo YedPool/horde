@@ -156,6 +156,26 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
   columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
 
+## Confirm record (migration 5; T-0299, M's ruling)
+
+- A publish with a list equal to the live one writes no snapshot (`decisions_snapshot_not_same`), so the
+  turn-duty Stop hook could not tell an Orc whose list is unchanged from one that never looked at it.
+  `decisions_confirm` (id, orc_id, snapshot_id, session_id, confirmed_at) is the record: append-only,
+  one row per accepted publish, written in the same transaction as the publish. A new list gets its
+  snapshot and a confirm at the same millisecond; an equal list gets a confirm for the live snapshot and
+  nothing else. A refused publish writes nothing.
+- Triggers: a confirm must be of its Orc's live snapshot at insert time, and never earlier than that
+  snapshot's `published_at`. `horde db check` also flags a confirm whose snapshot belongs to another Orc or
+  that is earlier than its snapshot (reachable only with the triggers off). Unique on (snapshot_id,
+  confirmed_at): a second publish in the same millisecond adds nothing.
+- `decisions_live` (recreated, every old column kept) gains `confirmed_at`: the latest confirm of the live
+  snapshot, else `published_at`, so `confirmed_at >= published_at` always; snapshots made before migration
+  5 read `confirmed_at = published_at`.
+- FOR THE HOOK (lane K): the field is `confirmedAt` (ISO UTC) in each list of `horde decisions published
+  --json`, beside `publishedAt`. The turn-duty check should use the later of the two (confirmedAt is never
+  before publishedAt). `published` text prints `published <ISO>, confirmed <ISO>`; `publish` of an equal
+  list prints `unchanged, confirmed <ISO> (snapshot ...)`.
+
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 
 The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in
@@ -177,7 +197,7 @@ The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatus
 (`-Ledger`, `-PrCache`, `-Changelog`, `-Cards`, `-ThrallCard`, `-Registry`, `-DryRun`; no path is ever defaulted
 to the real files). Each source is optional. All files are read first; then one `inWrite` transaction
 runs node, orcs, sessions, PR cache, ledger, changelog and orc_status in that order, so a failure
-leaves the database as it was and a dry run rolls the same work back. Decisions and the parking lots
+leaves the database as it was and a dry run rolls the same work back. The decisions store is part 2a (below); the parking lots
 are the next part.
 
 Idempotent: state rows (node, orc, session, task, pr) are found by their label and kept as they are
@@ -204,9 +224,98 @@ is reported as needing a person. Live seats are decided first, freshest session 
 written, so a parent inserted early for its child never takes the seat; a session that loses it is kept with rank
 unknown. A time that does not parse is replaced and each replacement is reported. Two cards naming one Orc: only
 the newer is imported. Text cut to its column is reported per field. PR repo names are lower-cased, and a PR
-with no checked time takes its first ledger line's time. `--dry-run` refuses a file that needs migrating.
+with no checked time takes the time of the first ledger line imported (see part 2a, three nits). `--dry-run` refuses a file that needs migrating.
 
 Reported, never dropped in silence: `report.unlinked` lists, by source and reason, with a count and up to five
 examples, every row that could not be linked or read (for example `ledger: by C13 names no Orc row (kept as
 by_text): 12`). A `handed` line with no known target and a ledger line without a usable ts/task/event are the
 only lines not imported (the schema requires a target for a handing); each is in the report.
+
+## Importer (phase 1c part 2a: decisions store)
+
+Why now: `horde decisions publish` links a list line to its question by number (`fleet-db/decisions-cli.mjs`
+looks the number up in `question`), and that table was empty, so every list naming a question was refused.
+This part fills `question` and its answers from the founder's real store. `horde db import -Decisions
+<HORDE_HOME>\store\decisions` (`--decisions` on the node side; refused on any other verb).
+
+**Reading.** The folder holds one record per file, `0000000001.json` upwards. All files are read and checked as
+a whole before anything is written, and one fault refuses the SOURCE (nothing from it is imported; the other
+sources go on, and the report says why in one line): a gap in the sequence, two records with one id, a file
+whose name is not its record's sequence or not ten digits, a record that is not a JSON object, an id that is not
+32 lower-case hex characters, a `schemaVersion` other than 1. A file that is not `.json` (a half-written
+`.tmp`) is ignored and named. Times are the 7-digit-fraction `Z` form, read to UTC milliseconds.
+
+**Mapping.**
+
+| Record | Becomes |
+|---|---|
+| `question-added` | one `question` row per number (the founder-visible Q number): `title`, `kind`, `body` = whatItIs, `yes_means`, `recommendation`, `group_name`, `group_note`, `importance` and `blocks` (only when the record states them), `needs_passkey`, `asked_at`, `decisions_seq`, `backfill` 1; the lists (options, parts, waiting, files, references) and needsSecret are one canonical JSON text, `detail_json`. `followsUp` is `follows_up_id` (the earlier question). `askedBy` is `asked_by_orc_id` where it names one (`Orc C`, `M (Thrall)`, `Thrall`), else `asked_by_text` and a report line. `task_id` is empty (E10: the store never named a task) and every question says so in the report. |
+| `message-said` | one `answer` row (speaker, route, text, part, wording_version, asks, signed_by, replaces_answer_id) and one `answer_extra` row (evidence_present, act, recorded_by). |
+| `answer-routed` | one `answer_route` row (seat orc/warchief/analyst -> orc/thrall/analyst, session only when it is a `session` row, resolved only with that session) and one `answer_route_extra` row (purpose, label, notice, analyst, note, and the `resolved` the store said). |
+| `question-closed`, `-reopened`, `-ranked`, `-updated`, `-acked`, `answer-change-replied` | one `question_event` row each (closed, reopened, ranked, updated, acked, change-reply), `data_json` the record's data without the number, plus `actor`. |
+| `messages-read` | one `decisions_read` row (reader, up_to_seq). |
+| any other kind, a record about a question never added, a route to a message not in the journal, a time that does not read | not imported, counted in the report by reason. |
+
+**Signing material.** `evidence` and `signedBy` of a phone answer are never stored. `answer_extra.evidence_present`
+says evidence was there; `answer.signed_by` holds the sha256 of the key id (so `answer_now.authorizes` still sees a
+signed answer) and not the key id. A test scans every text column of every table, and the report, for the
+fixture's values.
+
+**requestHash.** Each record's hash is recomputed as the store makes it (`decisions/Operations.ps1`: sha256 of the
+canonical text of `{operation, actor, number, body}`; the body is the data without the number, without `evidence`
+and `signedBy` of a say, without the `closedBySeat` a close gets after hashing; an add hashes number 0 because its
+request has none; a marking has no number and hashes `{upTo}`; strings are hashed as the characters themselves in
+UTF-8, not the ASCII-escaped form `ids.mjs` uses). A record whose recomputed hash differs is imported as it
+stands and reported by record. Known answers made by PowerShell's `Get-HordeDecisionHash` are in the test, and the
+end-to-end scenario hashes its fixture with the store's own function. The source's hash is not stored (no column:
+the row's own sha256 is of the row).
+
+**The fold.** The journal is folded in order, as `decisions/Rules.ps1` folds it, to work out what the store never
+writes: a question is open until its `question-closed` (open again after a reopen); a `question-updated` that
+changes a wording field (title, options, parts, whatItIs, yesMeans) raises the question's wording version. Per
+message that gives `arrivedAfterClosing` (the question was not open when it arrived), `saidToEarlierWording` (a
+wording version below the question's) and his change of his own answer (`replaces_answer_id`: his answer that
+counts - it asks, has no act, arrived while open, and is not chat words under a passkey question - replaces his
+latest earlier answer that counts to the same part). After the write, every message is compared with
+`answer_now`: arrival and authorization. Every difference is a line in the report. The differences that can arise
+by construction: a message in the same millisecond as the close that follows it (the schema counts the close as
+before); an unsigned phone answer under a passkey question (the schema calls it unauthorized, the rules do not). A message said
+to an earlier wording has no flag in the schema: it is counted in the report and kept as an answer.
+
+**Parts.** A parts question is answered part by part, one `message-said` per part. The schema keeps a part as one
+capital letter and the store writes lower case (`a`), so the letter is stored upper case and the count of those is
+in the report. A part the question's parts (as last worded) do not list is reported unless the message was said to
+an earlier wording.
+
+**Migration 4** (never edits 1-3): `question` gains `asked_by_text`, `yes_means`, `recommendation`, `group_name`,
+`group_note`, `importance`, `blocks`, `detail_json`; new write-once, append-only tables `answer_extra`,
+`answer_route_extra` and `decisions_read`. The extras are beside `answer` and `answer_route`, not columns of them,
+because those are hashed history: the hash is of every column, so a new column would change how a row written
+before it recomputes (the phase 3 diff). `question` is state, not history, so it takes plain columns. Current
+importance, blocks and group are derived from the ranked and updated events; the question row keeps what was
+first asked.
+
+**Acknowledgements close.** `Step-HordeDecisionAcked` closes an open question when the Orc that asked has the
+answer. Migration 4 therefore recreates `question_now` and `answer_now` so that an `acked` event closes a
+question as a `closed` event does (a later `reopened` still opens it); no closed event is made up. The store
+writes an ack only when the rules applied it, so the fold closes on every ack (an ack on a closed question is
+reported). Messages after an ack are therefore `open_at_arrival` 0, as the rules say.
+
+**A question imported before migration 4** (a version-3 database already holding it) gets the new columns that are
+NULL filled from the journal, one `UPDATE ... WHERE column IS NULL` per column; a value that is there is never
+overwritten. **Unknown keys**: every record's top-level, `data` and `data.question` keys are compared with the
+known set, and an extra key is reported by kind and key with a count (`unknown key data.mood in message-said
+records`); it is not stored.
+
+**Idempotent and atomic** like part 1: the step runs inside the same transaction (a dry run rolls it back; a
+refused row, such as a lone surrogate in a message, undoes every row before it); questions are found by number and
+kept; history goes through `appendHistory` (the hash includes `decisions_seq`, so each record is one row) or
+`ON CONFLICT DO NOTHING` on its unique `decisions_seq`/`answer_id`/`route_id`; a second import adds 0 rows to every
+table, and `findProblems` is empty after.
+
+**Three nits of the review of part 1.** (1) A wait on `lane:C1` resolves the label to its lead Orc, as a bare `C1`
+already did. (2) A PR with no checked time is dated from the first ledger line that was imported (a line the
+importer drops - unknown event, a handing with no target, a priority with no value - dates nothing). (3) With no
+imported line and no merge time, the PR's `checked_at` is the time of the import, not 1970: the column is NOT NULL
+and the entity registry reads it as the time the object came to be, so NULL would need a table rebuild; the time we
+first saw it is true to what `checked_at` means for a row nobody checked, and the report says so for each such PR.
