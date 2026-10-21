@@ -851,6 +851,15 @@ function Invoke-HordeChatChannelAccept {
             $wp = $posted.value.PSObject.Properties["woken"]
             $entry = [pscustomobject]@{ messageId = $line.messageId; messengerId = $message.messageId; postedMs = (Get-HordeChatTakenNowMs); from = "$($Item.from)"; seq = [long]$Item.seq; alarmed = $false; woken = ($null -ne $wp -and $wp.Value -eq $true) }
             $awaitedBefore = @($mine.durable.awaiting)
+            $already = Get-HordeChatTakenEntry -State $mine.durable -MessageId $line.messageId
+            $overflow = @(Get-HordeChatTakenOverflow -State $mine.durable)
+            if ($null -ne $already -and $already.alarmed) {
+                # ALREADY AWAITED AND ALARMED (a restart, a re-signed duplicate): its alarm stands, and a
+                # queued receipt now would cover it on the phone (the newest receipt wins) and no alarm
+                # would come again. Nothing is sent; the line stays awaited with its own clock.
+                return [pscustomobject]@{ outcome = "done"; reason = ("line " + $line.messageId + ": already awaited and alarmed - no receipt sent over the alarm") }
+            }
+            $gaveUp = @()
             if (Add-HordeChatTaken -State $mine.durable -Entry $entry) {
                 $mine.takenChecked[$line.messageId] = (Get-HordeChatTakenNowMs)
                 try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable }
@@ -859,8 +868,12 @@ function Invoke-HordeChatChannelAccept {
                     $mine.durable.awaiting = $awaitedBefore
                     return (& $answer "retry" "held" "not-now" ("the chat state could not be written, so the line is not yet awaited: " + $_.Exception.Message) $line.session)
                 }
+                # PAST THE LIST'S SIZE the oldest left it (Add-HordeChatTaken): never in silence.
+                $gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })
             }
-            return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting the Thrall's own side (TAKEN)") $line.session)
+            $queued = & $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting the Thrall's own side (TAKEN)") $line.session
+            if ($gaveUp.Count -gt 0) { $queued.reason = $queued.reason + " | " + ($gaveUp -join " | ") }
+            return $queued
         }
         "held" { return (& $answer "done" "held" "not-delivered" ("messenger " + $messenger.value.name + " holds it, not delivered") $line.session) }
         "expired" { return (& $answer "done" "held" "expired" ("messenger " + $messenger.value.name + " gave it up undelivered") $line.session) }

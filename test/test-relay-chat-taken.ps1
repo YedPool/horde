@@ -8,7 +8,7 @@
 #   - a line accepted but not taken is awaited, in the durable state, before its record is done;
 #   - it is delivered ONLY when the stage is handed-over or seen; an unknown, absent or accepted stage is
 #     never a confirmation;
-#   - not taken in takenAlarmSeconds: ONE alarm receipt (held, not-delivered) to the phone, never two, and
+#   - not taken in takenAlarmSeconds: ONE alarm receipt (held, not-now: still trying) to the phone, never two, and
 #     the line is not dropped: a late confirmation turns the alarm into delivered;
 #   - a stale seat (held by the fleet), a target that is not running (no answer), a receipt that never
 #     comes (ttl), a receipt that comes late, a duplicate line, a restart, a state that cannot be written,
@@ -210,6 +210,22 @@ function Send-OneLine {
     foreach ($r in @(Get-Records)) { if ($r.message.body -like ("*" + $mid + "*")) { $mine = $r } }
     return [pscustomobject]@{ id = $mid; words = $Text; turn = $turn; messengerId = $(if ($null -ne $mine) { "$($mine.message.messageId)" } else { "" }) }
 }
+function Get-SessionLine {
+    # A line signed with the unlocked SESSION key (what every real phone line is), not a fresh passkey.
+    param($World, $Sess, [string]$MessageId, [string]$Text, [switch]$WithVouch)
+    $body = New-HordeTestPhoneLineBody -MessageId $MessageId -Horde "work" -Machine $World.id.sign.keyId -Session (Get-ThrallSession $World) -Text $Text
+    return (New-HordeTestPhoneSessionEnvelope -Phone $World.phone -Session $Sess -Kind "line" -Channel "chat" -Body $body -To $World.agree -WithVouch:$WithVouch)
+}
+function Send-OneSessionLine {
+    # One session-signed line through a turn of the runner; { id; words; turn; messengerId }.
+    param($World, $Sess, [string]$Text)
+    $mid = [guid]::NewGuid().ToString("N")
+    [void](Send-ToMachine $World (Get-SessionLine $World $Sess $mid $Text -WithVouch).text)
+    $turn = Invoke-Turn $World
+    $mine = $null
+    foreach ($r in @(Get-Records)) { if ($r.message.body -like ("*" + $mid + "*")) { $mine = $r } }
+    return [pscustomobject]@{ id = $mid; words = $Text; turn = $turn; messengerId = $(if ($null -ne $mine) { "$($mine.message.messageId)" } else { "" }) }
+}
 function Get-ReceiptsOf {
     # Every receipt of one line the phone has not yet seen, in order, as "status/code".
     param($World, [string]$Id)
@@ -253,7 +269,7 @@ try {
     Set-HordeChatTakenClock -Ms ($base + 95000)
     $t = Invoke-Tick $W
     $rc = @(Get-ReceiptsOf $W $a.id)
-    Check ((($rc -join ",") -ceq "held/not-delivered")) ("95 s on, not taken: the phone gets ONE alarm receipt, held/not-delivered (" + ($rc -join ",") + ")")
+    Check ((($rc -join ",") -ceq "held/not-now")) ("95 s on, not taken: the phone gets ONE alarm receipt, held/not-now, still trying (" + ($rc -join ",") + ")")
     Check ((($t.lines -join "|").Contains("ALARM: chat line " + $a.id)) -and (($t.lines -join "|").Contains("Thrall was not woken"))) ("and the runner's log carries an ALARM line that says the Thrall was not woken (" + ($t.lines -join " | ") + ")")
     $aw = @(Get-Awaiting $W)
     Check ($aw.Count -eq 1 -and $aw[0].EndsWith(":1:0")) "the line is NOT dropped: it is still awaited, marked alarmed"
@@ -316,7 +332,7 @@ try {
     Set-HordeChatTakenClock -Ms ($base + 3100000)
     $null = Invoke-Tick $W
     $rc = @(Get-ReceiptsOf $W $d.id)
-    Check ((($rc -join ",") -ceq "held/not-delivered")) ("past the window an unknown status is alarmed on the clock alone (" + ($rc -join ",") + ")")
+    Check ((($rc -join ",") -ceq "held/not-now")) ("past the window an unknown status is alarmed on the clock alone (" + ($rc -join ",") + ")")
     $script:stages[$d.messengerId] = "absent"
     Set-HordeChatTakenClock -Ms ($base + 3200000)
     $null = Invoke-Tick $W
@@ -347,7 +363,7 @@ try {
     Set-HordeChatTakenClock -Ms ($base + 8200000)
     $null = Invoke-Tick $W
     $rc = @(Get-ReceiptsOf $W $e.id)
-    Check (@($rc | Where-Object { $_ -ceq "accepted/delivered" }).Count -eq 1 -and -not ($rc -contains "held/not-delivered")) ("one confirmation, one delivered receipt, no alarm (" + ($rc -join ",") + ")")
+    Check (@($rc | Where-Object { $_ -ceq "accepted/delivered" }).Count -eq 1 -and -not ($rc -contains "held/not-now")) ("one confirmation, one delivered receipt, no alarm (" + ($rc -join ",") + ")")
 
     Write-Host ""
     Write-Host "--- TAKEN 8. a restart loses nothing: the list is durable and the words come back from the journal ---" -ForegroundColor Cyan
@@ -360,7 +376,7 @@ try {
     Set-HordeChatTakenClock -Ms ($base + 9100000)
     $t = Invoke-Tick $W
     $rcAll = @(Get-Receipts @(Get-NewMail $W) | Where-Object { $_.messageId -ceq $f.id })
-    Check ($rcAll.Count -eq 1 -and $rcAll[0].code -ceq "not-delivered" -and $rcAll[0].text -ceq "Across a restart.") ("after the restart the alarm still comes, with the line's own words read back from the journal (" + ($t.lines -join " | ") + ")")
+    Check ($rcAll.Count -eq 1 -and $rcAll[0].code -ceq "not-now" -and $rcAll[0].text -ceq "Across a restart.") ("after the restart the alarm still comes, with the line's own words read back from the journal (" + ($t.lines -join " | ") + ")")
 
     Write-Host ""
     Write-Host "--- TAKEN 9. the list is written BEFORE the record is done: a state that cannot be written holds the record ---" -ForegroundColor Cyan
@@ -447,6 +463,177 @@ try {
     $null = Invoke-Tick $W2
     $rc = @(Get-ReceiptsOf $W2 $e.id)
     Check (@(Get-Awaiting $W2).Count -eq 0 -and $rc -ccontains "accepted/delivered") ("once the phone can be told it gets delivered, and the list is empty (" + ($rc -join ",") + ")")
+
+    Write-Host ""
+    Write-Host "--- TAKEN 14. a SESSION-signed line keeps its receipts whatever happens to the session later (M1) ---" -ForegroundColor Cyan
+    # (a) accepted, every phone session ended at the PC, then the Thrall takes it: delivered.
+    Set-HordeChatTakenClock -Ms ($base + 30000000)
+    $W3 = New-World -Settings $S
+    $null = Invoke-Tick $W3
+    $null = Get-NewMail $W3
+    Reset-Posts
+    Remove-TestMessengers
+    $null = Register-TestMessenger "chat-wakes"
+    $sess = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.id.sign.keyId -Seq 1
+    $s1 = Send-OneSessionLine $W3 $sess "Session words, ended then taken."
+    $rc = @(Get-ReceiptsOf $W3 $s1.id)
+    Check ((($rc -join ",") -ceq "accepted/queued") -and @(Get-Awaiting $W3).Count -eq 1) ("CONTROL: the session-signed line is accepted, queued and awaited (" + ($rc -join ",") + "; " + $s1.turn.text + ")")
+    $end = Stop-HordeRelaySessions -HordeHome $W3.home -Reason "T-0281 suite: end all"
+    Check ($end.state -ceq "known") "CONTROL: every phone session was ended at the PC"
+    $script:stages[$s1.messengerId] = "seen"
+    Set-HordeChatTakenClock -Ms ($base + 30020000)
+    $t = Invoke-Tick $W3
+    $rc = @(Get-ReceiptsOf $W3 $s1.id)
+    Check ((($rc -join ",") -ceq "accepted/delivered")) ("session ENDED, then the Thrall took the line: delivered (" + ($rc -join ",") + "; " + ($t.lines -join " | ") + ")")
+    Check (@(Get-Awaiting $W3).Count -eq 0) "and it left the list"
+    $rcw = @(Get-Receipts @(Get-NewMail $W3 -All) | Where-Object { $_.messageId -ceq $s1.id -and $_.code -ceq "delivered" })
+    Check ($rcw.Count -ge 1 -and $rcw[0].text -ceq "Session words, ended then taken.") "with the line's own words read back"
+    # (b) accepted, sessions ended, never taken: ONE alarm, and the line stays awaited. (A world of its
+    # own: an unlock made just after an end-all is itself ended.)
+    $W3b = New-World -Settings $S
+    $null = Invoke-Tick $W3b
+    $null = Get-NewMail $W3b
+    $sessB = New-HordeTestPhoneSession -Phone $W3b.phone -Machine $W3b.id.sign.keyId -Seq 1
+    Set-HordeChatTakenClock -Ms ($base + 30100000)
+    $s2 = Send-OneSessionLine $W3b $sessB "Session words, ended, never taken."
+    $null = Get-NewMail $W3b
+    $end = Stop-HordeRelaySessions -HordeHome $W3b.home -Reason "T-0281 suite: end all two"
+    Set-HordeChatTakenClock -Ms ($base + 30200000)
+    $t = Invoke-Tick $W3b
+    $rc = @(Get-ReceiptsOf $W3b $s2.id)
+    Check ((($rc -join ",") -ceq "held/not-now")) ("session ENDED, never taken: ONE alarm on the phone (" + ($rc -join ",") + "; " + ($t.lines -join " | ") + "; accept: " + $s2.turn.text + ")")
+    Check (@(Get-Awaiting $W3b).Count -eq 1) "and the line is still awaited"
+    $script:stages[$s2.messengerId] = "handed-over"
+    Set-HordeChatTakenClock -Ms ($base + 30400000)
+    $null = Invoke-Tick $W3b
+    $rc = @(Get-ReceiptsOf $W3b $s2.id)
+    Check ((($rc -join ",") -ceq "accepted/delivered")) ("and a late TAKEN, the session long gone, turns the alarm into delivered (" + ($rc -join ",") + ")")
+    # (c) idle limit 1 minute: alarmed while the session is fresh, the session idles, the Thrall takes it.
+    $W4 = New-World -Settings $S
+    [System.IO.File]::WriteAllText((Join-Path $W4.home (Join-Path "settings" "relay-sessions.json")), '{"schemaVersion": 1, "settings": {"idleMinutes": 1}}', $utf8)
+    $null = Invoke-Tick $W4
+    $null = Get-NewMail $W4
+    $sessC = New-HordeTestPhoneSession -Phone $W4.phone -Machine $W4.id.sign.keyId -Seq 1
+    Set-HordeChatTakenClock -Ms ($base + 31000000)
+    $s3 = Send-OneSessionLine $W4 $sessC "Session words, idle then taken."
+    Set-HordeChatTakenClock -Ms ($base + 31100000)
+    $null = Invoke-Tick $W4
+    $rc = @(Get-ReceiptsOf $W4 $s3.id)
+    Check ((($rc -join ",") -ceq "accepted/queued,held/not-now")) ("CONTROL: queued, then the alarm while the session is fresh (" + ($rc -join ",") + ")")
+    Start-Sleep -Seconds 70
+    $script:stages[$s3.messengerId] = "seen"
+    Set-HordeChatTakenClock -Ms ($base + 31200000)
+    $t = Invoke-Tick $W4
+    $rc = @(Get-ReceiptsOf $W4 $s3.id)
+    Check ((($rc -join ",") -ceq "accepted/delivered")) ("session IDLE (limit 1 min), then the Thrall took it: the alarm becomes delivered (" + ($rc -join ",") + "; " + ($t.lines -join " | ") + ")")
+    Check (@(Get-Awaiting $W4).Count -eq 0) "and it left the list"
+    # (d) a record that truly cannot be opened is never dropped in silence: an ALARM line names the line.
+    Set-HordeChatTakenClock -Ms ($base + 32000000)
+    $s4 = Send-OneSessionLine $W4 (New-HordeTestPhoneSession -Phone $W4.phone -Machine $W4.id.sign.keyId -Seq 2) "Session words, record lost."
+    $null = Get-NewMail $W4
+    $awm = @(Get-Awaiting $W4)
+    $e4 = ConvertFrom-HordeChatTakenMark -Mark $awm[0]
+    Use-World $W4
+    $e4.seq = [long]99999
+    $words4 = Get-HordeChatTakenWords -Context $W4.ctx -Entry $e4
+    Check ($words4.state -cne "ok") ("CONTROL: a mark whose record is not in the journal gives no words (" + $words4.state + ")")
+    $rs = Read-HordeChatChannelState -HordeHome $W4.home
+    $st = $rs.value
+    $st.awaiting = @(ConvertTo-HordeChatTakenMark -Entry $e4)
+    Write-HordeChatChannelState -HordeHome $W4.home -State $st
+    Close-HordeRelayRunContext -Context $W4.ctx
+    $W4.ctx = (New-HordeRelayRunContext -HordeHome $W4.home -Connection $W4.conn).value
+    $script:stages[$s4.messengerId] = "seen"
+    Set-HordeChatTakenClock -Ms ($base + 32000000 + 3700000)
+    $t = Invoke-Tick $W4
+    Check ((($t.lines -join "|").Contains("ALARM: chat line " + $s4.id)) -and (($t.lines -join "|").Contains("could NOT be told"))) ("a line whose record cannot be opened leaves with an ALARM line naming it, not in silence (" + ($t.lines -join " | ") + ")")
+
+    Write-Host ""
+    Write-Host "--- TAKEN 15. a line already awaited and ALARMED is not answered 'Sent' again over its alarm (S1) ---" -ForegroundColor Cyan
+    $W5 = New-World -Settings $S
+    Set-HordeChatTakenClock -Ms ($base + 40000000)
+    $null = Invoke-Tick $W5
+    $null = Get-NewMail $W5
+    Reset-Posts
+    Remove-TestMessengers
+    $null = Register-TestMessenger "chat-wakes"
+    $r1 = Send-OneLine $W5 "Duplicate after the alarm."
+    $null = Get-NewMail $W5
+    Set-HordeChatTakenClock -Ms ($base + 40100000)
+    $null = Invoke-Tick $W5
+    $rc = @(Get-ReceiptsOf $W5 $r1.id)
+    Check ((($rc -join ",") -ceq "held/not-now")) ("the alarm is out (" + ($rc -join ",") + ")")
+    $awA = @(Get-Awaiting $W5)
+    [void](Send-ToMachine $W5 (Get-Line $W5 -MessageId $r1.id -Text "Duplicate after the alarm.").text)
+    $turn = Invoke-Turn $W5
+    $rc = @(Get-ReceiptsOf $W5 $r1.id)
+    Check ($rc.Count -eq 0) ("the same line coming again (re-signed) sends no 'Sent' over the alarm (" + ($rc -join ",") + "; " + $turn.text + ")")
+    $awB = @(Get-Awaiting $W5)
+    Check ($awB.Count -eq 1 -and $awB[0] -ceq $awA[0] -and $awB[0].EndsWith(":1:0")) "and the line keeps its alarmed mark and its own clock"
+    Check (Has $turn "done ") "and the duplicate's record is done, not stuck"
+
+    Write-Host ""
+    Write-Host "--- TAKEN 16. past the list's size the oldest line is never dropped in silence (S2) ---" -ForegroundColor Cyan
+    $script:HordeChatTakenKept = 3
+    try {
+        $W6 = New-World -Settings $S
+        Set-HordeChatTakenClock -Ms ($base + 50000000)
+        $null = Invoke-Tick $W6
+        $null = Get-NewMail $W6
+        Reset-Posts
+        Remove-TestMessengers
+        $null = Register-TestMessenger "chat-wakes"
+        $ov = @()
+        foreach ($i in 1..4) { $ov += Send-OneLine $W6 ("Overflow line " + $i + ".") }
+        $aw = @(Get-Awaiting $W6)
+        Check ($aw.Count -eq 3 -and -not ($aw -join ",").Contains($ov[0].id)) ("the list holds 3, the oldest is off it (" + $aw.Count + ")")
+        $rc = @(Get-ReceiptsOf $W6 $ov[0].id)
+        Check (($rc -join ",") -ceq "accepted/queued,held/not-delivered") ("the oldest line's phone was told it was NOT delivered (" + ($rc -join ",") + ")")
+        Check ((Has $ov[3].turn ("ALARM: chat line " + $ov[0].id)) -and (Has $ov[3].turn "awaiting list is full")) ("and the runner's log carries an ALARM line naming it (" + $ov[3].turn.text + ")")
+        $rc3 = @(Get-ReceiptsOf $W6 $ov[3].id)
+        Check ($rc3.Count -eq 0 -or ($rc3 -join ",") -ceq "accepted/queued") "the newest line is not touched"
+    } finally { $script:HordeChatTakenKept = 200 }
+
+    Write-Host ""
+    Write-Host "--- TAKEN 17. the fleet is asked about a bounded number of lines per tick, the longest-unasked first (S3) ---" -ForegroundColor Cyan
+    $script:HordeChatTakenAsksPerTick = 4
+    try {
+        $W7 = New-World -Settings $S
+        Set-HordeChatTakenClock -Ms ($base + 60000000)
+        $null = Invoke-Tick $W7
+        $null = Get-NewMail $W7
+        Reset-Posts
+        Remove-TestMessengers
+        $null = Register-TestMessenger "chat-wakes"
+        $many = @()
+        foreach ($i in 1..9) { $many += Send-OneLine $W7 ("Bounded line " + $i + ".") }
+        $script:statusAsks = 0
+        # The LAST line is taken already: a tick that asks the oldest four first does not reach it yet.
+        $script:stages[$many[8].messengerId] = "handed-over"
+        Set-HordeChatTakenClock -Ms ($base + 60015000)
+        $t = Invoke-Tick $W7
+        Check (@(Get-ReceiptsOf $W7 $many[8].id | Where-Object { $_ -ceq "accepted/delivered" }).Count -eq 0) "the longest-waiting four were asked first: the newest line was not yet reached"
+        Check ($script:statusAsks -eq 4) ("9 lines due: the fleet is asked about 4 and no more (" + $script:statusAsks + " asks)")
+        Check (($t.lines -join "|").Contains("5 of 9 awaiting lines wait for the next tick")) ("and the log says how many wait (" + ($t.lines -join " | ") + ")")
+        $script:statusAsks = 0
+        $t = Invoke-Tick $W7
+        Check ($script:statusAsks -eq 4) ("the next tick asks the next 4 - the ones not yet asked first (" + $script:statusAsks + " asks)")
+        $script:statusAsks = 0
+        $t = Invoke-Tick $W7
+        Check ($script:statusAsks -eq 1) ("then the last one (" + $script:statusAsks + " asks): every line is asked in turn, none starved")
+        Check (@(Get-ReceiptsOf $W7 $many[8].id | Where-Object { $_ -ceq "accepted/delivered" }).Count -eq 1) "and it was reached in its turn: delivered"
+        # A line posted while the others wait is accepted at once: the tick does not hold the inbound path.
+        Set-HordeChatTakenClock -Ms ($base + 60016000)
+        $fresh = Send-OneLine $W7 "A new line of the founder."
+        Check ($fresh.messengerId -cne "" -and (Has $fresh.turn "done ")) "a new founder line is accepted in the same breath, not behind the status checks"
+    } finally { $script:HordeChatTakenAsksPerTick = 10 }
+
+    Write-Host ""
+    Write-Host "--- TAKEN 18. the alarm reads as still-trying and differs from the final held outcome (S4) ---" -ForegroundColor Cyan
+    Check ($script:HordeChatTakenAlarmCode -ceq "not-now" -and $script:HordeChatTakenAlarmCode -cne "not-delivered") "the alarm code is held/not-now, not the final held/not-delivered"
+    $phoneJs = [System.IO.File]::ReadAllText((Join-Path $root "relay\js\protocol.js"))
+    $mm = [regex]::Match($phoneJs, '"not-now": "([^"]+)"')
+    Check ($mm.Success -and $mm.Groups[1].Value -match 'try again') ("the phone's own sentence for that code says it will try again (" + $mm.Groups[1].Value + ")")
 
     Set-HordeChatTakenClock -Ms 0
     Reset-Posts

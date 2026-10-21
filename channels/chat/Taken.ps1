@@ -30,15 +30,26 @@
 #     seen is the Thrall's own hook having taken it: the line's receipt becomes accepted/delivered and it
 #     leaves the list. A receipt that comes LATE, after the alarm, replaces the alarm on the phone: the
 #     phone shows each line's newest receipt.
-#   - ALARMED. Not confirmed after takenAlarmSeconds: ONE receipt, held/not-delivered, to every trusted
-#     phone ("Not delivered: the Thrall's mailbox holds it back." - the phone's fixed sentence for the code;
-#     a new code would need a deployed phone app, and an old phone drops a code it does not know), and a
+#   - ALARMED. Not confirmed after takenAlarmSeconds: ONE receipt, held/not-now, to every trusted
+#     phone ("Held: delivery failed for now; it will try again." - the phone's fixed sentence for the code,
+#     which reads as still-trying and is NOT the sentence of the final held/not-delivered below; a code of
+#     its own with a sentence of its own ("Not delivered yet: the Thrall has not taken it; still trying.")
+#     needs the phone page deployed, and an old phone drops a code it does not know), and a
 #     line in capitals in the runner's log. Not dropped: the line stays in the Thrall's mailbox and in
 #     the list, asked for every takenAfterAlarmSeconds, and a late TAKEN still turns the alarm into
 #     delivered. A status that cannot be had (unknown, absent) is NOT a confirmation: the alarm is
 #     raised on the clock alone.
 #   - GIVEN UP. Held or expired by the messenger (final), or ttlSeconds old: the receipt is held/not-delivered
 #     or held/expired, the line leaves the list.
+#   - A RECEIPT NEVER DEPENDS ON THE SESSION LATER. The words a receipt echoes are read back from the
+#     journal record with Open-HordeRelayChannelRecord -Reread: the sender is not judged again. A line
+#     signed with the unlocked SESSION key (every real phone line) was judged once, when it was accepted;
+#     the session ending, going idle or being pruned afterwards takes nothing from its receipts. Where a
+#     receipt truly cannot be sent (its record cannot be opened at all), an ALARM line names the line.
+#   - BOUNDED. At most HordeChatTakenAsksPerTick lines are asked about in one Tick (a status is a process
+#     started), the longest-unasked first, so the founder's new lines never wait behind them.
+#   - NEVER OFF THE LIST IN SILENCE. Past HordeChatTakenKept lines the oldest is given up WITH a
+#     held/not-delivered receipt and an ALARM line, never dropped without a word.
 # WHY takenAlarmSeconds IS 90. An idle Thrall that is knocked takes its line within seconds. The knock
 # can fail (occupied box, no pane found: the cases above), and the fleet's own re-knock, the wake
 # watcher (core/Wake.ps1), backs off 5, 15, 45 seconds, 65 in all, before it is asked a fourth time. So
@@ -55,8 +66,15 @@
 # An awaiting line as the state keeps it:
 #   <phone messageId 32 hex>:<messenger uuid>:<posted at, ms>:<sender key id 32 hex>:<journal seq>:<alarmed 0|1>:<woken 0|1>
 $script:HordeChatTakenMarkPattern = '\A([0-9a-f]{32}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]{1,16}):([0-9a-f]{32}):([0-9]{1,16}):([01]):([01])\z'
-# The most lines awaited at once: a day of lines many times over. The oldest past it are given up on.
+# The most lines awaited at once: a day of lines many times over. The oldest past it are given up on,
+# with a receipt and an ALARM line (Get-HordeChatTakenOverflow, Send-HordeChatTakenGiveUp).
 $script:HordeChatTakenKept = 200
+# The most lines the fleet is asked about in one Tick: each ask is a process, and the Tick shares its
+# time with the founder's new lines.
+$script:HordeChatTakenAsksPerTick = 10
+# The code of the alarm receipt: held/not-now, "Held: delivery failed for now; it will try again." - a
+# sentence every phone knows that reads as still-trying, unlike the final held/not-delivered.
+$script:HordeChatTakenAlarmCode = "not-now"
 # For suites only (Set-HordeChatTakenClock): the clock, in milliseconds since 1970. 0 means the real one.
 $script:HordeChatTakenClockMs = [long]0
 
@@ -82,6 +100,31 @@ function ConvertFrom-HordeChatTakenMark {
     if ($Mark -cnotmatch $script:HordeChatTakenMarkPattern) { return $null }
     $g = $Matches
     return [pscustomobject]@{ messageId = $g[1]; messengerId = $g[2]; postedMs = [long]$g[3]; from = $g[4]; seq = [long]$g[5]; alarmed = ($g[6] -ceq "1"); woken = ($g[7] -ceq "1") }
+}
+
+function Get-HordeChatTakenEntry {
+    # The awaiting entry of one phone message id, or $null.
+    param($State, [Parameter(Mandatory = $true)][string]$MessageId)
+    foreach ($m in @($State.awaiting)) {
+        $e = ConvertFrom-HordeChatTakenMark -Mark $m
+        if ($null -ne $e -and $e.messageId -ceq $MessageId) { return $e }
+    }
+    return $null
+}
+
+function Get-HordeChatTakenOverflow {
+    # The entries that adding ONE more line to the list would push off it: the oldest, past
+    # HordeChatTakenKept. They are not dropped by this; Add-HordeChatTaken does that, and the caller gives
+    # each one up with a receipt (Send-HordeChatTakenGiveUp).
+    param($State)
+    $marks = @($State.awaiting)
+    $over = $marks.Count + 1 - $script:HordeChatTakenKept
+    $out = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $over -and $i -lt $marks.Count; $i++) {
+        $e = ConvertFrom-HordeChatTakenMark -Mark $marks[$i]
+        if ($null -ne $e) { [void]$out.Add($e) }
+    }
+    return @($out.ToArray())
 }
 
 function Add-HordeChatTaken {
@@ -126,11 +169,25 @@ function Get-HordeChatTakenWords {
     $homeDir = Get-HordeChatChannelHome $Context
     $rec = Get-HordeRelayJournalReceivedRecord -From $Entry.from -Channel "chat" -Seq $Entry.seq -HordeHome $homeDir
     if ($rec.state -cne "known") { return [pscustomobject]@{ state = "retry"; line = $null; sentAt = [long]0; reason = $rec.reason } }
-    $o = Open-HordeRelayChannelRecord -Context $Context -Channel (Get-HordeRelayChannel -Name "chat") -Record $rec.value
+    # -Reread: the line was accepted already, so its session is not judged again (a session since ended,
+    # gone idle or pruned must not take its receipts away).
+    $o = Open-HordeRelayChannelRecord -Context $Context -Channel (Get-HordeRelayChannel -Name "chat") -Record $rec.value -Reread
     if (-not $o.ok) { return [pscustomobject]@{ state = $(if ($o.outcome -ceq "retry") { "retry" } else { "gone" }); line = $null; sentAt = [long]0; reason = $o.reason } }
     $r = Read-HordeChatChannelLine -Body $o.item.body
     if (-not $r.ok) { return [pscustomobject]@{ state = "gone"; line = $null; sentAt = [long]0; reason = $r.reason } }
+    if ($r.value.messageId -cne $Entry.messageId) { return [pscustomobject]@{ state = "gone"; line = $null; sentAt = [long]0; reason = "the record holds another line than the one awaited" } }
     return [pscustomobject]@{ state = "ok"; line = $r.value; sentAt = [long]$o.item.ts; reason = "" }
+}
+
+function Send-HordeChatTakenGiveUp {
+    # One awaiting entry that leaves the list for a reason that is not its own end: the phone is told
+    # held/not-delivered, and an ALARM line names it. Returns the log line. The caller removes the entry.
+    param($Context, $Mine, $Entry, [string]$Why)
+    $w = Get-HordeChatTakenWords -Context $Context -Entry $Entry
+    if ($w.state -cne "ok") { return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + ") and the phone could NOT be told (its words cannot be read: " + $w.reason + ")") }
+    $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $Entry.messageId -Status "held" -Code "not-delivered" -Session $w.line.session -Text $w.line.text -SentAt $w.sentAt
+    if ($sent.StartsWith("no receipt:")) { return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + ") and the phone could NOT be told (" + $sent + ")") }
+    return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered" + $(if ($sent -cne "") { "; " + $sent } else { "" }))
 }
 
 function Get-HordeChatTakenDueMs {
@@ -169,12 +226,27 @@ function Invoke-HordeChatTakenTick {
     $messenger = Find-HordeChatChannelMessenger
     $keep = New-Object System.Collections.ArrayList
     $changed = $false
+    # BOUNDED: of the lines that are due, the longest-unasked go first, at most HordeChatTakenAsksPerTick
+    # of them; the rest are untouched and come first on the next Tick.
+    $dueLines = New-Object System.Collections.ArrayList
+    $pos = 0
+    foreach ($mark in @($d.awaiting)) {
+        $pos++
+        $de = ConvertFrom-HordeChatTakenMark -Mark $mark
+        if ($null -eq $de) { continue }
+        $dLast = $(if ($Mine.takenChecked.ContainsKey($de.messageId)) { [long]$Mine.takenChecked[$de.messageId] } else { [long]0 })
+        if ($now - $dLast -ge (Get-HordeChatTakenDueMs -Settings $Settings -Alarmed $de.alarmed)) { [void]$dueLines.Add([pscustomobject]@{ id = $de.messageId; last = $dLast; pos = $pos }) }
+    }
+    $mayAsk = @{}
+    foreach ($x in @($dueLines.ToArray() | Sort-Object -Property last, pos | Select-Object -First $script:HordeChatTakenAsksPerTick)) { $mayAsk[$x.id] = $true }
+    if ($dueLines.Count -gt $mayAsk.Count) { [void]$lines.Add("chat: " + ($dueLines.Count - $mayAsk.Count) + " of " + $dueLines.Count + " awaiting lines wait for the next tick (at most " + $script:HordeChatTakenAsksPerTick + " are asked about in one)") }
     foreach ($mark in @($d.awaiting)) {
         $e = ConvertFrom-HordeChatTakenMark -Mark $mark
         if ($null -eq $e) { [void]$lines.Add("chat: an awaiting mark that is not one was dropped"); $changed = $true; continue }
         $every = Get-HordeChatTakenDueMs -Settings $Settings -Alarmed $e.alarmed
         $last = $(if ($Mine.takenChecked.ContainsKey($e.messageId)) { [long]$Mine.takenChecked[$e.messageId] } else { [long]0 })
         if ($now - $last -lt $every) { [void]$keep.Add($mark); continue }
+        if (-not $mayAsk.ContainsKey($e.messageId)) { [void]$keep.Add($mark); continue }
         $Mine.takenChecked[$e.messageId] = $now
         $status = $null
         if ($messenger.state -ceq "known") { $status = Get-HordeMessengerStatus -Messenger $messenger.value -MessageId $e.messengerId }
@@ -182,15 +254,20 @@ function Invoke-HordeChatTakenTick {
         $act = Get-HordeChatTakenAction -Status $status -AgeSeconds $age -Alarmed $e.alarmed -AlarmSeconds ([double]$Settings.takenAlarmSeconds) -TtlSeconds ([double]$Settings.ttlSeconds)
         if ($act -ceq "wait") { [void]$keep.Add($mark); continue }
         $w = Get-HordeChatTakenWords -Context $Context -Entry $e
+        if ($w.state -ceq "retry" -and $age -gt [double]$Settings.ttlSeconds) {
+            # A record that could not be read for a whole ttl is not coming back: never kept for ever in silence.
+            [void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") after " + [int]$age + " s and the phone could NOT be told: its record cannot be read - " + $w.reason); $changed = $true; continue
+        }
         if ($w.state -ceq "retry") { [void]$keep.Add($mark); [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", but its words cannot be read yet (" + $w.reason + "); asked again"); continue }
         if ($w.state -ceq "gone") {
-            # Nothing to tell the phone with: the record can never be opened again.
-            [void]$lines.Add("chat: line " + $e.messageId + " is left (" + $act + "): its record cannot be opened again - " + $w.reason); $changed = $true; continue
+            # Nothing to tell the phone with: the record can never be opened again (damaged, gone), session or
+            # no session. Never in silence: an ALARM line names the line.
+            [void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") and the phone could NOT be told: its record cannot be opened again - " + $w.reason); $changed = $true; continue
         }
         $status_ = "accepted"; $code = "delivered"
         if ($act -ceq "held") { $status_ = "held"; $code = "not-delivered" }
         elseif ($act -ceq "expired") { $status_ = "held"; $code = "expired" }
-        elseif ($act -ceq "alarm") { $status_ = "held"; $code = "not-delivered" }
+        elseif ($act -ceq "alarm") { $status_ = "held"; $code = $script:HordeChatTakenAlarmCode }
         $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $e.messageId -Status $status_ -Code $code -Session $w.line.session -Text $w.line.text -SentAt $w.sentAt
         if ($sent.StartsWith("no receipt:")) {
             # Not even recorded: nothing told the phone, so the line stays as it was and is asked again.

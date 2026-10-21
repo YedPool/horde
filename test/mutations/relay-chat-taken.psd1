@@ -41,7 +41,7 @@
            Replace = '                $e.alarmed = $false' }
         # The alarm is one receipt held/not-delivered; a confirmation is accepted/delivered.
         @{ Name = "alarm-sent-as-delivered"
-           Find = 'elseif ($act -ceq "alarm") { $status_ = "held"; $code = "not-delivered" }'
+           Find = 'elseif ($act -ceq "alarm") { $status_ = "held"; $code = $script:HordeChatTakenAlarmCode }'
            Replace = 'elseif ($act -ceq "alarm") { $status_ = "accepted"; $code = "delivered" }' }
         # A line that cannot be reported to the phone is asked again, not forgotten.
         @{ Name = "unreported-line-forgotten"
@@ -65,6 +65,35 @@
         @{ Name = "words-stored-in-awaiting-mark"
            Find = '":" + $(if ($Entry.woken) { "1" } else { "0" }))'
            Replace = '":" + $(if ($Entry.woken) { "1" } else { "0" }) + ":" + $Entry.text)' }
+        # M1: a receipt never depends on the session later. The words are read back WITHOUT judging the
+        # session again; a record that cannot be opened at all is an ALARM line, never a silence.
+        @{ Name = "receipt-judges-the-session-again"
+           Find = '-Record $rec.value -Reread'
+           Replace = '-Record $rec.value' }
+        @{ Name = "unopenable-line-dropped-silently"
+           Find = '[void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") and the phone could NOT be told: its record cannot be opened again - " + $w.reason)'
+           Replace = '[void]$lines.Add("chat: line " + $e.messageId + " is left (" + $act + "): its record cannot be opened again - " + $w.reason)' }
+        @{ Name = "another-line-s-words-echoed"
+           Find = 'if ($r.value.messageId -cne $Entry.messageId) {'
+           Replace = 'if ($false) {' }
+        # S4: the alarm is still-trying (held/not-now), not the final held/not-delivered.
+        @{ Name = "alarm-reads-as-final"
+           Find = 'elseif ($act -ceq "alarm") { $status_ = "held"; $code = $script:HordeChatTakenAlarmCode }'
+           Replace = 'elseif ($act -ceq "alarm") { $status_ = "held"; $code = "not-delivered" }' }
+        # S3: the asks of one tick are bounded, the longest-unasked first.
+        @{ Name = "asks-per-tick-unbounded"
+           Find = 'Select-Object -First $script:HordeChatTakenAsksPerTick'
+           Replace = 'Select-Object -First 100000' }
+        @{ Name = "asks-newest-first"
+           Find = 'Sort-Object -Property last, pos |'
+           Replace = 'Sort-Object -Property last, pos -Descending |' }
+        # S2: a line pushed off the full list is told to the phone, with an ALARM line.
+        @{ Name = "overflow-receipt-wrong"
+           Find = '-MessageId $Entry.messageId -Status "held" -Code "not-delivered"'
+           Replace = '-MessageId $Entry.messageId -Status "accepted" -Code "delivered"' }
+        @{ Name = "overflow-alarm-line-lost"
+           Find = 'return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered"'
+           Replace = 'return ("chat: line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered"' }
         # The Glance says yes when a line is due.
         @{ Name = "glance-never-due"
            Find = '        if ($now - $last -ge $every) { return $true }'

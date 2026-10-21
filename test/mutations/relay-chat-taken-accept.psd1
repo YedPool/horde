@@ -32,5 +32,13 @@
         @{ Name = "glance-ignores-due-line"
            Find = 'if ($mine.loaded -and (Test-HordeChatTakenDue -Mine $mine)) { return $true }'
            Replace = '' }
+        # S1: a line already awaited and alarmed is not answered "Sent" over its alarm.
+        @{ Name = "queued-receipt-over-the-alarm"
+           Find = 'if ($null -ne $already -and $already.alarmed) {'
+           Replace = 'if ($false) {' }
+        # S2: a line pushed off a full list is given up with a receipt and an ALARM line, never in silence.
+        @{ Name = "overflow-line-dropped-silently"
+           Find = '$gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })'
+           Replace = '$gaveUp = @()' }
     )
 }
