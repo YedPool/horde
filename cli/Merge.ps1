@@ -67,7 +67,7 @@ $script:HordeMergeSettings = New-HordeModuleSettings -Module "merge" -Settings @
     @{ name = "guardShell"; kind = "text"; min = 1; max = 260; default = "powershell.exe"
        what = "The Windows PowerShell 5.1 the guards run in first; the gate runs suites in Windows PowerShell." },
     @{ name = "guardShell7"; kind = "folder"; default = ""
-       what = "The absolute path of the PowerShell 7 the guards run in second. Empty: the MSI install, <Program Files>\PowerShell\7\pwsh.exe, never whatever pwsh the search path finds (it may be the Microsoft Store copy)." },
+       what = "The absolute path of the PowerShell 7 the guards run in second. Empty: the MSI install under Program Files, never the Store copy that may be on the search path." },
     @{ name = "ledgerProgram"; kind = "text"; min = 1; max = 260; default = "python"
        what = "The program that runs the task ledger script. A .ps1 is run with this PowerShell." },
     @{ name = "ledgerScript"; kind = "folder"; default = ""
