@@ -453,7 +453,14 @@ Write-Host "--- the CLI can never start a server by accident ---" -ForegroundCol
 # that flag, a call aimed at a socket that is not answering may start a mux that loads the user's
 # config - the thing --skip-config exists to prevent.
 $harnessCode = ((Get-Content -LiteralPath $harnessPath) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n"
-Check ($harnessCode -match '\$script:HordeIsoCli = @\("cli", "--no-auto-start"\)') "every CLI call in the harness passes --no-auto-start"
+Check ($harnessCode -match '\$script:HordeIsoCli = @\("--skip-config", "cli", "--no-auto-start"\)') "every CLI call in the harness passes --skip-config (the person's config and its plugin manager are never loaded by a cli call) and --no-auto-start"
+# T-0216: a `cli` call that loaded the person's config made its plugin manager clone a plugin into the
+# scenario's profile, and the clone client held the folder for over 60 s (fleet e2e, 2026-10-16). The
+# commands the scenario starts as their own processes reach the terminal through horde's host adapter, which
+# is not this function, so the scenario also names an empty config for them in their environment.
+$e2eText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))) "test\e2e\e2e-fleet.ps1"))
+Check ($e2eText -match 'WEZTERM_CONFIG_FILE\s*=\s*\$emptyTermConfig') "the fleet scenario names an empty terminal config (WEZTERM_CONFIG_FILE) in the environment of every command it runs"
+Check ($e2eText -match '(?s)\$emptyTermConfig\s*=\s*Join-Path\s+\$work') "and that file is inside the scenario's own folder"
 $rawCli = @(([regex]::Matches($harnessCode, '& wezterm @\(')) | ForEach-Object { $_.Value })
 Check ($rawCli.Count -eq 1) "and the one place that calls wezterm directly is the function that adds it"
 Check (-not ($harnessCode -match '& wezterm cli ')) "no other line calls the wezterm CLI without it"

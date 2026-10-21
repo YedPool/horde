@@ -49,6 +49,8 @@
 . (Join-Path $PSScriptRoot "RestoreSource.ps1")
 . (Join-Path $PSScriptRoot "WakeTell.ps1")
 . (Join-Path $PSScriptRoot "Identity.ps1")
+# Which sessions sleep in a hibernation, so the pass never knocks on one (fleet/Asleep.ps1 says why).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "fleet\Asleep.ps1")
 
 # THE ONE SWITCH FOR BOTH SENDERS. While it is $false, the restore source and the tell sender run SHADOW in
 # every mode of the run - they journal would-post, would-stall and would-tell, and post nothing - for the
@@ -254,6 +256,10 @@ function Invoke-HordeWakeTick {
     #   -ReadSessions  () -> Get-HordeRestoreSessions' answer; a test hands in its own, and the default
     #                  reads the two stores of this machine
     #   -TickSeconds   the loop's tick, written into the heartbeat so a reader knows what stale is
+    #   -ReadAsleep    () -> Get-HordeFleetAsleep's answer: the sessions asleep in a hibernation, which the
+    #                  pass skips. A test hands in its own; the default reads this home's records. Read on
+    #                  every tick: a hibernation ends sessions minutes apart, and a watcher started before
+    #                  it must see each as it goes.
     #   -Messenger     what the two senders post through when they post at all (THE ONE SWITCH); found
     #                  through the messenger port when it is not given. A test hands in the in-process one.
     param(
@@ -263,6 +269,7 @@ function Invoke-HordeWakeTick {
         $Settings = (Get-HordeWakeSettings),
         $RestoreSettings = (Get-HordeRestoreSettings),
         [scriptblock]$ReadSessions = { Get-HordeRestoreSessions },
+        [scriptblock]$ReadAsleep = $null,
         [int]$TickSeconds = 3,
         [int]$ProcessId = 0,
         $Messenger = $null,
@@ -320,7 +327,22 @@ function Invoke-HordeWakeTick {
         $silentProbes = 0
         $sentSoFar = Get-HordeWakeEntryValue $Run.silence "probes"
         if ($sentSoFar -is [int] -or $sentSoFar -is [long]) { $silentProbes = [int]$sentSoFar }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence
+        # ASLEEP IN A HIBERNATION: read fresh each tick. A reading that is not a known answer - unknown, or
+        # a throw - knocks on nobody this tick (core/Wake.ps1, Get-HordeWakeHold), and says why.
+        $asleep = @{}; $asleepUnknown = ""
+        try {
+            $sleepers = $(if ($null -ne $ReadAsleep) { & $ReadAsleep } else { Get-HordeFleetAsleep -HordeHome $HordeHome -KeepMarkers:($mode -cne "live") })
+            if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") {
+                $asleep = $sleepers.value
+                # A RECORD THAT COULD NOT BE READ IS SKIPPED AND SAID, never a reason to knock on nobody (T-0216).
+                $skippedRecords = $sleepers.PSObject.Properties["skipped"]
+                if ($null -ne $skippedRecords) { foreach ($line in @($skippedRecords.Value)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("a hibernation record is left out of who sleeps, and the pass goes on without it: " + $line))) } }
+            }
+            elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }
+            else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
+        } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown
+        if ($asleepUnknown -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("nobody is knocked while which sessions are asleep in a hibernation cannot be told: " + $asleepUnknown))) }
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be

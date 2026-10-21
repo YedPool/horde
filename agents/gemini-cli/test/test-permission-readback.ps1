@@ -14,8 +14,8 @@
 # 2026-10-02), the key is fake, and the endpoint is a closed local port: a run ends in about 2 s. The
 # real settings folder's entry count is compared before and after.
 #
-# WITHOUT THE PROGRAM INSTALLED THE SUITE FAILS, unless HORDE_SKIP_READBACK=1 asks by name; a skipped
-# run exits 3.
+# WITHOUT THE PROGRAM INSTALLED THE SUITE SKIPS (T-0322): a missing gemini is the machine, not a fault, so it
+# prints a SKIP line saying why and exits 0. HORDE_SKIP_READBACK=1 still skips by name and exits 3.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
@@ -31,8 +31,8 @@ if ($exe -eq "") {
         Write-Host "  [SKIP] the program is not installed, and HORDE_SKIP_READBACK=1 asked to skip the readback" -ForegroundColor Yellow
         Complete-HordeSuite -Success "READBACK SKIPPED (HORDE_SKIP_READBACK=1), EXIT 3" -PassCode 3
     }
-    Check $false "the program is installed on this machine, so its modes can be read back (HORDE_SKIP_READBACK=1 skips by name)"
-    Complete-HordeSuite
+    Write-Host "  [SKIP] gemini is not installed on this machine, so its modes cannot be read back here" -ForegroundColor Yellow
+    Complete-HordeSuite -Success "READBACK SKIPPED (gemini not installed), EXIT 0"
 }
 
 $realDir = Join-Path $env:USERPROFILE ".gemini"

@@ -1006,6 +1006,11 @@ function Get-HordeDecisionActedBy {
     if ($Question -is [System.Collections.IDictionary]) { if ($Question.Contains("closedBy")) { $closer = "$($Question['closedBy'])" } }
     elseif ($null -ne $Question.PSObject.Properties["closedBy"]) { $closer = "$($Question.closedBy)" }
     if ($closer -ne "") { return $closer }
+    # S3 (review of PR 335, round 5): a close proven from the warchief's seat is the warchief's, whoever asked.
+    $seatProof = ""
+    if ($Question -is [System.Collections.IDictionary]) { if ($Question.Contains("closedBySeat")) { $seatProof = "$($Question['closedBySeat'])" } }
+    elseif ($null -ne $Question.PSObject.Properties["closedBySeat"]) { $seatProof = "$($Question.closedBySeat)" }
+    if ($seatProof -ceq "warchief") { return "the warchief" }
     $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
     if ($asker.seat -ceq "orc") { return $asker.shown }
     return "the warchief"

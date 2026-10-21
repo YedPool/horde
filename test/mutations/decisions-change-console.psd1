@@ -8,6 +8,12 @@
     Suite  = "test\test-decisions-change.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "an-unproven-close-says-nothing-of-it"
+           Find = '        if ($Verb -ceq "close" -and -not ($null -ne $value.question.PSObject.Properties["closedByWarchief"] -and [bool]$value.question.closedByWarchief)) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "every-close-says-it-was-not-proven"
+           Find = '        if ($Verb -ceq "close" -and -not ($null -ne $value.question.PSObject.Properties["closedByWarchief"] -and [bool]$value.question.closedByWarchief)) {'
+           Replace = '        if ($Verb -ceq "close") {' }
         @{ Name = "any-session-is-taken-for-the-warchief"
            Find = '        if ($null -eq $held -or -not [bool]$held.ok) { return [pscustomobject]@{ ok = $false; reason = "this session does not hold the warchief''s seat" } }'
            Replace = '' }

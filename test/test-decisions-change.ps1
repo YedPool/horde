@@ -177,6 +177,24 @@ Check ($null -eq $m[0].PSObject.Properties["changedFrom"] -and $null -eq $m[1].P
 $whole = Say $qP "Yes to both."
 $m = @(Messages-Of $qP)
 Check ($null -eq $m[4].PSObject.Properties["changedFrom"]) "an answer to the whole question is not a change of an answer to a part"
+# ROUND 8: ONLY HIS OWN ANSWERS ARE EARLIER ANSWERS OF HIS. The keeper's words and his acts (park) are stepped over
+# when the answer he replaces is looked for, and the keeper's words are never a change of anything of his.
+$qK = Add-Question "Orc C" "Should the keeper step go ahead?"
+Reply $qK "Which step do you mean?"
+Reply $qK "Take your time."
+$k1 = Say $qK "The first step."
+$m = @(Messages-Of $qK)
+Check ($m.Count -eq 3 -and $null -eq $m[1].PSObject.Properties["changedFrom"] -and $null -eq $m[2].PSObject.Properties["changedFrom"] -and @(Changes-Of $qK).Count -eq 0) "the keeper's words are no change of anything, and before his answer they are no earlier answer of his: his first answer is no change"
+Advance 1
+$k2 = Say $qK "The second step."
+$m = @(Messages-Of $qK)
+Check ([long](Get-HordeTestMember $m[3] "changedFrom") -eq $k1 -and (Get-HordeTestMember $m[3] "changedFromText") -ceq "The first step.") "and his second answer replaces his first, never the keeper's words before it"
+$kPark = Op "say" @{ id = (New-Id); actor = "founder"; number = $qK; speaker = "founder"; route = "window"; text = "Later."; wordingVersion = 1; act = "park" }
+$kUnpark = Op "say" @{ id = (New-Id); actor = "founder"; number = $qK; speaker = "founder"; route = "window"; text = "Now."; wordingVersion = 1; act = "unpark" }
+Advance 1
+$k3 = Say $qK "The third step."
+$m = @(Messages-Of $qK)
+Check ($kPark.value.outcome -ceq "done" -and $kUnpark.value.outcome -ceq "done" -and [long](Get-HordeTestMember $m[-1] "changedFrom") -eq $k2 -and (Get-HordeTestMember $m[-1] "changedFromText") -ceq "The second step." -and @(Changes-Of $qK).Count -eq 2) "his act (park, unpark) between two answers is no earlier answer of his: the third answer replaces the second"
 
 Write-Host ""
 Write-Host "--- accepted while the question is open, refused by name once it is closed ---" -ForegroundColor Cyan
@@ -246,7 +264,7 @@ Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*was ask
 $bad = Change-Reply $qR "C" $r1 "undoing"
 Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*which is not a changed answer of the founder under question*") ("a reply to a FIRST answer is refused: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "maybe"
-Check ($bad.state -ceq "known" -and $bad.value.outcome -ceq "refused") "a reply that is none of the three is refused"
+Check ($bad.state -ceq "known" -and $bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -ceq "request.reply is 'maybe', not one of: not-acted, undoing, cannot-undo") ("a reply that is none of the three is refused by the request's schema, naming the three: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "cannot-undo"
 Check ($bad.value.outcome -ceq "refused" -and (Findings-Of $bad) -like "*says why*") ("cannot-undo without why is refused: " + (Findings-Of $bad))
 $bad = Change-Reply $qR "C" $r2 "not-acted" -Why "because"
@@ -340,6 +358,8 @@ Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Numbe
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2" } -Sender $asD -SeatProof $seatOk } "needs -Reply <not-acted, undoing or cannot-undo>") "no -Reply: refused, saying what to give"
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "cannot-undo"; Why = "a`nb" } -Sender $asD -SeatProof $seatOk } "-Why is one line") "a -Why of more than a line: refused"
 Check (Throws { Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "undoing"; Peek = $true } -Sender $asD -SeatProof $seatOk } "does not belong to decisions change-reply") "a flag of another verb: refused"
+$waiting = @((Invoke-HordeDecisionCommand -Verb "show" -Given @{ Number = "$qCli" }).lines)
+Check (@($waiting | Where-Object { $_ -ceq ("Answer changed at record " + $k2 + " (replacing record " + $k1 + "): no reply yet from Orc D") }).Count -eq 1) "before the Orc replies, show says the change waits for it, naming the Orc"
 $wrongOrc = Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "undoing" } -Sender $asC -SeatProof $seatOk
 Check ($wrongOrc.failure -like "*was asked by 'Orc D', not by Orc C*") "an Orc that did not ask it is refused by the rules, in words"
 $noWhy = Invoke-HordeDecisionCommand -Verb "change-reply" -Given @{ Number = "$qCli"; Answer = "$k2"; Reply = "cannot-undo" } -Sender $asD -SeatProof $seatOk
@@ -531,7 +551,34 @@ $qP = [int]$pqN.value.number
 Advance 1
 [void](PassTrust $trustYes)
 $nP = @(& $cNotice $qP)
-Check ($nP.Count -eq 1 -and "$($nP[0].body)".Contains("Some part of this question got only chat words")) "N3: one part signed and another only chat words, then the warchief's close: the asking Orc is told"
+Check ($nP.Count -eq 1 -and "$($nP[0].body)".Contains("Some part of this question has no passkey answer from him")) "N3: one part signed and another only chat words, then the warchief's close: the asking Orc is told (round 5 wording: no passkey answer, not 'only chat words')"
+# ROUND 5, N1: one part signed WITH a chat note on it, the other part no words at all: the notice still tells the Orc, and
+# does not say the unanswered part "got chat words".
+$pqN1 = Op "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Which two other steps go ahead?"; kind = "parts"; parts = @("(a) The first step", "(b) The second step"); whatItIs = "Two steps."; group = "A group"; askedBy = "Orc C"; waiting = @("Orc C") } }
+$qP1 = [int]$pqN1.value.number
+[void](Say $qP1 "a yes signed" -Route "phone" -Part "a")
+[void](Say $qP1 "about a: careful" -Route "chat-recorded" -Part "a")
+[void](Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qP1"; Outcome = "b never answered." } -Sender $asM -SeatProof $seatByRole)
+Advance 1
+[void](PassTrust $trustYes)
+$nP1 = @(& $cNotice $qP1)
+Check ($nP1.Count -eq 1 -and "$($nP1[0].body)".Contains("Some part of this question has no passkey answer from him") -and -not "$($nP1[0].body)".Contains("got only chat words")) "N1 (round 5): a part with no words at all is not said to have 'got chat words'"
+# ROUND 5, S2 MUST-REFUSE / MUST-ACCEPT: the founder signs ONE answer to the WHOLE question (no part named), adds a chat
+# note, and the warchief closes. A whole-question signed answer answers every part, so the "parts" notice (no passkey answer
+# came for that part) would be false: the Orc is told nothing. The twin above (a part signed, another not) still tells it.
+$pqW = Op "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Do both steps go ahead?"; kind = "parts"; parts = @("(a) The first step", "(b) The second step"); whatItIs = "Two steps."; group = "A group"; askedBy = "Orc C"; waiting = @("Orc C") } }
+$qPW = [int]$pqW.value.number
+[void](Say $qPW "Yes to both" -Route "phone")
+[void](Say $qPW "and be careful" -Route "chat-recorded")
+[void](Invoke-HordeDecisionCommand -Verb "close" -Given @{ Number = "$qPW"; Outcome = "Done, both deployed." } -Sender $asM -SeatProof $seatByRole)
+Advance 1
+[void](PassTrust $trustYes)
+Check (@(& $cNotice $qPW).Count -eq 0 -and @(Routes $qPW | Where-Object { "$($_.purpose)" -ceq "closed" }).Count -eq 0) "S2 MUST-REFUSE (round 5): a whole-question signed answer plus a chat note, then the warchief's close: the Orc is NOT told that no passkey answer came"
+# S1 (round 5): the CLI says when the close was not proven from the warchief's seat, and says nothing of the kind when it was.
+Check (@($cliF.lines | Where-Object { "$_" -like "*was not proven as the warchief's seat*will not be told*" }).Count -eq 1) ("S1 MUST-REFUSE (round 5): an unproven close (Orc D) says plainly that the session was not proven as the warchief's seat and the Orc will not be told (" + ($cliF.lines -join " | ") + ")")
+Check (@($cliWords.lines | Where-Object { "$_" -like "*not proven*" }).Count -eq 0 -and @($cliM.lines | Where-Object { "$_" -like "*not proven*" }).Count -eq 0) "S1 MUST-ACCEPT (round 5): a close proven from the warchief's seat prints no such note"
+# S3 (round 5): the view says the warchief acted after a PROVEN warchief close, the Orc that asked after an unproven one.
+Check ("$((Show $qW).actedBy)" -ceq "the warchief" -and "$((Show $qWords).actedBy)" -ceq "the warchief" -and "$((Show $qF).actedBy)" -ceq "Orc C") "S3 (round 5): actedBy is 'the warchief' after a proven warchief close, and still the asking Orc after an unproven (Orc D) close"
 
 Write-Host ""
 Write-Host "--- N2: a change-reply after the warchief's close is taken and shown ---" -ForegroundColor Cyan

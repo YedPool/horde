@@ -47,6 +47,13 @@
 #                                                      FROM THE REAL COMMAND'S OUTPUT (2026-10-13). A
 #                                                      wezfleet from before the verb is played by
 #                                                      mode.json's labels: a non-zero exit
+#   box slash <id> <command> -Expect <words> -Reason <why>
+#                                                      the fleet's checked slash command (hibernation's
+#                                                      exit). Prints text, as the real one does, and
+#                                                      exits 0 with "/exit" "typed" into typed.log as
+#                                                      { id; text }, unless mode.json's box scripts the
+#                                                      answer (exit, stdout, hangSeconds). Anything
+#                                                      but slash is exit 1
 param()
 $ErrorActionPreference = "Stop"
 $fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -76,6 +83,17 @@ function Get-FakeNow { return [datetime]::UtcNow.ToString("o", [System.Globaliza
 function Test-Mode { param($M, [string]$Name) return ($null -ne $M -and $null -ne $M.PSObject.Properties[$Name]) }
 
 $isLabels = ($argvList.Count -ge 1 -and $argvList[0] -ceq "labels")
+if ($argvList.Count -ge 1 -and $argvList[0] -ceq "box") {
+    $boxMode = $null
+    $bm = Join-Path $root "mode.json"
+    if (Test-Path -LiteralPath $bm) { $all = [System.IO.File]::ReadAllText($bm) | ConvertFrom-Json; if ($null -ne $all.PSObject.Properties["box"]) { $boxMode = $all.box } }
+    if ($null -ne $boxMode -and $null -ne $boxMode.PSObject.Properties["hangSeconds"]) { Start-Sleep -Seconds ([int]$boxMode.hangSeconds) }
+    if ($null -ne $boxMode -and $null -ne $boxMode.PSObject.Properties["stdout"]) { [Console]::Out.Write([string]$boxMode.stdout); exit ([int]$boxMode.exit) }
+    if ($argvList.Count -lt 4 -or $argvList[1] -cne "slash") { [Console]::Out.WriteLine("fake wezfleet: only box slash is played"); exit 1 }
+    [System.IO.File]::AppendAllText((Join-Path $root "typed.log"), ((@{ id = $argvList[2]; text = $argvList[3] } | ConvertTo-Json -Compress) + "`n"), [System.Text.Encoding]::ASCII)
+    [Console]::Out.WriteLine("box slash " + $argvList[2] + " (pane 1): SUBMITTED - the text left the box.")
+    exit 0
+}
 if (-not $isLabels -and ($argvList.Count -lt 2 -or $argvList[0] -cne "mail" -or @("state", "nudge") -cnotcontains $argvList[1])) { [Console]::Out.WriteLine("fake wezfleet: only mail state, mail nudge and labels reserved are played"); exit 1 }
 $to = Get-FakeArg "-To"
 $hasTo = ($argvList -ccontains "-To")

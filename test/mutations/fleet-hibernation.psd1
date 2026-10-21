@@ -57,5 +57,35 @@
         @{ Name = "missing-role-guessed"
            Find = 'if ($r.role.state -ne "known") { return "other" }'
            Replace = 'if ($r.role.state -ne "known") { return "warg" }' }
+        @{ Name = "reason-cap-too-long"
+           Find = 'if ($Reason.Length -gt 600) {'
+           Replace = 'if ($Reason.Length -gt 601) {' }
+        @{ Name = "reason-cap-too-short"
+           Find = 'if ($Reason.Length -gt 600) {'
+           Replace = 'if ($Reason.Length -gt 599) {' }
+        @{ Name = "reason-cut-one-too-long"
+           Find = '$keep = 597;'
+           Replace = '$keep = 598;' }
+        @{ Name = "reason-cut-one-too-short"
+           Find = '$keep = 597;'
+           Replace = '$keep = 596;' }
+        @{ Name = "reason-cut-splits-surrogate-pair"
+           Find = 'if ([char]::IsHighSurrogate($Reason[596])) { $keep = 596 }'
+           Replace = 'if ($false) { $keep = 596 }' }
+        @{ Name = "reason-surrogate-checked-at-wrong-index"
+           Find = '[char]::IsHighSurrogate($Reason[596])'
+           Replace = '[char]::IsHighSurrogate($Reason[595])' }
+        @{ Name = "unmark-asked-for-the-wrong-reason"
+           Find = 'try { $a = & $HostAdapter.unmark ("" + $id) "hibernated" }'
+           Replace = 'try { $a = & $HostAdapter.unmark ("" + $id) "parked" }' }
+        @{ Name = "unmark-failure-unsaid"
+           Find = 'if ($null -eq $a -or "" + $a.state -cne "known") { [void]$lines.Add('
+           Replace = 'if ($null -eq $a -or "" + $a.state -cne "known") { continue; [void]$lines.Add(' }
+        @{ Name = "unmark-asked-twice-for-one-id"
+           Find = 'foreach ($id in @($Ids | Where-Object { "" + $_ -ne "" } | Select-Object -Unique)) {'
+           Replace = 'foreach ($id in @($Ids | Where-Object { "" + $_ -ne "" })) {' }
+        @{ Name = "unmark-throw-escapes"
+           Find = 'catch { $a = New-HordeUnknown -Reason ("" + $_.Exception.Message) }'
+           Replace = 'catch { throw }' }
     )
 }

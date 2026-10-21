@@ -106,4 +106,6 @@ return [pscustomobject]@{
     Clock = { param($State, $Now) Set-HordeWezfleetWakerClock $Now }
     # With no budget given, the waker's own default is what is set back: this fixture does not say what it is.
     Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = 0) if ($NudgeBudgetSeconds -gt 0) { Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeBudgetSeconds $NudgeBudgetSeconds } else { Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds } }
+    # The exit command's deadline (hibernation), every other deadline back at its default; none given, all are.
+    ExitDeadline = { param($State, [int]$Seconds = 0) if ($Seconds -gt 0) { Set-HordeWezfleetWakerDeadlines -ExitSeconds $Seconds } else { Set-HordeWezfleetWakerDeadlines } }
 }
