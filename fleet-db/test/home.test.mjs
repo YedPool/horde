@@ -55,6 +55,13 @@ test('a relative HORDE_HOME is refused, and does not fall through to the pointer
   assert.equal(got.ok, false);
   assert.equal(got.kind, 'refused');
   assert.match(got.message, /absolute/);
+  // The same values core/Home.ps1 refuses (Test-HordeHomeRooted): rooted to no named drive, or a drive-relative path.
+  for (const v of ['\\x', '\\x\\y', 'C:x', 'C:', '/x']) {
+    const one = resolveHordeHome({ HORDE_HOME: v, USERPROFILE: r.profile });
+    assert.equal(one.ok, false, v);
+    assert.equal(one.kind, 'refused', v);
+  }
+  assert.equal(resolveHordeHome({ HORDE_HOME: '\\\\server\\share\\horde', USERPROFILE: r.profile }).ok, true, 'UNC');
   r.done();
 });
 

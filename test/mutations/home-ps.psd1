@@ -10,8 +10,8 @@
            Find = 'if ($set -ne "") {'
            Replace = 'if ($false) {' }
         @{ Name = "relative-horde-home-accepted"
-           Find = 'if (-not [System.IO.Path]::IsPathRooted($set))'
-           Replace = 'if ($false)' }
+           Find = 'if (-not (Test-HordeHomeRooted $set)) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "pointer-ignored"
            Find = 'if (Test-Path -LiteralPath $pointer) {'
            Replace = 'if ($false) {' }
@@ -54,6 +54,9 @@
         @{ Name = "set-writes-wrong-version"
            Find = '$json = ''{"v":1,"hordeHome":"'''
            Replace = '$json = ''{"v":2,"hordeHome":"''' }
+        @{ Name = "horde-home-rooted-test-too-loose"
+           Find = 'if (-not (Test-HordeHomeRooted $set)) { throw' 
+           Replace = 'if (-not [System.IO.Path]::IsPathRooted($set)) { throw' }
         @{ Name = "clear-leaves-the-pointer"
            Find = 'Remove-Item -LiteralPath $file -Force; $removed = $true'
            Replace = '$removed = $true' }

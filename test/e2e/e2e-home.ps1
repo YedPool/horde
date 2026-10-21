@@ -70,6 +70,9 @@ foreach ($h in @($homeA, $homeB)) {
 }
 $r = Invoke-Home @("home", "set", "-Path", $homeA)
 Check ($r.code -eq 0 -and $r.out -like ("*old home: " + (Join-Path $fakeProfile ".horde") + "*") -and $r.out -like ("*new home: " + $homeA + "*")) ("set prints the old and the new home (" + $r.code + ")")
+Check ($r.out -like ("*effective here: " + $homeA + " (pointer)*")) "set then prints the effective home and its source"
+Check (($r.out -like "*tasks: *") -or ($r.out -like "*task *")) "and the task check (a count, a task that names another home, or one line saying why it could not be read)"
+Check ($r.out -notlike "*WARNING*") "no warning while HORDE_HOME is not set"
 Check ((Pointer-Text) -ceq ('{"v":1,"hordeHome":"' + $homeA.Replace("\", "\\") + '"}')) "the pointer is exactly {v 1, hordeHome}"
 Check (@([System.IO.File]::ReadAllBytes($pointer) | Where-Object { $_ -gt 0x7E }).Count -eq 0) "and plain ASCII"
 Check (@(Get-ChildItem -LiteralPath $fakeProfile -Force | Where-Object { $_.Name -like "*.tmp" }).Count -eq 0) "and no temp file is left behind"
@@ -79,6 +82,11 @@ $r = Invoke-Home @("db", "status")
 Check ($r.code -eq 0 -and $r.out -like ("*" + (Join-Path $homeA "fleet.db") + "*")) "a db verb, with HORDE_HOME unset, works in the pointer home"
 $r = Invoke-Home @("db", "status") @{ HORDE_HOME = $homeB; USERPROFILE = $fakeProfile }
 Check ($r.code -eq 0 -and $r.out -like ("*" + (Join-Path $homeB "fleet.db") + "*")) "HORDE_HOME set beats the pointer"
+$r = Invoke-Home @("home") @{ HORDE_HOME = $homeB; USERPROFILE = $fakeProfile }
+Check ($r.code -eq 0 -and $r.out -like "*WARNING: HORDE_HOME is set in this process*overrides the pointer*") "home with HORDE_HOME set while a pointer exists warns that it overrides the pointer"
+$r = Invoke-Home @("home", "set", "-Path", $homeB) @{ HORDE_HOME = $homeA; USERPROFILE = $fakeProfile }
+Check ($r.code -eq 0 -and $r.out -like ("*effective here: " + $homeA + " (HORDE_HOME)*") -and $r.out -like "*WARNING: HORDE_HOME is set*") "set run with HORDE_HOME set says the effective home is that one, and warns"
+$r = Invoke-Home @("home", "set", "-Path", $homeA)
 $r = Invoke-Home @("home", "set", "-Path", $homeB)
 Check ($r.code -eq 0 -and $r.out -like ("*old home: " + $homeA + "*") -and $r.out -like ("*new home: " + $homeB + "*")) "set again: the old home is the previous pointer's"
 $r = Invoke-Home @("db", "status")

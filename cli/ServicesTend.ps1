@@ -536,12 +536,12 @@ function New-HordeServiceTendJob {
     # MINUTES, NOT ONE: a pass decides to take a step while it has budget left, and the step it then
     # takes - the move of a checkout, a self-check - may itself run a minute; ended at one minute, a
     # pass was being cut down in the middle of exactly the steps that must not be cut (safety review
-    # of the first build, item 6). The home travels with it as data, as the metrics job's does.
+    # of the first build, item 6). The home is NOT baked in (T-0299): the job resolves it at each run (HORDE_HOME, then the pointer), so horde home set moves it.
     # -PersonJob, for the start-up job: the name of the job in the person's session beside it.
     param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [string]$PersonJob = "", [switch]$Disabled)
     $home2 = Get-HordeHome
     $where = $(if ($Kind -ceq "startup") { @{ AtStartup = $true } } else { @{ WithPerson = $true; AtLogon = $true } })
-    $environment = @{ HORDE_HOME = $home2 }
+    $environment = @{}
     if ($Kind -ceq "startup" -and $PersonJob -ne "") { $environment[$script:HordeServicePersonJobVariable] = $Folder + "\" + $PersonJob }
     return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment $environment -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }

@@ -67,10 +67,12 @@ function Resolve-HordeHome {
     # relative, the pointer is bad, or there is no home at all. Not created here: a reader must not make folders.
     #
     # A RELATIVE HORDE_HOME IS REFUSED, not resolved against the current directory: the same command
-    # run from two folders would write to two homes, and nothing would say so.
+    # run from two folders would write to two homes, and nothing would say so. "Relative" is decided by
+    # Test-HordeHomeRooted, the same test as the pointer file and core/home.mjs, so a path like "\x" or "C:x"
+    # (which IsPathRooted accepts but which depend on the current drive or folder) is refused in both languages.
     $set = "$env:HORDE_HOME".Trim()
     if ($set -ne "") {
-        if (-not [System.IO.Path]::IsPathRooted($set)) { throw ("HORDE_HOME must be an absolute path, not '" + $set + "'") }
+        if (-not (Test-HordeHomeRooted $set)) { throw ("HORDE_HOME must be an absolute path, not '" + $set + "'") }
         return [pscustomobject]@{ path = [System.IO.Path]::GetFullPath($set); source = "HORDE_HOME" }
     }
     $pointer = Get-HordeHomePointerPath

@@ -13,6 +13,9 @@
         @{ Name = "horde-home-ignored"
            Find = 'if (raw !== '''') {'
            Replace = 'if (false) {' }
+        @{ Name = "rooted-test-too-loose"
+           Find = 'return process.platform === ''win32'' ? /^([A-Za-z]:[\\/]|\\\\[^\\/])/.test(s) : path.isAbsolute(s);'
+           Replace = 'return path.isAbsolute(s);' }
         @{ Name = "relative-horde-home-accepted"
            Find = 'if (!isRootedPath(raw)) {'
            Replace = 'if (false) {' }

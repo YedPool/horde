@@ -24,6 +24,15 @@ try {
     Check ((Get-HordeHome) -eq "C:\profile-for-test\.horde") "with HORDE_HOME unset the home is .horde in the user profile"
     $env:HORDE_HOME = "relative\home"
     Check (Throws { Get-HordeHome } "absolute") "a relative HORDE_HOME is refused, not resolved against the current folder"
+    # IsPathRooted accepts these and they depend on the current drive or folder; core/home.mjs refuses them, so this does too.
+    foreach ($v in @("\x", "\x\y", "C:x", "C:", "/x")) {
+        $env:HORDE_HOME = $v
+        Check (Throws { Get-HordeHome } "absolute") ("HORDE_HOME '" + $v + "' (rooted to a drive it does not name, or relative to a drive's folder) is refused")
+    }
+    $env:HORDE_HOME = "\\server\share\horde"
+    Check ((Get-HordeHome) -eq "\\server\share\horde") "CONTROL: a UNC HORDE_HOME is still accepted"
+    $env:HORDE_HOME = "D:/horde/home"
+    Check ((Get-HordeHome) -eq "D:\horde\home") "CONTROL: a drive path with forward slashes is still accepted"
     $env:HORDE_HOME = ""
     $env:USERPROFILE = ""
     Check (Throws { Get-HordeHome } "no home") "with neither variable there is no home, and it says so"

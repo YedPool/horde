@@ -88,7 +88,9 @@ const ORC_LETTER = /^[A-Z][A-Z0-9]{0,3}$/;
 const LOG_FILE =
   process.env.HORDE_TURN_DUTY_LOG || join(homedir(), "Documents", "Code", ".wezfleet", "accuracy", "turn-duty-hook.log");
 // The state and config folders follow the resolved home (HORDE_TURN_DUTY_HORDE_HOME, else core/home.mjs), so one
-// step moves them with everything else; with no home they stay where they were.
+// step moves them with everything else; with no home they stay where they were. THE THROTTLE STATE RESETS when the
+// home changes, and when the pointer is bad or cleared and the folder falls back to the profile one: the first stop
+// after that checks again at once (a nudge a little early, never a lost one).
 const CORE_HOME = resolveHordeHome(process.env);
 const DUTY_ROOT = (() => {
   const own = usableHome(process.env.HORDE_TURN_DUTY_HORDE_HOME);

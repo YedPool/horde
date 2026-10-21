@@ -29,7 +29,7 @@ try {
     Write-Host ""
     Write-Host "--- the job is data ---" -ForegroundColor Cyan
     $job = New-HordeCollectJob -HordeScript $horde -Name $testName -Folder "HordeTest" -Disabled
-    Check ($job.script -eq $horde -and (@($job.arguments) -join " ") -eq "metrics collect" -and $job.environment["HORDE_HOME"] -eq $env:HORDE_HOME) "the job is this checkout's horde.ps1, metrics collect, with this shell's Horde home"
+    Check ($job.script -eq $horde -and (@($job.arguments) -join " ") -eq "metrics collect" -and -not $job.environment.ContainsKey("HORDE_HOME") -and $job.hordeHome -eq $env:HORDE_HOME) "the job is this checkout's horde.ps1, metrics collect, with NO home baked in (it resolves HORDE_HOME, then the pointer, at each run); its marker records the home it was registered under"
     Check ($job.everyMinutes -eq 30 -and $job.timeLimitMinutes -eq 20 -and $job.lowPriority -and $job.disabled) "every 30 minutes, at low priority, stopped after 20 minutes; disabled when asked"
     $mark = Read-HordeJobMarker -Description $job.description
     Check ($mark.marked -and $mark.home -eq $env:HORDE_HOME) "its description carries Horde's marker and the home it serves"

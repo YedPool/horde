@@ -138,11 +138,11 @@ function Read-HordeJobMarker {
 function New-HordeCollectJob {
     # The collect job: the shipped horde.ps1 of THIS checkout, `metrics collect`, every 30 minutes.
     #
-    # THE HOME TRAVELS WITH IT, AS DATA. A scheduler starts the job with the user's own environment, not
-    # this shell's, so the job sets HORDE_HOME itself, to the home this shell resolves - which is also the
-    # home its marker names. How the value reaches the program is the scheduler's business, never a
-    # command string built here (review of PR #70, F2: a curly quote closed one).
+    # THE HOME IS NOT BAKED IN (T-0299, round-1 review). The job runs as the user who registered it, so at each
+    # run it resolves the home as every other command does: HORDE_HOME, then the pointer file, then the default.
+    # A baked HORDE_HOME would outrank the pointer and keep the old folder after horde home set. The marker still
+    # records the home it was registered under, for status and for the check that a re-register is deliberate.
     param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled)
     $home2 = Get-HordeHome
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -Disabled:$Disabled -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("metrics", "collect") -HordeHome $home2 -Disabled:$Disabled -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
 }

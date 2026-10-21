@@ -414,3 +414,40 @@ resolver follows at its next call; nothing is restarted. Rollback: `horde home s
 back to the default. There is no migration of data and `node.json` handling (`core/Device.ps1`) is unchanged. A machine whose
 environment already sets HORDE_HOME keeps using it: the variable wins, so unset it (or set it to the same folder) for the pointer
 to take effect in those processes.
+
+**What bakes a home, and what was done about it (round-1 review).** HORDE_HOME outranks the pointer, so anything that
+writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home set`. Each writer, by what it outlives:
+
+- *Scheduled tasks, all registered to run as the user who registers them* (logon type S4U or Interactive, so the user's
+  profile and pointer are visible to them): the metrics collect job (`core/Schedule.ps1`), the supervisor's two jobs
+  (`cli/ServicesTend.ps1`, which `cli/Setup.ps1`'s elevated command also registers) and the meter's two tasks
+  (`fleet-metrics/register-schedule.ps1`) NO LONGER BAKE THE HOME. Each run resolves it like any command: HORDE_HOME, then
+  the pointer, then the default. The job's description still records the home it was registered under (the marker), which is
+  data for status and for the "remove it first to serve another home" refusal, not what the run uses.
+  **A task that runs as a different account (SYSTEM, another profile) cannot see this user's pointer** and would need a home
+  baked in or its own pointer; none of Horde's tasks is registered that way today, and the elevated command of
+  `cli/Setup.ps1` (a prompt that may be another admin account) still passes the resolved home to that one short-lived
+  command: if the prompt is another account, that account's profile must hold the pointer for the job it registers.
+- *Short-lived children the command starts and waits for* (`cli/Setup.ps1` `Invoke-HordeSetupHorde`, `cli/ServicesAct.ps1`
+  `Invoke-HordeServiceHordeCommand`, `cli/commands/db.ps1`, `meter.ps1`, `decisions/Publish.ps1`) keep receiving the home the
+  command resolved at that moment; nothing of theirs outlives the command.
+- *Long-lived services* (`cli/ServicesAct.ps1` start of a horde-kind service; the home is the definition's `hordeHome`,
+  `core/Services.ps1`) take the home WHEN THEY START. The flip restarts them: `horde services stop <name>` then
+  `horde services start <name>` for each, after the definitions file of the new home names the new `hordeHome`.
+
+**The flip, in full.** (1) Put `fleet.db` in the new home. (2) `horde home set -Path <new home>`: this process and every
+new or running reader follow at their next call. (3) Unset HORDE_HOME wherever it is set (`horde home` warns while it is, in
+this process). (4) Re-register each task registered before this change, because a task only changes when re-registered and
+those still carry a baked HORDE_HOME and their old marker: `horde metrics schedule remove` then `install`, `horde services
+unschedule` then `schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
+`register-schedule.ps1` for the meter. **The metrics task of lane L needs the founder's elevated run; L files that.**
+(5) Restart the long-lived services (above). (6) `horde home` lists every task under `\Horde\` whose action or marker still
+names another home (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes on);
+run it after `set` and again after the re-registers: it should say none names another home.
+
+**The rooted test.** Both languages refuse a HORDE_HOME that is not a drive path or a UNC path: `\x` and `C:x` (which .NET's
+IsPathRooted accepts) are refused by `core/Home.ps1` through `Test-HordeHomeRooted`, as `core/home.mjs` refuses them.
+
+**The hook's throttle state.** The turn-duty hook keeps its state under `<resolved home>\turn-duty`. When the home changes, or
+the pointer is bad or cleared and the folder falls back to the profile's, the state is not carried over: the throttle resets
+and the first stop after that checks again at once (a nudge a little early, never a lost one).

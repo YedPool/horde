@@ -7,10 +7,12 @@
 # runs it, and it changes nothing when -WhatIf is given. Run it again to change a setting: a task of the
 # same name is replaced, never duplicated.
 #
-# WHY HORDE_HOME IS WRITTEN INTO EACH TASK'S ACTION. A scheduled task starts with the user's environment
-# as the task service sees it, and HORDE_HOME is not set at user level on this fleet's machines. The
-# meter has no default home on purpose (fleet-metrics/home.mjs), so without it every run would fail with
-# "HORDE_HOME is not set". The value is -HordeHome, which has no default either, for the same reason.
+# WHY HORDE_HOME IS NOT WRITTEN INTO EACH TASK'S ACTION (T-0299). The tasks run as the user who registers them,
+# so at each run horde resolves the home as every command does: HORDE_HOME, then the pointer file
+# (%USERPROFILE%\.horde-home.json). A HORDE_HOME baked into the action would outrank the pointer and keep the old
+# folder after horde home set. -HordeHome, when given, is only checked to be the home this shell resolves, so a
+# task is never registered believing in a home it will not serve. A task registered under another account would
+# need that account's profile to hold the pointer.
 #
 # WHY BELOW NORMAL PRIORITY (task priority 7). The collector reads a lot of text, and the machines that
 # run the fleet are short of memory and CPU; a meter that slows the sessions it measures defeats itself.
@@ -44,17 +46,21 @@
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory = $true)][string]$HordeHome,
+    [string]$HordeHome = "",
     [string]$HordeScript = "",
     [string]$TaskFolder = "\Horde\"
 )
 $ErrorActionPreference = "Stop"
 
-if (-not [System.IO.Path]::IsPathRooted($HordeHome)) { throw ("-HordeHome must be an absolute path, not '" + $HordeHome + "'") }
+. (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "core") "Home.ps1")
+$effective = (Resolve-HordeHome).path
+if ($HordeHome -ne "") {
+    if (-not (Test-HordeHomeRooted $HordeHome)) { throw ("-HordeHome must be an absolute path, not '" + $HordeHome + "'") }
+    if ([System.IO.Path]::GetFullPath($HordeHome) -ine $effective) { throw ("-HordeHome is " + $HordeHome + " but this shell resolves " + $effective + "; the tasks resolve the home at each run, so point it first with horde home set -Path, or set HORDE_HOME here") }
+}
 # The default is worked out here: under 5.1 a script root used in a parameter default is empty.
 if ($HordeScript -eq "") { $HordeScript = Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) "horde.ps1" }
 if (-not (Test-Path -LiteralPath $HordeScript -PathType Leaf)) { throw ("horde.ps1 not found at " + $HordeScript) }
-$taskHome = [System.IO.Path]::GetFullPath($HordeHome)
 $taskScript = (Resolve-Path -LiteralPath $HordeScript).Path
 
 $sysDir = [System.Environment]::SystemDirectory
@@ -63,11 +69,10 @@ $shell = [System.IO.Path]::Combine($sysDir, "WindowsPowerShell", "v1.0", "powers
 foreach ($needed in @($consoleHost, $shell)) { if (-not [System.IO.File]::Exists($needed)) { throw ($needed + " is not there, and the tasks cannot be run without a window") } }
 
 function Get-MeterTaskCommand {
-    # The command of one task as PowerShell text: HORDE_HOME set in the task's own process, then horde.
+    # The command of one task as PowerShell text: horde, which resolves its home at each run (header).
     param([string]$MeterVerb)
-    $homeQ = $taskHome -replace "'", "''"
     $scriptQ = $taskScript -replace "'", "''"
-    return ("$" + "env:HORDE_HOME = '" + $homeQ + "'; & '" + $scriptQ + "' meter " + $MeterVerb + "; exit $" + "LASTEXITCODE")
+    return ("& '" + $scriptQ + "' meter " + $MeterVerb + "; exit $" + "LASTEXITCODE")
 }
 
 function Get-MeterTaskArgument {
