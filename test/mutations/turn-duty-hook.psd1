@@ -67,8 +67,8 @@
            Find = '{ windowsHide: true, env: { ...process.env, HORDE_HOME: home }, stdio'
            Replace = '{ windowsHide: true, stdio' }
         @{ Name = "home-env-precedence-swapped"
-           Find = 'for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {'
-           Replace = 'for (const v of [process.env.HORDE_HOME, process.env.HORDE_TURN_DUTY_HORDE_HOME]) {' }
+           Find = 'if (own) return own;'
+           Replace = 'if (own && !CORE_HOME.ok) return own;' }
         @{ Name = "home-config-ignored"
            Find = 'const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));'
            Replace = 'const cfg = null;' }
@@ -171,5 +171,20 @@
         @{ Name = "bom-not-stripped"
            Find = 'if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // PS 5.1 redirected stdin carries a BOM'
            Replace = '' }
+        @{ Name = "pointer-home-ignored"
+           Find = 'if (CORE_HOME.ok) return usableHome(CORE_HOME.home);'
+           Replace = '' }
+        @{ Name = "bad-pointer-falls-through-to-config"
+           Find = 'if (CORE_HOME.kind === "refused") return null;'
+           Replace = '' }
+        @{ Name = "state-dir-ignores-the-resolved-home"
+           Find = 'if (CORE_HOME.ok) return join(CORE_HOME.home, "turn-duty");'
+           Replace = '' }
+        @{ Name = "state-dir-ignores-the-turn-duty-home"
+           Find = 'if (own) return join(own, "turn-duty");'
+           Replace = '' }
+        @{ Name = "state-dir-default-moved"
+           Find = 'return join(homedir(), ".horde", "turn-duty");'
+           Replace = 'return join(homedir(), ".horde2", "turn-duty");' }
     )
 }

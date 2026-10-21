@@ -390,7 +390,7 @@ try {
     try {
         $horde = Join-Path $root "horde.ps1"
         $job = New-HordeServiceTendJob -HordeScript $horde -Name "Horde services tend TEST" -Folder "HordeTest" -Kind startup -Disabled
-        Check ($job.script -eq $horde -and (@($job.arguments) -join " ") -eq "services tend" -and $job.environment["HORDE_HOME"] -eq $h0 -and $job.hordeHome -eq $h0) "the job is this checkout's horde, services tend, with this shell's Horde home"
+        Check ($job.script -eq $horde -and (@($job.arguments) -join " ") -eq "services tend" -and -not $job.environment.ContainsKey("HORDE_HOME") -and $job.hordeHome -eq $h0) "the job is this checkout's horde, services tend, with NO home baked in (it resolves HORDE_HOME, then the pointer, at each run); its marker records the home it was registered under"
         Check ($job.everyMinutes -eq 1 -and $job.timeLimitMinutes -eq 5 -and $job.atStartup -eq $true -and $job.withPerson -eq $false -and $job.disabled) "the start-up job: at start-up and every minute, whether or not anyone is signed in, and stopped only at five minutes, since a pass cut down at one minute was being cut in the middle of a step; disabled when asked"
         $pjob = New-HordeServiceTendJob -HordeScript $horde -Name "Horde services tend TEST" -Folder "HordeTest" -Kind person
         Check ($pjob.withPerson -eq $true -and $pjob.atLogon -eq $true -and $pjob.atStartup -eq $false -and $pjob.everyMinutes -eq 1 -and $pjob.timeLimitMinutes -eq 5) "the person's job: in their own session, at sign-in and every minute, for the services that need their desktop"
