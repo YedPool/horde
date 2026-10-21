@@ -15,6 +15,10 @@
 #     session record with a byte order mark) into a fleet.db of its own: it names the rows added per table
 #     and the lines it could not link, a second import adds nothing, a dry run writes nothing, a flag
 #     meant for import is refused on another verb, and a file that is not there is refused;
+#   - import -Lots reads a hibernations folder (lane K's one-file-per-table lots): the lot, members, wake and
+#     the sessions fleet.db never saw come in, a legacy record is named and left, a second import adds nothing,
+#     a member that woke since is moved forward, -Lots on another verb is refused, a file of the wrong table is
+#     reported;
 #   - a mistyped verb is refused, and a machine without Node fails at once in one sentence.
 # NOTHING REAL IS READ OR WRITTEN: the home and the user profile every child sees are folders this
 # scenario made and removes. The real homes (HORDE_HOME if set, and the profile's .horde) are checked
@@ -229,6 +233,42 @@ Check ([datetime]$l2.confirmedAt -gt [datetime]$l1.confirmedAt -and [datetime]$l
 $listed2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
 $c2 = [regex]::Match($pj2.out, 'confirmedAt\W+([0-9TZ:.-]+)').Groups[1].Value
 Check ($listed2.code -eq 0 -and $c2 -ne "" -and $listed2.out -like ("*confirmed " + $c2 + "*")) "and horde decisions published prints the confirm time"
+
+Write-Host ""
+Write-Host "=== import: the parking lots (lane K's one-file-per-table form) ===" -ForegroundColor Cyan
+$lotsDir = Join-Path $src "hibernations"
+$lotId = "01K8T0N2E0S6V7W8X9Y0Z1A2B3"
+$wakeId = "01K8T1Q2E0S6V7W8X9Y0Z1A2B3"
+$lotSession1 = "33333333-0000-4000-8000-000000000001"
+$lotSession2 = "33333333-0000-4000-8000-000000000002"
+$lotDir = Join-Path $lotsDir "20261019-202000"
+New-Item -ItemType Directory -Path (Join-Path $lotDir ("wakes\" + $wakeId)), (Join-Path $lotsDir "20260101-000000") -Force | Out-Null
+Save-Text (Join-Path $lotsDir "20260101-000000\record.json") '{"id":"20260101-000000"}'
+function Save-LotMembers { param([string]$State)
+    Save-Text (Join-Path $lotDir "parking_lot_member.json") ('{"v":1,"table":"parking_lot_member","rows":[{"lot_id":"' + $lotId + '","session_id":"' + $lotSession1 + '","orc_id":"C","tier":2,"state":"' + $State + '"},{"lot_id":"' + $lotId + '","session_id":"' + $lotSession2 + '","state":"parked","note":"lanes/c/PARKED-C1.md"}]}')
+}
+Save-LotMembers "parked"
+Save-Text (Join-Path $lotDir "parking_lot.json") ('{"v":1,"table":"parking_lot","rows":[{"id":"' + $lotId + '","created_at":"2026-10-19T20:20:00Z","created_by_orc_id":"C","reason":"free memory","selection_kind":"orcs","keep_visible":1}]}')
+Save-Text (Join-Path $lotDir ("wakes\" + $wakeId + "\wake_member.json")) ('{"v":1,"table":"wake_member","rows":[{"wake_id":"' + $wakeId + '","session_id":"' + $lotSession1 + '","outcome":"woken"}]}')
+Save-Text (Join-Path $lotDir ("wakes\" + $wakeId + "\wake.json")) ('{"v":1,"table":"wake","rows":[{"id":"' + $wakeId + '","lot_id":"' + $lotId + '","requested_at":"2026-10-19T21:00:00Z"}]}')
+$lotArgs = @("import", "-Lots", $lotsDir)
+$lotDry = Invoke-Db ($lotArgs + "-DryRun") $impEnv
+Check ($lotDry.code -eq 0 -and $lotDry.out -cmatch '(?m)^parking_lot: 1 added, 0 already there\r?$' -and $lotDry.out -cmatch '(?m)^parking_lot_member: 2 added, 0 already there, 0 moved forward\r?$') ("a dry run says what the lots would add (" + $lotDry.code + ")")
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^parking_lot: 0 rows\r?$') "and wrote nothing"
+$lot1 = Invoke-Db $lotArgs $impEnv
+Check ($lot1.code -eq 0 -and $lot1.out -cmatch '(?m)^parking_lot: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^parking_lot_member: 2 added, 0 already there, 0 moved forward\r?$' -and $lot1.out -cmatch '(?m)^wake: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^wake_member: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^session: 2 added, 0 already there\r?$') ("the lot, its members, its wake and the two sessions fleet.db had never seen come in (" + $lot1.code + ")")
+Check ($lot1.out -like "*lots: legacy record, run K's lot backfill first (not imported): 1 (e.g. 20260101-000000)*") "and the legacy record is named, not imported"
+$lot2 = Invoke-Db $lotArgs $impEnv
+Check ($lot2.code -eq 0 -and $lot2.out -cmatch '(?m)^parking_lot: 0 added, 1 already there\r?$' -and $lot2.out -cmatch '(?m)^parking_lot_member: 0 added, 2 already there, 0 moved forward\r?$' -and $lot2.out -cmatch '(?m)^wake: 0 added, 1 already there\r?$' -and $lot2.out -cmatch '(?m)^wake_member: 0 added, 1 already there\r?$') "a second import adds nothing"
+Save-LotMembers "woken"
+$lot3 = Invoke-Db $lotArgs $impEnv
+Check ($lot3.code -eq 0 -and $lot3.out -cmatch '(?m)^parking_lot_member: 0 added, 2 already there, 1 moved forward\r?$') "a member that woke since is moved forward, not added again"
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is still sound"
+$lotWrongVerb = Invoke-Db @("status", "-Lots", $lotsDir) $impEnv
+Check ($lotWrongVerb.code -ne 0 -and $lotWrongVerb.out -like "*-Lots belongs to db import, not db status*") "-Lots on another verb is refused"
+Save-Text (Join-Path $lotDir "parking_lot_member.json") '{"v":1,"table":"wake","rows":[]}'
+$lotBad = Invoke-Db $lotArgs $impEnv
+Check ($lotBad.code -eq 0 -and $lotBad.out -like "*lots: a file is missing or is not version 1 of its table (nothing imported from this lot): 1*") "a member file of the wrong table is reported, in words"
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan

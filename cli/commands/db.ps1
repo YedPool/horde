@@ -1,8 +1,8 @@
 $HordeCommand = @{
     name    = "db"
     group   = "data"
-    usage   = "db init | db status | db check | db import [-Ledger <tasks.jsonl>] [-PrCache <pr-cache.json>] [-Changelog <changelog.jsonl>] [-Cards <orcs folder>] [-ThrallCard <status.txt>] [-Registry <sessions folder>] [-Decisions <storedecisions folder>] [-DryRun]"
-    summary = "fleet.db, the fleet's one database of work data, kept in HORDE_HOME\fleet.db: init: make it, or bring it to this version's schema (safe to run again); status: the file, its schema and the rows in every table, changing no data; check: SQLite's integrity and foreign-key checks and the rules one row cannot hold alone, one line per problem, exit 1 if any; import: read the old files you name (the task ledger, the PR cache, the changelog, the status cards, the Thrall card, the session registry, the decisions store; no path is ever defaulted) into fleet.db in one transaction, print the rows added and already there per table and every line that could not be linked, and run it twice to add nothing; -DryRun does it all and writes nothing. HORDE_HOME must be set: fleet.db is never made in a default folder. Needs Node.js 24 or later"
+    usage   = "db init | db status | db check | db import [-Ledger <tasks.jsonl>] [-PrCache <pr-cache.json>] [-Changelog <changelog.jsonl>] [-Cards <orcs folder>] [-ThrallCard <status.txt>] [-Registry <sessions folder>] [-Decisions <storedecisions folder>] [-Lots <hibernations folder>] [-DryRun]"
+    summary = "fleet.db, the fleet's one database of work data, kept in HORDE_HOME\fleet.db: init: make it, or bring it to this version's schema (safe to run again); status: the file, its schema and the rows in every table, changing no data; check: SQLite's integrity and foreign-key checks and the rules one row cannot hold alone, one line per problem, exit 1 if any; import: read the old files you name (the task ledger, the PR cache, the changelog, the status cards, the Thrall card, the session registry, the decisions store, the parking lots; no path is ever defaulted) into fleet.db in one transaction, print the rows added and already there per table and every line that could not be linked, and run it twice to add nothing; -DryRun does it all and writes nothing. HORDE_HOME must be set: fleet.db is never made in a default folder. Needs Node.js 24 or later"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("init", "status", "check", "import")][string]$Verb,
@@ -13,11 +13,12 @@ $HordeCommand = @{
             [ValidateNotNullOrEmpty()][string]$ThrallCard,
             [ValidateNotNullOrEmpty()][string]$Registry,
             [ValidateNotNullOrEmpty()][string]$Decisions,
+            [ValidateNotNullOrEmpty()][string]$Lots,
             [switch]$DryRun
         )
         # A flag meant for another verb is refused, never silently ignored (cli/commands/metrics.ps1).
         if ($Verb -ne "import") {
-            foreach ($flag in @("Ledger", "PrCache", "Changelog", "Cards", "ThrallCard", "Registry", "Decisions", "DryRun")) {
+            foreach ($flag in @("Ledger", "PrCache", "Changelog", "Cards", "ThrallCard", "Registry", "Decisions", "Lots", "DryRun")) {
                 if ($PSBoundParameters.ContainsKey($flag)) { throw ("-" + $flag + " belongs to db import, not db " + $Verb) }
             }
         }
@@ -45,7 +46,7 @@ $HordeCommand = @{
         if ($Verb -eq "import") {
             # Paths are made absolute here, against the folder the user is in, because node starts in
             # PowerShell's process folder, which is not always the same one.
-            $flags = [ordered]@{ "--ledger" = $Ledger; "--pr-cache" = $PrCache; "--changelog" = $Changelog; "--cards" = $Cards; "--thrall-card" = $ThrallCard; "--registry" = $Registry; "--decisions" = $Decisions }
+            $flags = [ordered]@{ "--ledger" = $Ledger; "--pr-cache" = $PrCache; "--changelog" = $Changelog; "--cards" = $Cards; "--thrall-card" = $ThrallCard; "--registry" = $Registry; "--decisions" = $Decisions; "--lots" = $Lots }
             foreach ($f in $flags.Keys) {
                 if ("" + $flags[$f] -ne "") { $nodeArgs += @($f, $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($flags[$f])) }
             }

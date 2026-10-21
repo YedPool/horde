@@ -198,7 +198,7 @@ The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatus
 to the real files). Each source is optional. All files are read first; then one `inWrite` transaction
 runs node, orcs, sessions, PR cache, ledger, changelog and orc_status in that order, so a failure
 leaves the database as it was and a dry run rolls the same work back. The decisions store is part 2a (below); the parking lots
-are the next part.
+are part 2b (below).
 
 Idempotent: state rows (node, orc, session, task, pr) are found by their label and kept as they are
 (never renamed, never refreshed); history rows go through `appendHistory` with `backfill = 1`, so the
@@ -319,3 +319,48 @@ importer drops - unknown event, a handing with no target, a priority with no val
 imported line and no merge time, the PR's `checked_at` is the time of the import, not 1970: the column is NOT NULL
 and the entity registry reads it as the time the object came to be, so NULL would need a table rebuild; the time we
 first saw it is true to what `checked_at` means for a row nobody checked, and the report says so for each such PR.
+
+## Importer (phase 1c part 2b: parking lots)
+
+Why now: the parking lots (T-0216, lane K) are the last file-kept source before the one-home move. K wrote them as
+one JSON file per table so that a row moves into fleet.db as it is. `horde db import -Lots
+<HORDE_HOME>\fleet\hibernations` (`--lots` on the node side; refused on any other verb).
+
+**Reading.** For each `<hid>` folder: `parking_lot.json`, `parking_lot_member.json` and, for every
+`wakes\<id>\`, `wake.json` and `wake_member.json`, each `{"v":1,"table":<name>,"rows":[...]}`. All files are read
+before the transaction. A file that is not JSON, is not version 1, names another table, holds a row that is not an
+object, is missing, or a `parking_lot.json`/`wake.json` that does not hold exactly one row, refuses its WHOLE lot:
+nothing of it is imported (not even a stub session) and the report names the folder and the file. A wake folder
+with no `wake.json` is an unfinished write (K writes the members first): it is reported and skipped, the lot goes
+on. A folder with `record.json` and no `parking_lot.json` is a legacy record: it is NOT imported and is reported as
+"legacy record, run K's lot backfill first" with its folder name (K's ULIDs for legacy records are made from the
+park's time and a seed in `fleet/Lots.ps1`; the importer does not reimplement them). A folder with neither is
+ignored and named.
+
+**Mapping.** Rows go in as they are: K's ULIDs are kept, a column left out is NULL (`keep_visible` of a lot written
+before the flag is 0), times (`created_at`, `requested_at`, which must be UTC seconds `...Z`) become UTC
+milliseconds. A column the table does not have is reported by table and name and not stored. Sessions are the
+harness's uuids: a lot, member, wake or `new_session_id` session that is not in `session` gets a stub row first
+(rank unknown, first and last seen = the time of the lot or wake that names it), as part 1 does for a parent; the
+report counts them. An Orc named in `created_by_orc_id` or a member's `orc_id` is mapped as part 1 maps one: the
+`orc` table's own id, else a letter, a lane folder, or a sub-session label (`F3` gives F); a name that maps to no
+row leaves the column empty and is reported. No migration: schema version 2 already holds `keep_visible`, and every
+column K's files carry has a column (migration 6 is not needed).
+
+**One savepoint per lot.** A row the schema refuses (a bad ULID, a state outside parked, woken and dropped, a tier
+of 3, a lot id that is not the lot's, a session in a lot twice, a time that is not UTC seconds, a wake outcome
+outside the five) rolls that lot back whole, to its savepoint, and is reported with the reason and the folder: a lot
+is there whole or not at all, and the other lots go on. The counts of a rolled-back lot are not added to the
+report. The whole step is inside the run's one transaction: a failure later undoes every lot, and a dry run rolls
+them back.
+
+**Idempotent.** `parking_lot`, `wake` and `wake_member` are created once, found by their key
+(`ON CONFLICT DO NOTHING`): a lot already there is never rewritten, even if the file's reason has changed.
+`parking_lot_member` is a state table. A re-import adds a member the lot did not yet hold, and moves an existing
+member's state forward, never back. K's member rows carry NO time, so "newer" cannot be read from the row; it is
+read from the lifecycle: parked is the start, woken and dropped (it never slept, so it left the park) are the ends.
+A file may take a parked member to woken or dropped; it may not take a woken or dropped member back to parked, and
+woken and dropped do not replace each other (a re-park is a new lot, never a member going back). A file that is not
+further along than the database is kept as the database has it and reported ("member state in the file is not
+further along ..."). `parking_lot_member` therefore reports a third number, rows moved forward. A second import of
+unchanged files adds 0 to every table and moves 0, and `findProblems` is empty after.
