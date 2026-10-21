@@ -52,11 +52,13 @@ const list = (who, minutes) => {
   if (process.env.TD_SNAP !== "none") e.snapshot = process.env.TD_SNAP || "s1"; // "none": a list with no snapshot id
   const c = process.env.TD_CONFIRMED;
   if (c === "bad") e.confirmedAt = "not a time";
+  else if (c && c.startsWith("raw:")) e.confirmedAt = c.slice(4);
   else if (c) e.confirmedAt = new Date(Date.now() - Number(c) * 60000).toISOString();
   return JSON.stringify({ lists: [e] });
 };
 if (mode === "never") { console.log('{"lists":[]}'); }
 else if (mode.startsWith("age:")) { console.log(list(orc, Number(mode.slice(4)))); }
+else if (mode.startsWith("rawpub:")) { const o = JSON.parse(list(orc, 0)); o.lists[0].publishedAt = mode.slice(7); console.log(JSON.stringify(o)); }
 else if (mode === "otherorc") { console.log(list("ZZ", 1)); }
 else if (mode === "badjson") { console.log("this is not json"); }
 else if (mode === "dbmissing") { console.error("horde decisions published: refused: fleet.db does not exist yet at X; run horde db init"); process.exitCode = 1; }
@@ -90,7 +92,7 @@ function Put-BlockedState {
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     $c = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
     $b = [long]([datetimeoffset]::UtcNow.AddMinutes(-$BlockedMinutesAgo).ToUnixTimeMilliseconds())
-    [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $c + ',"lastBlockedAt":' + $b + ',"lastBlockedSnapshot":"' + $Snapshot + '"}'), $utf8)
+    [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $c + ',"lastBlockedAt":' + $b + ',"lastDecisionsBlockedAt":' + $b + ',"lastBlockedSnapshot":"' + $Snapshot + '"}'), $utf8)
 }
 function Get-StateObj { param([string]$Sid) $p = State-Path $Sid; if (-not [System.IO.File]::Exists($p)) { return $null }; return (Text $p | ConvertFrom-Json) }
 
@@ -344,7 +346,7 @@ $r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
 $st = Get-StateObj $s
 Check ((Test-Pass $r) -and (Ran)) "the SAME snapshot, blocked 40 minutes ago: pass, no block"
 Check ($null -ne $st -and $st.lastCheckedAt -gt ([datetimeoffset]::UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()) -and $st.lastBlockedSnapshot -ceq "snapA") "   the check is recorded and the snapshot is kept"
-Check ($null -ne $st -and $st.lastBlockedAt -lt ([datetimeoffset]::UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds())) "   and lastBlockedAt is NOT moved by a pass (the 4 hours run from the real block)"
+Check ($null -ne $st -and $st.lastDecisionsBlockedAt -lt ([datetimeoffset]::UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds())) "   and lastDecisionsBlockedAt is NOT moved by a pass (the 4 hours run from the real block)"
 Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 230 "snapA"
 $r = Stop-Hook $s @{ TD_MODE = "age:400"; TD_SNAP = "snapA" }
@@ -386,6 +388,61 @@ Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_CONFIRMED = "bad" }
 Check (Test-Pass $r) "   and a malformed confirmedAt does not spoil a fresh publishedAt"
+
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastDecisionsBlockedAt -gt 0) "a decisions block records lastDecisionsBlockedAt"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+$ms31 = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
+[System.IO.File]::WriteAllText((State-Path $s), ('{"lastCheckedAt":' + $ms31 + ',"lastBlockedAt":' + [long]([datetimeoffset]::UtcNow.AddMinutes(-40).ToUnixTimeMilliseconds()) + ',"lastBlockedSnapshot":"snapA"}'), $utf8)
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+Check ($null -ne (Get-Block $r)) "an old state file with no lastDecisionsBlockedAt reads as never blocked: blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s -600 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+Check ($null -ne (Get-Block $r)) "a block time in the FUTURE never counts as recent: blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA"; TD_TASK = "age:200"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastDecisionsBlockedAt -lt ([datetimeoffset]::UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds()) -and $st.lastBlockedSnapshot -ceq "snapA") "a task-list-only block does not move the decisions quiet window or snapshot"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and $st.lastBlockedSnapshot -ceq "") "a list that passes as fresh clears the remembered snapshot"
+Write-Host ""
+Write-Host "--- times that cannot be trusted are ignored ---" -ForegroundColor Cyan
+foreach ($c in @(
+        @{ n = "a publishedAt 100 days in the future"; env = @{ TD_MODE = "age:-144000" } }
+        @{ n = "a publishedAt of year 9999"; env = @{ TD_MODE = "rawpub:9999-01-01T00:00:00Z" } }
+        @{ n = "a confirmedAt 100 days in the future beside an old publishedAt"; env = @{ TD_MODE = "age:200"; TD_CONFIRMED = "-144000" } }
+        @{ n = "a publishedAt that is only a year (2026)"; env = @{ TD_MODE = "rawpub:2026" } }
+        @{ n = "a publishedAt that is a bare number (1)"; env = @{ TD_MODE = "rawpub:1" } }
+        @{ n = "a publishedAt in a loose date form (Oct 30 2099)"; env = @{ TD_MODE = "rawpub:Oct 30 2099" } }
+        @{ n = "a confirmedAt in a loose date form beside an old publishedAt"; env = @{ TD_MODE = "age:200"; TD_CONFIRMED = ("raw:" + (Get-Date).ToUniversalTime().ToString("r", [cultureinfo]::InvariantCulture)) } }
+    )) {
+    Reset-Marks
+    $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+    $r = Stop-Hook $s $c.env
+    Check ($null -ne (Get-Block $r)) ("ignored, no usable time is stale (never a kill switch): blocks: " + $c.n)
+}
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_CONFIRMED = "raw:2026-13-45T99:99:99Z" }
+Check (Test-Pass $r) "an ISO-shaped but impossible confirmedAt is ignored, a fresh publishedAt still passes"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:-1" }
+Check (Test-Pass $r) "a publishedAt 1 minute ahead (clock skew within 2 minutes) still counts"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:-5" }
+Check ($null -ne (Get-Block $r)) "a publishedAt 5 minutes ahead is ignored: no usable time, stale, blocks"
 
 Write-Host ""
 Write-Host "--- the state is written BEFORE the block ---" -ForegroundColor Cyan

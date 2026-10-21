@@ -8,7 +8,7 @@
 // ORDER OF WORK, cheapest first, so most turns cost one file read and no process:
 //   1. stop_hook_active true  -> exit 0 at once. A session that is stopping BECAUSE of a block is never blocked
 //      again, so the hook can never loop.
-//   2. the session's state file (<state dir>\<session id>.json: { lastCheckedAt, lastBlockedAt, lastBlockedSnapshot }) says it was
+//   2. the session's state file (<state dir>\<session id>.json: { lastCheckedAt, lastBlockedAt, lastDecisionsBlockedAt, lastBlockedSnapshot }) says it was
 //      checked less than 30 minutes ago -> exit 0. No process is spawned.
 //   3. the session is not an Orc or the Thrall in the wezfleet registry (not there, or a Warg) -> record the
 //      check, exit 0.
@@ -42,7 +42,7 @@
 // the block text as a runnable PowerShell command. No home found: log, record the check, pass.
 //
 // RETIRED seats (registry rows with retired true) are skipped like a Warg.
-//// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
+// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
 // keeps for it. An Orc is role "orchestrator" with its lane letter as label. Any other role (a Warg) is left alone.
 //
 // ENVIRONMENT (the tests set these; production sets none):
@@ -67,6 +67,11 @@ const FRESH_MS = 30 * 60 * 1000;
 // The field names that carry the time a publish was last CONFIRMED (re-published unchanged), tried in order. The
 // authoritative name comes from N's fleet.db confirm record, which `horde decisions published` will show beside
 // publishedAt; when N's change merges, adjusting this list is the one-line change. Values are ISO UTC times.
+// A time later than now + this is not believed (clock skew, a bad writer, year 9999): it would read as fresh until
+// that date and silence the duty for good. Two minutes covers honest skew between machines.
+const FUTURE_SLACK_MS = 2 * 60 * 1000;
+// Only an ISO UTC time is read; Date.parse alone also takes "2026", "1" and "Oct 30 2099".
+const ISO_UTC = /^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?Z$/;
 const CONFIRMED_FIELDS = ["confirmedAt", "checkedAt", "lastConfirmedAt"];
 // An Orc that was blocked for list snapshot S is not blocked again for the SAME S until this long has passed. Re-publishing
 // an unchanged list answers "unchanged" and leaves publishedAt at the first publish, so without this an Orc whose list
@@ -139,8 +144,8 @@ function readState(sid) {
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
   const snap = (v) => (typeof v === "string" ? v : "");
   return s && typeof s === "object"
-    ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt), lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }
-    : { lastCheckedAt: 0, lastBlockedAt: 0, lastBlockedSnapshot: "" };
+    ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt), lastDecisionsBlockedAt: num(s.lastDecisionsBlockedAt), lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }
+    : { lastCheckedAt: 0, lastBlockedAt: 0, lastDecisionsBlockedAt: 0, lastBlockedSnapshot: "" };
 }
 
 function writeState(sid, state) {
@@ -227,13 +232,17 @@ function runHorde(args, home) {
   });
 }
 
-// How fresh this Orc's list is, from `-Json` output { lists: [ { orc, snapshot, publishedAt, confirmedAt?, ... } ] }.
-// Fresh = the NEWER of publishedAt and confirmedAt. CONTRACT WITH THE PUBLISH CODE: `confirmedAt` (see CONFIRMED_FIELDS) is an ISO UTC
-// time set each time a publish is accepted, including one answered "unchanged" (publishedAt then stays at the first
-// publish). The first field in CONFIRMED_FIELDS with a valid time is used. A malformed value is ignored.
-// Resolves { state: "ok" | "due" | "error", why, snapshot } (snapshot: the list's id, "" when it has none).
-function freshestTime(entry) {
-  const ok = (v) => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
+// The freshest believable time of one list entry { orc, snapshot, publishedAt, confirmedAt?, ... }, or null.
+// Fresh = the NEWER of publishedAt and a confirmed time. CONTRACT WITH THE PUBLISH CODE: the confirmed time (field
+// names in CONFIRMED_FIELDS, `confirmedAt` first) is an ISO UTC time set each time a publish is accepted, including one
+// answered "unchanged" (publishedAt then stays at the first publish). The first CONFIRMED_FIELDS entry with a usable
+// time is used. A value that is not an ISO UTC time, or is later than now + FUTURE_SLACK_MS, is ignored.
+function freshestTime(entry, now) {
+  const ok = (v) => {
+    if (typeof v !== "string" || !ISO_UTC.test(v)) return null;
+    const t = Date.parse(v);
+    return Number.isFinite(t) && t <= now + FUTURE_SLACK_MS ? t : null;
+  };
   const published = ok(entry.publishedAt);
   let confirmed = null;
   for (const k of CONFIRMED_FIELDS) {
@@ -243,6 +252,9 @@ function freshestTime(entry) {
   if (published === null) return confirmed;
   return confirmed === null ? published : Math.max(published, confirmed);
 }
+
+// Resolves { state: "ok" | "due" | "error", why, snapshot } (snapshot: the list's id, "" when it has none).
+// No usable time at all is stale ("due"), never fresh.
 async function listAgeCheck(args, letter, now, home) {
   const r = await runHorde(args, home);
   if (!r.ok) return { state: "error", why: r.why };
@@ -252,9 +264,9 @@ async function listAgeCheck(args, letter, now, home) {
   if (!parsed || !Array.isArray(parsed.lists)) return { state: "error", why: "output had no lists" };
   const mine = parsed.lists.filter((l) => l && l.orc === letter);
   if (mine.length === 0) return { state: "due", why: "never published" };
-  const at = freshestTime(mine[0]);
-  if (at === null) return { state: "error", why: "publishedAt was not a time" };
+  const at = freshestTime(mine[0], now);
   const snapshot = typeof mine[0].snapshot === "string" ? mine[0].snapshot : "";
+  if (at === null) return { state: "due", why: "no usable publish time", snapshot };
   return now - at < FRESH_MS ? { state: "ok", why: "", snapshot } : { state: "due", why: "last published more than 30 minutes ago", snapshot };
 }
 
@@ -303,25 +315,27 @@ async function main() {
   }));
   const reasons = [];
   let blockedSnapshot = state.lastBlockedSnapshot;
+  let decisionsBlockedAt = state.lastDecisionsBlockedAt;
   results.forEach((r, i) => {
-    if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
+    if (r.state === "ok" && active[i].snapshotQuiet) blockedSnapshot = ""; // fresh: a later return of an old id is judged on its own
+    else if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
     else if (r.state === "due") {
       // Already asked about exactly this list, recently: the Orc either republished (confirmed it) or ignored the ask.
-      const askedBefore = active[i].snapshotQuiet && r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot && now - state.lastBlockedAt < SNAPSHOT_QUIET_MS;
+      const askedBefore = active[i].snapshotQuiet && r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot && now >= state.lastDecisionsBlockedAt && now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;
       if (askedBefore) logLine("check " + active[i].name + " for " + letter + ": list " + r.snapshot + " already asked about; passing");
       else {
         reasons.push(active[i].reason(letter, home));
-        if (active[i].snapshotQuiet) blockedSnapshot = r.snapshot || "";
+        if (active[i].snapshotQuiet) { blockedSnapshot = r.snapshot || ""; decisionsBlockedAt = now; }
       }
     }
   });
 
-  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt, lastBlockedSnapshot: blockedSnapshot };
+  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt, lastDecisionsBlockedAt: decisionsBlockedAt, lastBlockedSnapshot: blockedSnapshot };
   const saved = writeState(sid, next); // BEFORE the block is printed
   if (reasons.length === 0 || !saved) return 0;
   // ASCII ON THE WIRE: a home may hold a non-ASCII character, and a reader that decodes stdout with another code
-// page (Windows PowerShell 5.1) would mangle it; JSON escapes keep the bytes ASCII and the text exact.
-process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")));
+  // page (Windows PowerShell 5.1) would mangle it; JSON escapes keep the bytes ASCII and the text exact.
+  process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")));
   return 0;
 }
 
