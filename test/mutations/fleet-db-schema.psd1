@@ -43,8 +43,8 @@
            Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;"
            Replace = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';" }
         @{ Name = "answer-reopen-ignored"
-           Find = "IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,"
-           Replace = "IN ('closed', 'acked') THEN 1 ELSE 1 END AS open_at_arrival," }
+           Find = "AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,"
+           Replace = "AND e.kind IN ('closed', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival," }
         @{ Name = "replaces-any-question"
            Find = "BEGIN SELECT RAISE(ABORT, 'an answer replaces an answer to the same question'); END;"
            Replace = "BEGIN SELECT 1; END;" }
