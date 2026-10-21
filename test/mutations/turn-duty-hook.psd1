@@ -69,9 +69,12 @@
         @{ Name = "home-config-ignored"
            Find = 'const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));'
            Replace = 'const cfg = null;' }
-        @{ Name = "home-config-relative-accepted"
-           Find = ' && isAbsolute(h.trim())) return h.trim();'
-           Replace = ') return h.trim();' }
+        @{ Name = "home-relative-accepted"
+           Find = ' || !/^([A-Za-z]:[\\/]|\\\\[^\\])/.test(h)'
+           Replace = '' }
+        @{ Name = "home-line-break-accepted"
+           Find = '/[\r\n]/.test(h) || '
+           Replace = '' }
         @{ Name = "no-home-still-asks"
            Find = 'if (home === null) {'
            Replace = 'if (false) {' }
@@ -82,8 +85,11 @@
            Find = '"no published decisions list was found for Orc " + letter'
            Replace = '"your list was never published, Orc " + letter' }
         @{ Name = "home-apostrophe-not-doubled"
-           Find = 'home.replace(/''/g, "''''")'
+           Find = 'home.replace(/[''‘’‚‛]/g, "$&$&")'
            Replace = 'home' }
+        @{ Name = "home-curly-quote-not-doubled"
+           Find = '[''‘’‚‛]'
+           Replace = '['']' }
         @{ Name = "tell-n-line-dropped"
            Find = '    "if publish refuses because fleet.db has no row for your Orc, tell N",'
            Replace = '' }

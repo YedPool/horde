@@ -55,7 +55,7 @@
 // NOT INSTALLED BY THIS FILE. The settings.json entry is in the pull request notes; a person installs it.
 
 import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { join, dirname, isAbsolute } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
