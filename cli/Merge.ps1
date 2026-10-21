@@ -540,14 +540,14 @@ function New-HordeMergeTools {
         # -Shell is "5.1" or "7" (the shells table). PowerShell 7 that is not there is a red guard with the
         # path named, never a skipped one.
         Guard = {
-            param([string]$Checkout, [string]$Suite, [string]$Shell)
+            param([string]$Checkout, [string]$Suite, [string]$Which)
             $program = $shell
-            if ($Shell -ceq "7") {
+            if ($Which -ceq "7") {
                 $program = $shell7
                 if (-not [System.IO.File]::Exists($program)) { return [pscustomobject]@{ code = -1; out = ""; err = ("PowerShell 7 is not at " + $program + "; install the MSI or set guardShell7 in the merge settings") } }
             }
-            elseif ($Shell -cne "5.1") { return [pscustomobject]@{ code = -1; out = ""; err = ("the guard shell '" + $Shell + "' is not 5.1 or 7") } }
-            $env1 = & $guardEnvFor -Shell $Shell -MachinePsModulePath ("" + $machinePath)
+            elseif ($Which -cne "5.1") { return [pscustomobject]@{ code = -1; out = ""; err = ("the guard shell '" + $Which + "' is not 5.1 or 7") } }
+            $env1 = & $guardEnvFor -Shell $Which -MachinePsModulePath ("" + $machinePath)
             return (& $runProgram -Program $program -Arguments @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", [System.IO.Path]::Combine($Checkout, $Suite)) -Directory $Checkout -Environment $env1)
         }.GetNewClosure()
         Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments)) -Directory $place) }.GetNewClosure()

@@ -79,10 +79,10 @@
            Find = 'if (-not [System.IO.File]::Exists($program)) { return [pscustomobject]@{ code = -1;'
            Replace = 'if ($false) { return [pscustomobject]@{ code = -1;' }
         @{ Name = "unknown-shell-taken"
-           Find = 'elseif ($Shell -cne "5.1") { return'
+           Find = 'elseif ($Which -cne "5.1") { return'
            Replace = 'elseif ($false) { return' }
         @{ Name = "machine-module-path-not-given"
-           Find = '$env1 = & $guardEnvFor -Shell $Shell -MachinePsModulePath ("" + $machinePath)'
+           Find = '$env1 = & $guardEnvFor -Shell $Which -MachinePsModulePath ("" + $machinePath)'
            Replace = '$env1 = @{}' }
         @{ Name = "environment-not-set-on-the-child"
            Find = 'foreach ($k in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$k] = "" + $Environment[$k] }'
