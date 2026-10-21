@@ -18,6 +18,7 @@
 # wezfleet refused the same files (a malformed session_id, lib/Registry.ps1:244).
 
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "Schema.ps1")
@@ -49,7 +50,7 @@ function Read-HordePaneSessions {
         $j = $null
         $written = $null
         try {
-            $j = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json
+            $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $f.FullName)
             $written = [System.IO.File]::GetLastWriteTimeUtc($f.FullName)
         } catch {
             # A file removed between listing and reading is a session that restarted in that

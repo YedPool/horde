@@ -30,6 +30,7 @@
 #
 # No Set-StrictMode here: dot-sourced by Relay.ps1, after Wrangler.ps1.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 $script:HordeCloudflareRelayBundleSeconds = 120
 $script:HordeCloudflareRelayNoNetwork = "http://127.0.0.1:9"
 # What the dry run writes that is not code: a note naming the time it was written (measured above).
@@ -50,7 +51,7 @@ function Get-HordeCloudflareRelayBundleHash {
     try {
         $text = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8)
         if (Test-HordeCloudflareRelayHasTestBinding -Text $text) { return (New-HordeUnknown -Reason "the tree's wrangler.json names a test binding") }
-        $cfg = $text | ConvertFrom-Json
+        $cfg = ConvertFrom-HordeJson -Text ($text)
         $slash = { param([string]$p) ([System.IO.Path]::GetFullPath($p)) -replace '\\', '/' }
         $site = Join-Path $Work "no-assets"
         [void][System.IO.Directory]::CreateDirectory($site)

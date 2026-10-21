@@ -27,6 +27,7 @@
 # is read.
 
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "Roles.ps1")
@@ -59,7 +60,7 @@ function Read-HordeJsonFile {
     # A parsed JSON object, or $null with the reason added to Gaps.
     param([string]$Path, $Gaps, [string]$Label)
     try {
-        $j = (Read-HordeSharedText -Path $Path) | ConvertFrom-Json
+        $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)
         if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { [void]$Gaps.Add($Label + " is not a JSON object"); return $null }
         return $j
     } catch { [void]$Gaps.Add($Label + " could not be read: " + $_.Exception.Message); return $null }
@@ -143,7 +144,7 @@ function Read-HordeEventLog {
         $t = $line.Trim()
         if ($t -eq "") { continue }
         $e = $null
-        try { $e = $t | ConvertFrom-Json } catch { $e = $null }
+        try { $e = ConvertFrom-HordeJson -Text ($t) } catch { $e = $null }
         if ($null -eq $e -or $e -isnot [System.Management.Automation.PSCustomObject]) {
             return [pscustomobject]@{ events = @(); present = $true; complete = (New-HordeUnknown -Reason ("line " + $n + " of the event log " + $Path + " is not a JSON object")) }
         }

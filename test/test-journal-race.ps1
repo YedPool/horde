@@ -174,9 +174,10 @@ $n = ([regex]::Matches($src, [regex]::Escape($find))).Count
 Check ($n -eq 1) "the control's edit matches exactly once in remote/Journal.ps1"
 $brokenPath = Join-Path $script:work "Journal-overwrites.ps1"
 [System.IO.File]::WriteAllText($brokenPath, $src.Replace($find, '[System.IO.FileMode]::Create'))
-# The copy dot-sources core/Tristate.ps1 by a path relative to itself, so it needs one beside it.
+# The copy dot-sources core/Tristate.ps1 and core/JsonText.ps1 by paths relative to itself, so it needs both beside it.
 New-Item -ItemType Directory -Path (Join-Path $script:work "core") | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "core\Tristate.ps1") -Destination (Join-Path $script:work "core\Tristate.ps1")
+Copy-Item -LiteralPath (Join-Path $root "core\JsonText.ps1") -Destination (Join-Path $script:work "core\JsonText.ps1")
 $brokenDir = Join-Path $script:work "remote"
 New-Item -ItemType Directory -Path $brokenDir | Out-Null
 Move-Item -LiteralPath $brokenPath -Destination (Join-Path $brokenDir "Journal.ps1")

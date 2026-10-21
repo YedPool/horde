@@ -26,7 +26,6 @@ CLAUDE.md | 1 | the agent-session rules file carries the name the harness itself
 CONTRIBUTING.md | 1 | the working rules name CLAUDE.md, the session rules file whose name the harness fixes, as the short form of this document
 core/Identity.ps1 | 72 | identifies a session from the harness's own control files, process names and transcripts; these reads move behind the AgentPort in the engines plan's step A4
 core/ownership.json | 35 | the ownership table catalogues the stores of the system being replaced, and several of them are the harness's own control files, transcripts and status files
-core/json-parse-allowlist.txt | 2 | the raw JSON parse list (issue #274) names by path the two files in this harness's folder that still call ConvertFrom-Json; each line leaves when its file moves to ConvertFrom-HordeJson
 core/RestorePlan.ps1 | 10 | checks each resume kind's argv for the restore plan, and the kinds are named per harness until the engines plan's steps K1 and R3 take them out
 core/Roles.ps1 | 2 | reads the old system's session records, whose key field carries the harness's name; the name belongs to the store being read on the way out
 hosts/wezterm/allowlist.txt | 2 | the host's own allowlist lists CLAUDE.md, the session rules file whose name the harness fixes

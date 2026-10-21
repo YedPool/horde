@@ -46,6 +46,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "notices\Decide.ps1")
 
 $script:HordeNoticesChannelFolder = $PSScriptRoot
@@ -407,7 +408,7 @@ function Read-HordeNoticesChannelFollow {
     try { $text = $strict.GetString($Body) } catch { $fail.reason = "the switch is not UTF-8"; return $fail }
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the switch is not a JSON object"; return $fail }
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { $fail.reason = "the switch has a member more than once"; return $fail }
-    try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the switch is not JSON"; return $fail }
+    try { $a = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the switch is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the switch is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
     if ((@($names | Sort-Object) -join ",") -cne ($script:HordeNoticesChannelFollowMembers -join ",")) { $fail.reason = ("the switch's members are " + ($names -join ", ") + ", not " + ($script:HordeNoticesChannelFollowMembers -join ", ")); return $fail }

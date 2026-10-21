@@ -54,6 +54,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 $script:HordeWeztermActExe = "wezterm"
 # How long one cli call may take. A spawn answered in under a second on this machine (2026-10-05,
 # isolated instance, 12 spawns); 20 s is the bound past which the terminal is called not answering.
@@ -435,7 +436,7 @@ function Read-HordeWeztermPaneList {
     $joined = ((@($Raw) -join "`n").Trim())
     if ($joined -eq "") { return (New-HordeUnknown -Reason "the terminal's pane list was empty output, which is unknown, not none") }
     $parsed = $null
-    try { $parsed = $joined | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason "the terminal's pane list is not JSON") }
+    try { $parsed = ConvertFrom-HordeJson -Text ($joined) } catch { return (New-HordeUnknown -Reason "the terminal's pane list is not JSON") }
     if ($joined -ceq "[]") { return (New-HordeKnown -Value @()) }
     $rows = New-Object System.Collections.ArrayList
     foreach ($p in @($parsed)) {

@@ -12,4 +12,3 @@
 # paths, which can only name this folder's files by naming the folder.
 #
 # path | mentions | why this file may name the relay
-core/json-parse-allowlist.txt | 5 | the raw JSON parse list (issue #274) names by path the four files in this relay's folder that still call ConvertFrom-Json, one of them Wrangler.ps1; each line leaves when its file moves to ConvertFrom-HordeJson

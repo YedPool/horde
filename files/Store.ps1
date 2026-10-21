@@ -47,6 +47,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
 
@@ -215,7 +216,7 @@ function Read-HordeFilesRecordFile {
     }
     if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty" } }
     $data = $null
-    try { $data = $text | ConvertFrom-Json } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: it was damaged, or made by hand" } }
+    try { $data = ConvertFrom-HordeJson -Text ($text) } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: it was damaged, or made by hand" } }
     if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not a JSON object" } }
     return [pscustomobject]@{ kind = "ok"; data = $data; reason = "" }
 }

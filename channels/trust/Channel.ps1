@@ -35,7 +35,7 @@ function Read-HordeTrustChannelBody {
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the body is not a JSON object"; return $fail }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { $fail.reason = ("the body has a member more than once: " + $dups[0]); return $fail }
-    try { $b = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the body is not JSON"; return $fail }
+    try { $b = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the body is not JSON"; return $fail }
     if ($b -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the body is not a JSON object"; return $fail }
     $names = @($b.PSObject.Properties | ForEach-Object { $_.Name })
     if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeTrustChannelMembers | Sort-Object) -join ",")) { $fail.reason = ("the body's members are " + ($names -join ", ") + ", not " + ($script:HordeTrustChannelMembers -join ", ")); return $fail }

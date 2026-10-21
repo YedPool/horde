@@ -446,7 +446,7 @@ function Read-HordeModuleSettingsDocument {
     # deep ("RecursionLimit exceeded"), an empty key, and a key named PSObject, which it keeps for
     # itself. Each is this one sentence. The parser's own message is not passed on: it quotes the text.
     $parsed = $null
-    try { $parsed = $Text | ConvertFrom-Json } catch { return [pscustomobject]@{ settings = $null; problems = @("is not JSON the parser can read") } }
+    try { $parsed = ConvertFrom-HordeJson -Text ($Text) } catch { return [pscustomobject]@{ settings = $null; problems = @("is not JSON the parser can read") } }
     $unfit = @(Test-HordeSchema -Value $parsed -Schema (Get-HordeSchema -Name $script:HordeModuleSettingsSchemaName))
     if ($unfit.Count -gt 0) { return [pscustomobject]@{ settings = $null; problems = @($unfit | ForEach-Object { "does not fit schema/" + $script:HordeModuleSettingsSchemaName + ": " + $_ }) } }
     return [pscustomobject]@{ settings = (Get-HordeObjectByKey $parsed)["settings"]; problems = @() }

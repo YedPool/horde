@@ -76,7 +76,7 @@ function Read-HordeOverlayEndpoint {
         if ($n -gt 126 -or ($n -lt 32 -and $n -ne 9 -and $n -ne 10 -and $n -ne 13)) { return (New-HordeUnknown -Reason "the overlay's answer holds a character that is not printable ASCII") }
     }
     $doc = $null
-    try { $doc = $Text | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason "the overlay's answer is not JSON") }
+    try { $doc = ConvertFrom-HordeJson -Text ($Text) } catch { return (New-HordeUnknown -Reason "the overlay's answer is not JSON") }
     $found = @(Test-HordeContractDocument -Value $doc -SchemaName "overlay-endpoint.v1")
     if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the overlay's answer fails schema/overlay-endpoint.v1, so no address is taken from it: " + $found[0])) }
     if ("$($doc.overlay)" -cne $Name) { return (New-HordeUnknown -Reason ("asked about overlay '" + $Name + "', the answer is about '" + $doc.overlay + "'")) }

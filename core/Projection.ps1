@@ -93,6 +93,7 @@
 # calls, Get-WfRunSnapshot, is the parity target for step 2.3.
 
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "Schema.ps1")
@@ -114,7 +115,7 @@ $script:HordeOrphanGraceSeconds = 120
 function Get-HordeOwnershipRules {
     # core/ownership.json, Horde's own file: fields by name, and the provisional marks.
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
-    $doc = (Read-HordeSharedText -Path $Path) | ConvertFrom-Json
+    $doc = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)
     $byName = @{}
     foreach ($f in @($doc.fields)) { $byName["$($f.name)"] = $f }
     return [pscustomobject]@{ doc = $doc; fields = $byName; required = @($doc.required | ForEach-Object { "$_" }); dropped = @($doc.dropped) }
@@ -516,7 +517,7 @@ function Read-HordeControlExtras {
     # (the agent's updatedAt, a codex file's wezfleetSessionId). $null when it cannot be read.
     param($Record)
     if ($null -eq $Record) { return $null }
-    try { return ((Read-HordeSharedText -Path $Record.source) | ConvertFrom-Json) } catch { return $null }
+    try { return (ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Record.source)) } catch { return $null }
 }
 
 # ------------------------------------------------------------------------- the reading's snapshot

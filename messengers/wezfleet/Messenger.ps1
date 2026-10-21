@@ -134,6 +134,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after messengers/Port.ps1.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\PathText.ps1")
@@ -504,7 +505,7 @@ function Read-HordeWezfleetMessengerAnswer {
         return (New-HordeUnknown -Reason ($what + " printed " + $lines.Count + " lines, not one line of JSON" + $(if ($detail) { ": " + $detail } else { "" })))
     }
     $j = $null
-    try { $j = $lines[0] | ConvertFrom-Json } catch { $j = $null }
+    try { $j = ConvertFrom-HordeJson -Text ($lines[0]) } catch { $j = $null }
     if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($what + " printed something that is not JSON: " + (ConvertTo-HordeWezfleetMessengerLine $lines[0]))) }
     $need = @("id", "to", "stage", "reason")
     if ($Command -ceq "post") { $need += "woken" }

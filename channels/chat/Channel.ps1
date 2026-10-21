@@ -237,7 +237,7 @@ function Read-HordeChatChannelState {
     catch { return (New-HordeUnknown -Reason ("the chat state " + $path + " cannot be read: " + $_.Exception.Message)) }
     $why = "the chat state " + $path + " does not hold together"
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (New-HordeUnknown -Reason ($why + ": a member is repeated")) }
-    try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
+    try { $s = ConvertFrom-HordeJson -Text $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
     if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
     $names = @($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
     if (($names -join ",") -cne "cursor,lines,pending,phones,rewind,session,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }
@@ -704,7 +704,7 @@ function Read-HordeChatChannelLine {
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the line is not a JSON object"; return $fail }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { $fail.reason = ("the line has a member more than once: " + $dups[0]); return $fail }
-    try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the line is not JSON"; return $fail }
+    try { $a = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the line is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the line is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
     if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeChatChannelLineMembers | Sort-Object) -join ",")) { $fail.reason = ("the line's members are " + ($names -join ", ") + ", not " + ($script:HordeChatChannelLineMembers -join ", ")); return $fail }

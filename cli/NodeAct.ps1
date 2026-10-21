@@ -106,6 +106,7 @@
 # still running is failed, and nothing is forced.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 $script:HordeNodeActCore = Split-Path -Parent $PSScriptRoot
 foreach ($f in @("Tristate", "Namespace", "NodePolicy", "EngineResolve", "NodeEngineLayers", "AgentLaunch", "HostAct", "Secrets")) { . (Join-Path $script:HordeNodeActCore ("core\" + $f + ".ps1")) }
 $script:HordeNodeSpawnLockName = ".spawn.lock"
@@ -171,7 +172,7 @@ function Read-HordeNodeSpawnRecord {
     if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeAbsent -Note ("'" + $SessionId + "' is not a session id this node gives")) }
     $p = Join-Path $Dir ($SessionId + ".json")
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return (New-HordeAbsent -Note ("this node did not start the session " + $SessionId + " for a hub")) }
-    try { return (New-HordeKnown -Value ([System.IO.File]::ReadAllText($p) | ConvertFrom-Json)) }
+    try { return (New-HordeKnown -Value (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($p)))) }
     catch { return (New-HordeUnknown -Reason ("this node's record of " + $SessionId + " cannot be read: " + $_.Exception.Message)) }
 }
 
@@ -200,7 +201,7 @@ function Get-HordeNodeSpawnsToday {
         if ($f.Name.StartsWith(".")) { continue }
         if (($f.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $n++; continue }
         $r = $null
-        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { $n++; continue }
+        try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { $n++; continue }
         $t = [datetime]::MinValue
         $ok = [datetime]::TryParse("" + $r.startedAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$t)
         # An unreadable start counts: the cap is never raised by a torn file. A start at or after today's
@@ -685,7 +686,7 @@ function Remove-HordeNodeOldScreens {
         if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
         $old = $true
         try {
-            $at = [datetime]::Parse(("" + ([System.IO.File]::ReadAllText($f) | ConvertFrom-Json).takenAt), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            $at = [datetime]::Parse(("" + (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f))).takenAt), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
             # A takenAt AFTER the clock (the clock was set back) counts its distance too, so a screen is
             # never kept more than a week from the time it names, whichever way the clock moved.
             $old = ([Math]::Abs(($Now.ToUniversalTime() - $at).TotalDays) -gt $script:HordeNodeScreenKeepDays)
@@ -1078,7 +1079,7 @@ function Invoke-HordeNodeReconcile {
     foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "*.json" -File)) {
         if ($f.Name.StartsWith(".")) { continue }
         $r = $null
-        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { [void]$lines.Add("ALERT: the spawn record " + $f.Name + " cannot be read, so it was not reconciled"); continue }
+        try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { [void]$lines.Add("ALERT: the spawn record " + $f.Name + " cannot be read, so it was not reconciled"); continue }
         if ("" + $r.outcome -cne "starting") { continue }
         $sid = "" + $r.sessionId
         $pidv = $null; $ps = ""

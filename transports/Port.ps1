@@ -55,6 +55,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 
@@ -104,7 +105,7 @@ function Register-HordeTransport {
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("transport folder '" + $Folder + "' has no capabilities.json") }
-    $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8))
     $findings = @(Test-HordeTransportCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("transport '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
     # Once per name. A second registration used to replace the first silently, so a stray copy of a

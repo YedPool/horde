@@ -267,7 +267,7 @@ function Read-HordeRelayEnvelope {
     if ($null -eq $Text -or $Text.Length -eq 0) { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is empty") }
     if ($Text.Length -gt $limits.textChars) { return (New-HordeRelayEnvelopeAnswer -Reason ("the envelope is larger than " + $limits.textChars + " characters")) }
     if ($Text -cnotmatch '\A[\x20-\x7E]*\z') { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is not printable ASCII") }
-    try { $e = ConvertFrom-Json -InputObject $Text } catch { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is not JSON") }
+    try { $e = ConvertFrom-HordeJson -Text $Text } catch { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is not JSON") }
     if ($e -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is not a JSON object") }
     $top = @($e.PSObject.Properties | ForEach-Object { $_.Name })
     if ($top -cnotcontains "header" -or $e.header -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope has no header object") }

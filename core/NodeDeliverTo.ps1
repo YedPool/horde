@@ -16,6 +16,7 @@
 # refuses EVERY deliver (remote/NodeServe.ps1), as the same problems refuse every spawn (cli/NodeAct.ps1).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "EngineConfig.ps1")
 
 $script:HordeDeliverToKey = "remote.deliverTo"
@@ -34,7 +35,7 @@ function Get-HordeNodeDeliverTo {
     $byLayer = @{}
     foreach ($d in @($Layers | Where-Object { $null -ne $_ })) {
         $parsed = $d.doc
-        if ($null -eq $parsed) { $parsed = "$($d.text)" | ConvertFrom-Json }
+        if ($null -eq $parsed) { $parsed = ConvertFrom-HordeJson -Text ("$($d.text)") }
         foreach ($r in @(Get-HordeConfigItems $parsed "rules")) {
             $p = $r.set.PSObject.Properties[$script:HordeDeliverToKey]
             if ($null -eq $p) { continue }

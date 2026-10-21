@@ -35,6 +35,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Protocol.ps1")
 . (Join-Path $PSScriptRoot "Clock.ps1")
 
@@ -77,7 +78,7 @@ function ConvertTo-HordeMirrorObject {
     # One shape for every mirror, whether built here or read from a file: parsed JSON. A round trip
     # through JSON is the one conversion both agree on (remote/NodeServe.ps1 does the same for answers).
     param([Parameter(Mandatory = $true)]$Value)
-    return (($Value | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json)
+    return (ConvertFrom-HordeJson -Text ($Value | ConvertTo-Json -Depth 40 -Compress))
 }
 
 function New-HordeNodeMirror {

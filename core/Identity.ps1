@@ -37,6 +37,7 @@
 
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 # The process table is the platform's (core/Platform.ps1): the one place the operating system is asked.
@@ -232,7 +233,7 @@ function Read-HordeControlJson {
     # listed and is gone by the time it is opened, its name added to Vanished instead.
     param($File, $Gaps, $Vanished)
     $obj = $null
-    try { $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }
+    try { $obj = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $File.FullName) }
     catch {
         # GONE IS NOT UNREADABLE. Claude removes a session's file when the session exits, so on a
         # live machine a listed file can be gone a moment later: the session exited during the read,

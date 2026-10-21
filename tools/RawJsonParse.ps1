@@ -5,14 +5,12 @@
 # WHY. PowerShell 7's ConvertFrom-Json reads a date-shaped string as a [datetime]; 5.1 never does
 # (issue #274, measured 2026-10-14 on 7.6.6). core/JsonText.ps1's ConvertFrom-HordeJson is the one
 # parse that keeps every string a string under both. A file that calls ConvertFrom-Json itself is
-# exposed again the day it runs under 7, so every such call outside core/JsonText.ps1 is a finding
-# unless core/json-parse-allowlist.txt lists its file with the exact number of calls.
+# exposed again the day it runs under 7, so every such call outside core/JsonText.ps1 is a finding.
 #
-# THE LIST ONLY SHRINKS, as hosts/<name>/allowlist.txt does for test/test-host-names.ps1. The count is
-# EXACT: a file with more calls than listed is a finding (a new raw parse), and so is a file with FEWER
-# (the entry allows more than the file needs: lower it, or delete the line). A listed file that is gone
-# is a finding. So a file moved to the seam must leave the list in the same change, and a new raw call
-# can only arrive through a visible, reviewed edit of the list.
+# THE ALLOWLIST IS CLOSED (T-0323, 2026-10-20). core/json-parse-allowlist.txt once listed the files that
+# still parsed raw, and only shrank; the last entry left in that change. The file stays, with no entries,
+# because a missing list is itself a finding, and an entry in it is a finding too: there is no exception
+# to ask for, a reader uses ConvertFrom-HordeJson.
 #
 # WHAT COUNTS. A command named ConvertFrom-Json in the file's PARSE (a CommandAst), with or without its
 # module prefix - not a mention in a comment or a string. A file that does not parse is a finding, so it
@@ -47,12 +45,12 @@ function Get-HordeRawJsonParseCounts {
 }
 
 function Test-HordeRawJsonParse {
-    # Findings { path; problem } for the repository at -Root against its allowlist (or -AllowlistPath).
+    # Findings { path; problem } for the repository at -Root. The allowlist is CLOSED (no entries), so every
+    # raw call is a finding; -AllowlistPath names a copy of the list to read instead of the repository's own.
     param([Parameter(Mandatory = $true)][string]$Root, [string]$AllowlistPath = "")
     $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
     if ($AllowlistPath -eq "") { $AllowlistPath = Join-Path $rootFull $script:HordeJsonAllowlistFile }
     $out = New-Object System.Collections.ArrayList
-    $allowed = @{}
     if (-not (Test-Path -LiteralPath $AllowlistPath -PathType Leaf)) {
         [void]$out.Add([pscustomobject]@{ path = $script:HordeJsonAllowlistFile; problem = "the allowlist is missing" })
     } else {
@@ -61,29 +59,14 @@ function Test-HordeRawJsonParse {
             $lineNo++
             $t = $line.Trim()
             if ($t -eq "" -or $t.StartsWith("#")) { continue }
-            $parts = @($t -split '\|' | ForEach-Object { $_.Trim() })
-            if ($parts.Count -ne 3 -or $parts[0] -eq "" -or $parts[1] -notmatch '\A[1-9]\d{0,3}\z' -or $parts[2] -eq "") {
-                [void]$out.Add([pscustomobject]@{ path = $script:HordeJsonAllowlistFile; problem = ("line " + $lineNo + " is not <path> | <calls, 1 or more> | <why>") }); continue
-            }
-            $p = $parts[0] -replace '\\', '/'
-            if ($allowed.ContainsKey($p.ToLowerInvariant())) { [void]$out.Add([pscustomobject]@{ path = $p; problem = ("is listed twice (line " + $lineNo + ")") }); continue }
-            $allowed[$p.ToLowerInvariant()] = [pscustomobject]@{ path = $p; count = [int]$parts[1] }
+            [void]$out.Add([pscustomobject]@{ path = $script:HordeJsonAllowlistFile; problem = ("line " + $lineNo + " is an entry, and the allowlist is closed: parse with ConvertFrom-HordeJson, never list a raw call") })
         }
     }
     $counts = Get-HordeRawJsonParseCounts -Root $rootFull
     foreach ($rel in @($counts.Keys | Sort-Object)) {
         $n = $counts[$rel]
         if ($n -lt 0) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = "does not parse, so its calls cannot be counted" }); continue }
-        $entry = $allowed[$rel.ToLowerInvariant()]
-        if ($null -eq $entry) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("calls ConvertFrom-Json " + $n + " time(s) and is not on the allowlist: parse with ConvertFrom-HordeJson (core/JsonText.ps1)") }); continue }
-        if ($n -gt $entry.count) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("calls ConvertFrom-Json " + $n + " time(s), more than the " + $entry.count + " listed: a new raw parse; use ConvertFrom-HordeJson") }) }
-        elseif ($n -lt $entry.count) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("calls ConvertFrom-Json " + $n + " time(s), fewer than the " + $entry.count + " listed: lower the entry, so the list only shrinks") }) }
-    }
-    foreach ($k in @($allowed.Keys | Sort-Object)) {
-        $e = $allowed[$k]
-        $found = $false
-        foreach ($rel in $counts.Keys) { if ($rel.ToLowerInvariant() -ceq $k) { $found = $true; break } }
-        if (-not $found) { [void]$out.Add([pscustomobject]@{ path = $e.path; problem = "is listed but has no raw ConvertFrom-Json call (or is gone, or is not shipped): delete the line, so the list only shrinks" }) }
+        [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("calls ConvertFrom-Json " + $n + " time(s): parse with ConvertFrom-HordeJson (core/JsonText.ps1)") })
     }
     return $out.ToArray()
 }

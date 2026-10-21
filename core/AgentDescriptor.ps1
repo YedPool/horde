@@ -95,7 +95,7 @@ function Read-HordeCapabilityVocabularyText {
     $problems = New-Object System.Collections.ArrayList
     foreach ($p in (Get-HordeJsonDuplicateKeyProblems -Text $Text)) { [void]$problems.Add($p) }
     $table = $null
-    try { $table = $Text | ConvertFrom-Json } catch { throw ("the capability vocabulary is not JSON: " + $_.Exception.Message) }
+    try { $table = ConvertFrom-HordeJson -Text ($Text) } catch { throw ("the capability vocabulary is not JSON: " + $_.Exception.Message) }
     $rows = Get-HordeAgentProp $table "capabilities"
     if ($table -isnot [System.Management.Automation.PSCustomObject]) { [void]$problems.Add("the vocabulary must be an object with a capabilities key") }
     else { foreach ($k in @($table.PSObject.Properties | ForEach-Object { $_.Name })) { if ($k -cne "capabilities") { [void]$problems.Add("the vocabulary has an extra key '" + $k + "'") } } }
@@ -239,7 +239,7 @@ function Read-HordeAgentDescriptorText {
     $problems = New-Object System.Collections.ArrayList
     foreach ($p in (Get-HordeJsonDuplicateKeyProblems -Text $Text)) { [void]$problems.Add($p) }
     $d = $null
-    try { $d = $Text | ConvertFrom-Json } catch { throw ($What + " is not JSON: " + $_.Exception.Message) }
+    try { $d = ConvertFrom-HordeJson -Text ($Text) } catch { throw ($What + " is not JSON: " + $_.Exception.Message) }
     foreach ($p in @(Test-HordeSchema -Value $d -Schema (Get-HordeSchema -Name "agent-descriptor.v1"))) { [void]$problems.Add($p) }
     foreach ($p in @(Test-HordeAgentDescriptorRules -Descriptor $d -ExpectedName $ExpectedName -Vocabulary $Vocabulary -Levels $Levels)) { [void]$problems.Add($p) }
     if ($problems.Count -gt 0) { throw ($What + " is not usable: " + ($problems -join "; ")) }

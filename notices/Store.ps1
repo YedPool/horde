@@ -118,7 +118,7 @@ function Read-HordeNoticeJson {
     try { $bytes = [System.IO.File]::ReadAllBytes($Path); Assert-HordeAsciiBytes -Bytes $bytes -What ("the " + $What + " " + $Path); $text = [System.Text.Encoding]::ASCII.GetString($bytes) }
     catch { return (New-HordeUnknown -Reason ("the " + $What + " " + $Path + " cannot be read: " + $_.Exception.Message)) }
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (New-HordeUnknown -Reason ("the " + $What + " " + $Path + " has a member twice")) }
-    try { $o = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ("the " + $What + " " + $Path + " is not JSON")) }
+    try { $o = ConvertFrom-HordeJson -Text $text } catch { return (New-HordeUnknown -Reason ("the " + $What + " " + $Path + " is not JSON")) }
     if ($o -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("the " + $What + " " + $Path + " is not an object")) }
     return (New-HordeKnown -Value $o)
 }
@@ -226,7 +226,7 @@ function Read-HordeNoticeLog {
         if ($line.Trim() -eq "") { continue }
         $why = "line " + $i + " of the notices " + $path + " does not hold together"
         if ($line -cmatch '[^\x20-\x7E]') { return (New-HordeUnknown -Reason ($why + ": it is not printable ASCII")) }
-        try { $o = ConvertFrom-Json -InputObject $line } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
+        try { $o = ConvertFrom-HordeJson -Text $line } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
         $names = (@($o.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",")
         if ($names -cne "entry,from,id,kind,lane,n,text,ts,v" -or $o.v -ne 1 -or -not ($o.n -is [int] -or $o.n -is [long]) -or $o.n -lt 1 -or $o.id -isnot [string] -or $o.id -cnotmatch '\A[0-9a-f]{32}\z' -or
             @("notify", "progress", "cutoff") -cnotcontains "$($o.kind)") { return (New-HordeUnknown -Reason ($why + ": it is not a notice")) }

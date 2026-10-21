@@ -54,6 +54,7 @@
 #
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike: only System.IO, no native call.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 $script:HordeLocalRelayFolder = $PSScriptRoot
 $script:HordeLocalRelayItemPattern = '\A([0-9]{16})-[0-9a-f]{64}\.item\z'
 $script:HordeLocalRelayFloorPattern = '\Afloor-([0-9]{16})\z'
@@ -66,7 +67,7 @@ $script:HordeLocalRelayPollMs = 50
 
 function Get-HordeLocalRelayLimits {
     # This relay's own copy of its declared limits, for the checks it makes itself.
-    $caps = [System.IO.File]::ReadAllText((Join-Path $script:HordeLocalRelayFolder "capabilities.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $script:HordeLocalRelayFolder "capabilities.json"), [System.Text.Encoding]::UTF8))
     return $caps.limits
 }
 $script:HordeLocalRelayMaxText = [int](Get-HordeLocalRelayLimits).maxTextChars

@@ -37,6 +37,7 @@
 #
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike. No Set-StrictMode here: dot-sourced.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Tristate.ps1")
 
 $script:HordeCloudflareRelayFolder = $PSScriptRoot
@@ -209,14 +210,14 @@ function New-HordeCloudflareRelayConfig {
     if ($isTest -and $null -ne $Deployment) { return (New-HordeUnknown -Reason "-Deployment is for a production config only") }
     if (-not $isTest -and ($null -eq $Deployment -or ("" + $Deployment.name) -cnotmatch '\A[a-z0-9][a-z0-9-]{0,62}\z' -or ("" + $Deployment.origin) -cnotmatch '\Ahttps://')) { return (New-HordeUnknown -Reason "a production config needs a deployment: Get-HordeCloudflareRelayDeployment's Worker name and https origin") }
     if ($Origin -ne "" -and $Origin -cnotmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') { return (New-HordeUnknown -Reason "a test origin is http://127.0.0.1:<port>") }
-    $cfg = $text | ConvertFrom-Json
+    $cfg = ConvertFrom-HordeJson -Text ($text)
     $slash = { param([string]$p) ([System.IO.Path]::GetFullPath($p)) -replace '\\', '/' }
     $cfg.main = & $slash (Join-Path $script:HordeCloudflareRelayFolder $cfg.main)
     $cfg.base_dir = & $slash (Get-HordeCloudflareRelayRepoRoot)
     $cfg.assets.directory = & $slash $Site
     if ($isTest) {
         if (-not $CommittedTestBinding -and $TestToken -cnotmatch '\A[0-9a-f]{32,}\z') { return (New-HordeUnknown -Reason "a test token is 32 or more lower-case hex digits") }
-        $overlay = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "test-bindings.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        $overlay = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "test-bindings.json"), [System.Text.Encoding]::UTF8))
         $vars = [ordered]@{}
         if ($null -ne $cfg.PSObject.Properties["vars"]) { foreach ($p in $cfg.vars.PSObject.Properties) { $vars[$p.Name] = $p.Value } }
         foreach ($p in $overlay.vars.PSObject.Properties) { $vars[$p.Name] = $p.Value }

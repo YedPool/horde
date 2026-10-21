@@ -116,6 +116,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
@@ -198,7 +199,7 @@ function Register-HordeWaker {
     if ($from -eq "") { $from = Join-Path (Get-HordeWakerRoot) $Name }
     $capPath = Join-Path $from "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("waker folder '" + $from + "' has no capabilities.json") }
-    $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8))
     $findings = @(Test-HordeWakerCapabilities -Capabilities $caps -Folder $from)
     if ($findings.Count -gt 0) { throw ("waker '" + (Split-Path -Leaf $from) + "' refused: " + ($findings -join "; ")) }
     if ("$($caps.waker)" -cne $Name) { throw ("waker '" + $Name + "' refused: its capabilities.json names the waker '" + $caps.waker + "'") }

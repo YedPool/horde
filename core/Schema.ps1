@@ -66,6 +66,7 @@
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 $script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern", "minimum",
                                  '$schema', '$id', "title", "description", "definitions", '$ref')
 $script:HordeSchemaTypes = @("object", "array", "string", "integer", "number", "boolean", "null")
@@ -538,7 +539,7 @@ function Read-HordeSchemaFile {
     # loads it, not the first value checked against it. The check is remembered for this object, so the
     # first Test-HordeSchema on it does not repeat it.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $schemaRead = ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+    $schemaRead = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)))
     [void](Assert-HordeSchema -Schema $schemaRead)
     return $schemaRead
 }

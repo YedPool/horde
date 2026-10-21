@@ -109,7 +109,7 @@ function Read-HordeFleetWorkEventText {
         return (New-HordeFleetWorkAnswer -State "refused" -FleetEvent $null -Problems @("the line holds the character U+" + ([int][char]$wide.Value).ToString("X4") + ", which is not ASCII. Write the character as a \u escape"))
     }
     $parsedValue = $null
-    try { $parsedValue = $Text | ConvertFrom-Json } catch { $parsedValue = $null }
+    try { $parsedValue = ConvertFrom-HordeJson -Text ($Text) } catch { $parsedValue = $null }
     if ($null -eq $parsedValue -or $parsedValue -isnot [System.Management.Automation.PSCustomObject]) {
         return (New-HordeFleetWorkAnswer -State "refused" -FleetEvent $null -Problems @("the line is not a JSON object the parser can read"))
     }

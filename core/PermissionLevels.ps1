@@ -111,7 +111,7 @@ function Read-HordePermissionLevelText {
         if ($first.Length -gt $script:HordePermissionLevelMeaningMax -or -not (Test-HordePermissionLevelPrintable -Text $first)) { $first = "a finding of " + $first.Length + " characters, not shown" }
         throw ("the permission-level vocabulary is malformed: a key is written twice in one object, and only the last would be read (" + $dups.Count + " found; first: " + $first + ")")
     }
-    $table = $Text | ConvertFrom-Json
+    $table = ConvertFrom-HordeJson -Text ($Text)
     $problems = @(Test-HordePermissionLevelTable -Table $table)
     if ($problems.Count -gt 0) { throw ("the permission-level vocabulary is malformed: " + ($problems -join "; ")) }
     $out = New-Object System.Collections.ArrayList

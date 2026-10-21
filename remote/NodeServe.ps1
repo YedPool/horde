@@ -53,6 +53,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Protocol.ps1")
 . (Join-Path $PSScriptRoot "Journal.ps1")
 . (Join-Path $PSScriptRoot "Messaging.ps1")
@@ -439,7 +440,7 @@ function New-HordeNodeResult {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)]$Answer)
     # Built as ordered maps, sent as parsed JSON objects: the contract's checker and the wire writer
     # read objects, and a round trip through JSON is the one conversion both agree on.
-    $result = ($Answer | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json
+    $result = ConvertFrom-HordeJson -Text ($Answer | ConvertTo-Json -Depth 40 -Compress)
     return [pscustomobject][ordered]@{ v = 1; kind = "res"; id = (New-HordeLinkFrameId); seq = (Get-HordeNodeNextSeq $State); ts = (Get-HordeLinkTime); verb = "$($Request.verb)"; requestId = "$($Request.requestId)"; re = "$($Request.id)"; result = $result }
 }
 

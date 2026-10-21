@@ -140,6 +140,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\ModuleSettings.ps1")
 
@@ -287,7 +288,7 @@ function Read-HordeSurfaceMessages {
     param([string]$Path = (Get-HordeSurfaceMessagesPath))
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw ("the definition of the bridge's messages is not there: " + $Path) }
     $parsed = $null
-    try { $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { throw ("the definition of the bridge's messages at " + $Path + " is not JSON: " + $_.Exception.Message) }
+    try { $parsed = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)) } catch { throw ("the definition of the bridge's messages at " + $Path + " is not JSON: " + $_.Exception.Message) }
     $findings = @(Test-HordeSurfaceMessages -Messages $parsed)
     if ($findings.Count -gt 0) { throw ("the definition of the bridge's messages at " + $Path + " is refused: " + ($findings -join "; ")) }
     return $parsed
@@ -412,7 +413,7 @@ function Register-HordeSurface {
     param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][scriptblock]$Open)
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("surface folder '" + $Folder + "' has no capabilities.json") }
-    $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8))
     $findings = @(Test-HordeSurfaceCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("surface '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
     # Once per name, as a messenger is: a second registration would silently swap the surface every
@@ -646,7 +647,7 @@ function Invoke-HordeSurfaceRequest {
     if ([string]::IsNullOrEmpty($Text)) { return (& $refuse "the message was empty" $null) }
     if ($Text.Length -gt $Bridge.limits.messageChars) { return (& $refuse ("the message was " + $Text.Length + " characters, more than the " + $Bridge.limits.messageChars + " one may be; it was not read") $null) }
     $message = $null
-    try { $message = $Text | ConvertFrom-Json } catch { $message = $null }
+    try { $message = ConvertFrom-HordeJson -Text ($Text) } catch { $message = $null }
     if ($null -eq $message -or $message -isnot [System.Management.Automation.PSCustomObject]) { return (& $refuse "the message was not one JSON object" $null) }
     # THE ID FIRST, so that every later refusal can be answered: a whole number the page chose.
     $idProp = $message.PSObject.Properties[$ask.id]

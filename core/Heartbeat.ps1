@@ -33,6 +33,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
@@ -172,7 +173,7 @@ function Read-HordeHeartbeat {
     try {
         $text = Read-HordeSharedText -Path $Path
         if ($text.Length -gt $script:HordeHeartbeatMaxBytes) { return (New-HordeUnknown -Reason ("the heartbeat is " + $text.Length + " characters, more than a heartbeat is")) }
-        $j = $text | ConvertFrom-Json
+        $j = ConvertFrom-HordeJson -Text ($text)
     } catch { return (New-HordeUnknown -Reason "the heartbeat could not be read" -ErrorRecord $_) }
     if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason "the heartbeat is not a record") }
     $at = $null

@@ -28,13 +28,14 @@
 
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 
 function Get-HordeRoleTable {
     # { native = string[]; aliases = hashtable, keys lowercase } from core\roles.json.
     param([string]$Path = (Join-Path $PSScriptRoot "roles.json"))
-    $j = (Read-HordeSharedText -Path $Path) | ConvertFrom-Json
+    $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)
     $aliases = @{}
     foreach ($p in $j.aliases.PSObject.Properties) { $aliases[$p.Name.ToLowerInvariant()] = "$($p.Value)" }
     return [pscustomobject]@{ native = @($j.native | ForEach-Object { "$_".ToLowerInvariant() }); aliases = $aliases }
@@ -128,7 +129,7 @@ function Read-HordeWezfleetRoles {
         # (<id>.<pid>.<guid>.tmp) sits beside the records mid-write and is not one.
         foreach ($f in $sessFiles) {
             $rec = $null
-            try { $rec = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); $unreadableSessions++; continue }
+            try { $rec = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $f.FullName) } catch { [void]$unreadable.Add($f.FullName); $unreadableSessions++; continue }
             if ($null -eq $rec) { [void]$unreadable.Add($f.FullName); $unreadableSessions++; continue }
             $id = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
             # Skipped as wezfleet skips it (lib/Registry.ps1:122, "corrupt, not authoritative"), so
@@ -177,7 +178,7 @@ function Read-HordeWezfleetRoles {
     if ($claimFiles.Count -gt 0) {
         foreach ($f in $claimFiles) {
             $c = $null
-            try { $c = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); $unreadableClaims++; continue }
+            try { $c = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $f.FullName) } catch { [void]$unreadable.Add($f.FullName); $unreadableClaims++; continue }
             if ($null -eq $c) { [void]$unreadable.Add($f.FullName); $unreadableClaims++; continue }
             $r = Read-HordeRecordRole -Record $c -Table $Table
             $spawned = $null

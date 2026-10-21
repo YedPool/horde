@@ -38,6 +38,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "HubAct.ps1")
 
 # The route a dialled node's requests take: carried by the hub, never sent by the CLI.
@@ -63,7 +64,7 @@ function Get-HordeHubCarryQueue {
     if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return [pscustomobject]@{ records = @(); skipped = @() } }
     foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File | Where-Object { -not $_.Name.StartsWith(".") })) {
         $r = $null
-        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { [void]$skipped.Add("the hub's record " + $f.Name + " cannot be read, so it is not carried: " + $_.Exception.Message); continue }
+        try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { [void]$skipped.Add("the hub's record " + $f.Name + " cannot be read, so it is not carried: " + $_.Exception.Message); continue }
         if ($null -eq $r) { [void]$skipped.Add("the hub's record " + $f.Name + " is empty, so it is not carried"); continue }
         if ("$(Get-HordeLinkProp $r 'via')" -cne $script:HordeHubDialledRoute -or "$($r.deviceId)" -cne $DeviceId) { continue }
         if (-not (Test-HordeHubActPending -Record $r)) { continue }

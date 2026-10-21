@@ -47,7 +47,7 @@ $script:HordeOwnershipTopKeys = @("about", "owners", "stores", "storeIdGaps", "s
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
-    return ((Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json)
+    return (ConvertFrom-HordeJson -Text (Get-Content -LiteralPath $Path -Raw))
 }
 
 function Get-HordeOwnershipStoreKeys {
@@ -104,7 +104,7 @@ function Test-HordeOwnership {
     if ($Text -ne "") {
         foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { [void]$findings.Add($d) }
         if ($null -eq $Doc) {
-            try { $Doc = $Text | ConvertFrom-Json } catch {
+            try { $Doc = ConvertFrom-HordeJson -Text ($Text) } catch {
                 [void]$findings.Add("the table is not JSON that PowerShell can read: " + $_.Exception.Message)
                 return @($findings)
             }

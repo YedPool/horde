@@ -77,6 +77,7 @@
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike: System.Net.Http and System.Net.WebSockets.
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Deploy.ps1")
 . (Join-Path $PSScriptRoot "Bundle.ps1")
 . (Join-Path $PSScriptRoot "RequestSigner.ps1")
@@ -198,7 +199,7 @@ function Invoke-HordeCloudflareRelayHttp {
     } catch { return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " could not be reached for the " + $What) -ErrorRecord $_) }
     finally { $req.Dispose() }
     $parsed = $null
-    try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+    try { $parsed = ConvertFrom-HordeJson -Text ($text) } catch { $parsed = $null }
     if ($code -eq 401 -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayHttp -State $State -Method $Method -Path $Path -Body $Body -What $What -Once) }
     if ($code -ne 200) {
         $words = $(if ($null -ne $parsed -and $parsed -is [System.Management.Automation.PSCustomObject] -and $null -ne $parsed.PSObject.Properties["error"]) { $parsed.error } else { $text })
@@ -264,7 +265,7 @@ function Wait-HordeCloudflareRelayWatch {
         if (-not $r.EndOfMessage) { continue }
         $text = [System.Text.Encoding]::ASCII.GetString($Handle.message.ToArray())
         $parsed = $null
-        try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+        try { $parsed = ConvertFrom-HordeJson -Text ($text) } catch { $parsed = $null }
         if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason "the relay's watch message is not a JSON object") }
         if ($null -ne $parsed.PSObject.Properties["error"]) { return (New-HordeUnknown -Reason ("the relay ended the watch: " + (Get-HordeCloudflareRelayWords $parsed.error))) }
         $got = ConvertTo-HordeCloudflareRelayItems -Answer (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow)) -What "watch"

@@ -32,6 +32,7 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 # The preamble and hello-binding rules of a dialled link (see DIALLED LINKS below).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "remote\LinkBinding.ps1")
 # What the hub carries over a dialled link after its pull: the act requests written down for that node
 # (cli/HubCarry.ps1, which loads cli/HubAct.ps1's records).
@@ -114,7 +115,7 @@ function Read-HordeHubMirror {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$Contract)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no mirror file at " + $Path)) }
     $m = $null
-    try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }
+    try { $m = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path) }
     catch {
         # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
         # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the

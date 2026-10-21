@@ -116,6 +116,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Secrets.ps1")
@@ -196,7 +197,7 @@ function Register-HordeConversationAdapter {
     )
     $capPath = Join-Path $Folder "conversation.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("adapter folder '" + $Folder + "' has no conversation.json") }
-    $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8))
     $findings = @(Test-HordeSchema -Value $caps -Schema (Get-HordeSchema -Name "conversation-capabilities.v1"))
     $leaf = Split-Path -Leaf $Folder
     if ($findings.Count -eq 0 -and "$($caps.vendor)" -cne $leaf) { $findings = @("conversation.json names the vendor '" + $caps.vendor + "' but sits in the folder '" + $leaf + "'") }

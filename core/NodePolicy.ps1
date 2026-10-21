@@ -100,7 +100,7 @@ function Read-HordeNodePolicyText {
     if ($Text -cmatch '[^\x00-\x7F]') { return (New-HordeUnknown -Reason "the node policy holds a character that is not ASCII (CONTRIBUTING 13)") }
     foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { if ($null -ne $d) { [void]$problems.Add("" + $d) } }
     $doc = $null
-    try { $doc = $Text | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason "the node policy is not JSON") }
+    try { $doc = ConvertFrom-HordeJson -Text ($Text) } catch { return (New-HordeUnknown -Reason "the node policy is not JSON") }
     if ($null -eq $doc) { return (New-HordeUnknown -Reason "the node policy is empty") }
     foreach ($b in @(Test-HordeSchema -Value $doc -Schema (Get-HordeSchema -Name "node-policy.v1"))) { [void]$problems.Add("" + $b) }
     if ($problems.Count -gt 0) { return (New-HordeUnknown -Reason ("the node policy is malformed: " + ($problems -join "; "))) }
@@ -149,7 +149,7 @@ function Read-HordeNodeSessionStoresText {
     $problems = New-Object System.Collections.ArrayList
     foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { if ($null -ne $d) { [void]$problems.Add("" + $d) } }
     $doc = $null
-    try { $doc = $Text | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason "the session-stores declaration is not JSON") }
+    try { $doc = ConvertFrom-HordeJson -Text ($Text) } catch { return (New-HordeUnknown -Reason "the session-stores declaration is not JSON") }
     if ($null -eq $doc) { return (New-HordeUnknown -Reason "the session-stores declaration is empty") }
     foreach ($b in @(Test-HordeSchema -Value $doc -Schema (Get-HordeSchema -Name "node-session-stores.v1"))) { [void]$problems.Add("" + $b) }
     if ($problems.Count -eq 0) {

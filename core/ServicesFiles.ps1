@@ -30,6 +30,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "Home.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
@@ -87,7 +88,7 @@ function Read-HordeServiceExitRecord {
     try {
         $text = Read-HordeSharedText -Path $path
         if ($text.Length -gt 4096) { return (New-HordeUnknown -Reason "its exit record is larger than one is") }
-        $have = Get-HordeObjectByKey ($text | ConvertFrom-Json)
+        $have = Get-HordeObjectByKey (ConvertFrom-HordeJson -Text ($text))
         $started = ConvertFrom-HordeHeartbeatTimeText $have["startedAt"]
         if (($have["pid"] -isnot [int] -and $have["pid"] -isnot [long]) -or [long]$have["pid"] -ne [long]$Process.pid -or -not (Test-HordeHeartbeatSameStart -One $started -Other $Process.startedAt)) { return (New-HordeUnknown -Reason "its exit record is about another process") }
         if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeUnknown -Reason "its exit record holds no code") }
@@ -232,7 +233,7 @@ function Read-HordeServiceState {
     try {
         $text = Read-HordeSharedText -Path $path
         if ($text.Length -gt $script:HordeServiceStateMaxBytes) { return (New-HordeUnknown -Reason ("its state file " + $path + " is larger than a state file is")) }
-        $record = $text | ConvertFrom-Json
+        $record = ConvertFrom-HordeJson -Text ($text)
     } catch { return (New-HordeUnknown -Reason ("its state file " + $path + " could not be read") -ErrorRecord $_) }
     $made = ConvertFrom-HordeServiceStateRecord -Record $record -Name $Name
     if ($null -eq $made.state) { return (New-HordeUnknown -Reason ("its state file " + $path + " is not a state the supervisor wrote: " + $made.problem + "; mend it or remove it")) }

@@ -36,6 +36,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 $script:ClaudeCodeProgram = "claude"
 # This harness's names for its modes, mapped to Horde's levels. The descriptor's readback evidence
 # names the same four; agents/claude-code/test/test-launch.ps1 checks they agree.
@@ -404,7 +405,7 @@ function Find-ClaudeCodeSession {
         try { $text = Read-HordeSharedText -Path $f.FullName } catch { continue }
         if ($text -cnotmatch ('"sessionId"\s*:\s*"' + [regex]::Escape($SessionId) + '"')) { continue }
         $doc = $null
-        try { $doc = $text | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason ("the control file " + $f.Name + " names the session but is not JSON")) }
+        try { $doc = ConvertFrom-HordeJson -Text ($text) } catch { return (New-HordeUnknown -Reason ("the control file " + $f.Name + " names the session but is not JSON")) }
         if ("" + $doc.sessionId -cne $SessionId) { continue }
         [void]$found.Add([pscustomobject]@{ file = $f; doc = $doc })
     }

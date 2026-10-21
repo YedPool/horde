@@ -79,6 +79,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 
@@ -151,7 +152,7 @@ function Register-HordeMessenger {
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("messenger folder '" + $Folder + "' has no capabilities.json") }
-    $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $caps = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8))
     $findings = @(Test-HordeMessengerCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("messenger '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
     # Once per name: a second registration would silently swap the messenger every caller resolves by

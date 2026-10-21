@@ -32,6 +32,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "TextUuid.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
@@ -428,7 +429,7 @@ function Read-HordeRestoreState {
     param([switch]$Shadow, [string]$Name = "restore", [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no restore state was saved in this home") }
-    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
+    try { $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path) }
     catch { return (New-HordeUnknown -Reason "the saved restore state could not be read" -ErrorRecord $_) }
     if ($null -eq $j -or $null -eq $j.PSObject.Properties["posted"]) { return (New-HordeUnknown -Reason "the saved restore state is not one") }
     $posted = @{}

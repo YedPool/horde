@@ -80,16 +80,15 @@
 #
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs conversations/Port.ps1 loaded first.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ReadShared.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\WezfleetState.ps1")
 
 $script:ClaudeCodeConversationHeadBytes = 4096
-# POWERSHELL 7 READS A DATE-SHAPED STRING AS A [datetime] (measured 2026-10-10 on 7.6: every timestamp came
-# back a DateTime, and the conformance suite's timestamps case failed under 7 and passed under 5.1). 7.5
-# and later can be told not to (-DateKind String); 5.1 never does it. On a 7 before 7.5 the value is
-# turned back into ISO text (ConvertTo-ClaudeCodeText), which keeps the time but may not keep a prompt
-# that was nothing but a date exactly as typed.
-$script:ClaudeCodeJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")
+# POWERSHELL 7 READS A DATE-SHAPED STRING AS A [datetime] (measured 2026-10-10 on 7.6). A transcript line is
+# parsed with ConvertFrom-HordeJson (core/JsonText.ps1), which keeps every string a string under both shells:
+# -DateKind String on 7.5 and later, a walk that turns each [datetime] back into ISO text on 7.0 to 7.4, and
+# the plain parse on 5.1. ConvertTo-ClaudeCodeText stays for the values it turns into text.
 $script:ClaudeCodeConversationSkipStep = 65536
 # The harness's own words in front of a Stop hook's block reason (DELIVERED, in the header).
 $script:ClaudeCodeDeliveredPrefix = "Stop hook feedback:"
@@ -161,7 +160,7 @@ function ConvertFrom-ClaudeCodeLine {
     $isAssistant = $Line.IndexOf('"type":"assistant"', [System.StringComparison]::Ordinal) -ge 0 -and $Line.IndexOf('"type":"text"', [System.StringComparison]::Ordinal) -ge 0
     $isDelivered = $Line.IndexOf('"isMeta":true', [System.StringComparison]::Ordinal) -ge 0 -and $Line.IndexOf($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal) -ge 0
     if (-not $isUser -and -not $isAssistant -and -not $isDelivered) { return @() }
-    if ($script:ClaudeCodeJsonDateKind) { $j = $Line | ConvertFrom-Json -DateKind String } else { $j = $Line | ConvertFrom-Json }
+    $j = ConvertFrom-HordeJson -Text $Line
     if ($j -isnot [System.Management.Automation.PSCustomObject]) { return @() }
     if ((Get-ClaudeCodeMember $j "isSidechain") -eq $true) { return @() }
     $type = Get-ClaudeCodeMember $j "type"

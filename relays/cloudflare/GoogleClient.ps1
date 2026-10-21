@@ -17,6 +17,7 @@
 #
 # No Set-StrictMode here: dot-sourced. Test-HordeModuleSettingFolder is the one test of an absolute path.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 
 # The largest client file read: Google's are under 1 KiB.
@@ -43,7 +44,7 @@ function Read-HordeCloudflareRelayGoogleClient {
     $info = New-Object System.IO.FileInfo($Path)
     if ($info.Length -gt $script:HordeCloudflareRelayClientFileBytes) { return (New-HordeUnknown -Reason ("the Google client file " + $Path + " is larger than a client file is (" + $script:HordeCloudflareRelayClientFileBytes + " bytes at most)")) }
     $parsed = $null
-    try { $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { $parsed = $null }
+    try { $parsed = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)) } catch { $parsed = $null }
     if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("the Google client file " + $Path + " is not a JSON object")) }
     $web = $parsed.PSObject.Properties["web"]
     if ($null -eq $web -or $web.Value -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("the Google client file " + $Path + " is not a web application's client (it has no ""web"" section); a phone signs in from a web page")) }

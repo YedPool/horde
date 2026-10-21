@@ -69,7 +69,7 @@ function Get-HordeRelayClientDataFindings {
     }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { return ("clientDataJSON has a member more than once: " + $dups[0]) }
-    try { $cd = ConvertFrom-Json -InputObject $text } catch { return "clientDataJSON is not JSON" }
+    try { $cd = ConvertFrom-HordeJson -Text $text } catch { return "clientDataJSON is not JSON" }
     if ($cd -isnot [System.Management.Automation.PSCustomObject]) { return "clientDataJSON is not a JSON object" }
     $names = @($cd.PSObject.Properties | ForEach-Object { $_.Name })
     if ($names -cnotcontains "type" -or $cd.type -isnot [string] -or $cd.type -cne $Type) { return ("clientDataJSON type is not " + $Type) }

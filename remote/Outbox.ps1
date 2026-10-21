@@ -23,6 +23,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Journal.ps1")
 . (Join-Path $PSScriptRoot "Protocol.ps1")
 . (Join-Path $PSScriptRoot "Messaging.ps1")
@@ -67,7 +68,7 @@ function New-HordeOutboxMail {
     if ($bad -ne "") { return (New-HordeUnknown -Reason $bad) }
     $id = "$(Get-HordeLinkProp $Mail 'messageId')"
     if ($id -cnotmatch $script:HordeJournalIdPattern) { return (New-HordeUnknown -Reason ("'" + $id + "' is not a message id: an id is one lowercase UUID")) }
-    $m = ($Mail | ConvertTo-Json -Depth 20) | ConvertFrom-Json
+    $m = ConvertFrom-HordeJson -Text ($Mail | ConvertTo-Json -Depth 20)
     $contract = Get-HordeOutboxContract
     $walk = Get-HordeLinkWalkTarget -Contract $contract -Target "#/definitions/outbound-mail" -Path '$.mail'
     $found = @(Test-HordeLinkValue -Value $m -Walk $walk -Path '$.mail')

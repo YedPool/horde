@@ -92,6 +92,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after wakers/Port.ps1.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\PathText.ps1")
@@ -439,7 +440,7 @@ function Read-HordeWezfleetWakerJson {
         return [pscustomobject]@{ ok = $false; json = $null; reason = ($said + " printed " + $lines.Count + " lines, not one line of JSON" + $(if ($detail) { ": " + $detail } else { "" })) }
     }
     $j = $null
-    try { $j = $lines[0] | ConvertFrom-Json } catch { $j = $null }
+    try { $j = ConvertFrom-HordeJson -Text ($lines[0]) } catch { $j = $null }
     if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ ok = $false; json = $null; reason = ($said + " printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0] -Max $script:HordeWezfleetWakerDetailChars -Tool)) } }
     return [pscustomobject]@{ ok = $true; json = $j; reason = "" }
 }

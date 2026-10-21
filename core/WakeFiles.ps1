@@ -8,6 +8,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "Home.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
@@ -211,7 +212,7 @@ function Read-HordeWakeHeartbeat {
     param([switch]$Shadow, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $path = Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "it has never run in this home: there is no heartbeat") }
-    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
+    try { $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path) }
     catch { return (New-HordeUnknown -Reason "the heartbeat could not be read" -ErrorRecord $_) }
     $at = $null
     if ($null -ne $j -and $null -ne $j.PSObject.Properties["at"]) { $at = ConvertFrom-HordeWakeTimeText $j.at }

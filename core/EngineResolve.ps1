@@ -65,7 +65,7 @@ function Read-HordeRoleRequirementsFile {
     if ($null -eq $Vocabulary) { $Vocabulary = @(Get-HordeCapabilityVocabulary) }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     Assert-HordeAsciiBytes -Bytes $bytes -What ("the role requirements at '" + $Path + "'")
-    $t = [System.Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
+    $t = ConvertFrom-HordeJson -Text ([System.Text.Encoding]::ASCII.GetString($bytes))
     $req = Get-HordeAgentProp $t "requires"
     $names = @($Vocabulary | ForEach-Object { $_.name })
     $roles = @("warchief", "orc", "warg")
