@@ -136,15 +136,24 @@ export function decisionsHash(items) {
 }
 
 // Publish an Orc's whole decisions list. A list equal to its newest one writes nothing and says
-// unchanged (the schema's trigger would refuse it anyway). Returns { id, unchanged }.
+// unchanged (the schema's trigger would refuse it anyway) but is recorded as a confirm. Returns { id, unchanged, confirmedAt }.
 export function publishDecisions(db, { orcId, sessionId = null, publishedAt = Date.now(), items }, { mint = newId } = {}) {
   if (!Array.isArray(items)) throw new Error('publishDecisions: items must be a list (an empty one is a list)');
   if (!Number.isSafeInteger(publishedAt)) throw new Error('publishDecisions: publishedAt must be UTC milliseconds');
   const list = items.map(normalItem);
   const hash = sha256(list);
+  // Every accepted publish leaves a confirm at its time (T-0299); a second at the same millisecond is a no-op.
+  const confirm = (snapshotId) => {
+    db.prepare('INSERT INTO decisions_confirm (id, orc_id, snapshot_id, session_id, confirmed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (snapshot_id, confirmed_at) DO NOTHING')
+      .run(mint(publishedAt), orcId, snapshotId, sessionId, publishedAt);
+    return db.prepare('SELECT confirmed_at FROM decisions_live WHERE orc_id = ?').get(orcId).confirmed_at;
+  };
   const publish = () => {
     const live = db.prepare('SELECT id, sha256 FROM decisions_live WHERE orc_id = ?').get(orcId);
-    if (live && live.sha256 === hash) return { id: live.id, unchanged: true };
+    if (live && live.sha256 === hash) {
+      const confirmedAt = confirm(live.id);
+      return { id: live.id, unchanged: true, confirmedAt };
+    }
     if (live && db.prepare('SELECT published_at FROM decisions_snapshot WHERE id = ?').get(live.id).published_at >= publishedAt) {
       // Lists are published in time order (an import writes each Orc's lists oldest first): a list older
       // than the live one, or in its millisecond, would be archive the moment it is written.
@@ -155,7 +164,7 @@ export function publishDecisions(db, { orcId, sessionId = null, publishedAt = Da
       .run(id, orcId, publishedAt, sessionId, list.length, hash);
     const put = db.prepare('INSERT INTO decisions_snapshot_item (snapshot_id, position, question_id, text, recommendation, importance, blocks) VALUES (?, ?, ?, ?, ?, ?, ?)');
     for (const it of list) put.run(id, it.position, it.question_id, it.text, it.recommendation, it.importance, it.blocks);
-    return { id, unchanged: false };
+    return { id, unchanged: false, confirmedAt: confirm(id) };
   };
   return db.isTransaction ? publish() : inWrite(db, publish);
 }

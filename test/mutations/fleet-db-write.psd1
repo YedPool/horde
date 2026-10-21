@@ -64,8 +64,8 @@
            Find = 'return db.isTransaction ? run() : inWrite(db, run);'
            Replace = 'if (db.isTransaction) db.exec(''COMMIT''); return inWrite(db, run);' }
         @{ Name = "unchanged-list-written"
-           Find = 'if (live && live.sha256 === hash) return'
-           Replace = 'if (false) return' }
+           Find = 'if (live && live.sha256 === hash) {'
+           Replace = 'if (false) {' }
         @{ Name = "null-field-not-normalised"
            Find = 'const v = item[k] ?? null;'
            Replace = 'const v = item[k];' }
@@ -78,5 +78,23 @@
         @{ Name = "count-off"
            Find = '.run(id, orcId, publishedAt, sessionId, list.length, hash);'
            Replace = '.run(id, orcId, publishedAt, sessionId, list.length + 1, hash);' }
+        @{ Name = "new-list-confirm-not-written"
+           Find = 'confirmedAt: confirm(id) }'
+           Replace = 'confirmedAt: publishedAt }' }
+        @{ Name = "equal-list-confirm-not-written"
+           Find = 'const confirmedAt = confirm(live.id);'
+           Replace = 'const confirmedAt = publishedAt;' }
+        @{ Name = "confirm-loses-session"
+           Find = 'snapshotId, sessionId, publishedAt)'
+           Replace = 'snapshotId, null, publishedAt)' }
+        @{ Name = "confirm-time-off"
+           Find = 'snapshotId, sessionId, publishedAt)'
+           Replace = 'snapshotId, sessionId, publishedAt + 1)' }
+        @{ Name = "confirm-conflict-unnamed"
+           Find = ' ON CONFLICT (snapshot_id, confirmed_at) DO NOTHING'
+           Replace = '' }
+        @{ Name = "confirmed-at-returns-published"
+           Find = '.get(orcId).confirmed_at;'
+           Replace = '.get(orcId).published_at;' }
     )
 }

@@ -49,10 +49,10 @@
            Find = '  ${appendOnly(''decisions_snapshot_item'')}'
            Replace = '' }
         @{ Name = "live-is-oldest"
-           Find = 'PARTITION BY s.orc_id ORDER BY s.published_at DESC'
-           Replace = 'PARTITION BY s.orc_id ORDER BY s.published_at ASC' }
+           Find = 'PARTITION BY x.orc_id ORDER BY x.published_at DESC'
+           Replace = 'PARTITION BY x.orc_id ORDER BY x.published_at ASC' }
         @{ Name = "live-across-orcs"
-           Find = 'row_number() OVER (PARTITION BY s.orc_id ORDER BY'
+           Find = 'row_number() OVER (PARTITION BY x.orc_id ORDER BY'
            Replace = 'row_number() OVER (ORDER BY' }
     )
 }

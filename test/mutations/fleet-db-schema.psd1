@@ -66,5 +66,26 @@
         @{ Name = "taken-row-editable"
            Find = '${appendOnly(''answer_route_taken'')}'
            Replace = '' }
+        @{ Name = "confirm-of-any-snapshot-allowed"
+           Find = 'WHEN NEW.snapshot_id IS NOT (SELECT l.id FROM decisions_live l WHERE l.orc_id = NEW.orc_id)'
+           Replace = 'WHEN 0' }
+        @{ Name = "confirm-before-publish-allowed"
+           Find = 'WHEN NEW.confirmed_at < (SELECT s.published_at'
+           Replace = 'WHEN 0 AND NEW.confirmed_at < (SELECT s.published_at' }
+        @{ Name = "confirm-editable"
+           Find = '${appendOnly(''decisions_confirm'')}'
+           Replace = '' }
+        @{ Name = "confirmed-at-ignores-confirms"
+           Find = 'max(published_at, COALESCE('
+           Replace = 'min(published_at, COALESCE(' }
+        @{ Name = "confirmed-at-off-by-one"
+           Find = '), 0)) AS confirmed_at'
+           Replace = '), 0) + 1) AS confirmed_at' }
+        @{ Name = "live-view-loses-session"
+           Find = 'SELECT id, orc_id, published_at, by_session_id, item_count, sha256,'
+           Replace = 'SELECT id, orc_id, published_at, item_count, sha256,' }
+        @{ Name = "confirm-same-time-twice"
+           Find = 'UNIQUE (snapshot_id, confirmed_at)'
+           Replace = 'CHECK (1)' }
     )
 }

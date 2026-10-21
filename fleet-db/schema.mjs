@@ -788,6 +788,47 @@ export const MIGRATIONS = [
       WHEN a.signed_by IS NULL AND qn.needs_passkey = 1 THEN 0 ELSE 1 END AS authorizes
   FROM answer a JOIN question qn ON qn.id = a.question_id;
   `,
+
+  // 5: decisions_confirm (T-0299): an Orc that publishes a list equal to its live one still leaves a record.
+  `
+  -- A confirm: the Orc published its list again and it was still the same (or it was just published).
+  -- decisions publish with a list equal to the live one writes no snapshot (decisions_snapshot_not_same),
+  -- so this is the only record that the Orc looked at its list again. Append-only, like the snapshots.
+  CREATE TABLE decisions_confirm (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    orc_id TEXT NOT NULL REFERENCES orc (id),
+    snapshot_id TEXT NOT NULL REFERENCES decisions_snapshot (id),
+    session_id TEXT REFERENCES session (id),
+    confirmed_at INTEGER NOT NULL CHECK (confirmed_at >= 0),
+    UNIQUE (snapshot_id, confirmed_at)
+  ) STRICT;
+  CREATE INDEX decisions_confirm_orc_time ON decisions_confirm (orc_id, confirmed_at);
+
+  -- A confirm is of the Orc's own live list, at insert time, and never before that list was published.
+  CREATE TRIGGER decisions_confirm_own_live BEFORE INSERT ON decisions_confirm
+  WHEN NEW.snapshot_id IS NOT (SELECT l.id FROM decisions_live l WHERE l.orc_id = NEW.orc_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_confirm: not the live list of this Orc'); END;
+  CREATE TRIGGER decisions_confirm_not_early BEFORE INSERT ON decisions_confirm
+  WHEN NEW.confirmed_at < (SELECT s.published_at FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_confirm: before the list was published'); END;
+  ${appendOnly('decisions_confirm')}
+
+  -- decisions_live gains confirmed_at: the latest confirm of the live list, else its published_at, so
+  -- confirmed_at >= published_at always. Every old column stays.
+  DROP VIEW decisions_live_item;
+  DROP VIEW decisions_live;
+  CREATE VIEW decisions_live AS
+  SELECT id, orc_id, published_at, by_session_id, item_count, sha256,
+    max(published_at, COALESCE((SELECT max(c.confirmed_at) FROM decisions_confirm c WHERE c.snapshot_id = t.id), 0)) AS confirmed_at
+  FROM (
+    SELECT x.*, row_number() OVER (PARTITION BY x.orc_id ORDER BY x.published_at DESC, x.id DESC) AS rn
+    FROM decisions_snapshot x) t
+  WHERE rn = 1;
+  CREATE VIEW decisions_live_item AS
+  SELECT l.orc_id, l.published_at, i.snapshot_id, i.position, i.question_id, i.text, i.recommendation,
+    i.importance, i.blocks
+  FROM decisions_live l JOIN decisions_snapshot_item i ON i.snapshot_id = l.id;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
