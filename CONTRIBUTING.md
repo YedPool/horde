@@ -301,23 +301,27 @@ its branch can break main when main moved under it").
    edited config, schema or data file that is not itself a target; a guard inserted above a mutant
    whose own line did not change; and a suite edited to catch less. The review of its pull request
    (#63) probed the first three, and each time the affected mutants were skipped and the run
-   exited 0. It proves only the mutants on touched lines and never stands in for the changed-target specs:
-   **a pull request may not merge on `-Changed` results alone.**
+   exited 0. It proves only the mutants on touched lines and never stands in for the
+   changed-target specs: **a pull request may not merge on `-Changed` results alone.**
 2. **The full suite and the changed-target mutation specs run once per pull request**, on its
    final head, and on the **merge result** with current `main` (`git merge-tree`, or a throwaway
-   merge commit) - not on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
-   the merged tree is green. Why the specs run at all, and not only `-Changed`: first, `-Changed` is blind to every change
-   that is not on a mutant's own line (rule 1), and only whole specs see those. Second, a spec
-   on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
+   merge commit) - not on the branch alone. The changed-target specs are every spec whose
+   `Target`, `Suite` or spec file the pull request changes, so a suite edited to catch less reruns
+   its specs. "Mergeable" on GitHub means the text merges; it says nothing about whether the merged
+   tree is green. Why whole specs run at all, and not only `-Changed`: first, `-Changed` is blind
+   to every change that is not on a mutant's own line (rule 1): whole specs see those on their own
+   targets, and the nightly sweep sees the rest. Second, a spec on `main` can break without anyone
+   running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
 
    **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
    It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
    request's gate held that slot for over an hour and a half, and about ten runs from other
-   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets;
-   the nightly sweep covers the two blind spots above, an edited helper and a spec broken on
-   `main`, within a day. Until the nightly run is live, the sweep is run by hand once a night.
+   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets and
+   suites; the nightly sweep covers what they cannot see, an edited helper or config that is no
+   spec's target, and a spec broken on `main`, within a day. Until the nightly run is live, the
+   sweep is run by hand once a night.
    A pull request body names the specs it ran and says the full sweep is left to the nightly run.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the

@@ -1,6 +1,6 @@
 # EVERY MUTANT OF EVERY SPEC MUST APPLY: its find string occurs exactly once in its spec's target.
 # tools\Mutate.ps1 refuses a mutant whose find string occurs zero times or more than once ("did not
-# apply"), but only when that spec is run, and the full specs are run rarely. Meanwhile any edit to a
+# apply"), but only when that spec is run, and most specs run only in the nightly sweep. Meanwhile any edit to a
 # target can add a second copy of a find string, or remove the only one. That happened: 56e99a7 (PR
 # #57) copied the line that test\mutations\port-names.psd1's port-own-folder-assumed-hosts mutates
 # into a second function of tools\HostNames.ps1, and the spec stayed broken on main, unseen, until
