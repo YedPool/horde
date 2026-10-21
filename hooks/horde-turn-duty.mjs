@@ -8,12 +8,15 @@
 // ORDER OF WORK, cheapest first, so most turns cost one file read and no process:
 //   1. stop_hook_active true  -> exit 0 at once. A session that is stopping BECAUSE of a block is never blocked
 //      again, so the hook can never loop.
-//   2. the session's state file (<state dir>\<session id>.json: { lastCheckedAt, lastBlockedAt }) says it was
+//   2. the session's state file (<state dir>\<session id>.json: { lastCheckedAt, lastBlockedAt, lastDecisionsBlockedAt, lastBlockedSnapshot }) says it was
 //      checked less than 30 minutes ago -> exit 0. No process is spawned.
 //   3. the session is not an Orc or the Thrall in the wezfleet registry (not there, or a Warg) -> record the
 //      check, exit 0.
 //   4. run the checks (CHECKS below) for this session's Orc letter, in parallel, each with an 8 s timeout.
 //      Any check that finds the duty undone makes ONE block whose reason holds every failed check's text.
+//
+// ONE BLOCK PER UNCHANGED LIST. A block remembers the list snapshot it saw; the same snapshot is not blocked again
+// for SNAPSHOT_QUIET_MS (4 h), and a list is also fresh when its confirmedAt (see freshestTime) is recent.
 //
 // ONE BLOCK PER 30 MINUTES. lastCheckedAt is written on every path that ran the checks, a block included, and the
 // state file is written (atomically) BEFORE the block is printed: if the write fails the hook does not block,
@@ -39,7 +42,7 @@
 // the block text as a runnable PowerShell command. No home found: log, record the check, pass.
 //
 // RETIRED seats (registry rows with retired true) are skipped like a Warg.
-//// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
+// THE THRALL is the registry's role "master"; its list is read under its label (M), which is the letter fleet.db
 // keeps for it. An Orc is role "orchestrator" with its lane letter as label. Any other role (a Warg) is left alone.
 //
 // ENVIRONMENT (the tests set these; production sets none):
@@ -61,6 +64,20 @@ import { spawn } from "node:child_process";
 
 const THROTTLE_MS = 30 * 60 * 1000;
 const FRESH_MS = 30 * 60 * 1000;
+// The field names that carry the time a publish was last CONFIRMED (re-published unchanged), tried in order. The
+// authoritative name comes from N's fleet.db confirm record, which `horde decisions published` will show beside
+// publishedAt; when N's change merges, adjusting this list is the one-line change. Values are ISO UTC times.
+// A time later than now + this is not believed (clock skew, a bad writer, year 9999): it would read as fresh until
+// that date and silence the duty for good. Two minutes covers honest skew between machines.
+const FUTURE_SLACK_MS = 2 * 60 * 1000;
+// Only an ISO UTC time is read; Date.parse alone also takes "2026", "1" and "Oct 30 2099".
+const ISO_UTC = /^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?Z$/;
+const CONFIRMED_FIELDS = ["confirmedAt", "checkedAt", "lastConfirmedAt"];
+// An Orc that was blocked for list snapshot S is not blocked again for the SAME S until this long has passed. Re-publishing
+// an unchanged list answers "unchanged" and leaves publishedAt at the first publish, so without this an Orc whose list
+// does not change would be blocked every 30 minutes whatever it did. Four hours: long enough that one ask per list is
+// not a nag, short enough that an Orc that ignored the ask hears it again within the working day.
+const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;
 const SESSION_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const ORC_LETTER = /^[A-Z][A-Z0-9]{0,3}$/;
 
@@ -121,11 +138,14 @@ function readJsonFile(path) {
   } catch { return null; }
 }
 
-// ---- state: written atomically (a temp file, then a rename) ------------------------------------------------
+// ---- state: { lastCheckedAt, lastBlockedAt, lastBlockedSnapshot } written atomically (a temp file, then a rename) ------------------------------------------------
 function readState(sid) {
   const s = readJsonFile(join(STATE_DIR, sid + ".json"));
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  return s && typeof s === "object" ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt) } : { lastCheckedAt: 0, lastBlockedAt: 0 };
+  const snap = (v) => (typeof v === "string" ? v : "");
+  return s && typeof s === "object"
+    ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt), lastDecisionsBlockedAt: num(s.lastDecisionsBlockedAt), lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }
+    : { lastCheckedAt: 0, lastBlockedAt: 0, lastDecisionsBlockedAt: 0, lastBlockedSnapshot: "" };
 }
 
 function writeState(sid, state) {
@@ -212,8 +232,29 @@ function runHorde(args, home) {
   });
 }
 
-// The newest "publishedAt" of this Orc's list in `-Json` output { lists: [ { orc, publishedAt, ... } ] }.
-// Resolves { state: "ok" | "due" | "error", why }.
+// The freshest believable time of one list entry { orc, snapshot, publishedAt, confirmedAt?, ... }, or null.
+// Fresh = the NEWER of publishedAt and a confirmed time. CONTRACT WITH THE PUBLISH CODE: the confirmed time (field
+// names in CONFIRMED_FIELDS, `confirmedAt` first) is an ISO UTC time set each time a publish is accepted, including one
+// answered "unchanged" (publishedAt then stays at the first publish). The first CONFIRMED_FIELDS entry with a usable
+// time is used. A value that is not an ISO UTC time, or is later than now + FUTURE_SLACK_MS, is ignored.
+function freshestTime(entry, now) {
+  const ok = (v) => {
+    if (typeof v !== "string" || !ISO_UTC.test(v)) return null;
+    const t = Date.parse(v);
+    return Number.isFinite(t) && t <= now + FUTURE_SLACK_MS ? t : null;
+  };
+  const published = ok(entry.publishedAt);
+  let confirmed = null;
+  for (const k of CONFIRMED_FIELDS) {
+    confirmed = ok(entry[k]);
+    if (confirmed !== null) break;
+  }
+  if (published === null) return confirmed;
+  return confirmed === null ? published : Math.max(published, confirmed);
+}
+
+// Resolves { state: "ok" | "due" | "error", why, snapshot } (snapshot: the list's id, "" when it has none).
+// No usable time at all is stale ("due"), never fresh.
 async function listAgeCheck(args, letter, now, home) {
   const r = await runHorde(args, home);
   if (!r.ok) return { state: "error", why: r.why };
@@ -223,9 +264,10 @@ async function listAgeCheck(args, letter, now, home) {
   if (!parsed || !Array.isArray(parsed.lists)) return { state: "error", why: "output had no lists" };
   const mine = parsed.lists.filter((l) => l && l.orc === letter);
   if (mine.length === 0) return { state: "due", why: "never published" };
-  const at = Date.parse(mine[0].publishedAt);
-  if (!Number.isFinite(at)) return { state: "error", why: "publishedAt was not a time" };
-  return now - at < FRESH_MS ? { state: "ok", why: "" } : { state: "due", why: "last published more than 30 minutes ago" };
+  const at = freshestTime(mine[0], now);
+  const snapshot = typeof mine[0].snapshot === "string" ? mine[0].snapshot : "";
+  if (at === null) return { state: "due", why: "no usable publish time", snapshot };
+  return now - at < FRESH_MS ? { state: "ok", why: "", snapshot } : { state: "due", why: "last published more than 30 minutes ago", snapshot };
 }
 
 // THE CHECKS. Adding a duty is adding one entry: { name, enabled(), run(letter, now, home) -> {state, why}, reason(letter, home) }.
@@ -233,6 +275,7 @@ const CHECKS = [
   {
     name: "decisions",
     enabled: () => true,
+    snapshotQuiet: true, // blocked once per unchanged list (SNAPSHOT_QUIET_MS)
     run: (letter, now, home) => listAgeCheck(["decisions", "published", "-Orc", letter, "-Json"], letter, now, home),
     reason: decisionsReason,
   },
@@ -255,7 +298,8 @@ async function main() {
 
   const now = Date.now();
   const state = readState(sid);
-  if (now - state.lastCheckedAt < THROTTLE_MS) return 0;
+  // 0 <= age: a lastCheckedAt in the future (clock rollback, a corrupt file) must not silence the hook until then.
+  if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;
 
   const letter = dutyLetter(sid);
   if (letter === null) { writeState(sid, { ...state, lastCheckedAt: now }); return 0; }
@@ -271,17 +315,28 @@ async function main() {
     try { return await c.run(letter, now, home); } catch (e) { return { state: "error", why: "threw: " + (e && e.message) }; }
   }));
   const reasons = [];
+  let blockedSnapshot = state.lastBlockedSnapshot;
+  let decisionsBlockedAt = state.lastDecisionsBlockedAt;
   results.forEach((r, i) => {
-    if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
-    else if (r.state === "due") reasons.push(active[i].reason(letter, home));
+    if (r.state === "ok" && active[i].snapshotQuiet) blockedSnapshot = ""; // fresh: a later return of an old id is judged on its own
+    else if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
+    else if (r.state === "due") {
+      // Already asked about exactly this list, recently: the Orc either republished (confirmed it) or ignored the ask.
+      const askedBefore = active[i].snapshotQuiet && r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot && now >= state.lastDecisionsBlockedAt && now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;
+      if (askedBefore) logLine("check " + active[i].name + " for " + letter + ": list " + r.snapshot + " already asked about; passing");
+      else {
+        reasons.push(active[i].reason(letter, home));
+        if (active[i].snapshotQuiet) { blockedSnapshot = r.snapshot || ""; decisionsBlockedAt = now; }
+      }
+    }
   });
 
-  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt };
+  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt, lastDecisionsBlockedAt: decisionsBlockedAt, lastBlockedSnapshot: blockedSnapshot };
   const saved = writeState(sid, next); // BEFORE the block is printed
   if (reasons.length === 0 || !saved) return 0;
   // ASCII ON THE WIRE: a home may hold a non-ASCII character, and a reader that decodes stdout with another code
-// page (Windows PowerShell 5.1) would mangle it; JSON escapes keep the bytes ASCII and the text exact.
-process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")));
+  // page (Windows PowerShell 5.1) would mangle it; JSON escapes keep the bytes ASCII and the text exact.
+  process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n") }).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")));
   return 0;
 }
 
