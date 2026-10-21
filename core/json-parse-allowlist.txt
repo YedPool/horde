@@ -22,7 +22,6 @@ cli/RelayPublish.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when t
 cli/ServicesAct.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 conversations/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/AgentDescriptor.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-core/EngineConfig.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/EngineResolve.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Finding.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/FleetWork.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
