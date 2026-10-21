@@ -103,6 +103,7 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 .chat-item.founder { margin-left: 15%; border-color: var(--accent); }
 .chat-item.assistant { margin-right: 15%; }
 .chat-item.system { color: var(--warn); }
+.chat-item.marker { margin: 4px 0; padding: 2px 10px; border-style: dashed; }
 .chat-who { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
 .chat-who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 /* WHEN IT WAS SAID: small, beside who said it; a key only so that a tap can open the exact time, so it

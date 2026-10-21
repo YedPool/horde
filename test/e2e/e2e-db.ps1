@@ -11,6 +11,10 @@
 #   - status names the file and counts the rows of every table, the decisions lists among them;
 #   - check says ok on a sound file, and on a file holding a decisions list that is missing a line it
 #     names the list and fails, so a script or a scheduler sees it;
+#   - import reads small fixture files of the old formats (ledger, PR cache, changelog, status cards, a
+#     session record with a byte order mark) into a fleet.db of its own: it names the rows added per table
+#     and the lines it could not link, a second import adds nothing, a dry run writes nothing, a flag
+#     meant for import is refused on another verb, and a file that is not there is refused;
 #   - a mistyped verb is refused, and a machine without Node fails at once in one sentence.
 # NOTHING REAL IS READ OR WRITTEN: the home and the user profile every child sees are folders this
 # scenario made and removes. The real homes (HORDE_HOME if set, and the profile's .horde) are checked
@@ -96,6 +100,55 @@ Check ($k2.out -cmatch '(?m)^check: 2 problems\r?$') "and counts two problems"
 Check ($k2.out -like "*horde db check stopped with exit code 1*") "and the command says it stopped with that exit code"
 
 Write-Host ""
+Write-Host "=== import ===" -ForegroundColor Cyan
+# A Horde home of its own: the check section above filled the first one with rows of its own.
+$impHome = Join-Path $script:work "home-import"
+$impEnv = @{ HORDE_HOME = $impHome; USERPROFILE = $fakeProfile }
+$src = Join-Path $script:work "sources"
+New-Item -ItemType Directory -Path (Join-Path $src "orcs\form-fill"), (Join-Path $src "thrall"), (Join-Path $src "sessions") -Force | Out-Null
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$utf8bom = New-Object System.Text.UTF8Encoding($true)
+function Save-Text { param([string]$Path, [string]$Text, $Enc = $utf8) [System.IO.File]::WriteAllText($Path, $Text, $Enc) }
+$ledgerFile = Join-Path $src "tasks.jsonl"
+Save-Text $ledgerFile ((@(
+    '{"ts":"2026-10-05T17:00:00+00:00","task":"T-0001","event":"opened","title":"Root","source":"founder","lane":"form-fill","prio":2,"parent":null,"by":"analyst-backfill"}',
+    '{"ts":"2026-10-05T18:00:00Z","task":"T-0001","event":"started","by":"C13"}',
+    '{"ts":"2026-10-05T19:00:00+00:00","task":"T-0001","event":"done","by":"C","pr":"OrahVision/horde#5"}'
+) -join "`r`n") + "`r`n")
+$prFile = Join-Path $src "pr-cache.json"
+Save-Text $prFile '{"OrahVision/horde#5":{"checked":"2026-10-15T19:49:05+00:00","mergedAt":"2026-10-14T10:00:00Z","state":"MERGED"}}'
+$logFile = Join-Path $src "changelog.jsonl"
+Save-Text $logFile '{"v":1,"id":"20261011T035700Z-01","ts":"2026-10-11T03:57:00Z","kind":"progress","area":"Lane C","title":"first","text":"Happened: a","lane":"C,F","task":"T-0001 (root)"}'
+$cardText = "horde-orc-status 1`norc: C`nlane: Form fill`ndoing: filling forms`nfinished: one form`nblocked: no`n"
+Save-Text (Join-Path $src "orcs\form-fill\status.txt") $cardText
+Save-Text (Join-Path $src "thrall\status.txt") ($cardText.Replace("orc: C", "orc: M").Replace("Form fill", "Thrall"))
+$sessionFile = Join-Path $src "sessions\00000000-0000-4000-8000-000000000001.json"
+Save-Text $sessionFile ('{"owner":"C","label":"C3","firstSeen":"10/17/2026 01:49:32","lastSeen":"2026-10-18T10:00:00.0000000Z","parent":"00000000-0000-4000-8000-000000000099"}') $utf8bom
+$impArgs = @("import", "-Ledger", $ledgerFile, "-PrCache", $prFile, "-Changelog", $logFile, "-Cards", (Join-Path $src "orcs"), "-ThrallCard", (Join-Path $src "thrall\status.txt"), "-Registry", (Join-Path $src "sessions"))
+
+$noDb = Invoke-Db $impArgs $impEnv
+Check ($noDb.code -ne 0 -and $noDb.out -like "*run horde db init*") ("import before init says to run init (" + $noDb.code + ")")
+Check (-not (Test-Path -LiteralPath (Join-Path $impHome "fleet.db"))) "and made no file"
+$null = Invoke-Db @("init") $impEnv
+$dry = Invoke-Db ($impArgs + "-DryRun") $impEnv
+Check ($dry.code -eq 0 -and $dry.out -cmatch '(?m)^import: dry run, nothing was written\r?$' -and $dry.out -cmatch '(?m)^task_event: 3 added, 0 already there\r?$') ("a dry run says what it would add (" + $dry.code + ")")
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^task_event: 0 rows\r?$') "and wrote nothing"
+$i1 = Invoke-Db $impArgs $impEnv
+Check ($i1.code -eq 0 -and $i1.out -cmatch '(?m)^import: done\r?$') ("import ends 0 (" + $i1.code + ")")
+Check ($i1.out -cmatch '(?m)^orc: 2 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^task: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^task_event: 3 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^pr: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^session: 2 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^changelog_entry: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^orc_status: 2 added, 0 already there\r?$') "it names the rows added in every table (a session and its missing parent's stub among them)"
+Check ($i1.out -like "*ledger: by analyst-backfill names no Orc row (kept as by_text): 1*" -and $i1.out -like "*registry: parent is not in the registry (stub row made): 1*") "and the lines it could not link, with their counts"
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^task_event: 3 rows\r?$') "status counts the imported events"
+$i2 = Invoke-Db $impArgs $impEnv
+Check ($i2.code -eq 0 -and $i2.out -cmatch '(?m)^task_event: 0 added, 3 already there\r?$' -and $i2.out -cmatch '(?m)^session: 0 added, 1 already there\r?$' -and $i2.out -cmatch '(?m)^orc_status: 0 added, 2 already there\r?$' -and $i2.out -cmatch '(?m)^changelog_entry: 0 added, 1 already there\r?$') "a second import adds nothing in any table"
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the imported file is sound"
+$flagOnOther = Invoke-Db @("status", "-Ledger", $ledgerFile) $impEnv
+Check ($flagOnOther.code -ne 0 -and $flagOnOther.out -like "*-Ledger belongs to db import, not db status*") ("a flag meant for import is refused on another verb (" + $flagOnOther.code + ")")
+$missing = Invoke-Db @("import", "-Ledger", (Join-Path $src "nope.jsonl")) $impEnv
+Check ($missing.code -ne 0 -and $missing.out -like "*ENOENT*") ("a source file that is not there is refused (" + $missing.code + ")")
+$none = Invoke-Db @("import") $impEnv
+Check ($none.code -ne 0 -and $none.out -like "*at least one source*") "import with no source is refused"
+
+Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan
 $bad = Invoke-Db @("drop")
 Check ($bad.code -ne 0 -and $bad.out -like "*drop*") ("a verb that is not init, status or check is refused (" + $bad.code + ")")
@@ -108,4 +161,4 @@ Check ($noNode.code -ne 0 -and $noNode.out -like "*needs Node.js 24 or later*") 
 $realAfter = @($realHomes | ForEach-Object { Test-Path -LiteralPath $_ })
 Check (($realAfter -join ",") -eq ($realBefore -join ",")) "no real Horde home gained or lost a fleet.db"
 
-Complete-HordeSuite -Success "init is safe to repeat, status counts every table, check names a broken list, and nothing real is touched"
+Complete-HordeSuite -Success "init is safe to repeat, status counts every table, check names a broken list, import adds each row once, and nothing real is touched"

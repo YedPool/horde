@@ -419,12 +419,15 @@ function drawChat(rec) {
     box.dataset.key = key;
     who.className = "chat-who";
     const name = document.createElement("span");
-    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : it.role === "marker" ? "Message received" : "The machine";
     who.appendChild(name);
     const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", key);
     if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
     box.appendChild(who);
+    // A MARKER (channels/chat/Pointer.ps1): a wezfleet pointer line the machine kept back, so its time and
+    // nothing else is shown - no words, no id.
+    if (it.role === "marker") { log.appendChild(box); continue; }
     if (it.kind === "photo") {
       // A PHOTO: the small picture this page drew when it was sent (kept in memory only, like the chat);
       // from another phone, or after a reload, the words say what it is.
