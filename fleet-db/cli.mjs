@@ -65,6 +65,10 @@ export function findProblems(db) {
   const short = db.prepare(`SELECT s.id, s.item_count, count(i.position) AS have FROM decisions_snapshot s
     LEFT JOIN decisions_snapshot_item i ON i.snapshot_id = s.id GROUP BY s.id HAVING have <> s.item_count`).all();
   for (const r of short) problems.push('decisions list ' + r.id + ' says ' + r.item_count + ' lines and holds ' + r.have);
+  // A confirm belongs to a snapshot of its own Orc and is never earlier than that snapshot (the triggers
+  // hold both; a raw connection with triggers off could break them).
+  for (const r of db.prepare(`SELECT c.id FROM decisions_confirm c JOIN decisions_snapshot s ON s.id = c.snapshot_id
+    WHERE s.orc_id <> c.orc_id OR c.confirmed_at < s.published_at ORDER BY c.id`).all()) problems.push('decisions confirm ' + r.id + ' is not of its own Orc list or is before it was published');
   // A list's hash is recomputed from the lines it holds, so a line changed or added outside the write
   // module shows (the database cannot compare a hash with its rows).
   const lines = db.prepare('SELECT question_id, text, recommendation, importance, blocks FROM decisions_snapshot_item WHERE snapshot_id = ? ORDER BY position');

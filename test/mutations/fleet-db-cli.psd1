@@ -65,5 +65,11 @@
         @{ Name = "init-hint-lost"
            Find = 'e.message.replace(''open it for writing once'', ''run horde db init'')'
            Replace = 'e.message' }
+        @{ Name = "confirm-of-other-orc-unseen"
+           Find = 'WHERE s.orc_id <> c.orc_id OR c.confirmed_at < s.published_at'
+           Replace = 'WHERE c.confirmed_at < s.published_at' }
+        @{ Name = "early-confirm-unseen"
+           Find = 'WHERE s.orc_id <> c.orc_id OR c.confirmed_at < s.published_at'
+           Replace = 'WHERE s.orc_id <> c.orc_id' }
     )
 }

@@ -156,6 +156,26 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
   columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
 
+## Confirm record (migration 5; T-0299, M's ruling)
+
+- A publish with a list equal to the live one writes no snapshot (`decisions_snapshot_not_same`), so the
+  turn-duty Stop hook could not tell an Orc whose list is unchanged from one that never looked at it.
+  `decisions_confirm` (id, orc_id, snapshot_id, session_id, confirmed_at) is the record: append-only,
+  one row per accepted publish, written in the same transaction as the publish. A new list gets its
+  snapshot and a confirm at the same millisecond; an equal list gets a confirm for the live snapshot and
+  nothing else. A refused publish writes nothing.
+- Triggers: a confirm must be of its Orc's live snapshot at insert time, and never earlier than that
+  snapshot's `published_at`. `horde db check` also flags a confirm whose snapshot belongs to another Orc or
+  that is earlier than its snapshot (reachable only with the triggers off). Unique on (snapshot_id,
+  confirmed_at): a second publish in the same millisecond adds nothing.
+- `decisions_live` (recreated, every old column kept) gains `confirmed_at`: the latest confirm of the live
+  snapshot, else `published_at`, so `confirmed_at >= published_at` always; snapshots made before migration
+  5 read `confirmed_at = published_at`.
+- FOR THE HOOK (lane K): the field is `confirmedAt` (ISO UTC) in each list of `horde decisions published
+  --json`, beside `publishedAt`. The turn-duty check should use the later of the two (confirmedAt is never
+  before publishedAt). `published` text prints `published <ISO>, confirmed <ISO>`; `publish` of an equal
+  list prints `unchanged, confirmed <ISO> (snapshot ...)`.
+
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 
 The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in
