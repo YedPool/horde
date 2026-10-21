@@ -153,7 +153,7 @@ try {
     $cm = @(ConvertFrom-HordeJson $capped | ForEach-Object { $_ })
     $utf8n = New-Object System.Text.UTF8Encoding -ArgumentList $false
     Check ($utf8n.GetByteCount($capped) -le 16384 -and $cm[0].more -gt 0 -and @($cm[0].items).Count + $cm[0].more -eq 20 -and $cm[1].more -eq 0 -and @($cm[1].items).Count -eq 6) ("OVER 16 KB, the longest lists lose their last items first, each list saying how many it lost, the short one untouched (" + $utf8n.GetByteCount($capped) + " bytes; F kept " + @($cm[0].items).Count + ", G kept " + @($cm[1].items).Count + ")")
-    Check (@($cm[0].items)[0].text.StartsWith("xxx") -and @($cm[0].items).Count -lt 20) "and it is the END of the list that goes: the first items are the ones kept"
+    Check (@($cm[0].items)[0].text.EndsWith(" 1") -and @($cm[0].items)[@($cm[0].items).Count - 1].text.EndsWith(" " + @($cm[0].items).Count) -and @($cm[0].items).Count -lt 20) "and it is the END of the list that goes: the first items are the ones kept"
     $uni = New-FleetList -Orc "F" -Items 1 -Text ("caf" + [char]0x00E9)
     $ut = ConvertTo-HordeDecisionsChannelPublished -Lists @($uni)
     Check ($ut -cmatch '\A[\x20-\x7E]*\z' -and $ut.Contains('caf' + [char]92 + 'u00e9')) "whatever is not plain ASCII is escaped"
