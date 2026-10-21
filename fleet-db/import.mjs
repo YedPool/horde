@@ -9,7 +9,9 @@
 //   cards       the _home/orcs folder  -> orc (one per valid <folder>/status.txt), orc_status
 //   thrallCard  _home/thrall/status.txt-> orc (rank thrall), orc_status
 //   registry    the registry sessions folder (one <session id>.json per session) -> session
-// Order: node -> orcs -> sessions -> tasks + events + PRs -> changelog -> orc_status.
+//   decisions   the decisions store folder (storedecisions, one record per file) -> question, question_event,
+//               answer, answer_route and their side tables, decisions_read
+// Order: node -> orcs -> sessions -> tasks + events + PRs -> changelog -> decisions -> orc_status.
 //
 // THE WHOLE IMPORT IS ONE inWrite TRANSACTION: a failure leaves the database as it was, and a dry run runs
 // the same code and rolls it back, so its report is exactly what a real run would have added.
@@ -20,12 +22,14 @@
 //
 // NOTHING IS DROPPED IN SILENCE: every line, card or file that could not be linked or read is counted in the
 // report under its source and reason (report.unlinked), with the first few examples.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inWrite } from './store.mjs';
 import { appendHistory, newId } from './write.mjs';
 import { RANKS, TASK_EVENT_KINDS, CHANGELOG_KINDS } from './schema.mjs';
+import { canonical } from './ids.mjs';
 
 const EXAMPLES = 5;
 // What a waiting-on class names when it is not an Orc: things outside the fleet.
@@ -34,7 +38,8 @@ const PR_REF = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
 const TASK_KEY = /^T-\d{4,}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA40 = /^[0-9a-f]{40}$/;
-const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status'];
+const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
+  'question', 'question_event', 'answer', 'answer_extra', 'answer_route', 'answer_route_extra', 'decisions_read'];
 
 class DryRunDone extends Error {}
 
@@ -184,6 +189,8 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
       onStep('tasks');
       stepChangelog(ctx, data);
       onStep('changelog');
+      stepDecisions(ctx, data);
+      onStep('decisions');
       stepStatus(ctx);
       onStep('status');
       if (dryRun) throw new DryRunDone();
@@ -196,9 +203,10 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
 
 // Every file is read before the transaction opens, so a missing or unreadable file fails before a write.
 function loadSources(src, rep) {
-  const d = { ledger: null, prCache: null, changelog: null, cards: [], thrall: null, sessions: null };
+  const d = { ledger: null, prCache: null, changelog: null, cards: [], thrall: null, sessions: null, decisions: null };
   if (src.ledger) d.ledger = readJsonl(src.ledger, 'ledger', rep);
   if (src.changelog) d.changelog = readJsonl(src.changelog, 'changelog', rep);
+  if (src.decisions) d.decisions = readDecisions(src.decisions, rep);
   if (src.prCache) {
     const cache = readJsonFile(src.prCache);
     if (cache === null || typeof cache !== 'object' || Array.isArray(cache)) throw new Error('the PR cache is not a JSON object');
@@ -447,6 +455,7 @@ function stepPrCache(ctx, data) {
   // The first ledger line that names each PR: the time a PR with no checked time of its own takes.
   const firstNamed = new Map();
   for (const { obj } of data.ledger ?? []) {
+    if (!ledgerLineAccepted(ctx, obj)) continue;
     const ref = typeof obj.pr === 'string' ? prKey(obj.pr) : null;
     const t = parseTime(obj.ts);
     if (ref && t !== null && !(firstNamed.get(ref.key) <= t)) firstNamed.set(ref.key, t);
@@ -463,12 +472,25 @@ function stepPrCache(ctx, data) {
     if (state === 'merged' && mergedAt === null) { rep.unlink('pr-cache', 'merged with no mergedAt time (kept open)', key); state = 'open'; }
     if (state !== 'merged' && mergedAt !== null) { rep.unlink('pr-cache', 'mergedAt on a PR that is not merged (time ignored)', key); mergedAt = null; }
     if (checked === null) {
-      checked = firstNamed.get(m.key) ?? mergedAt ?? 0;
-      rep.unlink('pr-cache', 'checked is not a time (the first ledger line naming it, else mergedAt, else 0, used)', key);
+      checked = firstNamed.get(m.key) ?? mergedAt ?? Date.now();
+      rep.unlink('pr-cache', 'checked is not a time (the first imported ledger line naming it, else mergedAt, else the time of this import, used)', key);
     }
     const sha = v.mergeSha ?? v.merge_sha ?? null;
     insertPr(ctx, m.key, m.repo, m.number, state, mergedAt, typeof sha === 'string' && SHA40.test(sha) ? sha : null, checked, null);
   }
+}
+
+// Whether stepLedger will import this line: a usable ts, task and known event, a priority line with a priority, a
+// handed line with a target. A line it drops names no PR in the database, so it must not date one.
+function ledgerLineAccepted(ctx, obj) {
+  if (parseTime(obj.ts) === null || typeof obj.task !== 'string' || !TASK_KEY.test(obj.task) || !TASK_EVENT_KINDS.includes(obj.event)) return false;
+  if (obj.event === 'priority' && !(Number.isInteger(obj.prio) && obj.prio >= 0 && obj.prio <= 9)) return false;
+  if (obj.event === 'handed') {
+    const to = nz(obj.to);
+    const target = to === null ? null : orcRef(ctx, to) ?? labelOrc(ctx, to);
+    if (target === null) return false;
+  }
+  return true;
 }
 
 // OWNER/REPO#N to its parts; GitHub names are not case-sensitive, so the repo is lower-cased and one PR is one row.
@@ -556,7 +578,7 @@ function makeTasks(ctx, events) {
 function classifyOn(ctx, raw) {
   if (raw === 'founder') return { kind: 'founder', orc: null };
   const lane = /^lane:(.+)$/.exec(raw);
-  if (lane) return { kind: 'orc', orc: orcRef(ctx, lane[1]), unlinked: orcRef(ctx, lane[1]) === null };
+  if (lane) { const o = orcRef(ctx, lane[1]) ?? labelOrc(ctx, lane[1]); return { kind: 'orc', orc: o, unlinked: o === null }; }
   if (/^[A-Z]$/.test(raw)) return { kind: 'orc', orc: orcRef(ctx, raw), unlinked: orcRef(ctx, raw) === null };
   if (/^[A-Z]\d+$/.test(raw)) return { kind: 'orc', orc: labelOrc(ctx, raw), unlinked: labelOrc(ctx, raw) === null };
   if (EXTERNAL_WAITS.includes(raw)) return { kind: 'external', orc: null };
@@ -751,5 +773,335 @@ function stepStatus(ctx) {
     }
     const r = appendHistory(db, 'orc_status', { orc_id: orcId, at: c.mtime, doing, blocked, backfill: 1 });
     rep.count('orc_status', r.inserted);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The decisions store (phase 1c part 2a): store\decisions\0000000001.json ... one record per file, written once.
+//
+// The journal is READ WHOLE FIRST and checked as a whole: a gap in the sequence, a duplicate record id, a
+// file whose name is not its sequence or a schemaVersion other than 1 refuses the SOURCE (nothing from it is
+// imported; the other sources go on), because a journal with a hole is not the journal the rules fold.
+// It is then FOLDED IN ORDER, as decisions\Rules.ps1 folds it, to work out what the store never writes down:
+// whether a message arrived after its question was closed (arrivedAfterClosing), whether it was said to an
+// earlier wording (saidToEarlierWording) and whether it replaces his earlier answer. What the schema derives
+// itself (answer_now) is compared with the fold afterwards and every difference is reported.
+
+const DECISION_KINDS = ['question-added', 'message-said', 'answer-routed', 'question-closed', 'question-ranked',
+  'question-updated', 'question-reopened', 'question-acked', 'answer-change-replied', 'messages-read'];
+// The operation each kind is written by: the first word of what its requestHash hashes (decisions/Operations.ps1).
+const DECISION_OPERATION = {
+  'question-added': 'add', 'question-updated': 'update', 'question-closed': 'close', 'question-reopened': 'reopen',
+  'question-ranked': 'rank', 'answer-routed': 'route', 'question-acked': 'ack', 'answer-change-replied': 'change-reply',
+  'message-said': 'say', 'messages-read': 'mark-read',
+};
+const DECISION_EVENT_KIND = {
+  'question-updated': 'updated', 'question-closed': 'closed', 'question-reopened': 'reopened', 'question-ranked': 'ranked',
+  'question-acked': 'acked', 'answer-change-replied': 'change-reply',
+};
+// The members of a say that are not part of what makes two requests the same (decisions/Operations.ps1 unhashed),
+// and the one member the store adds to a close after the request was hashed.
+const DECISION_UNHASHED = { 'message-said': ['evidence', 'signedBy'], 'question-closed': ['closedBySeat'] };
+// Fields of a question whose change is a new wording (decisions/Rules.ps1 HordeDecisionFields, wording = true).
+const WORDING_FIELDS = ['title', 'options', 'parts', 'whatItIs', 'yesMeans'];
+const SEAT_OF = { orc: 'orc', warchief: 'thrall', analyst: 'analyst' };
+const SEQ_NAME = /^(\d{10})\.json$/;
+const RECORD_ID = /^[0-9a-f]{32}$/;
+
+// The text the store hashes (decisions/Rules.ps1 ConvertTo-HordeDecisionCanonicalText): keys in ordinal order, a
+// string escaping only the backslash and the quote, whole numbers only. Not ids.mjs canonical(), which escapes
+// every non-ASCII character: the store hashes the characters themselves, as UTF-8.
+function storeText(v) {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'string') return '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  if (typeof v === 'number') {
+    if (!Number.isSafeInteger(v)) throw new Error('only whole numbers are decisions data');
+    return String(v);
+  }
+  if (Array.isArray(v)) return '[' + v.map(storeText).join(',') + ']';
+  if (typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => storeText(k) + ':' + storeText(v[k])).join(',') + '}';
+  throw new Error('cannot hash a ' + typeof v);
+}
+
+// The requestHash the store would have written for this record, or null when its kind or shape is not one it writes.
+export function recomputeRequestHash(rec) {
+  const op = DECISION_OPERATION[rec.kind];
+  const data = rec.data;
+  if (op === undefined || data === null || typeof data !== 'object' || Array.isArray(data)) return null;
+  const body = {};
+  let number = 0;
+  if (rec.kind === 'messages-read') {
+    // A marking has no question number; what it hashes is the record it marks up to.
+    body.upTo = data.upTo;
+  } else {
+    // An add names no number in its request (the list gives it one when it is written), so it hashes 0.
+    number = rec.kind === 'question-added' ? 0 : data.number;
+    for (const k of Object.keys(data)) if (k !== 'number' && !(DECISION_UNHASHED[rec.kind] ?? []).includes(k)) body[k] = data[k];
+  }
+  try {
+    return crypto.createHash('sha256').update(storeText({ operation: op, actor: rec.actor, number, body }), 'utf8').digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+// Every record file, read and checked as a whole. Returns the records in sequence order, or null (refused).
+function readDecisions(dir, rep) {
+  const refuse = (why, example) => {
+    rep.unlink('decisions', 'source refused, nothing imported from it: ' + why, example);
+    return null;
+  };
+  const found = [];
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (!ent.isFile()) continue;
+    if (!/\.json$/i.test(ent.name)) { rep.unlink('decisions', 'file is not a record (a .json file named for its sequence); ignored', ent.name); continue; }
+    const m = SEQ_NAME.exec(ent.name);
+    if (!m) return refuse('a file name is not a ten-digit sequence', ent.name);
+    let rec;
+    try { rec = JSON.parse(readText(path.join(dir, ent.name))); } catch { rec = null; }
+    if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return refuse('a record file is not a JSON object', ent.name);
+    if (rec.schemaVersion !== 1) return refuse('a record has a schemaVersion other than 1', ent.name);
+    if (rec.sequence !== Number(m[1])) return refuse('a file name is not its record\'s sequence', ent.name);
+    if (typeof rec.id !== 'string' || !RECORD_ID.test(rec.id)) return refuse('a record id is not 32 lower-case hex characters', ent.name);
+    found.push(rec);
+  }
+  found.sort((a, b) => a.sequence - b.sequence);
+  const ids = new Set();
+  for (let i = 0; i < found.length; i++) {
+    if (found[i].sequence !== i + 1) return refuse('a gap in the sequence: record ' + (i + 1) + ' is not there', 'record ' + (i + 1));
+    if (ids.has(found[i].id)) return refuse('two records share one id', 'record ' + found[i].sequence);
+    ids.add(found[i].id);
+  }
+  return found;
+}
+
+const isText = (v) => typeof v === 'string';
+const asList = (v) => (Array.isArray(v) ? v : []);
+
+function stepDecisions(ctx, data) {
+  if (data.decisions === null) return;
+  const { db, rep } = ctx;
+  const q = new Map(); // number -> { id, state, wording, passkey, fields, thread: [] }
+  const msg = new Map(); // sequence -> { answerId, arrived, authorizes, earlier }
+  ctx.answerBySeq = new Map();
+  for (const r of db.prepare('SELECT id, decisions_seq FROM answer WHERE decisions_seq IS NOT NULL').all()) ctx.answerBySeq.set(r.decisions_seq, r.id);
+  const known = new Map(); // number -> id of a question the database already holds
+  for (const r of db.prepare('SELECT id, number FROM question').all()) known.set(r.number, r.id);
+
+  for (const rec of data.decisions) {
+    const seq = rec.sequence;
+    const where = 'record ' + seq;
+    const at = parseTime(rec.at);
+    if (at === null) { rep.unlink('decisions', 'record time is not readable (record not imported)', where); continue; }
+    if (!DECISION_KINDS.includes(rec.kind)) { rep.unlink('decisions', 'kind ' + String(rec.kind).slice(0, 40) + ' has no place in fleet.db (record not imported)', where); continue; }
+    const d = rec.data;
+    if (d === null || typeof d !== 'object' || Array.isArray(d)) { rep.unlink('decisions', 'record has no data object (record not imported)', where); continue; }
+    const want = recomputeRequestHash(rec);
+    if (want === null || want !== rec.requestHash) rep.unlink('decisions', 'requestHash is not the one recomputed from the record (record imported as it stands)', where);
+    const actor = isText(rec.actor) ? rec.actor.slice(0, 40) : 'unknown';
+
+    if (rec.kind === 'messages-read') {
+      if (!isText(d.reader) || !Number.isSafeInteger(d.upTo) || d.upTo < 1) { rep.unlink('decisions', 'messages-read has no reader or upTo (record not imported)', where); continue; }
+      const r = db.prepare('INSERT INTO decisions_read (id, reader, up_to_seq, at, decisions_seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT (decisions_seq) DO NOTHING')
+        .run(newId(at), fit(rep, 'decisions', 'reader', d.reader, 40, where), d.upTo, at, seq);
+      rep.count('decisions_read', r.changes === 1);
+      continue;
+    }
+    if (!Number.isSafeInteger(d.number) || d.number < 1) { rep.unlink('decisions', rec.kind + ' has no question number (record not imported)', where); continue; }
+
+    if (rec.kind === 'question-added') { addQuestion(ctx, q, known, rec, at, where); continue; }
+    const st = q.get(d.number);
+    if (st === undefined) { rep.unlink('decisions', rec.kind + ' is about a question the journal never added (record not imported)', where); continue; }
+
+    if (rec.kind === 'message-said') { sayMessage(ctx, st, msg, rec, at, where); continue; }
+    if (rec.kind === 'answer-routed') { routeAnswer(ctx, rec, at, where); continue; }
+
+    // Everything else is an event of the question: closed, reopened, ranked, updated, acked, change-reply.
+    if (rec.kind === 'question-closed') {
+      if (st.state === 'closed') rep.unlink('decisions', 'question-closed on a question already closed (the rules would not apply it)', where);
+      st.state = 'closed';
+    } else if (rec.kind === 'question-reopened') {
+      if (st.state === 'open') rep.unlink('decisions', 'question-reopened on a question that is open (the rules would not apply it)', where);
+      st.state = 'open';
+    } else if (rec.kind === 'question-updated') {
+      foldUpdate(st, d.changes);
+    } else if (rec.kind === 'question-acked') {
+      // An acknowledgement closes an open question in the rules (Step-HordeDecisionAcked); fleet.db derives
+      // closure from closed events alone, so this is a difference by construction and is reported as one.
+      const said = typeof d.answer === 'number' ? msg.get(d.answer) : undefined;
+      if (st.state === 'open' && said !== undefined && said.founderAnswer) {
+        st.state = 'closed';
+        rep.unlink('decisions', 'question-acked closes the question in the rules, but fleet.db closes only on a closed event (no closed event made)', where);
+      }
+    }
+    const kind = DECISION_EVENT_KIND[rec.kind];
+    const json = {};
+    for (const k of Object.keys(d)) if (k !== 'number') json[k] = d[k];
+    json.actor = actor;
+    let text;
+    try { text = canonical(json); } catch (e) { rep.unlink('decisions', rec.kind + ' holds data that cannot be stored (' + e.message + '; record not imported)', where); continue; }
+    const r = appendHistory(db, 'question_event', { question_id: st.id, at, kind, data_json: text, decisions_seq: seq });
+    rep.count('question_event', r.inserted);
+  }
+  compareFold(ctx, msg);
+}
+
+// A question-updated's changes folded into the question as the rules fold them: a reworded field raises the
+// wording version, a changed group does not.
+function foldUpdate(st, changes) {
+  if (changes === null || typeof changes !== 'object' || Array.isArray(changes)) return;
+  let reworded = false;
+  for (const name of Object.keys(changes)) {
+    let same;
+    try { same = storeText(st.fields[name] ?? null) === storeText(changes[name]); } catch { same = false; }
+    if (same) continue;
+    st.fields[name] = changes[name];
+    if (WORDING_FIELDS.includes(name)) reworded = true;
+  }
+  if (reworded) st.wording += 1;
+}
+
+function askerOf(ctx, asked) {
+  if (!isText(asked)) return { orcId: null };
+  const m = /^Orc ([A-Z])$/.exec(asked.trim());
+  if (m) return { orcId: ctx.byLetter.get(m[1]) ?? null };
+  if (/^(M \(Thrall\)|Thrall)$/.test(asked.trim())) return { orcId: ctx.thrallId };
+  return { orcId: null };
+}
+
+function addQuestion(ctx, q, known, rec, at, where) {
+  const { db, rep } = ctx;
+  const d = rec.data;
+  const f = d.question;
+  if (f === null || typeof f !== 'object' || Array.isArray(f) || !isText(f.title) || f.title.trim() === '' || !isText(f.kind) || f.kind.trim() === '') {
+    rep.unlink('decisions', 'question-added has no title or kind (record not imported)', where);
+    return;
+  }
+  if (q.has(d.number)) { rep.unlink('decisions', 'a second question-added for one number (the first kept)', where); return; }
+  const st = { id: null, state: 'open', wording: 1, passkey: d.needsPasskey === true, fields: { ...f }, thread: [] };
+  q.set(d.number, st);
+  if (known.has(d.number)) { st.id = known.get(d.number); rep.count('question', false); return; }
+  const asker = askerOf(ctx, f.askedBy);
+  let askedText = null;
+  if (asker.orcId === null) {
+    askedText = isText(f.askedBy) && f.askedBy.trim() !== '' ? fit(rep, 'decisions', 'askedBy', f.askedBy, 4000, where) : null;
+    rep.unlink('decisions', 'askedBy names no Orc row (kept as text on the question)', isText(f.askedBy) ? f.askedBy.slice(0, 50) : '(none)');
+  }
+  let follows = null;
+  if (d.followsUp !== undefined) {
+    follows = q.get(d.followsUp)?.id ?? known.get(d.followsUp) ?? null;
+    if (follows === null) rep.unlink('decisions', 'followsUp names a question that is not earlier in the journal (no link)', where);
+  }
+  rep.unlink('decisions', 'question names no task (task_id empty, backfill)', 'question ' + d.number);
+  const detail = canonical({ options: asList(f.options), parts: asList(f.parts), waiting: asList(f.waiting), files: asList(f.files), references: asList(f.references), needsSecret: f.needsSecret === true });
+  const text = (v, max, field) => (isText(v) ? fit(rep, 'decisions', field, v, max, where) : null);
+  const id = newId(at);
+  db.prepare(`INSERT INTO question (id, number, task_id, asked_by_orc_id, follows_up_id, kind, title, body, needs_passkey, asked_at, decisions_seq, backfill,
+      asked_by_text, yes_means, recommendation, group_name, group_note, importance, blocks, detail_json)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, d.number, asker.orcId, follows,
+    text(f.kind, 40, 'kind'), text(f.title, 400, 'title'), isText(f.whatItIs) && f.whatItIs !== '' ? f.whatItIs : null, st.passkey ? 1 : 0, at, rec.sequence,
+    askedText, isText(f.yesMeans) && f.yesMeans !== '' ? f.yesMeans : null, isText(f.recommendation) && f.recommendation !== '' ? f.recommendation : null,
+    isText(f.group) && f.group !== '' ? text(f.group, 400, 'group') : null, isText(f.groupNote) && f.groupNote !== '' ? f.groupNote : null,
+    isText(d.importance) ? text(d.importance, 40, 'importance') : null, isText(d.blocks) ? text(d.blocks, 40, 'blocks') : null, detail);
+  st.id = id;
+  known.set(d.number, id);
+  rep.count('question', true);
+}
+
+// SHA-256 of a signing value, so the row says a key signed without saying which key.
+const sealed = (v) => crypto.createHash('sha256').update(v, 'utf8').digest('hex');
+
+function sayMessage(ctx, st, msg, rec, at, where) {
+  const { db, rep } = ctx;
+  const d = rec.data;
+  if (!isText(d.speaker) || d.speaker === '' || !isText(d.text)) { rep.unlink('decisions', 'message-said has no speaker or text (record not imported)', where); return; }
+  const arrived = st.state !== 'open';
+  const stated = Number.isSafeInteger(d.wordingVersion) && d.wordingVersion >= 1;
+  const earlier = stated && d.wordingVersion < st.wording;
+  if (stated && d.wordingVersion > st.wording) rep.unlink('decisions', 'message says a wording the question had not reached (imported as said)', where);
+  const act = isText(d.act) ? d.act : '';
+  const asks = d.asks !== false;
+  const founder = d.speaker === 'founder';
+  const route = isText(d.route) && d.route !== '' ? fit(rep, 'decisions', 'route', d.route, 40, where) : null;
+  const authorizes = !(founder && route === 'chat-recorded' && st.passkey);
+  const rawPart = isText(d.part) ? d.part : '';
+  let part = null;
+  if (rawPart !== '') {
+    if (/^[A-Za-z]$/.test(rawPart)) {
+      part = rawPart.toUpperCase();
+      if (rawPart !== part) rep.unlink('decisions', 'part letter written in lower case (stored upper case, the schema\'s rule)', where);
+    } else rep.unlink('decisions', 'part is not one letter (answer kept without a part)', where);
+    const letters = asList(st.fields.parts).map((p) => (isText(p) ? /^\(([A-Za-z])\)/.exec(p.trim()) : null)).filter(Boolean).map((m) => m[1].toLowerCase());
+    if (!earlier && letters.length > 0 && !letters.includes(rawPart.toLowerCase())) rep.unlink('decisions', 'answers a part the question does not list (imported as said)', where);
+  }
+  // His change of his own answer: his answer that counts, when answers of his to the same part already count.
+  let replaces = null;
+  if (act === '' && asks && founder && authorizes && !arrived) {
+    for (let i = st.thread.length - 1; i >= 0; i--) {
+      const b = st.thread[i];
+      if (!b.founder || b.act !== '' || !b.asks || !b.counts || b.rawPart !== rawPart) continue;
+      replaces = b.answerId;
+      break;
+    }
+  }
+  const row = {
+    question_id: st.id, at, speaker: fit(rep, 'decisions', 'speaker', d.speaker, 40, where), route, text: d.text, part,
+    signed_by: isText(d.signedBy) && d.signedBy !== '' ? sealed(d.signedBy) : null,
+    wording_version: stated ? d.wordingVersion : null, asks: asks ? 1 : 0, replaces_answer_id: replaces, decisions_seq: rec.sequence,
+  };
+  const r = appendHistory(db, 'answer', row);
+  rep.count('answer', r.inserted);
+  const x = db.prepare('INSERT INTO answer_extra (answer_id, evidence_present, act, recorded_by) VALUES (?, ?, ?, ?) ON CONFLICT (answer_id) DO NOTHING')
+    .run(r.id, isText(d.evidence) && d.evidence !== '' ? 1 : 0, act === '' ? null : fit(rep, 'decisions', 'act', act, 200, where), isText(rec.actor) && rec.actor !== '' ? rec.actor.slice(0, 40) : 'unknown');
+  rep.count('answer_extra', x.changes === 1);
+  ctx.answerBySeq.set(rec.sequence, r.id);
+  const counts = authorizes && !arrived;
+  st.thread.push({ answerId: r.id, founder, act, asks, counts, rawPart });
+  msg.set(rec.sequence, { answerId: r.id, arrived, authorizes, earlier, founderAnswer: founder && act === '' && counts });
+  if (earlier) rep.unlink('decisions', 'message was said to an earlier wording of its question (kept as an answer; fleet.db has no flag for it)', where);
+}
+
+function routeAnswer(ctx, rec, at, where) {
+  const { db, rep } = ctx;
+  const d = rec.data;
+  const answerId = Number.isSafeInteger(d.answer) ? ctx.answerBySeq.get(d.answer) : undefined;
+  if (answerId === undefined) { rep.unlink('decisions', 'answer-routed names a message the journal does not hold (record not imported)', where); return; }
+  let seat = SEAT_OF[d.seat];
+  if (seat === undefined) { seat = 'none'; rep.unlink('decisions', 'route seat ' + String(d.seat).slice(0, 20) + ' is not a seat fleet.db knows (stored as none)', where); }
+  const given = isText(d.sessionId) && d.sessionId !== '' ? d.sessionId.toLowerCase() : null;
+  let sessionId = null;
+  if (given !== null) {
+    if (db.prepare('SELECT 1 FROM session WHERE id = ?').get(given)) sessionId = given;
+    else rep.unlink('decisions', 'route names a session fleet.db has no row for (session left empty)', where);
+  }
+  const claimed = d.resolved === true;
+  const resolved = claimed && sessionId !== null ? 1 : 0;
+  if (claimed && resolved === 0) rep.unlink('decisions', 'route says resolved but its session is not a row (stored unresolved)', where);
+  const r = appendHistory(db, 'answer_route', { answer_id: answerId, at, seat, session_id: sessionId, resolved, decisions_seq: rec.sequence });
+  rep.count('answer_route', r.inserted);
+  const t = (v, max, field) => (isText(v) && v !== '' ? fit(rep, 'decisions', field, v, max, where) : null);
+  const x = db.prepare(`INSERT INTO answer_route_extra (route_id, purpose, label, notice, analyst, note, source_resolved) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (route_id) DO NOTHING`).run(r.id, isText(d.purpose) && d.purpose !== '' ? fit(rep, 'decisions', 'purpose', d.purpose, 40, where) : 'answer',
+    t(d.label, 40, 'label'), t(d.notice, 80, 'notice'), t(d.analyst, 4000, 'analyst'), t(d.note, 4000, 'note'), claimed ? 1 : 0);
+  rep.count('answer_route_extra', x.changes === 1);
+}
+
+// What the schema derives (answer_now), against what the fold of the journal says, message by message.
+function compareFold(ctx, msg) {
+  const { db, rep } = ctx;
+  const now = db.prepare('SELECT open_at_arrival, authorizes FROM answer_now WHERE id = ?');
+  for (const [seq, m] of msg) {
+    const s = now.get(m.answerId);
+    if (s === undefined) continue;
+    const where = 'record ' + seq;
+    const arrivalAgrees = s.open_at_arrival === (m.arrived ? 0 : 1);
+    if (!arrivalAgrees) {
+      rep.unlink('decisions', m.arrived ? 'rules say the message arrived after closing; answer_now says it was open' : 'rules say the message arrived while open; answer_now says it arrived after closing', where);
+    }
+    // Authorization includes arrival, so it is compared only when arrival agrees: one cause is one line.
+    if (arrivalAgrees && s.authorizes !== (m.authorizes && !m.arrived ? 1 : 0)) {
+      rep.unlink('decisions', m.authorizes && !m.arrived ? 'rules say the message authorizes; answer_now says it does not (unsigned on a passkey question)' : 'rules say the message does not authorize; answer_now says it does', where);
+    }
   }
 }

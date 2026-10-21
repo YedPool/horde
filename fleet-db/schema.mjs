@@ -718,6 +718,57 @@ export const MIGRATIONS = [
   SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
   FROM tree JOIN live l ON l.id = tree.id;
   `,
+
+  // 4: what the decisions store holds that migrations 1-3 had no place for (phase 1c part 2a, the importer).
+  // question: the words of a question beyond its title (body is its whatItIs), the asker as written when
+  // it names no Orc, the group, and the two ranking words as first asked; the lists (options, parts,
+  // waiting, files, references) stay one canonical JSON text, since nothing queries inside them.
+  // The side tables are write-once rows beside the hashed history tables, as answer_route_taken is, so
+  // answer and answer_route keep their columns and their hashes.
+  `
+  ALTER TABLE question ADD COLUMN asked_by_text TEXT CHECK (length(asked_by_text) <= 4000);
+  ALTER TABLE question ADD COLUMN yes_means TEXT;
+  ALTER TABLE question ADD COLUMN recommendation TEXT;
+  ALTER TABLE question ADD COLUMN group_name TEXT CHECK (length(group_name) <= 400);
+  ALTER TABLE question ADD COLUMN group_note TEXT;
+  ALTER TABLE question ADD COLUMN importance TEXT CHECK (length(importance) <= 40);
+  ALTER TABLE question ADD COLUMN blocks TEXT CHECK (length(blocks) <= 40);
+  ALTER TABLE question ADD COLUMN detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json));
+
+  -- What an answer carries besides its columns. The evidence and the passkey id are signing material:
+  -- only that evidence was there is kept (answer.signed_by holds a sha256 of the key id, never the id).
+  CREATE TABLE answer_extra (
+    answer_id TEXT PRIMARY KEY REFERENCES answer (id),
+    evidence_present INTEGER NOT NULL ${flag('evidence_present')},
+    act TEXT CHECK (length(act) <= 200),
+    recorded_by TEXT NOT NULL CHECK (length(recorded_by) BETWEEN 1 AND 40)
+  ) STRICT;
+  ${appendOnly('answer_extra')}
+
+  -- What a route carries besides its columns. source_resolved is what the decisions store said; the route's
+  -- own resolved is 1 only when its session is a row here (the CHECK on answer_route).
+  CREATE TABLE answer_route_extra (
+    route_id TEXT PRIMARY KEY REFERENCES answer_route (id),
+    purpose TEXT NOT NULL CHECK (length(purpose) BETWEEN 1 AND 40),
+    label TEXT CHECK (length(label) <= 40),
+    notice TEXT CHECK (length(notice) <= 80),
+    analyst TEXT CHECK (length(analyst) <= 4000),
+    note TEXT CHECK (length(note) <= 4000),
+    source_resolved INTEGER NOT NULL ${flag('source_resolved')}
+  ) STRICT;
+  ${appendOnly('answer_route_extra')}
+
+  -- A reader has read the decisions store up to a record (messages-read). Keyed by the record's own
+  -- sequence, so the same record imported twice is one row.
+  CREATE TABLE decisions_read (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    reader TEXT NOT NULL CHECK (length(reader) BETWEEN 1 AND 40),
+    up_to_seq INTEGER NOT NULL CHECK (up_to_seq >= 1),
+    at INTEGER NOT NULL,
+    decisions_seq INTEGER NOT NULL UNIQUE
+  ) STRICT;
+  ${appendOnly('decisions_read')}
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
