@@ -2,8 +2,9 @@
 # tools\Mutate.ps1 -Changed <base-ref>. Dot-sourced by tools\Mutate.ps1; no side effects on load.
 #
 # WHY. A review round that reruns every mutation spec reruns hundreds of mutants on lines the round
-# never touched (the founder's decision of 2026-10-02: each review round tests only what changed; the
-# changed-target specs run once per PR, on its final head, and every spec nightly since 2026-10-21).
+# never touched (the founder's decision of 2026-10-02: each review round tests only what changed;
+# the changed-target specs run once per PR, on its final head, and every spec nightly since
+# 2026-10-21).
 # So a round runs only the mutants whose find string sits in a line the diff added or modified.
 #
 # WHAT IS SELECTED, and why each rule leans towards running:
@@ -36,8 +37,8 @@
 #
 # ZERO IS NOT A PASS when it should not be zero. A diff that touches a mutation target yet selects no
 # mutant means the change has no mutant on any line it touched: Get-HordeSelectionVerdict says so and
-# fails, and the author adds mutants or runs that target's whole specs. An empty diff, or one that touches no
-# target, selects none and says so.
+# fails, and the author adds mutants or runs that target's whole specs. An empty diff, or one that
+# touches no target, selects none and says so.
 
 function ConvertTo-HordeDiffKey {
     # One spelling for a repository path, whichever tool wrote it: forward slashes, no leading "./",
