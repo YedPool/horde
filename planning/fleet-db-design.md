@@ -445,9 +445,9 @@ writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home
   not read that config (documented only).
 
 **The flip, in full.** (1) Put `fleet.db` in the new home. (2) Stop each horde-kind service while its definition still
-names the old home: `horde services stop <name>`. (3) Change the definitions' `hordeHome` (in the new home's
+names the old home: `horde services stop <name>`. `horde services stop` leaves the heartbeat file, and "running" is a heartbeat younger than its stale time (the larger of 30 s and three ticks), so **wait for it to go stale before step 4**: `home set` and `home clear` refuse until then and say "stopped just now? its heartbeat clears in about N s" with N the wait. (3) Change the definitions' `hordeHome` (in the new home's
 `settings\service-definitions.json`). (4) `horde home set -Path <new home>`: this process and every new or running reader
-follow at their next call; it refuses if a service still runs. (5) Unset HORDE_HOME wherever it is set (`horde home`
+follow at their next call; it refuses if a service still runs. `horde home clear` moves the home back to the default just as `set` moves it, and has the same guard (target: the home it would leave). (5) Unset HORDE_HOME wherever it is set (`horde home`
 warns while it is, in this process). (6) `horde services start <name>` for each service. (7) Re-run `horde listen` so the
 SSH sessions get the new home. (8) Re-register each task that BAKES a home (those registered before this change; a task
 only changes when re-registered): `horde metrics schedule remove` then `install`, `horde services unschedule` then
@@ -458,6 +458,8 @@ informational; only a reinstall under another home asks for a remove first). **T
 founder's elevated run; L files that.** (9) `horde home` lists every task under `\Horde\` that BAKES a home other than
 the effective one (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes
 on); it should say none bakes in another home.
+
+**What the service guard cannot see (it fails open, so these are the person's to check).** A service with no `alive` block has no heartbeat to read, so it is never counted. A definitions file that cannot be read (missing, refused, not UTF-8) gives no services. A heartbeat that cannot be read gives no running service. A pointer that is bad makes the current home unresolvable, so the guard is skipped and `set` is the way to mend it. In each case the guard says nothing rather than refuse on a guess.
 
 **The user profile a task sees.** The tasks that no longer bake the home find the pointer through the user's profile
 folder. A scheduled task run as S4U may have no loaded profile, hence possibly no USERPROFILE in its environment, so when

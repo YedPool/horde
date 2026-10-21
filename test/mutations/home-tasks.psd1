@@ -37,6 +37,12 @@
         @{ Name = "same-home-refused"
            Find = 'if ((ConvertTo-HordeHomeComparable $old) -ieq (ConvertTo-HordeHomeComparable $NewHome)) { return }'
            Replace = '' }
+        @{ Name = "refusal-gives-no-wait"
+           Find = 'Stopped just now? its heartbeat clears in about " + $wait + " s, then try again. '
+           Replace = '' }
+        @{ Name = "clear-target-is-not-the-default"
+           Find = 'return (Join-Path (Get-HordeProfileDir) ".horde")'
+           Replace = 'return $set' }
         @{ Name = "no-task-reported"
            Find = 'if ($r.how -ceq "baked into its action" -and (ConvertTo-HordeHomeComparable $r.home) -ine $want -and -not $seen.ContainsKey($r.how)) {'
            Replace = 'if ($false) {' }

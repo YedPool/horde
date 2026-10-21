@@ -27,6 +27,8 @@ $HordeCommand = @{
             return
         }
         if ($Verb -eq "clear") {
+            # Clearing moves the home back to the default just as set moves it: the same guard, target = the home left.
+            Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear
             $r = Clear-HordeHomePointer
             Write-Output $(if ($r.removed) { "pointer removed: " + $r.file } else { "no pointer to remove: " + $r.file })
             $now = Resolve-HordeHome

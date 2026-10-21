@@ -103,9 +103,13 @@ $before = Pointer-Text
 $r = Invoke-Home @("home", "set", "-Path", $homeA)
 Check ($r.code -ne 0 -and $r.out -like "*home set is refused*relay-runner*horde services stop*") "home set while a horde-kind service runs under the current home is refused, naming it and the order"
 Check ((Pointer-Text) -ceq $before) "and the pointer is left as it was"
-Remove-Item -LiteralPath $beat -Force
+Check ($r.out -like "*Stopped just now? its heartbeat clears in about * s*") "and says how long until a just-stopped service's heartbeat goes stale"
+$r = Invoke-Home @("home", "clear")
+Check ($r.code -ne 0 -and $r.out -like "*home clear is refused*relay-runner*" -and (Pointer-Text) -ceq $before) "home clear is refused the same way, and leaves the pointer"
+# horde services stop leaves the heartbeat; it is stale once older than its stale time (backdated here, no sleeping)
+[System.IO.File]::WriteAllText($beat, ('{"at":"' + [datetime]::UtcNow.AddHours(-1).ToString("o") + '","pid":4242,"tickSeconds":60,"pass":1}'), $utf8)
 $r = Invoke-Home @("home", "set", "-Path", $homeA)
-Check ($r.code -eq 0 -and $r.out -like ("*new home: " + $homeA + "*")) "once the service is stopped (no fresh heartbeat), home set goes through"
+Check ($r.code -eq 0 -and $r.out -like ("*new home: " + $homeA + "*")) "once its heartbeat is stale (the service stopped long enough ago), home set goes through"
 $r = Invoke-Home @("home", "set", "-Path", $homeB)
 
 Write-Host ""

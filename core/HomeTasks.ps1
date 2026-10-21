@@ -95,10 +95,17 @@ function Get-HordeRunningHordeServices {
         try {
             $beat = Read-HordeHeartbeat -Path $d.alive.path
             $v = Get-HordeHeartbeatVerdict -Heartbeat $beat -Now $Now -DefaultTickSeconds ([int]$d.alive.tickSeconds)
-            if ($v.state -ceq "known" -and $v.value.fresh -eq $true) { [void]$rows.Add([pscustomobject]@{ name = "$($d.name)"; ageSeconds = $v.value.ageSeconds }) }
+            if ($v.state -ceq "known" -and $v.value.fresh -eq $true) { [void]$rows.Add([pscustomobject]@{ name = "$($d.name)"; ageSeconds = $v.value.ageSeconds; clearsInSeconds = [Math]::Max(1, [long]$v.value.staleAfterSeconds - [long]$v.value.ageSeconds + 1) }) }
         } catch { }
     }
     return @($rows.ToArray())
+}
+
+function Get-HordeHomeAfterClear {
+    # The home `horde home clear` would leave: HORDE_HOME if set (then clear changes nothing), else the default.
+    $set = "$env:HORDE_HOME".Trim()
+    if ($set -ne "") { return $set }
+    return (Join-Path (Get-HordeProfileDir) ".horde")
 }
 
 function Assert-HordeNoServiceRunsOnOldHome {
@@ -106,13 +113,16 @@ function Assert-HordeNoServiceRunsOnOldHome {
     # is: stop each service (its definition still names the old home), change the definitions' hordeHome, set the
     # pointer, start. Setting the pointer first, or editing a definition first, sends the stop to the wrong home while
     # the process runs on, so the relay runs twice or the stop does nothing.
-    param([Parameter(Mandatory = $true)][string]$NewHome)
+    param([Parameter(Mandatory = $true)][string]$NewHome, [ValidateSet("set", "clear")][string]$Verb = "set", [datetime]$Now = [datetime]::UtcNow)
     $old = ""
     try { $old = (Resolve-HordeHome).path } catch { return }
     if ((ConvertTo-HordeHomeComparable $old) -ieq (ConvertTo-HordeHomeComparable $NewHome)) { return }
-    $running = @(Get-HordeRunningHordeServices -Home2 $old)
+    $running = @(Get-HordeRunningHordeServices -Home2 $old -Now $Now)
     if ($running.Count -gt 0) {
-        throw ("home set is refused: " + (@($running | ForEach-Object { $_.name }) -join ", ") + " (a horde-kind service, running under " + $old + ") would be left running on the old home. Stop each with horde services stop <name> first (while its definition still names the old home), then change the definitions' hordeHome, then run home set, then horde services start <name>")
+        # horde services stop leaves the heartbeat file; "running" is a heartbeat younger than its stale time, so a
+        # service stopped a moment ago still reads as running until the heartbeat goes stale.
+        $wait = [long](@($running | ForEach-Object { $_.clearsInSeconds } | Measure-Object -Maximum).Maximum)
+        throw ("home " + $Verb + " is refused: " + (@($running | ForEach-Object { $_.name }) -join ", ") + " (a horde-kind service, running under " + $old + ") would be left running on the old home. Stopped just now? its heartbeat clears in about " + $wait + " s, then try again. Stop each with horde services stop <name> first (while its definition still names the old home), then change the definitions' hordeHome, then run home set, then horde services start <name>")
     }
 }
 

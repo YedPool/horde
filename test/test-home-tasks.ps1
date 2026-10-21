@@ -114,6 +114,24 @@ try {
     $env:HORDE_HOME = $homeA
 
     Write-Host ""
+    Write-Host "--- clear is guarded too, and a service stopped just now clears in a few seconds ---" -ForegroundColor Cyan
+    Put-Definition
+    $t0 = [datetime]::UtcNow
+    Write-HordeHeartbeat -Path $beatFile -At $t0 -ProcessId 4242 -TickSeconds 60
+    $env:HORDE_HOME = ""
+    [System.IO.File]::WriteAllText((Join-Path $env:USERPROFILE ".horde-home.json"), ('{"v":1,"hordeHome":"' + $oldHome.Replace("\", "\\") + '"}'))
+    Check ((Resolve-HordeHome).source -ceq "pointer" -and (Get-HordeHomeAfterClear) -eq (Join-Path $env:USERPROFILE ".horde")) "the pointer names the old home, and clear would leave the default"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "home clear is refused") "home clear is refused while a service runs under the pointer's home"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(5) } "clears in about 17? s") "the refusal says how long until the heartbeat goes stale (about 175 s for a 60 s tick, 5 s after the beat)"
+    Check (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(5) } "Stopped just now?") "and asks if it was stopped just now"
+    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome $newHome -Now $t0.AddSeconds(400) } "")) "once the heartbeat is older than its stale time (a stubbed clock), set is no longer refused"
+    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear -Now $t0.AddSeconds(400) } "")) "and neither is clear"
+    $env:HORDE_HOME = $oldHome
+    Check (-not (Throws { Assert-HordeNoServiceRunsOnOldHome -NewHome (Get-HordeHomeAfterClear) -Verb clear } "")) "with HORDE_HOME set, clear changes nothing and is not refused"
+    Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".horde-home.json") -Force
+    $env:HORDE_HOME = $homeA
+
+    Write-Host ""
     Write-Host "--- the lines horde home prints ---" -ForegroundColor Cyan
     $env:HORDE_HOME = $homeA
     $lines = @(Get-HordeHomeCheckLines -ListTasks { @() })
