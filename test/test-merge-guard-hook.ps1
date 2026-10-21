@@ -204,11 +204,13 @@ $text = @(
     @{ n = "a grep pattern"; c = "grep -rn ${Q}gh pr merge${Q} NOTES.md CONTRIBUTING.md" }
     @{ n = "a grep pattern with the repository"; c = "grep -rn ${D}gh pr merge .* YedPool/horde${D} docs" }
     @{ n = "a comment line"; c = "# gh pr merge 320 -R YedPool/horde`nls" }
+    @{ n = "a comment holding a ; and the command"; c = "ls # note; gh pr merge 320 -R YedPool/horde" }
     @{ n = "a trailing comment"; c = "ls # gh pr merge 320 -R YedPool/horde" }
     @{ n = "a here-document body"; c = "cat > notes.md <<${Q}EOF${Q}`ngh pr merge 320 -R YedPool/horde`nEOF`nls" }
     @{ n = "a here-document body, unquoted delimiter"; c = "cat <<END`n  gh pr merge 320 -R YedPool/horde`nEND" }
     @{ n = "a here-document with a dash"; c = "cat <<-EOT`ngh pr merge 320 -R YedPool/horde`nEOT" }
     @{ n = "a PowerShell here-string body"; c = "`$x = @${Q}`ngh pr merge 320 -R YedPool/horde`n${Q}@`nWrite-Output `$x"; tool = "PowerShell" }
+    @{ n = "a PowerShell here-string body with an apostrophe"; c = "`$x = @${Q}`ndon${Q}t run`ngh pr merge 320 -R YedPool/horde`n${Q}@`nWrite-Output `$x"; tool = "PowerShell" }
     @{ n = "a PowerShell double here-string body"; c = "`$x = @${D}`ngh pr merge 320 -R YedPool/horde`n${D}@`nWrite-Output `$x"; tool = "PowerShell" }
     @{ n = "a file written with Set-Content"; c = "Set-Content -Path n.txt -Value ${Q}gh pr merge 320 -R YedPool/horde${Q}"; tool = "PowerShell" }
     @{ n = "gh pr merge as an argument of another program"; c = "python -c ${D}print('gh pr merge -R YedPool/horde')${D}" }
