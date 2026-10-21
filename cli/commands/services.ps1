@@ -1,7 +1,7 @@
 $HordeCommand = @{
     name    = "services"
     group   = "services"
-    usage   = "services tend | services status [-Json] | services stop <name> | services start <name> | services schedule [status] [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled] | services unschedule [-TaskName <name>] [-TaskFolder Horde|HordeTest]"
+    usage   = "services tend | services status [-Json] | services stop <name> | services start <name> | services schedule [status] [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled] [-TakeOver] | services unschedule [-TaskName <name>] [-TaskFolder Horde|HordeTest]"
     summary = "the long-lived pieces of Horde on this machine, kept running and kept current. Each service is defined as data in <HORDE_HOME>\settings\service-definitions.json: how it is started and asked to stop, how to tell it is alive (a heartbeat file, and the process), and which revision it follows. tend: one pass over every service - start what is not running, restart what is hung, take a verified update when it may be restarted, roll a failed update back - journaled, and telling the warchief once when something needs a person; and keep the hosted phone page current, deploying it when the page changed since the recorded deploy and the relay's Worker did not, checking the hosted bytes, and otherwise telling the warchief why not (cli/RelayPublish.ps1); and keep the installed CLI (the bin clone every session runs horde from) on origin/main - fast-forwarded only when its tree is clean, on main and not diverged, proved to load with horde version and put back if it does not, otherwise told once (cli/ServicesBin.ps1; status shows its revision and whether it is behind); stop <name>: ask that service to stop, the way its definition says, and HOLD it - the supervisor then leaves it exactly as it is, not started, not updated, until start <name> lets it go and tends it at once; schedule: run tend in two jobs, each every minute - one from start-up, whether or not anyone is signed in, and one in the person's own session from sign-in, for the services that need their desktop - installing or updating both (it needs an elevated prompt, signed in as the account the jobs run as: only an administrator may register a job that runs at start-up; schedule status shows both; -Disabled installs them without letting them run); unschedule: remove both, stopping nothing; status: each service - alive or not and why, heartbeat age, running against wanted revision, last action, failures in a row, whether an escalation is outstanding - and, first, whether tend itself is still coming round; -Json prints one line of data. horde rollout does an update now"
     run     = {
         [CmdletBinding()] param(
@@ -10,10 +10,11 @@ $HordeCommand = @{
             [switch]$Json,
             [string]$TaskName = "Horde services tend",
             [ValidateSet("Horde", "HordeTest")][string]$TaskFolder = "Horde",
-            [switch]$Disabled
+            [switch]$Disabled,
+            [switch]$TakeOver
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
-        $verbFlags = @{ tend = @(); status = @("Json"); stop = @("Target"); start = @("Target"); schedule = @("Target", "TaskName", "TaskFolder", "Disabled"); unschedule = @("TaskName", "TaskFolder") }
+        $verbFlags = @{ tend = @(); status = @("Json"); stop = @("Target"); start = @("Target"); schedule = @("Target", "TaskName", "TaskFolder", "Disabled", "TakeOver"); unschedule = @("TaskName", "TaskFolder") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to services " + $Verb) } }
         # Loaded here, in the command's own scope, so the adapters' functions stay visible to the blocks
         # they register (core/ServiceHostPort.ps1, core/Schedule.ps1).
@@ -24,8 +25,9 @@ $HordeCommand = @{
             if ($Verb -eq "schedule" -and @("", "status") -cnotcontains $Target) { throw ("services schedule takes nothing, or status, after it, not '" + $Target + "'") }
             foreach ($s in (Get-HordeSchedulerFiles)) { . $s }
             $action = $(if ($Verb -eq "unschedule") { "remove" } elseif ($Target -ceq "status") { "status" } else { "install" })
+            if ($action -cne "install" -and $TakeOver) { throw "-TakeOver belongs to services schedule, when it installs the job" }
             if ($action -cne "install" -and $Disabled) { throw "-Disabled belongs to services schedule, when it installs the job" }
-            Invoke-HordeServiceSchedule -Action $action -TaskName $TaskName -Folder $TaskFolder -Disabled:$Disabled -HordeScript (Join-Path $root "horde.ps1") | ForEach-Object { Write-Output $_ }
+            Invoke-HordeServiceSchedule -Action $action -TaskName $TaskName -Folder $TaskFolder -Disabled:$Disabled -TakeOver:$TakeOver -HordeScript (Join-Path $root "horde.ps1") | ForEach-Object { Write-Output $_ }
             return
         }
         foreach ($f in @(Get-HordeServiceHostFiles)) { . $f }

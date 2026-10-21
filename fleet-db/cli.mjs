@@ -15,7 +15,7 @@
 // would be a second one that nothing reads (dbPathFor refuses an empty or relative home).
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dbPathFor, openStore } from './store.mjs';
+import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { SCHEMA_VERSION, ENTITY_KINDS } from './schema.mjs';
 import { decisionsHash } from './write.mjs';
 import { importFleet } from './import.mjs';
@@ -112,7 +112,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
   }
   let file;
   try {
-    file = dbPathFor(env.HORDE_HOME);
+    file = dbPathFor(homeFromEnv(env));
   } catch (e) {
     err('fleet.db: ' + e.message);
     return 2;

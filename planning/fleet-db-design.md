@@ -372,3 +372,105 @@ one, so it is a sign of a damaged folder, not a reason to lose the lot row. A lo
 fleet.db with other content (members: another orc_id, tier or note) is kept as it is and the difference reported; a wake id
 that already exists under another lot is not a difference but a clash, and refuses the whole lot. A lot's report lines
 (mismatches, stubs, unknown columns) are collected in a report of its own and added to the run's only if the lot commits.
+
+## One home (pointer file) (T-0299; M's ruling of 2026-10-21)
+
+Where Horde's home is (fleet.db, metrics, turn-duty, notices, wake, lots) used to be worked out in several places, each its own
+way: `core/Home.ps1` (HORDE_HOME, else `%USERPROFILE%\.horde`), `fleet-db/store.mjs` and `fleet-metrics/home.mjs` (HORDE_HOME or
+refuse), `hooks/horde-turn-duty.mjs` (its own variables, config.json, and a state folder fixed under `%USERPROFILE%\.horde`). The
+real home is a different folder from `%USERPROFILE%\.horde`, so some writers used one and some the other, and an environment
+variable set at user level reaches only processes started afterwards, so running sessions, hooks and scheduled tasks would have
+kept the old folder for days. The home now resolves the same way everywhere, from one source, so one step flips the whole fleet.
+
+**The pointer file.** `%USERPROFILE%\.horde-home.json`, outside any home, exactly `{"v":1,"hordeHome":"<absolute path>"}`, ASCII.
+It is a file and it is read on every call, so a running process sees a change at its next call.
+
+**The order, the same in every resolver** (`core/Home.ps1`, and for node the one module `core/home.mjs`, which
+`fleet-db/store.mjs`, `fleet-metrics/home.mjs` and the turn-duty hook import):
+
+1. `HORDE_HOME`, if set (absolute, else refused, as before; the tests rely on it);
+2. the pointer file, if there is one;
+3. PowerShell only: `%USERPROFILE%\.horde`, as before. The node resolvers have no third step and refuse when neither (1) nor (2)
+   names a home: a silent fallback would split the data.
+
+**A bad pointer is refused, never skipped**, with a message that names the file: unreadable, not JSON, not ASCII (a byte-order mark
+included), `v` not 1, no `hordeHome`, a relative `hordeHome`, or a folder that does not exist. Skipping it would send this program
+to another folder than the ones that read the pointer, and nothing would say so. (The hook cannot refuse a stop; it logs the
+refusal by name and passes, and does not fall through to config.json.)
+
+**The turn-duty hook** keeps `HORDE_TURN_DUTY_HORDE_HOME` first and `config.json` `hordeHome` as the last fallback (K's), with
+the rule above between them. Its state and config folders default to `<resolved home>\turn-duty` when a home resolves, else the old
+`%USERPROFILE%\.horde\turn-duty`; the `HORDE_TURN_DUTY_STATE_DIR` and `_CONFIG_DIR` overrides stay.
+
+**The verb.** `horde home` prints the home and which source gave it (HORDE_HOME, pointer, default). `horde home set -Path <abs>`
+writes the pointer atomically (a temp file in the profile folder, then a rename over the pointer: a reader sees the old pointer or
+the new one) and prints the old and the new home; it refuses a relative path, a folder that does not exist, a folder without
+`fleet.db`, and a path the ASCII pointer cannot hold. `horde home clear` removes the pointer and prints what the home is now.
+`horde db` and `horde decisions publish` still refuse to make fleet.db in a default folder: they need the source to be HORDE_HOME
+or the pointer.
+
+**Flip and rollback.** Flip: copy or move the data so the new home holds `fleet.db`, then `horde home set -Path <new home>`. Every
+resolver follows at its next call; nothing is restarted. Rollback: `horde home set -Path <old home>`, or `horde home clear` to go
+back to the default. There is no migration of data and `node.json` handling (`core/Device.ps1`) is unchanged. A machine whose
+environment already sets HORDE_HOME keeps using it: the variable wins, so unset it (or set it to the same folder) for the pointer
+to take effect in those processes.
+
+**What bakes a home, and what was done about it (round-1 review).** HORDE_HOME outranks the pointer, so anything that
+writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home set`. Each writer, by what it outlives:
+
+- *Scheduled tasks, all registered to run as the user who registers them* (logon type S4U or Interactive, so the user's
+  profile and pointer are visible to them): the metrics collect job (`core/Schedule.ps1`), the supervisor's two jobs
+  (`cli/ServicesTend.ps1`, which `cli/Setup.ps1`'s elevated command also registers) and the meter's two tasks
+  (`fleet-metrics/register-schedule.ps1`) NO LONGER BAKE THE HOME. Each run resolves it like any command: HORDE_HOME, then
+  the pointer, then the default. The job's description still records the home it was registered under (the marker), which is
+  data for status, not what the run uses (the scheduler no longer refuses to replace a task over it).
+  **A task that runs as a different account (SYSTEM, another profile) cannot see this user's pointer** and would need a home
+  baked in or its own pointer; none of Horde's tasks is registered that way today, and the elevated command of
+  `cli/Setup.ps1` (a prompt that may be another admin account) still passes the resolved home to that one short-lived
+  command: if the prompt is another account, that account's profile must hold the pointer for the job it registers.
+- *Short-lived children the command starts and waits for* (`cli/Setup.ps1` `Invoke-HordeSetupHorde`, `cli/ServicesAct.ps1`
+  `Invoke-HordeServiceHordeCommand`, `cli/commands/db.ps1`, `meter.ps1`, `decisions/Publish.ps1`) keep receiving the home the
+  command resolved at that moment; nothing of theirs outlives the command.
+- *Long-lived services* (`cli/ServicesAct.ps1` start of a horde-kind service; the home is the definition's `hordeHome`,
+  `core/Services.ps1`) take the home WHEN THEY START, and **`horde services stop` runs the stop command with the
+  definition's `hordeHome`** (`cli/ServicesAct.ps1`). So the ORDER MATTERS: a service must be stopped while its definition
+  still names the home it runs on. Editing the definition first sends the stop to the new home while the process runs on
+  the old one (a relay running twice, or a stop that does nothing). `horde home set` therefore REFUSES while a
+  horde-kind service of the current home has a fresh heartbeat (it names the service and the order), rather than guess:
+  the heartbeat is the supervisor's own test for "running", and a refusal costs one stop, where a wrong set costs a double
+  relay. The check reads the CURRENT home's definitions only; a definition already edited to the new home before the stop
+  is not seen, which is why the order below is the rule.
+- *Sessions through the SSH listener* (`transports/ssh/Listen.ps1`) get `SetEnv HORDE_HOME=<home>` from the sshd config
+  that `horde listen` wrote, so an SSH session keeps the old home until `horde listen` is run again; `horde home` does
+  not read that config (documented only).
+
+**The flip, in full.** (1) Put `fleet.db` in the new home. (2) Stop each horde-kind service while its definition still
+names the old home: `horde services stop <name>`. `horde services stop` leaves the heartbeat file, and "running" is a heartbeat younger than its stale time (the larger of 30 s and three ticks), so **wait for it to go stale before step 4**: `home set` and `home clear` refuse until then and say "stopped just now? its heartbeat clears in about N s" with N the wait. (3) Change the definitions' `hordeHome` (in the new home's
+`settings\service-definitions.json`). (4) `horde home set -Path <new home>`: this process and every new or running reader
+follow at their next call; it refuses if a service still runs. `horde home clear` moves the home back to the default just as `set` moves it, and has the same guard (target: the home it would leave). (5) Unset HORDE_HOME wherever it is set (`horde home`
+warns while it is, in this process). (6) `horde services start <name>` for each service. (7) Re-run `horde listen` so the
+SSH sessions get the new home. (8) Re-register each task that BAKES a home (those registered before this change; a task
+only changes when re-registered): `horde metrics schedule remove` then `install`, `horde services unschedule` then
+`schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
+`register-schedule.ps1` for the meter. A task registered since this change bakes none and needs nothing: it resolves the
+home at each run, so it is correct even though its marker still names the home it was registered under (its marker is
+informational: the scheduler no longer refuses to replace a Horde task whose marker names another home, because a task no longer
+bakes a home in, so the one elevated re-register after the flip replaces the old task and writes the new marker). **The metrics task of lane L needs the
+founder's elevated run; L files that.** (9) `horde home` lists every task under `\Horde\` that BAKES a home other than
+the effective one (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes
+on); it should say none bakes in another home.
+
+**What the service guard cannot see (it fails open, so these are the person's to check).** A service with no `alive` block has no heartbeat to read, so it is never counted. A definitions file that cannot be read (missing, refused, not UTF-8) gives no services. A heartbeat that cannot be read gives no running service. A pointer that is bad makes the current home unresolvable, so the guard is skipped and `set` is the way to mend it. In each case the guard says nothing rather than refuse on a guess.
+
+**The user profile a task sees.** The tasks that no longer bake the home find the pointer through the user's profile
+folder. A scheduled task run as S4U may have no loaded profile, hence possibly no USERPROFILE in its environment, so when
+USERPROFILE is empty `core/Home.ps1` asks the system (`[Environment]::GetFolderPath('UserProfile')`) and `core/home.mjs`
+asks `os.homedir()`, before refusing. ASSUMPTION: the system's answer for the account a task runs as is the profile folder
+that holds that account's pointer (true for a task that runs as the user who registered it, which is all of Horde's).
+
+**The rooted test.** Both languages refuse a HORDE_HOME that is not a drive path or a UNC path: `\x` and `C:x` (which .NET's
+IsPathRooted accepts) are refused by `core/Home.ps1` through `Test-HordeHomeRooted`, as `core/home.mjs` refuses them.
+
+**The hook's throttle state.** The turn-duty hook keeps its state under `<resolved home>\turn-duty`. When the home changes, or
+the pointer is bad or cleared and the folder falls back to the profile's, the state is not carried over: the throttle resets
+and the first stop after that checks again at once (a nudge a little early, never a lost one).
