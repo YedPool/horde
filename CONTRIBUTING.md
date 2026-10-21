@@ -303,7 +303,8 @@ its branch can break main when main moved under it").
    (#63) probed the first three, and each time the affected mutants were skipped and the run
    exited 0. It proves only the mutants on touched lines and never stands in for the full specs:
    **a pull request may not merge on `-Changed` results alone.**
-2. **The full suite and the full mutation specs run once per pull request**, on its final head, and
+2. **The full suite and the mutation specs of every changed target file run once per pull request**,
+   on its final head, and
    on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
    on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
    the merged tree is green. Why once and not never: first, `-Changed` is blind to every change
@@ -311,6 +312,14 @@ its branch can break main when main moved under it").
    on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
+
+   **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
+   It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
+   request's gate held that slot for over an hour and a half, and about ten runs from other
+   lanes queued behind it. The changed-file specs and `-Changed` cover the edited targets;
+   the nightly sweep covers the two blind spots above, an edited helper and a spec broken on
+   `main`, within a day. Until the nightly run is live, the sweep is run by hand once a night.
+   A pull request body names the specs it ran and says the full sweep is left to the nightly run.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
@@ -330,7 +339,7 @@ its branch can break main when main moved under it").
 6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
    A few times a day the ready pull requests are merged together:
    - build the combined tree: `main` plus every ready pull request, in order;
-   - run the touched suites, the full suite once, and the full mutation specs once for the pull
+   - run the touched suites, the full suite once, and the changed-file mutation specs once for the pull
      requests in the batch, on that tree;
    - merge in order, with merge commits only (rule 4).
 
