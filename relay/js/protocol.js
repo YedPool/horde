@@ -957,7 +957,9 @@ export const CHAT_WORDS = {
 export const CHAT_SENDING = "Sending...";
 // founder: a line of his that the MACHINE found delivered to the Thrall word for word (channels/chat,
 // A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN); it always names that line.
-export const CHAT_ROLES = ["user", "assistant", "system", "founder"];
+// marker: a wezfleet pointer or relay line the machine hid (channels/chat/Pointer.ps1); it holds no words, and
+// the phone shows "Message received" and its time.
+export const CHAT_ROLES = ["user", "assistant", "system", "founder", "marker"];
 const SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
 const TURN_ID = /^[\x21-\x7e]{1,200}$/;
 

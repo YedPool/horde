@@ -756,6 +756,11 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const r = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "x", role: "tool", session: "s", text: "t" }, { id: "y", role: "user", session: "s", text: "ok" }] })), "work", "a".repeat(32));
   check(r.ok && r.value.turns.length === 1 && r.value.dropped === 1, "a turn with a role off the list is dropped and counted");
   check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
+  // A MARKER (channels/chat/Pointer.ps1): a wezfleet pointer the machine kept back; it has no words and reads as a turn of its own.
+  const mk = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "m1", role: "marker", session: "s", text: "", time: "2026-10-20T15:44:00.000Z" }, { id: "u1", role: "user", session: "s", text: "hi", time: "2026-10-20T15:45:00.000Z" }] })), "work", "a".repeat(32));
+  check(mk.ok && mk.value.turns.length === 2 && mk.value.dropped === 0 && mk.value.turns[0].role === "marker" && mk.value.turns[0].text === "", "a marker turn is read, with its time and no words");
+  const mkItems = P.chatTimeline({ turns: mk.value.turns.map((t, i) => ({ ...t, seq: i })) });
+  check(mkItems.length === 2 && mkItems[0].role === "marker" && mkItems[0].text === "" && mkItems[0].said === Date.parse("2026-10-20T15:44:00.000Z") && mkItems[1].role === "user", "the timeline keeps a marker in its place, with its time");
 }
 
 // --- 10b2. photos: shrunk within their caps, refused when not a picture, ONE passkey tap, parts paced ---
