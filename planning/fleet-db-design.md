@@ -59,6 +59,7 @@ with correct efficient and proper unique ids and relational structure." DDL: `fl
 | `question`, `question_event`, `answer`, `answer_route`, `answer_route_taken` (TAKEN from the target's hook) | F (decisions verbs; routing reads `orc_seat`) | decisions store writes the DB in the same call |
 | `decisions_snapshot`, `decisions_snapshot_item` (append-only; live list = newest per Orc) | F (the publish verb; until then an interim JSON per publish, imported by N) | `publishDecisions` in `fleet-db/write.mjs` |
 | `service`, `deploy` | F (relay tend), L (router) | `horde db deploy add` after verify |
+| `work_unit` (agents and wargs; migration 6) | N owns the verb; C places the hooks and the `wezspawn` call | `horde work start / end`; the meter reads it by ATTACH |
 | meter tables (`tokens_*`, `mail_hops`) | L, in `metrics/fleet.sqlite` | ATTACH; ids from here |
 
 Not in schema version 1, added by a later migration when their owner is agreed: `mail` (to_orc first,
@@ -175,6 +176,73 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   --json`, beside `publishedAt`. The turn-duty check should use the later of the two (confirmedAt is never
   before publishedAt). `published` text prints `published <ISO>, confirmed <ISO>`; `publish` of an equal
   list prints `unchanged, confirmed <ISO> (snapshot ...)`.
+
+## Work units (migration 6; T-0299, founder ruling 2026-10-21)
+
+Delegated work is recorded as what it is, by a table and not by a habit.
+
+**Definitions.** An AGENT is an Agent-tool subagent inside a session: no window of its own, named by the
+harness's subagent id. A WARG is its own claude session in its own WezTerm pane (started by `wezspawn`). Either
+has a PARENT, the session that spawned it. Nothing else is a work unit: the parent session itself is a row of
+`session`, as before.
+
+**Who writes.** Lane C places the hooks and the `wezspawn` call (T-0326): `SubagentStart` runs `horde work start
+-Kind agent`, `SubagentStop` runs `horde work end`; `wezspawn` runs `horde work start -Kind warg` and the warg's
+session-end hook runs `horde work end -Session`. Lane N owns the table and the one write verb (`fleet-db/work.mjs`,
+`fleet-db/work-cli.mjs`, `cli/commands/work.ps1`); nobody writes `work_unit` with SQL of their own.
+
+**Who reads.** Lane L's meter reads `work_unit` READ-ONLY by `ATTACH`, joining on `agent_id` (an agent) or
+`session_id` (a warg). Every token figure stays in the meter's own database and is never copied here: a work unit
+says WHO and WHEN and WHAT FOR; the meter says HOW MUCH.
+
+**Columns.** `id` (ULID); `kind` (`agent` or `warg`); `parent_session_id` (the spawning session, required);
+`orc_id` (the parent session's Orc, when known); `agent_id` and `agent_type` (agent only: the harness id, and a
+type such as `general-purpose`); `session_id` (warg only: its own session); `task_id` or `task_flag` (exactly one);
+`work_type` (`build`, `review`, `verify`, `research`, `mechanical`, `monitor`, `other`); `domain` (the parent Orc's
+lane, short); `model`; `started_at`; `ended_at`; `outcome` (`running`, `done`, `failed`, `stopped`, `abandoned`).
+Indexes for the readers: `(orc_id, started_at)`, `(task_id)`, and `(outcome)` for the running ones only.
+
+**Rules the database holds.**
+- An agent has an `agent_id` and no `session_id`; a warg has a `session_id` and no `agent_id` or `agent_type`; a warg
+  is never its own parent. One agent id per parent (`UNIQUE (parent_session_id, agent_id)`), one unit per warg
+  session (`UNIQUE (session_id)`).
+- `agent_id` is stored EXACTLY as the harness gave it (the id in the subagent transcript's file name): no trimming,
+  lower-casing or reformatting, because the meter joins on it. Only its length (1 to 200) and printable ASCII with
+  no space are checked; a bad id is refused, never repaired.
+- A unit names a task OR a flag, never both and never neither. `no_task` means the brief named no task (these are
+  counted and nagged); `backfill` means recorded after the fact. They are kept apart. A task may be filled into a
+  `no_task` unit later (the flag is then cleared); a task once set never changes, and a `backfill` unit stays so.
+- `outcome = 'running'` exactly when `ended_at` is empty, and `ended_at >= started_at`.
+- Triggers: `kind`, `parent_session_id`, `agent_id`, `session_id`, `started_at` and `id` never change; a unit leaves
+  `running` once, and an ended unit's `ended_at` and `outcome` never change; a unit is never deleted.
+- `horde db check` also flags a warg whose own session says it has another parent than the unit names, and a unit
+  whose Orc is not its parent session's Orc (both reachable only by changing the session afterwards).
+
+**The verb.** `horde work start -Kind agent|warg -ParentSession <uuid> (-AgentId <id> [-AgentType <t>] | -Session
+<uuid>) -WorkType <t> [-Task T-NNNN] [-Domain <lane>] [-Model <m>] [-At <ms or ISO>]`; `horde work end
+(-ParentSession <uuid> -AgentId <id> | -Session <uuid>) -Outcome done|failed|stopped|abandoned [-At ...]`; `horde work
+list [-Orc <letter or lane folder>] [-Running] [-Json]`. The home comes from `HORDE_HOME`, as every fleet.db command.
+Made for hooks: one short transaction, ASCII output, one line per outcome.
+- Exit codes of `fleet-db/work-cli.mjs`: 0 done; 1 refused or failed (one line, `refused: <reason>`); 2 no home; 3
+  `fleet.db busy` (the lock was not free within `HORDE_WORK_BUSY_MS`, default 3000, so a hook never hangs). Through
+  `horde work` every nonzero is exit 1 with the same line.
+- A repeat changes nothing and exits 0: `already started agent <id>`, `already ended <id> as <outcome>`. Ending an
+  ended unit with a DIFFERENT outcome is refused (an end is final). Ending a unit that was never started is refused.
+- No `-Task`: recorded as `no_task`. A task id fleet.db does not know is NOT refused: the ledger may be ahead of the
+  last import, so the unit is recorded as `no_task` and a `warning: task T-NNNN is not in fleet.db yet` line names
+  the id.
+- A parent or warg session fleet.db has not seen gets a stub `session` row, as the importer makes one: the parent as
+  rank `unknown` with no Orc, the warg as rank `warg`, parented to the unit's parent and in its Orc. An end time
+  named with `-At` that is before the start is refused; with no `-At`, a clock behind the start ends the unit at its
+  start rather than stranding it.
+
+**The registry's `kind` (agreed with C).** C's session registry records gain a field `kind` (`thrall`, `orc` or
+`warg`), written by `wezspawn` and the seats. The importer reads it into `session.rank` when the session is new
+(`RANKS` already holds all three; migrations 1 to 5 are untouched). A record with no `kind` keeps the older rule
+(`rank`, then `role`). A `kind` that is none of the three is reported and the older rule decides. A session already
+in fleet.db keeps its rank: a `kind` that disagrees with it is reported (`kind X disagrees with the stored rank Y
+(rank kept)`) and never written over it. The seat rules still apply on top: an `orc` or `thrall` kind with no Orc row,
+or a second live seat for one Orc, is rank `unknown`, as before.
 
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 

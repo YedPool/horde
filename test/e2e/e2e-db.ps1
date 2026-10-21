@@ -20,6 +20,8 @@
 #     a member that woke since is moved forward, -Lots on another verb is refused, a file of the wrong table is
 #     reported;
 #   - a mistyped verb is refused, and a machine without Node fails at once in one sentence.
+#   - work start, list and end (an agent and a warg through the real horde.ps1): the repeat of each says already
+#     started / already ended and exits 0, a different outcome for an ended unit is refused, check stays ok;
 # NOTHING REAL IS READ OR WRITTEN: the home and the user profile every child sees are folders this
 # scenario made and removes. The real homes (HORDE_HOME if set, and the profile's .horde) are checked
 # before and after: neither may have gained a fleet.db (CONTRIBUTING 9).
@@ -69,7 +71,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 5, created\)') ("init creates the file at schema 5 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 6, created\)') ("init creates the file at schema 6 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -77,7 +79,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 5, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 6, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
@@ -269,6 +271,41 @@ Check ($lotWrongVerb.code -ne 0 -and $lotWrongVerb.out -like "*-Lots belongs to 
 Save-Text (Join-Path $lotDir "parking_lot_member.json") '{"v":1,"table":"wake","rows":[]}'
 $lotBad = Invoke-Db $lotArgs $impEnv
 Check ($lotBad.code -eq 0 -and $lotBad.out -like "*lots: a file is missing or is not version 1 of its table (nothing imported from this lot): 1*") "a member file of the wrong table is reported, in words"
+
+Write-Host ""
+Write-Host "=== work units: an agent and a warg through horde work ===" -ForegroundColor Cyan
+$workHome = Join-Path $script:work "home-work"
+$workEnv = @{ HORDE_HOME = $workHome; USERPROFILE = $fakeProfile }
+function Invoke-Work { param([string[]]$WorkArgs, [hashtable]$Env = $workEnv) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("work") + $WorkArgs) -Env $Env) }
+$parentId = "00000000-0000-4000-8000-0000000000a1"
+$wargId = "00000000-0000-4000-8000-0000000000b2"
+$agentName = "a3f9c01b7d2e4f5a6"
+$wn = Invoke-Work @("list") @{ HORDE_HOME = ""; USERPROFILE = $fakeProfile }
+Check ($wn.code -ne 0 -and $wn.out -like "*horde work needs HORDE_HOME set*") "work with HORDE_HOME unset is refused, naming the home"
+$w1 = Invoke-Work @("start", "-Kind", "agent", "-ParentSession", $parentId, "-AgentId", $agentName, "-AgentType", "general-purpose", "-WorkType", "research", "-Task", "T-0299", "-Domain", "fleet-db")
+Check ($w1.code -eq 0 -and $w1.out -cmatch '(?m)^started agent [0-9A-Z]{26}\r?$' -and $w1.out -like "*warning: task T-0299 is not in fleet.db yet*") ("an agent starts; a task the ledger lacks is a warning, not a refusal (" + $w1.code + ")")
+$w2 = Invoke-Work @("start", "-Kind", "agent", "-ParentSession", $parentId, "-AgentId", $agentName, "-WorkType", "research")
+Check ($w2.code -eq 0 -and $w2.out -cmatch '(?m)^already started agent [0-9A-Z]{26}\r?$') "the same start again says already started and exits 0"
+$w3 = Invoke-Work @("start", "-Kind", "warg", "-ParentSession", $parentId, "-Session", $wargId, "-WorkType", "build")
+Check ($w3.code -eq 0 -and $w3.out -cmatch '(?m)^started warg [0-9A-Z]{26}\r?$') "a warg starts by its own session"
+$wl = Invoke-Work @("list", "-Running")
+Check ($wl.code -eq 0 -and $wl.out -like ("* agent running - no_task research " + $agentName + " *") -and $wl.out -like ("* warg running - no_task build " + $wargId + " *")) "list shows both running, the agent id exactly as given"
+$wj = Invoke-Work @("list", "-Json")
+Check ($wj.code -eq 0 -and $wj.out -like ('*"agent_id":"' + $agentName + '"*') -and $wj.out -like '*"domain":"fleet-db"*') "list -Json is one line of data"
+$we = Invoke-Work @("end", "-ParentSession", $parentId, "-AgentId", $agentName, "-Outcome", "done")
+Check ($we.code -eq 0 -and $we.out -cmatch '(?m)^ended [0-9A-Z]{26} as done\r?$') "the agent ends"
+$we2 = Invoke-Work @("end", "-ParentSession", $parentId, "-AgentId", $agentName, "-Outcome", "done")
+Check ($we2.code -eq 0 -and $we2.out -cmatch '(?m)^already ended ') "ending again says already ended and exits 0"
+$we3 = Invoke-Work @("end", "-ParentSession", $parentId, "-AgentId", $agentName, "-Outcome", "failed")
+Check ($we3.code -ne 0 -and $we3.out -like "*refused: already ended as done*") ("a different outcome for an ended unit is refused (" + $we3.code + ")")
+$we4 = Invoke-Work @("end", "-Session", $wargId, "-Outcome", "stopped")
+Check ($we4.code -eq 0) "the warg ends by its session"
+$wl2 = Invoke-Work @("list", "-Running")
+Check ($wl2.code -eq 0 -and $wl2.out -like "*no work units*") "nothing is running after both ended"
+$wbad = Invoke-Work @("list", "-Kind", "agent")
+Check ($wbad.code -ne 0 -and $wbad.out -like "*-Kind does not belong to work list*") "a flag of another verb is refused"
+$wck = Invoke-HordeCliProcess -Root $root -HordeArgs @("db", "check") -Env $workEnv
+Check ($wck.code -eq 0 -and $wck.out -cmatch '(?m)^check: ok\r?$') "horde db check says ok on the file the work verbs made"
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan

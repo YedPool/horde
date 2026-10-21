@@ -372,7 +372,12 @@ function sessionOrc(ctx, rec, rank, rep) {
   return id;
 }
 
+// The kind a registry record names (written by wezspawn and the seats): the three ranks a record can be.
+// RANKS (schema.mjs) covers all three, so session.rank takes each as it is.
+const RECORD_KINDS = ['thrall', 'orc', 'warg'];
+
 function rankOf(rec) {
+  if (RECORD_KINDS.includes(rec.kind)) return rec.kind;
   if (RANKS.includes(rec.rank)) return rec.rank;
   if (rec.role === 'master') return 'thrall';
   if (rec.role === 'orchestrator') return 'orc';
@@ -401,15 +406,22 @@ function stepSessions(ctx, data) {
   const order = [...rows.values()].sort((a, b) => b.last - a.last || (a.id < b.id ? -1 : 1));
   const done = new Set();
   const visiting = new Set();
-  const exists = db.prepare('SELECT 1 FROM session WHERE id = ?');
+  const exists = db.prepare('SELECT rank FROM session WHERE id = ?');
   const seat = db.prepare("SELECT id FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
   // SEATS ARE DECIDED BEFORE ANY INSERT, freshest session first: the schema allows one live seat per Orc
   // and PC, and the freshest session must hold it. Inserting a parent early (for its child) never claims
   // one, because the claim was made here, by freshness, not by the order the rows happen to be written in.
   const claimed = new Set();
   for (const row of order) {
-    if (exists.get(row.id)) continue;
     const rec = row.rec;
+    // A record's kind is read into rank when the session is new. A row already there keeps its rank; a kind
+    // that disagrees is reported, never written over it. A kind that is none of the three is reported too.
+    if (rec.kind !== undefined && rec.kind !== null && !RECORD_KINDS.includes(rec.kind)) rep.unlink('registry', 'kind is not thrall, orc or warg (the older rule decides the rank)', row.id);
+    const have = exists.get(row.id);
+    if (have) {
+      if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink('registry', 'kind ' + rec.kind + ' disagrees with the stored rank ' + have.rank + ' (rank kept)', row.id);
+      continue;
+    }
     row.rank = rankOf(rec);
     row.orcId = sessionOrc(ctx, rec, row.rank, rep);
     if ((row.rank === 'orc' || row.rank === 'thrall') && row.orcId === null) {

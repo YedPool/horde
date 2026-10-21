@@ -52,6 +52,10 @@ export const ENTITY_KINDS = Object.keys(ENTITY_TABLES);
 export const LINK_RELATIONS = ['blocks', 'relates-to', 'answers', 'implements', 'duplicates', 'follows-up',
   'caused-by', 'mentions'];
 export const PERSON_ROLES = ['founder', 'staff', 'other'];
+export const WORK_KINDS = ['agent', 'warg'];
+export const WORK_TYPES = ['build', 'review', 'verify', 'research', 'mechanical', 'monitor', 'other'];
+export const WORK_OUTCOMES = ['running', 'done', 'failed', 'stopped', 'abandoned'];
+export const WORK_TASK_FLAGS = ['no_task', 'backfill'];
 
 const q = (list) => list.map((s) => "'" + s + "'").join(', ');
 // Crockford base32, 26 characters: the same pattern as schema/fleet-parking-lot.v1.json.
@@ -828,6 +832,68 @@ export const MIGRATIONS = [
   SELECT l.orc_id, l.published_at, i.snapshot_id, i.position, i.question_id, i.text, i.recommendation,
     i.importance, i.blocks
   FROM decisions_live l JOIN decisions_snapshot_item i ON i.snapshot_id = l.id;
+  `,
+
+  // 6: work_unit (T-0299, founder ruling 2026-10-21): an AGENT (an Agent-tool subagent inside a session, no
+  // window of its own) and a WARG (its own claude session in its own pane) recorded as what they are.
+  `
+  -- One row per unit of delegated work. The spawning session is the parent either way. An agent is named
+  -- by the harness's subagent id, exactly as given (the id in its transcript's file name: the fleet meter
+  -- joins on it, so it is never trimmed, lower-cased or reformatted: only its length and ASCII are
+  -- checked); a warg is a session of its own. The meter reads this table by ATTACH, read-only, and keeps
+  -- every token figure in its own database: nothing of the meter is copied here.
+  CREATE TABLE work_unit (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    kind TEXT NOT NULL CHECK (kind IN (${q(WORK_KINDS)})),
+    parent_session_id TEXT NOT NULL REFERENCES session (id),
+    orc_id TEXT REFERENCES orc (id),
+    agent_id TEXT CHECK (length(agent_id) BETWEEN 1 AND 200 AND agent_id NOT GLOB '*[^!-~]*'),
+    agent_type TEXT CHECK (length(agent_type) BETWEEN 1 AND 80 AND agent_type NOT GLOB '*[^!-~]*'),
+    session_id TEXT REFERENCES session (id),
+    -- Exactly one of a task and a flag. no_task: the brief named no task (counted and nagged); backfill:
+    -- a unit recorded after the fact. They are kept apart on purpose.
+    task_id TEXT REFERENCES task (id),
+    task_flag TEXT CHECK (task_flag IN (${q(WORK_TASK_FLAGS)})),
+    work_type TEXT NOT NULL CHECK (work_type IN (${q(WORK_TYPES)})),
+    domain TEXT CHECK (length(domain) BETWEEN 1 AND 120),
+    model TEXT CHECK (length(model) BETWEEN 1 AND 80),
+    started_at INTEGER NOT NULL CHECK (started_at >= 0),
+    ended_at INTEGER,
+    outcome TEXT NOT NULL CHECK (outcome IN (${q(WORK_OUTCOMES)})),
+    UNIQUE (parent_session_id, agent_id),
+    UNIQUE (session_id),
+    CHECK (kind <> 'agent' OR (agent_id IS NOT NULL AND session_id IS NULL)),
+    CHECK (kind <> 'warg' OR (session_id IS NOT NULL AND agent_id IS NULL AND agent_type IS NULL)),
+    CHECK (session_id IS NULL OR session_id <> parent_session_id),
+    CHECK ((task_id IS NOT NULL) <> (task_flag IS NOT NULL)),
+    CHECK ((outcome = 'running') = (ended_at IS NULL)),
+    CHECK (ended_at IS NULL OR ended_at >= started_at)
+  ) STRICT;
+  CREATE INDEX work_unit_orc ON work_unit (orc_id, started_at);
+  CREATE INDEX work_unit_task ON work_unit (task_id);
+  CREATE INDEX work_unit_running ON work_unit (outcome) WHERE outcome = 'running';
+
+  -- Who and when it began never change: every pointer to the unit, and the meter's join, rest on them.
+  CREATE TRIGGER work_unit_identity_fixed BEFORE UPDATE ON work_unit
+  WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.parent_session_id IS NOT OLD.parent_session_id
+    OR NEW.agent_id IS NOT OLD.agent_id OR NEW.session_id IS NOT OLD.session_id OR NEW.started_at IS NOT OLD.started_at
+  BEGIN SELECT RAISE(ABORT, 'work_unit: id, kind, parent, agent_id, session_id and started_at never change'); END;
+
+  -- A unit leaves running once. An ended unit keeps its end and its outcome, so it never goes back to
+  -- running and never ends a second way.
+  CREATE TRIGGER work_unit_end_is_final BEFORE UPDATE ON work_unit
+  WHEN OLD.outcome <> 'running' AND (NEW.outcome IS NOT OLD.outcome OR NEW.ended_at IS NOT OLD.ended_at)
+  BEGIN SELECT RAISE(ABORT, 'work_unit: an ended unit keeps its end and its outcome'); END;
+
+  -- A unit that named no task may be given one later (the flag is then cleared). A task once set never
+  -- changes, and a backfill unit stays as it is.
+  CREATE TRIGGER work_unit_task_fill_only BEFORE UPDATE ON work_unit
+  WHEN (NEW.task_id IS NOT OLD.task_id AND NOT (OLD.task_id IS NULL AND OLD.task_flag = 'no_task'))
+    OR (NEW.task_id IS OLD.task_id AND NEW.task_flag IS NOT OLD.task_flag)
+  BEGIN SELECT RAISE(ABORT, 'work_unit: a task is filled only into a no_task unit and never changes'); END;
+
+  CREATE TRIGGER work_unit_no_delete BEFORE DELETE ON work_unit
+  BEGIN SELECT RAISE(ABORT, 'work_unit: a unit is never deleted'); END;
   `,
 ];
 
