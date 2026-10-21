@@ -4,6 +4,7 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\CiGuards.ps1 [-Root <repo>] [-LogFolder <dir>]
 #       [-Only <guard script, e.g. test\test-core-load.ps1>] [-Seconds 1200]
+#       [-MachinePsModulePath <value>]   (a seam for the suite; the default is the machine's own value)
 #
 # GREEN IS EXIT 0 AND A CLOSING BANNER (CONTRIBUTING 15 rule 7): the last "==== ... ====" line of the
 # guard's output must exist and must not be a failures banner; a guard with no banner was NOT RUN and is
@@ -20,6 +21,7 @@ param(
     [string]$Root = "",
     [string]$LogFolder = "",
     [string]$Only = "",
+    [AllowNull()]$MachinePsModulePath = $null,
     [int]$Seconds = 1200
 )
 
@@ -95,7 +97,8 @@ if ($Only -ne "") {
 if ($LogFolder -eq "") { $LogFolder = Join-Path ([System.IO.Path]::GetTempPath()) "horde-ci-guards" }
 [void][System.IO.Directory]::CreateDirectory($LogFolder)
 
-$machinePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+$machinePath = $MachinePsModulePath
+if ($null -eq $machinePath) { $machinePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine") }
 $programs = @{ "5.1" = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"); "7" = (Get-HordeGuardPwsh7) }
 $rows = New-Object System.Collections.ArrayList
 Write-HordeCiLine ("the guards, from " + (Get-HordeGuardListPath) + ": " + ($guards -join ", "))

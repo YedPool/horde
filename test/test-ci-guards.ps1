@@ -28,6 +28,7 @@ $green = '$s = $PSVersionTable.PSVersion.Major; Write-Output ("ran in shell " + 
 $red = 'Write-Output "  [FAIL] stand-in red"; Write-Output ""; Write-Output "==== 1 FAILURE(S) ===="; exit 1'
 $nobanner = 'Write-Output "  [PASS] stand-in, cut short"; exit 0'
 $failbanner = 'Write-Output "==== 2 FAILURE(S) ===="; exit 0'
+$exit1 = 'Write-Output "  [PASS] stand-in"; Write-Output "==== looks green ===="; exit 1'
 $modules = '$s = $PSVersionTable.PSVersion.Major; Write-Output ("shell " + $s + " modules=" + $env:PSModulePath); Write-Output "==== modules ===="; exit 0'
 
 function New-Tree {
@@ -81,12 +82,19 @@ foreach ($shell in @($script51, $script7)) {
     Check ($r.out -clike "*ran in shell 5*" -and $r.out -clike "*ran in shell 7*") "  the stand-ins really ran in 5.1 and in 7"
     Check ([regex]::Matches($r.out, '\[GREEN\] test-[ab] in (Windows PowerShell 5\.1|PowerShell 7)').Count -eq 4) "  and each of the four runs is reported green"
     Check ([System.IO.File]::Exists((Join-Path $t "logs\test-a.5.1.log")) -and [System.IO.File]::Exists((Join-Path $t "logs\test-b.7.log"))) "  and each run's output is kept in a log"
-    Check ([System.IO.File]::ReadAllText((Join-Path $t "summary.md")) -clike "*| test-a | Windows PowerShell 5.1 | 0 | ==== stand-in green ==== | green |*") "  and the step summary has a table of the runs"
+    $summary = ""
+    $summaryFile = Join-Path $t "summary.md"
+    if ([System.IO.File]::Exists($summaryFile)) { $summary = [System.IO.File]::ReadAllText($summaryFile) }
+    Check ($summary -clike "*| test-a | Windows PowerShell 5.1 | 0 | ==== stand-in green ==== | green |*") "  and the step summary has a table of the runs"
 
     $t = New-Tree -Name ("one-red-" + $label) -Lines "test/test-r.ps1`ntest/test-a.ps1`n" -Files @{ "test-r.ps1" = $red; "test-a.ps1" = $green }
     $r = Invoke-Runner -Exe $shell -Tree $t
     Check ($r.code -eq 1 -and $r.out -clike "*[[]RED] test-r in Windows PowerShell 5.1*" -and $r.out -clike "*[[]GREEN] test-a in PowerShell 7*") "a red guard makes exit 1, and the guard after it still ran"
     Check ($r.out -clike "*::error::not green: test-r (Windows PowerShell 5.1), test-r (PowerShell 7)*") "  and the error names the guard and the shell"
+
+    $t = New-Tree -Name ("exit1-" + $label) -Lines "test/test-e.ps1`n" -Files @{ "test-e.ps1" = $exit1 }
+    $r = Invoke-Runner -Exe $shell -Tree $t
+    Check ($r.code -eq 1 -and $r.out -clike "*[[]RED] test-e in Windows PowerShell 5.1 (exit 1, ==== looks green ====)*") "a green-looking banner with a non-zero exit is red: the exit code counts"
 
     $t = New-Tree -Name ("nobanner-" + $label) -Lines "test/test-n.ps1`n" -Files @{ "test-n.ps1" = $nobanner }
     $r = Invoke-Runner -Exe $shell -Tree $t
@@ -120,13 +128,14 @@ foreach ($shell in @($script51, $script7)) {
     Check ($r.code -eq 1 -and $r.out -clike "*[[]RED] test-gone in PowerShell 7 (exit -1*" -and $r.out -clike "*the guard test\test-gone.ps1 is not in the checkout*") "a listed guard that is not in the checkout is red, never skipped"
 
     $t = New-Tree -Name ("modules-" + $label) -Lines "test/test-m.ps1`n" -Files @{ "test-m.ps1" = $modules }
-    $r = Invoke-Runner -Exe $shell -Tree $t -PoisonModulePath "C:\horde-ci-probe\poison"
-    $machine = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+    $r = Invoke-Runner -Exe $shell -Tree $t -PoisonModulePath "C:\horde-ci-poison\modules" -More @("-MachinePsModulePath", "C:\horde-ci-probe\machine")
+
     $seven = [regex]::Match($r.out, 'shell 7 modules=([^\r\n]*)').Groups[1].Value
     $five = [regex]::Match($r.out, 'shell 5 modules=([^\r\n]*)').Groups[1].Value
-    if ("" + $machine -ne "") { Check ($five -clike ("*" + ($machine -split ";")[0] + "*")) "5.1 is started with the machine PSModulePath" }
-    Check ($seven -ilike "*PowerShell\7\Modules*" -and $seven -cnotlike "*horde-ci-probe*") "7 builds its own PSModulePath: its own modules folder is in it and the runner's is not passed on"
-    Check ($five -cnotlike "*horde-ci-probe*" -and $five -ne "") "5.1 is not handed the runner's PSModulePath either"
+    Check ($five -clike "*C:\horde-ci-probe\machine*") "5.1 is started with the machine PSModulePath (a seam hands in the value)"
+    Check ($seven -cnotlike "*C:\horde-ci-probe\machine*") "7 is not given it"
+    Check ($seven -ilike "*PowerShell\7\Modules*" -and $seven -cnotlike "*horde-ci-poison*") "7 builds its own PSModulePath: its own modules folder is in it and the runner's is not passed on"
+    Check ($five -cnotlike "*horde-ci-poison*" -and $five -ne "") "5.1 is not handed the runner's PSModulePath either"
 }
 
 Write-Host "== the workflow holds no list of its own"
