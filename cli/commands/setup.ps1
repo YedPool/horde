@@ -36,7 +36,7 @@ $HordeCommand = @{
         . (Join-Path $root "relays\Port.ps1")
         foreach ($f in @(Get-HordeRelayFiles)) { . $f }
         . (Join-Path $root "relay\Trust.ps1")
-        foreach ($f in @("RelayDeploy", "RelayRun", "ServicesAct", "ServicesTend", "QrCode", "RelayPair", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
+        foreach ($f in @("RelayDeploy", "RelayRun", "ServicesAct", "ServicesTend", "QrCode", "RelayPair", "SetupStore", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
         $man = Read-HordeSetupManifest -Path (Get-HordeSetupManifestPath -Root $root)
         if ($man.state -cne "known") { throw $man.reason }
         if ($Steps) {

@@ -28,12 +28,16 @@ function Get-HordeCommandGroups {
         node = "serving this machine to the hub"
         hub = "the hub: its nodes and what it mirrors of them"
         decisions = "questions waiting for a person"
+        orcs = "the Orcs, in the founder's priority order"
         relay = "the founder's phone, through the relay"
         wake = "waking the sessions that have mail"
         services = "long-lived pieces kept running and current"
         files = "files shared for the founder to read"
         analyst = "the fleet analyst, kept always on"
         work = "merging the fleet's work"
+        fleet = "hibernating sessions and waking them"
+        status = "the Orc status card the founder's phone shows"
+        data = "the fleet's one database of work"
     }
 }
 

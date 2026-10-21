@@ -9,9 +9,11 @@
 #   -ScriptArgs '-Spec','x.psd1' reached the suite as the single argument '-Spec','x.psd1'). A piece that
 #   still holds a quote after that is refused with 126, nothing run, rather than passed on mangled.
 #   -ArgsFile is a JSON array of strings, taken exactly; it is the way for an argument holding a comma,
-#   a single quote or a space, and wins over -ScriptArgs. Either way, an argument holding a double
-#   quote or one of cmd's own characters (& | < > ^ %) is refused with 126: the run is started through
-#   cmd's line, which would read them itself.
+#   a single quote or a space, and wins over -ScriptArgs. A missing file, one that does not start with
+#   [, or one holding a non-string is refused with 126, each in its own words. Either way, an argument
+#   holding a double quote, one of cmd's own characters (& | < > ^ %) or a control character (a line
+#   break ends cmd's line) is refused with 126: the run is started through cmd's line, which would
+#   read them itself.
 #
 # Development tooling, not part of the engine. test/test-heavy-slot.ps1 is its suite.
 #
@@ -154,7 +156,13 @@ $script:argsRefused = ""
 if ($ArgsFile -ne "") {
     . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
     $list = $null
-    try { $list = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ArgsFile)) } catch { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " is not a JSON array of strings" }
+    # A missing or unreadable file is said so, apart from bad JSON, so a typo in the path is not read as a
+    # broken file (review of PR 316).
+    $raw = $null
+    try { $raw = [System.IO.File]::ReadAllText($ArgsFile) } catch { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " cannot be read: " + $_.Exception.Message }
+    # An ARRAY, as the header says: one bare JSON string would otherwise pass as a one-argument list.
+    if ($script:argsRefused -eq "" -and -not $raw.TrimStart().StartsWith("[")) { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " is not a JSON array of strings (it does not start with [)" }
+    if ($script:argsRefused -eq "") { try { $list = ConvertFrom-HordeJson $raw } catch { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " is not a JSON array of strings" } }
     if ($script:argsRefused -eq "") {
         $items = @($list)
         if (@($items | Where-Object { $_ -isnot [string] }).Count -gt 0) { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " holds something that is not a string" }
@@ -169,6 +177,9 @@ if ($ArgsFile -ne "") {
 # Every argument goes into cmd's line (below): a double quote ends cmd's quoting, and & | < > ^ % are
 # cmd's own (an & would start a second command), so none of them can reach the run as written.
 foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and $a -match '["&|<>^%]') { $script:argsRefused = "an argument holds a character cmd's line cannot carry (a double quote or & | < > ^ %): " + $a } }
+# A control character (a line break above all) ends cmd's line where it stands: what follows is
+# dropped without a word, so the run would get fewer arguments than asked (review of PR 316).
+foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and $a -match '[\x00-\x1F]') { $script:argsRefused = "an argument holds a control character (a line break or a tab), which would cut cmd's line short: " + ($a -replace '[\x00-\x1F]', '?') } }
 $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
 # The record lives where every agent of this user finds it, whatever TEMP each was given.
 if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }

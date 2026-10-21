@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/fleet-parking-lot-member.v1",
+  "title": "fleet parking_lot_member row v1",
+  "description": "ONE ROW OF THE parking_lot_member TABLE (work-data-ssot-audit-2026-10-19): one session in one lot, primary key (lot_id, session_id). The columns are the audit's. The session's label, role, folder and pane belong to the session table and are not repeated here; fleet/Hibernation.ps1's record.json carries them. state: parked, woken, or dropped (it never slept, so it left the park). Whether a member is ASLEEP is not stored: it is membership together with whether its process runs. A column that is not known is left out, never null. File: parking_lot_member.json beside parking_lot.json.",
+  "type": "object",
+  "required": ["lot_id", "session_id", "state"],
+  "additionalProperties": false,
+  "properties": {
+    "lot_id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
+    "session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The harness's own session id, a lower-case uuid." },
+    "orc_id": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$" },
+    "tier": { "type": "integer", "enum": [1, 2] },
+    "state": { "type": "string", "enum": ["parked", "woken", "dropped"] },
+    "note": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,1024}$", "description": "The path of its PARKED-<label>.md, when the file was there." }
+  }
+}

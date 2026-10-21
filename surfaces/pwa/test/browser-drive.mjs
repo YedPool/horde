@@ -640,6 +640,59 @@ const commands = {
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, left: await evaluate("document.getElementById('chatText').value"), notice: await evaluate(notice) };
   },
+  // A PHOTO from the chat's Photo button: a real touch on it must open Chrome's file chooser (caught here,
+  // never shown), and the file on disk at c.path is then given to the page's file field as a person's pick
+  // would be (DOM.setFileInputFiles fires its change). Chrome decodes, draws and encodes it; Chrome's
+  // passkey signs the manifest. { chooser, put, prompts, thumbs, notice }.
+  async chatPhoto(c) {
+    const before = headOf(c.mailbox);
+    const signsBefore = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    await cdp("Page.setInterceptFileChooserDialog", { enabled: true });
+    let chooser = false;
+    on("Page.fileChooserOpened", () => { chooser = true; });
+    const at = await centre("#chatPhoto");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    for (let i = 0; i < 50 && !chooser; i++) await sleep(100);
+    await cdp("Page.setInterceptFileChooserDialog", { enabled: false });
+    const field = await cdp("Runtime.evaluate", { expression: "document.getElementById('chatPhotoFile')" });
+    await cdp("DOM.enable");
+    await cdp("DOM.setFileInputFiles", { files: [c.path], objectId: field.result.objectId });
+    const end = Date.now() + (c.expectNone ? 3000 : 60000);
+    while (headOf(c.mailbox) < before + (c.parts || 2) && Date.now() < end) await sleep(100);
+    await sleep(c.expectNone ? 0 : 500);
+    const signsAfter = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    return { chooser, put: headOf(c.mailbox) - before, prompts: signsAfter - signsBefore, thumbs: await evaluate("document.querySelectorAll('#chatLog canvas.chat-photo').length"), notice: await evaluate(notice) };
+  },
+  // A PHOTO THAT ARRIVES IN THE CHAT WITHOUT HIS TOUCH HERE - as one sent from another window of the app
+  // would: the JPEG at c.path handed straight to the bridge (bridge.js, chat-photo), so the page draws it
+  // on the bridge's chat-changed and nothing of app.js's own send runs. Then where the chat stands.
+  async chatPhotoBehind(c) {
+    const before = headOf(c.mailbox);
+    const bytes = Array.from(readFileSync(c.path));
+    const r = await evaluate("window.HordeBridge.request('chat-photo', { bytes: new Uint8Array(" + JSON.stringify(bytes) + "), id: " + JSON.stringify(c.id) + " })");
+    const end = Date.now() + 15000;
+    while (headOf(c.mailbox) < before + 2 && Date.now() < end) await sleep(100);
+    await sleep(500);
+    return { sent: r, put: headOf(c.mailbox) - before, place: await commands.chatPlace() };
+  },
+  // SEND AGAIN on a photo the PC did not take in its hour: shown or not, then a real touch on it, and what
+  // was put, and how many Send again are left. { shown, put, prompts, left, notice }.
+  async chatSendAgain(c) {
+    const shown = await evaluate("(() => { const b = document.querySelector('#chatLog .chat-again'); if (!b) return 0; b.scrollIntoView({ block: 'center' }); return document.querySelectorAll('#chatLog .chat-again').length; })()");
+    if (!shown) return { shown: 0, put: 0, prompts: 0, notice: await evaluate(notice) };
+    await sleep(300);
+    const before = headOf(c.mailbox);
+    const signsBefore = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    const at = await centre("#chatLog .chat-again");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const end = Date.now() + 30000;
+    while (headOf(c.mailbox) < before + 2 && Date.now() < end) await sleep(100);
+    await sleep(500);
+    const signsAfter = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    return { shown, put: headOf(c.mailbox) - before, prompts: signsAfter - signsBefore, left: await evaluate("document.querySelectorAll('#chatLog .chat-again').length"), notice: await evaluate(notice) };
+  },
   // WHERE THE CHAT STANDS (chat-scroll.js; the founder, 2026-10-15): how far the window is from the bottom,
   // whether the newest message stands clear of the composer, the first message on his screen, and the
   // Jump to latest button - shown, its words, its size and where it stands - and what the live region says.

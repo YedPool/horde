@@ -112,23 +112,34 @@ function Get-HordeRoleSeat {
     if ($holders.Count -gt 1) {
         return (New-HordeUnknown -Reason ("" + $holders.Count + " live sessions each say they are the " + $Role + " (" + (@($holders | ForEach-Object { $_.id }) -join ", ") + "); one is never chosen over another"))
     }
-    $one = $holders[0]
+    return (Confirm-HordeSeatHolder -Holder $holders[0] -Registry $registry -Identity $Identity -What ("the " + $Role))
+}
+
+function Confirm-HordeSeatHolder {
+    # The seat of the ONE live record that names a role or a label, as an answer (the header): its pane
+    # and terminal, and STILL THERE - the session is running, the record is this run's, and no other
+    # running session's record names the pane. -Holder is { id; record }; -What names the seat in a
+    # reason ("the warchief", "orc C"). One function for both, so a seat found by its label is held to
+    # exactly the checks a seat found by its role is.
+    param([Parameter(Mandatory = $true)]$Holder, [Parameter(Mandatory = $true)]$Registry, $Identity = $null, [Parameter(Mandatory = $true)][string]$What)
+    $one = $Holder
+    $registry = $Registry
     $seat = [ordered]@{ sessionId = $one.id }
     foreach ($name in @("pane", "instance")) {
         $field = Get-HordeField -Record $one.record -Name $name
         $text = ""
         if ($field.state -ceq "known" -and ($field.value -is [string] -or $field.value -is [int] -or $field.value -is [long])) { $text = ("" + $field.value).Trim() }
-        if ($text -eq "") { return (New-HordeUnknown -Reason ("the " + $Role + "'s record (" + $one.id + ") does not say which " + $(if ($name -ceq "pane") { "pane" } else { "terminal" }) + " it runs in")) }
+        if ($text -eq "") { return (New-HordeUnknown -Reason ($What + "'s record (" + $one.id + ") does not say which " + $(if ($name -ceq "pane") { "pane" } else { "terminal" }) + " it runs in")) }
         $seat[$name] = $text
     }
     # STILL THERE (header): the session is running, the record is this run's, and no other running
     # session's record names the pane.
     if ($null -eq $Identity) { $Identity = Get-HordeIdentity }
     $running = Get-HordeSeatProcessStart -Identity $Identity -SessionId $one.id
-    if ($running.state -cne "known") { return (New-HordeUnknown -Reason ("the " + $Role + "'s session (" + $one.id + ") is not proven to be running, so the pane its record names may hold something else now: " + $running.reason)) }
+    if ($running.state -cne "known") { return (New-HordeUnknown -Reason ($What + "'s session (" + $one.id + ") is not proven to be running, so the pane its record names may hold something else now: " + $running.reason)) }
     $written = ConvertFrom-HordeIsoTime (Get-HordeField -Record $one.record -Name "lastSeen").value
-    if ($null -eq $written) { return (New-HordeUnknown -Reason ("the " + $Role + "'s record (" + $one.id + ") does not say when it was last written, so it cannot be told from a record of an earlier run of the session")) }
-    if ($written -lt $running.value) { return (New-HordeUnknown -Reason ("the " + $Role + "'s record (" + $one.id + ") was last written " + (ConvertTo-HordeIsoText $written) + ", before the session's present process started " + (ConvertTo-HordeIsoText $running.value) + ", so it says where an earlier run of the session sat")) }
+    if ($null -eq $written) { return (New-HordeUnknown -Reason ($What + "'s record (" + $one.id + ") does not say when it was last written, so it cannot be told from a record of an earlier run of the session")) }
+    if ($written -lt $running.value) { return (New-HordeUnknown -Reason ($What + "'s record (" + $one.id + ") was last written " + (ConvertTo-HordeIsoText $written) + ", before the session's present process started " + (ConvertTo-HordeIsoText $running.value) + ", so it says where an earlier run of the session sat")) }
     $sharing = New-Object System.Collections.ArrayList
     foreach ($id in @($registry.records.Keys | Sort-Object)) {
         $other = $registry.records[$id].record
@@ -139,4 +150,38 @@ function Get-HordeRoleSeat {
     }
     if ($sharing.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $sharing.Count + " running sessions' records name pane " + $seat["pane"] + " of that terminal (" + ($sharing -join ", ") + "), so which of them it holds now cannot be told")) }
     return (New-HordeKnown -Value ([pscustomobject]$seat))
+}
+
+function Get-HordeLabelSeat {
+    # The seat of the session whose record wears fleet label -Label AND names role -Role (an Orc's lane
+    # letter and orc), as an answer: known { sessionId; pane; instance }, absent, or unknown with the
+    # reason. The registry's own two fields, read as the role seat reads them, never a guess: the label is
+    # compared exactly as stored (an Orc's is "C"), and a record whose role cannot be read is not that
+    # Orc's. Two live records that both wear the label and the role are unknown, one never chosen over
+    # the other; the one found is held to the same STILL THERE checks (Confirm-HordeSeatHolder). -Root,
+    # -Table and -Identity as for Get-HordeRoleSeat.
+    param([Parameter(Mandatory = $true)][string]$Label, [Parameter(Mandatory = $true)][string]$Role, [string]$Root = (Get-HordeWezfleetRoot), $Table = $null, $Identity = $null)
+    if ($null -eq $Table) { $Table = Get-HordeRoleTable }
+    if (@($Table.native) -cnotcontains $Role) { throw ("'" + $Role + "' is not a role; the roles are: " + ($Table.native -join ", ")) }
+    $what = $Role + " " + $Label
+    $records = Read-HordeRegistry -Root $Root
+    if ("$($records.complete.state)" -cne "known") {
+        return (New-HordeUnknown -Reason ("the session records could not all be read, so which session is " + $what + " cannot be told: " + $records.complete.reason))
+    }
+    $wearers = New-Object System.Collections.ArrayList
+    foreach ($id in @($records.records.Keys | Sort-Object)) {
+        $entry = $records.records[$id].record
+        $gone = Get-HordeField -Record $entry -Name "retired"
+        if ($gone.state -ceq "known" -and [bool]$gone.value) { continue }
+        $worn = Get-HordeField -Record $entry -Name "label"
+        if ($worn.state -cne "known" -or $worn.value -isnot [string] -or $worn.value -cne $Label) { continue }
+        $held = (Read-HordeRecordRole -Record $entry -Table $Table).role
+        if ($held.state -cne "known" -or "$($held.value)" -cne $Role) { continue }
+        [void]$wearers.Add([pscustomobject]@{ id = "$id"; record = $entry })
+    }
+    if ($wearers.Count -eq 0) { return (New-HordeAbsent -Note ("no live session's record wears the label " + $Label + " with the role " + $Role)) }
+    if ($wearers.Count -ne 1) {
+        return (New-HordeUnknown -Reason ("" + $wearers.Count + " live sessions each wear the label " + $Label + " with the role " + $Role + " (" + (@($wearers | ForEach-Object { $_.id }) -join ", ") + "); one is never chosen over another"))
+    }
+    return (Confirm-HordeSeatHolder -Holder $wearers[0] -Registry $records -Identity $Identity -What $what)
 }

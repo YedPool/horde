@@ -35,11 +35,25 @@
 #                     and the lanes alone, and its "now" is empty.
 #   machineName       what each card says it came from; empty means this computer's name.
 #
-# WHAT A CARD SAYS (OUT, below): the lane's id (its orc letter, else its folder's name), its name, the
-# time its status file was last written (asOf: the phone shows its age), now, last done, waiting on,
+# WHAT A CARD SAYS (OUT, below): the lane's id (its orc letter, else its folder's name), its name, its
+# latest activity (asOf: the phone shows its age) and which source that was (asOfSource: status, progress
+# or decision) - the newest of its status file's last write, its newest progress entry and its newest
+# question asked or answered, the one derivation the dash's Latest order uses (C, 2026-10-15; before,
+# asOf was the status file's alone, and a lane that logged progress but forgot its status looked days
+# old) - now, last done, waiting on,
 # blocked yes or no, and from the ledger the tasks open and done in the last 7 days. A status file in
 # another form still gets a card: its first lines as now, its waiting on line, and form "other" with
 # the rules it breaks in plain words (problems), which the phone says. A file that is missing or cannot be read gets a card that says so - never no card.
+#
+# THE DASH RIDES IN THE SAME SNAPSHOT (design "Dash: one list of Orcs", PR 1, 2026-10-15): "dash" is the
+# Orc registry's list in the founder's order (orcs/Registry.ps1, ConvertTo-HordeOrcDashDocument): v, ok,
+# the registry version, and per Orc its id, letter, name, domain, place, back-burner flag, open questions,
+# status word with its age, sessions open and Wargs active and inactive; then orcsLeftOut. WHY HERE AND
+# NOT A CHANNEL OF ITS OWN: the relay keeps one envelope per channel from this machine (KeepFrom, below),
+# so a second snapshot kind on this channel would push the cards out, and a channel of its own would read
+# the same lanes folder a second time on a timer of its own. Here it is one look, one envelope, the same
+# lanes setting, the same secret refusal - and the cards stay exactly as they are until PR 2 moves the
+# phone over.
 #
 # NO SECRET LEAVES THE MACHINE. Every text that goes out is put through core/Secrets.ps1's refusal, the
 # one the log's entries get. A text that trips it is replaced by a fixed sentence, and the card is still
@@ -81,30 +95,18 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\StatusPanel.ps1")
 
 $script:HordeCardsChannelFolder = $PSScriptRoot
-$script:HordeCardsChannelSettings = New-HordeModuleSettings -Module "relay-cards" -Settings @(
-    @{ name = "lanesFolder"; kind = "folder"; default = ""; what = "The folder of lane folders, each with its status.txt, as an absolute path; empty means progress\lanes under Horde's home." },
-    @{ name = "ledgerFile"; kind = "folder"; default = ""; what = "The fleet's task ledger, as an absolute path; empty means progress\tasks.jsonl under Horde's home." },
-    @{ name = "areaLanesFile"; kind = "folder"; default = ""; what = "Which lanes each area of the progress log belongs to, as an absolute path; empty means progress\area-lanes.json under Horde's home." },
-    @{ name = "runsFolder"; kind = "folder"; default = ""; what = "The fleet's runs, for the count of sessions running, as an absolute path; empty means progress\runs under Horde's home." },
-    @{ name = "thrallStatusFile"; kind = "folder"; default = ""; what = "The Thrall's own status file, as an absolute path; empty means progress\thrall-status.txt under Horde's home." },
-    @{ name = "machineName"; kind = "text"; default = ""; min = 0; max = 64; what = "The name each card gives its machine; empty means this computer's name." },
-    @{ name = "sendIntervalMs"; kind = "whole"; default = 30000; min = 0; max = 3600000; what = "The shortest time between two looks at the lanes, in milliseconds." },
-    # 64: the most lanes read, as fleet/StatusPanel.ps1 reads; the rest are counted.
-    @{ name = "lanesRead"; kind = "whole"; default = 64; min = 1; max = 256; what = "The most lane folders read; the rest are counted and said." }
-)
-$script:HordeCardsChannelTextChars = 300
+# The settings and the paths they give are channels/cards/Sources.ps1 (it says why), with the area map's reader; the Orc registry
+# the dash is made from is orcs/Registry.ps1, which reads the same lanes folder.
+. (Join-Path $PSScriptRoot "Sources.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "orcs\Registry.ps1")
 $script:HordeCardsChannelStatusBytes = 16384
 $script:HordeCardsChannelLedgerBytes = 33554432
-$script:HordeCardsChannelAreasMost = 200
 $script:HordeCardsChannelTailBytes = 65536
 $script:HordeCardsChannelRecentHours = 24
 $script:HordeCardsChannelDoneDays = 7
 $script:HordeCardsChannelSecretWords = "Not shown: this line looks like it holds a secret, so it stays at the machine."
-$script:HordeCardsChannelLanePattern = '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}\z'
 $script:HordeCardsChannelOrcPattern = '\A[A-Z][A-Z0-9]{0,3}\z'
 $script:HordeCardsChannelClosed = @("done", "verified", "dropped", "superseded")
-
-function Get-HordeCardsChannelSettingsDeclaration { return $script:HordeCardsChannelSettings }
 
 function Get-HordeCardsChannelHome {
     param($Context)
@@ -112,35 +114,11 @@ function Get-HordeCardsChannelHome {
     return (Get-HordeHome)
 }
 
-function Get-HordeCardsChannelPaths {
-    # Every source this home reads (WHAT IT READS, in the header): a setting, or its place under the home.
-    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)]$Settings)
-    $under = { param([string]$Set, [string]$Leaf) if ($Set -cne "") { return $Set }; return [System.IO.Path]::Combine($HordeHome, "progress", $Leaf) }
-    return [pscustomobject]@{
-        lanes = (& $under $Settings.lanesFolder "lanes"); ledger = (& $under $Settings.ledgerFile "tasks.jsonl"); areas = (& $under $Settings.areaLanesFile "area-lanes.json")
-        runs = (& $under $Settings.runsFolder "runs"); thrall = (& $under $Settings.thrallStatusFile "thrall-status.txt") }
-}
-
 function ConvertTo-HordeCardsChannelJsonString {
     # A JSON string of -Text in printable ASCII (as channels/progress writes its entries): one byte a
     # character, so the envelope's size is measured exactly.
     param([AllowEmptyString()][string]$Text)
     return ('"' + [regex]::Replace($Text, '[^\x20\x21\x23-\x5B\x5D-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") }) + '"')
-}
-
-function Get-HordeCardsChannelClean {
-    # A text with its control characters as spaces, trimmed, and WHOLE: what the secret refusal looks at.
-    param([AllowEmptyString()][string]$Text)
-    return ([regex]::Replace($Text, '\p{Cc}', ' ')).Trim()
-}
-
-function Get-HordeCardsChannelPlain {
-    # A text as a card holds it: clean, and at most 300 characters - a card is a glance, and the whole
-    # story is the lane's stream. Never handed to the refusal: cut, a secret may no longer look like one.
-    param([AllowEmptyString()][string]$Text)
-    $t = Get-HordeCardsChannelClean $Text
-    if ($t.Length -gt $script:HordeCardsChannelTextChars) { $t = $t.Substring(0, $script:HordeCardsChannelTextChars - 3).TrimEnd() + "..." }
-    return $t
 }
 
 function Read-HordeCardsChannelStatusText {
@@ -316,34 +294,6 @@ function Read-HordeCardsChannelLedger {
     return $answer
 }
 
-function Read-HordeCardsChannelAreas {
-    # The area-to-lane map (areaLanesFile, in the header): { ok; reason; areas; refused } - areas a list
-    # of { area; lanes } in the file's order. No file is an empty map and says so; a file that does not
-    # hold together is an empty map, said, never half of one. An area or a lane that trips the secret
-    # refusal is left out and counted.
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $answer = [pscustomobject]@{ ok = $false; reason = ""; areas = @(); refused = 0 }
-    if (-not [System.IO.File]::Exists($Path)) { $answer.reason = "there is no area-to-lane map at " + $Path + ", so the log's entries that name no lane show only in the Thrall's stream"; return $answer }
-    try { $text = Read-HordeSharedText -Path $Path } catch { $answer.reason = "the area-to-lane map " + $Path + " could not be read"; return $answer }
-    $why = "the area-to-lane map " + $Path + " does not hold together"
-    if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { $answer.reason = $why + ": a member is repeated"; return $answer }
-    try { $m = ConvertFrom-Json -InputObject $text } catch { $answer.reason = $why + ": it is not JSON"; return $answer }
-    if ($m -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $m.PSObject.Properties["v"] -or $m.v -ne 1 -or $null -eq $m.PSObject.Properties["areas"] -or $m.areas -isnot [System.Management.Automation.PSCustomObject]) { $answer.reason = $why + ": it is not {""v"":1,""areas"":{...}}"; return $answer }
-    $list = New-Object System.Collections.ArrayList
-    foreach ($p in @($m.areas.PSObject.Properties)) {
-        if ($list.Count -ge $script:HordeCardsChannelAreasMost) { $answer.reason = "the area-to-lane map holds more than " + $script:HordeCardsChannelAreasMost + " areas; the rest are left out"; break }
-        $area = "$($p.Name)"
-        if ($p.Value -isnot [string] -or $area.Trim() -eq "" -or $area.Length -gt 60 -or $area -cmatch '\p{Cc}') { $answer.reason = $why + ": the area '" + (Get-HordeCardsChannelPlain $area) + "' is not 1 to 60 plain characters naming lanes"; $answer.areas = @(); return $answer }
-        $lanes = @($p.Value.Split([char]',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-        if ($lanes.Count -eq 0 -or @($lanes | Where-Object { $_ -cnotmatch $script:HordeCardsChannelLanePattern }).Count -gt 0) { $answer.reason = $why + ": the lanes of '" + (Get-HordeCardsChannelPlain $area) + "' are not lane ids separated by commas"; $answer.areas = @(); return $answer }
-        if ((Find-HordeSecretKind -Text ($area + " " + ($lanes -join ","))) -cne "") { $answer.refused++; continue }
-        [void]$list.Add([pscustomobject]@{ area = $area; lanes = $lanes })
-    }
-    $answer.ok = $true
-    $answer.areas = @($list.ToArray())
-    return $answer
-}
-
 function Read-HordeCardsChannelCensus {
     # The sessions running and waiting on a person (runsFolder, in the header): { ok; reason; running;
     # waiting; skipped }. ONE RUN THAT DOES NOT READ SKIPS ONLY ITSELF, counted in skipped: a run.json
@@ -457,6 +407,14 @@ function New-HordeCardsChannelSnapshot {
     if (-not $ledger.ok) { [void]$lines.Add("the cards show no task counts: " + $ledger.reason) }
     elseif ($ledger.skipped -gt 0) { [void]$lines.Add("" + $ledger.skipped + " line(s) of the task ledger could not be read and were passed over") }
     $cards = New-Object System.Collections.ArrayList
+    # What every card's age is worked out from besides its status file (below): the progress log and the
+    # decisions list, read once for the snapshot, through the registry's readers (cached while unchanged).
+    $actProgress = $null; $actQuestions = $null
+    try {
+        $orcPaths = Get-HordeOrcPaths -HordeHome (Get-HordeCardsChannelHome $Context)
+        if ($orcPaths.ok) { $actProgress = Read-HordeOrcProgress -Path $orcPaths.progress -AreasPath $orcPaths.areas; $actQuestions = Read-HordeOrcQuestions -Root $orcPaths.decisions }
+        else { [void]$lines.Add("the cards' ages are their status files' alone: " + $orcPaths.reason) }
+    } catch { [void]$lines.Add("the cards' ages are their status files' alone: " + $_.Exception.Message) }
     # ONE ID IS ONE CARD: the phone finds a card by its machine and its id, so two cards of one id drew the
     # first twice and the second never (review of PR 244, 2026-10-14). The first folder by name keeps the
     # id; a later one gets the first free "lane-<place>", and both the card and the machine say why.
@@ -482,6 +440,16 @@ function New-HordeCardsChannelSnapshot {
         $count = $(if ($ledger.ok -and $ledger.lanes.ContainsKey($c.lane)) { $ledger.lanes[$c.lane] } elseif ($ledger.ok) { [pscustomobject]@{ open = 0; doneWeek = 0 } } else { $null })
         $c | Add-Member -NotePropertyName "tasksOpen" -NotePropertyValue $(if ($null -ne $count) { [int]$count.open } else { $null })
         $c | Add-Member -NotePropertyName "doneWeek" -NotePropertyValue $(if ($null -ne $count) { [int]$count.doneWeek } else { $null })
+        # THE CARD'S AGE IS THE LANE'S LATEST ACTIVITY (C, 2026-10-15): the one derivation the dash's
+        # Latest order uses (orcs/Registry.ps1, Get-HordeOrcLastActivity) - the newest of the status file's
+        # write, the lane's newest progress entry and its newest question asked or answered - and which of
+        # them it was, so a lane that forgot its status file but logs progress is not shown days old.
+        # The lane is known by its folder's name and, when its id is one capital letter, by that letter; a
+        # card renamed for a repeated id ("lane-3") is known by its folder alone, since its letter is not its own.
+        $actLetter = $(if ("$($c.lane)" -cmatch '\A[A-Z]\z') { "$($c.lane)" } else { "" })
+        $act = Get-HordeOrcLastActivity -Id (Split-Path -Leaf $f) -Letter $actLetter -StatusAt (ConvertFrom-HordeOrcTime $c.asOf) -Progress $actProgress -Questions $actQuestions
+        if ($null -ne $act.at) { $c.asOf = $act.at }
+        $c | Add-Member -NotePropertyName "asOfSource" -NotePropertyValue $act.source
         [void]$cards.Add($c)
         if (@($c.refused).Count -gt 0) { [void]$lines.Add("a card of " + (Split-Path -Leaf $f) + " holds what looks like a secret in " + (@($c.refused) -join ", ") + ": the phone is shown a notice in its place") }
     }
@@ -502,20 +470,36 @@ function New-HordeCardsChannelSnapshot {
     # Each card is written once; what follows only joins the texts.
     $cardTexts = @(@($cards.ToArray()) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ })
     $thrallText = ConvertTo-HordeCardsChannelValueText $thrall
+    # THE DASH (orcs/Registry.ps1): the one list of Orcs in his order, with what is derived of each, read
+    # from the same lanes folder. It rides in this snapshot, beside the cards, until the phone moves to it
+    # (design "Dash", PR 2); the cards stay as they are. Its notes go to this machine's lines, never to
+    # the phone; a name or a domain that trips the secret refusal goes as the refusal's sentence.
+    $dash = $null
+    try { $dash = Get-HordeOrcDash -HordeHome (Get-HordeCardsChannelHome $Context) -Now $Now }
+    catch { $dash = [pscustomobject]@{ ok = $false; reason = ("the dash could not be made: " + $_.Exception.Message); version = [long]0; orcs = @(); lines = @() } }
+    if (-not $dash.ok) { [void]$lines.Add("the dash is empty: " + $dash.reason) }
+    foreach ($l in @($dash.lines)) { [void]$lines.Add("dash: " + $l) }
+    $dashDoc = ConvertTo-HordeOrcDashDocument -Dash $dash -Protect { param($Text, $Field) $no = New-Object System.Collections.ArrayList; return (Protect-HordeCardsChannelField -Text $Text -Field $Field -Refused $no) }
+    $dashTexts = @(@($dashDoc.orcs) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ })
+    $dashHead = '{"v":' + $dashDoc.v + ',"ok":' + $(if ($dashDoc.ok) { "true" } else { "false" }) + ',"version":' + $dashDoc.version + ',"orcs":['
     $made = $Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
     $build = {
-        param([int]$CardsKept, [int]$AreasKept)
+        param([int]$CardsKept, [int]$AreasKept, [int]$DashKept)
         $content = '"name":' + (ConvertTo-HordeCardsChannelJsonString $name) + ',"thrall":' + $thrallText + ',"cards":[' + (@($cardTexts | Select-Object -First $CardsKept) -join ",") + '],"cardsLeftOut":' + ($cardTexts.Count - $CardsKept) + ',"areas":[' + (@($areaTexts | Select-Object -First $AreasKept) -join ",") + '],"areasLeftOut":' + ($areaTexts.Count - $AreasKept)
+        $content = $content + ',"dash":' + $dashHead + (@($dashTexts | Select-Object -First $DashKept) -join ",") + '],"orcsLeftOut":' + ($dashTexts.Count - $DashKept) + '}'
         $h = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::ASCII.GetBytes($content)))
         return [pscustomobject]@{ hash = $h; body = ('{"v":1,"kind":"cards-snapshot","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","snapshot":"' + $h + '","made":"' + $made + '",' + $content + '}') }
     }
     $cardsKept = $cardTexts.Count
+    $dashKept = $dashTexts.Count
     while ($true) {
-        $made1 = & $build $cardsKept $areasKept
+        $made1 = & $build $cardsKept $areasKept $dashKept
         if ($made1.body.Length -le $Budget) { break }
-        # Cards first, from the end; with none left, the rest of the map.
+        # Cards first, from the end; with none left, the rest of the map; the dash last, from its end
+        # (its back-burner first): an Orc is a line of at most a few hundred bytes, so 64 of them fit.
         if ($cardsKept -gt 0) { $cardsKept-- }
         elseif ($areasKept -gt 0) { $areasKept-- }
+        elseif ($dashKept -gt 0) { $dashKept-- }
         else { break }
     }
     # THE MAP THEN FILLS THE ROOM THE CARDS LEAVE (F, review of PR 244: two small cards and 200 areas
@@ -523,7 +507,7 @@ function New-HordeCardsChannelSnapshot {
     # first, so what is left is less than the next card.
     if ($made1.body.Length -le $Budget) {
         while ($areasKept -lt $areaTexts.Count) {
-            $more = & $build $cardsKept ($areasKept + 1)
+            $more = & $build $cardsKept ($areasKept + 1) $dashKept
             if ($more.body.Length -gt $Budget) { break }
             $made1 = $more; $areasKept++
         }
@@ -531,6 +515,7 @@ function New-HordeCardsChannelSnapshot {
     $hash = $made1.hash; $body = $made1.body; $left = $cardTexts.Count - $cardsKept
     if ($left -gt 0) { [void]$lines.Add("" + $left + " card(s) did not fit one envelope and were left out; the phone is told how many") }
     if ($areasKept -lt $areaTexts.Count) { [void]$lines.Add("" + ($areaTexts.Count - $areasKept) + " area(s) of the map did not fit one envelope and were left out; on the phone their entries show only in the Thrall's stream") }
+    if ($dashKept -lt $dashTexts.Count) { [void]$lines.Add("" + ($dashTexts.Count - $dashKept) + " Orc(s) of the dash did not fit one envelope and were left out; the phone is told how many") }
     return [pscustomobject]@{ hash = $hash; body = $body; cards = $cardsKept; left = $left; lines = @($lines.ToArray()) }
 }
 

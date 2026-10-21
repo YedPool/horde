@@ -329,12 +329,16 @@ Check ((Get-Count $state "mail nudge*") -eq 0 -and @($pass.decisions | Where-Obj
 & $fx.Forget $state
 & $fx.SetRow $state (New-Row 9 @{ unreadCount = 0; oldestUnreadAt = $null; acked = "known"; lastAckedAt = $t0.AddSeconds(-5).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) })
 & $fx.Clock $state $t0
-$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
-Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1 -and $pass.acks[(Sid 9)] -eq $t0.AddSeconds(-5)) "with ANOTHER session's row saying it acknowledged mail five seconds ago, the same session is nudged: the evidence is read from the fleet's own rows"
+# The evidence is an acknowledgement SEEN TO RISE since the last pass (core/Wake.ps1, Update-HordeWakeAcksRose):
+# the last pass read session 9 with none.
+$before = [pscustomobject]@{ acks = @{ (Sid 9) = $null } }
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -AcksSeen $before
+Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1 -and $pass.acks[(Sid 9)] -eq $t0.AddSeconds(-5)) "with ANOTHER session's row saying it acknowledged mail five seconds ago, and none on the pass before, the same session is nudged: the evidence is read from the fleet's own rows"
+$heard = Update-HordeWakeAcksRose -Seen $before -Acks $pass.acks -Now $t0
 & $fx.SetRow $state (New-Row 9 @{ unreadCount = 0; oldestUnreadAt = $null; acked = "(none)"; lastAckedAt = "(none)" })
 & $fx.SetRow $state (New-Row 1 @{ limited = "unknown" })
 & $fx.Clock $state $t0
-$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -AcksSeen $heard
 Check ((Get-Count $state "mail nudge*") -eq 1 -and $pass.acks.Count -eq 1) "a row of the older command, which says nothing of what was acknowledged, is no evidence: no second nudge"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
@@ -722,6 +726,37 @@ try {
     $env:HORDE_HOME = $state.oldHome
 }
 foreach ($d in @($state.dir, $state.home)) { if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force } }
+$state = $null
+
+Write-Host ""
+Write-Host "--- the exit (hibernation): box slash /exit through the one start site, read by its exit code ---" -ForegroundColor Cyan
+$state = & $fx.New
+$why = "hibernation 20261016-120000"
+$e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason $why
+Check (Test-HordeWakerExits $w) "this waker can end a session"
+Check ($e.state -ceq "known" -and $e.value.outcome -ceq "submitted" -and $e.value.id -ceq (Sid 9)) ("exit 0 is submitted (" + $e.state + " " + $(if ($e.state -ceq "known") { $e.value.outcome } else { $e.reason }) + ")")
+Check ((@(Get-Asked $state)[-1]) -ceq ("box slash " + (Sid 9) + " /exit -Expect exit -Reason " + $why)) ("the fleet's checked path is asked, with the exit command, the word its menu must say, and the reason, each one argument (" + (@(Get-Asked $state)[-1]) + ")")
+Check (@((& $fx.Observe $state (Sid 9)).typed) -ccontains "/exit") "CONTROL: the fake played the command typed"
+Set-Answer $state "box" 6 "box slash x (pane 1): TEXT LEFT BEHIND."
+$e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason $why
+Check ($e.state -ceq "known" -and $e.value.outcome -ceq "left-behind" -and "$($e.value.reason)".Contains("LEFT BEHIND")) "exit 6 is left-behind, with the verb's own words"
+foreach ($code in @(1, 3, 4, 5, 7)) {
+    Set-Answer $state "box" $code "box slash x (pane 1): NOT DONE (busy)."
+    $e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason $why
+    Check ($e.state -ceq "known" -and $e.value.outcome -ceq "refused" -and "$($e.value.reason)".Contains("exit " + $code)) ("exit " + $code + " is refused: nothing was typed")
+}
+Set-Answer $state "box" 9 "something new"
+$e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason $why
+Check ($e.state -ceq "unknown") "an exit code the verb does not document is unknown: whether it typed is not known"
+$before = @(Get-Asked $state).Count
+$e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason ""
+Check ($e.state -ceq "unknown" -and @(Get-Asked $state).Count -eq $before) "an exit with no reason is refused by the port, and the fleet is not asked"
+& $fx.ExitDeadline $state 1
+& $fx.SetMode $state @{ box = @{ hangSeconds = 6; exit = 0; stdout = "late" } }
+$e = Send-HordeWakeExit -Waker $w -Id (Sid 9) -Reason $why
+& $fx.ExitDeadline $state
+Check ($e.state -ceq "known" -and $e.value.outcome -ceq "killed") "a box slash past its deadline is stopped and answered killed: its box may hold the command"
+& $fx.Remove $state
 $state = $null
 
 } finally {

@@ -14,7 +14,7 @@
            Find = 'return distanceFromBottom(m) <= threshold;'
            Replace = 'return distanceFromBottom(m) < threshold;' }
         @{ Name = "jump-shown-at-the-bottom"
-           Find = 'return !nearBottom(m, threshold);'
+           Find = 'return !caughtUp(m, threshold);'
            Replace = 'return true;' }
         @{ Name = "refresh-yanks-him-down"
            Find = 'return s.near === true ? "bottom" : "keep";'

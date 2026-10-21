@@ -367,8 +367,8 @@
            Find = '        if ($passes) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
            Replace = '' }
         @{ Name = "turn-passes-under-a-closed-question"
-           Find = '    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") {'
-           Replace = '    if ($script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") {' }
+           Find = '    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "" -and $last.authorizes) {'
+           Replace = '    if ($script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "" -and $last.authorizes) {' }
         @{ Name = "turn-stays-with-the-speaker"
            Find = '    founder  = @{ shown = "the founder";  then = "warchief"; reads = $false }'
            Replace = '    founder  = @{ shown = "the founder";  then = "founder"; reads = $false }' }

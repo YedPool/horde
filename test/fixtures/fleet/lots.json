@@ -1,0 +1,45 @@
+{
+  "v": 1,
+  "lots": [
+    {
+      "id": "01K8T0N2E0S6V7W8X9Y0Z1A2B3",
+      "hibernation_id": "20261019-202000",
+      "created_at": "2026-10-19T20:20:00Z",
+      "by": "M",
+      "reason": "free memory",
+      "selection_kind": "backfill",
+      "keep_visible": 0,
+      "members": [
+        { "session_id": "3fc9bfc2-cfc7-4034-84b3-1a5b357bd2b8", "label": "B", "role": "orc", "parent": "", "cwd": "lanes/b", "pane": "7", "note": "", "state": "asleep", "stored": "exited" },
+        { "session_id": "6168116b-625a-4db3-841c-af42e6516996", "label": "E", "role": "orc", "parent": "", "cwd": "lanes/e", "pane": "24", "note": "", "state": "asleep", "stored": "exited" }
+      ],
+      "wakes": []
+    },
+    {
+      "id": "01K7XQ4M9R0P3D5F7H9J1K3M5N",
+      "hibernation_id": "20261016-091500",
+      "created_at": "2026-10-16T09:15:00Z",
+      "by": "K",
+      "reason": "hibernate tier 2",
+      "selection_kind": "orcs",
+      "keep_visible": 1,
+      "members": [
+        { "session_id": "22222222-0000-4000-8000-000000000001", "label": "R", "role": "orc", "parent": "", "cwd": "lanes/r", "pane": "5", "note": "lanes/r/PARKED-R.md", "state": "woken", "stored": "woken" },
+        { "session_id": "22222222-0000-4000-8000-000000000002", "label": "R1", "role": "warg", "parent": "22222222-0000-4000-8000-000000000001", "cwd": "lanes/r", "pane": "6", "note": "", "state": "still-awake", "stored": "still-awake" },
+        { "session_id": "22222222-0000-4000-8000-000000000003", "label": "L", "role": "orc", "parent": "", "cwd": "lanes/l", "pane": "8", "note": "", "state": "asleep", "stored": "exited" },
+        { "session_id": "22222222-0000-4000-8000-000000000004", "label": "L2", "role": "warg", "parent": "22222222-0000-4000-8000-000000000003", "cwd": "lanes/l", "pane": "9", "note": "", "state": "failed", "stored": "failed" }
+      ],
+      "wakes": [
+        {
+          "id": "01K7XQ9T2B4C6D8E0F2G4H6J8K",
+          "requested_at": "2026-10-16T11:00:00Z",
+          "members": [
+            { "session_id": "22222222-0000-4000-8000-000000000001", "new_session_id": "", "outcome": "woken" },
+            { "session_id": "22222222-0000-4000-8000-000000000004", "new_session_id": "", "outcome": "failed" }
+          ]
+        }
+      ]
+    }
+  ],
+  "skipped": []
+}

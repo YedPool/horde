@@ -70,7 +70,9 @@ function Get-HordeAgentProp {
     if ($null -eq $p) { return $null }
     # -NoEnumerate: a plain return unrolls an empty list to nothing, and "protocols": [] would read
     # as a missing field instead of an empty one (measured on this suite, 2026-10-02).
-    Write-Output -NoEnumerate $p.Value
+    # Only a list needs it: pwsh 7.6 wraps even a lone string in a list under -NoEnumerate, so a scalar
+    # is returned as it is (measured 2026-10-20, 7.6.7; 5.1 returns the string either way).
+    if ($p.Value -is [System.Collections.IList]) { Write-Output -NoEnumerate $p.Value } else { $p.Value }
 }
 
 function Get-HordeJsonDuplicateKeyProblems {

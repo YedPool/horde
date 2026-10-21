@@ -277,6 +277,30 @@ try {
     $why = Test-HordeWezfleetMessengerTakesVerified -Path (Join-Path $probeDir "missing.ps1")
     Check ($why.Contains("not there")) ("the probe of a script that is not there says so, and nothing is passed (" + $why + ")")
 } finally { Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue }
+# THE RESERVED SYSTEM SENDER (third review of PR 318, P3): from.system = "horde" is posted as -FromLabel horde,
+# and wezfleet is NEVER given -FromSessionId, though the sender holds a real session UUID.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $msg.from.PSObject.Properties.Remove("label")
+    $msg.from | Add-Member -NotePropertyName system -NotePropertyValue "horde"
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $argv = @(@(& $fx.Runs $st)[0].argv)
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and (Get-Pair $argv "-FromLabel") -ceq "horde" -and -not ($argv -ccontains "-FromSessionId")) ("a system sender is named horde and never by a session id (" + ($argv -join " ") + "; " + (Show-Answer $a) + ")")
+    $rec = Get-Content -LiteralPath (Join-Path (Join-Path $st.dir "store") ((N $msg.messageId) + ".json")) -Raw | ConvertFrom-Json
+    Check ($rec.fromLabel -ceq "horde" -and "" + $rec.fromSessionId -ceq "") "the receiver's record says the sender calls itself horde, with no session id"
+    $msg2 = New-Msg
+    $msg2.from.sessionId = "agent-thread-7"
+    $msg2.from.PSObject.Properties.Remove("label")
+    $msg2.from | Add-Member -NotePropertyName system -NotePropertyValue "horde"
+    $a = Send-HordeWezfleetMessengerPost -Message $msg2
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "and a system sender whose session id is no UUID is not held bad-from (P3)"
+    $msg3 = New-Msg
+    $msg3.from | Add-Member -NotePropertyName system -NotePropertyValue "evil"
+    $before = @(& $fx.Runs $st).Count
+    $a = Send-HordeWezfleetMessengerPost -Message $msg3
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-from") -and @(& $fx.Runs $st).Count -eq $before) "any other system is held bad-from, and nothing starts"
+}
 With-Fake {
     param($st)
     $msg = New-Msg

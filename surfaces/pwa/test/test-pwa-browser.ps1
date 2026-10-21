@@ -37,6 +37,11 @@
 #      refresh and new lines while he reads back keep his place, and the button and a polite live region
 #      say how many came; a touch, Space or Enter jumps, Shift+Tab reaches it with a visible ring; his own
 #      line sent takes him down; its words stand out from its face by 4.5 to 1, light and dark;
+#  10c. a photo: a touch on Photo opens the picker; a 3000 by 2000 JPEG with a camera block is shrunk by
+#      Chrome's own canvas, signed under the unlocked session (no prompt; section 14 counts them) and put in parts; a real run writes
+#      it to the PC's inbox at 1600 px with no camera block left, and posts one line; an HTML page called
+#      .jpg is refused on the phone with nothing sent; his own photo sent while scrolled up takes him down,
+#      and one arriving while he reads back (from another window) keeps his place and counts as new;
 #  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
 #      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
@@ -55,7 +60,7 @@
 #  14. the unlocked session (design note "Unlocked session", 2026-10-14), its passkey prompts COUNTED by
 #      the virtual authenticator's signature counter: what Chrome gives when the app is left is measured
 #      and said; against the real PC, which keeps sessions (the unlocked session's PC side, relay/Session.ps1
-#      and channels/Sessions.ps1), an unlock and then three answers and a chat line are ONE prompt and land
+#      and channels/Sessions.ps1), an unlock and then three answers, a chat line and a photo are ONE prompt and land
 #      once, an answer to a needsPasskey question one more, and after the PC's idle limit (its own setting,
 #      one minute here), after the app was away past its setting and after a reload the next answer asks
 #      once again - each must-pass beside its control, every session envelope read and verified by the
@@ -164,7 +169,7 @@ try {
     $chatFixtures = @(Get-HordeTestChatFixtureFiles | ForEach-Object { . $_ -Root $root })
     $thrall = New-HordeTestChatThrall -Fixtures $chatFixtures
     Check ($null -ne $thrall -and (New-HordeTestFleetMessenger -HordeHome $hh -Folder $fake) -cne "") "CONTROL: a synthetic Thrall and a messenger stand-in are ready for the chat"
-    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) })
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) }, @{ role = "user"; text = "wezfleet: a message is waiting for you (id 7a5e99735c69f1bc6fdc90f7530561bc) - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing" })
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
     Check ($id.state -ceq "known") "CONTROL: the machine has its relay identity"
     $keysMade = @(@{ n = $id.value.sign.name; s = $id.value.scope }, @{ n = $id.value.agree.name; s = $id.value.scope })
@@ -409,6 +414,9 @@ try {
     Check ($tab.ok -and $tab.value.chat -and -not $tab.value.doc -and -not $tab.value.keys) "the chat tab shows the chat, and the answering row of the questions goes"
     $w1 = Invoke-Browser @{ cmd = "chatWait"; text = "three chimes recorded" }
     Check ($w1.ok -and $w1.value.found -and $w1.value.log.Contains("how is the chime going?")) ("the Thrall's turns are drawn (" + $(if ($w1.ok) { ($w1.value.log -replace '\s+', ' ') } else { $w1.reason }) + ")")
+    # THE POINTER LINE IS A MARKER (T-0309, the founder 2026-10-20): the third turn above is wezfleet's pointer, typed at the
+    # Thrall's prompt; the phone shows "Message received" and its time, and nothing of the line - no id, no wording.
+    Check ($w1.ok -and $w1.value.log.Contains("Message received") -and -not $w1.value.log.Contains("wezfleet") -and -not $w1.value.log.Contains("7a5e9973") -and -not $w1.value.log.Contains("pointer")) ("the wezfleet pointer line is drawn as a Message received marker, with none of its words or its id (" + $(if ($w1.ok) { ($w1.value.log -replace '\s+', ' ') } else { $w1.reason }) + ")")
     $cn = Invoke-Browser @{ cmd = "chatNewline"; mailbox = $mailbox }
     Check ($cn.ok -and $cn.value.value -ceq "one`ntwo`nthree" -and -not $cn.value.sent) ("Shift+Enter and the New line key each add a line and send nothing (" + $(if ($cn.ok) { ($cn.value.value -replace "`n", "|") } else { $cn.reason }) + ")")
     $cs = Invoke-Browser @{ cmd = "chatSend"; text = "Use the second chime."; via = "enter"; mailbox = $mailbox }
@@ -499,6 +507,86 @@ try {
     Check ($own.ok -and $own.value.put -and $od.ok -and $od.value.dist -le 1 -and $od.value.lastText -ceq "Back down to the bottom." -and -not $od.value.jumpShown) ("his own line sent while scrolled up takes him to the bottom, where it stands (" + (Show-Place $od) + ")")
     $ct = Invoke-Browser @{ cmd = "chatContrast" }
     Check ($ct.ok -and $ct.value.light.ratio -ge 4.5 -and $ct.value.dark.ratio -ge 4.5) ("Jump to latest's words stand out from its face by at least 4.5 to 1, light and dark (" + $(if ($ct.ok) { ConvertTo-Json $ct.value -Compress } else { $ct.reason }) + ")")
+    Write-Host "--- 10c. a photo from the Photo button: shrunk by Chrome, no prompt under the unlocked session, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
+    # A real picture, 3000 by 2000, drawn here and saved as a JPEG with a made-up camera block (APP1 Exif
+    # holding a "GPS" marker) put in after its first two bytes, as a phone camera's would be.
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object System.Drawing.Bitmap 3000, 2000
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $rand = New-Object System.Random 5
+    for ($k = 0; $k -lt 400; $k++) { $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($rand.Next(256), $rand.Next(256), $rand.Next(256))); $gfx.FillEllipse($brush, $rand.Next(3000), $rand.Next(2000), 40 + $rand.Next(400), 40 + $rand.Next(400)); $brush.Dispose() }
+    $gfx.Dispose()
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); $bmp.Dispose()
+    $plain = $ms.ToArray(); $ms.Dispose()
+    $exifBody = [System.Text.Encoding]::ASCII.GetBytes("Exif`0`0GPSLAT-SECRET-PLACE-31.7767N")
+    $app1 = [byte[]](@(0xFF, 0xE1, 0, ($exifBody.Length + 2)) + $exifBody)
+    $camera = [byte[]](@($plain[0], $plain[1]) + $app1 + $plain[2..($plain.Length - 1)])
+    $photoPath = Join-Path $work "camera.jpg"
+    [System.IO.File]::WriteAllBytes($photoPath, $camera)
+    Check ([System.Text.Encoding]::ASCII.GetString($camera).Contains("GPSLAT-SECRET")) ("CONTROL: the picture picked carries a camera block with a location marker (" + $camera.Length + " bytes)")
+    # Sent while he reads back: HIS OWN PHOTO, SENT, takes him to the bottom, as his own line does.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    $pp = Invoke-Browser @{ cmd = "chatPhoto"; path = $photoPath; mailbox = $mailbox; parts = 2 }
+    $pd = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($pp.ok -and $pd.ok -and $pd.value.dist -le 1 -and -not $pd.value.jumpShown) ("his own photo, sent while scrolled up, takes him to the bottom (" + $(if ($pd.ok) { ConvertTo-Json $pd.value -Compress -Depth 4 } else { $pd.reason }) + ")")
+    Check ($pp.ok -and $pp.value.chooser) ("a touch on Photo opens the phone's picker (" + $(if ($pp.ok) { ConvertTo-Json $pp.value -Compress } else { $pp.reason }) + ")")
+    Check ($pp.ok -and $pp.value.prompts -eq 0 -and $pp.value.put -ge 2) ("under the unlocked session this section's unlock opened (the PC keeps sessions), the photo asks for no passkey, as a line does, and its manifest and parts are put; section 14 counts the prompts from a lock (" + $(if ($pp.ok) { "" + $pp.value.prompts + " signature(s), " + $pp.value.put + " put(s)" } else { $pp.reason }) + ")")
+    Check ($pp.ok -and $pp.value.thumbs -eq 1) "the chat shows the photo sent as a small picture"
+    $run = Invoke-Run -Turns 2
+    $landed = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    $bytesIn = $(if ($landed.Count -eq 1) { [System.IO.File]::ReadAllBytes($landed[0].FullName) } else { [byte[]]@() })
+    Check ($landed.Count -eq 1 -and $bytesIn.Length -le 1000000 -and $bytesIn[0] -eq 0xFF -and $bytesIn[1] -eq 0xD8 -and $landed[0].Extension -ceq ".jpg") ("a real run writes one JPEG within 1,000,000 bytes to the PC's inbox (" + $(if ($landed.Count) { $landed[0].Name + ", " + $bytesIn.Length + " bytes" } else { "none" }) + "; exit " + $run.code + ")")
+    $asText = [System.Text.Encoding]::ASCII.GetString($bytesIn)
+    Check ($landed.Count -eq 1 -and -not $asText.Contains("GPSLAT-SECRET") -and -not $asText.Contains("Exif")) "the camera block, and the location in it, is not in what reached the PC"
+    $dims = $null
+    if ($landed.Count -eq 1) { $im = [System.Drawing.Image]::FromFile($landed[0].FullName); $dims = @($im.Width, $im.Height); $im.Dispose() }
+    Check ($null -ne $dims -and [math]::Max($dims[0], $dims[1]) -eq 1600 -and $dims[1] -eq [math]::Round(1600 * 2000 / 3000)) ("a photo is shrunk to 1600 px on its longest side, its shape kept (" + $(if ($null -ne $dims) { "" + $dims[0] + " x " + $dims[1] } else { "none" }) + ")")
+    $photoPosts = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") })
+    Check ($photoPosts.Count -eq 1 -and $landed.Count -eq 1 -and $photoPosts[0].body.Contains($landed[0].FullName)) ("one line to the Thrall names the file's path (" + $photoPosts.Count + ")")
+    $w3 = Invoke-Browser @{ cmd = "chatWait"; text = "Photo saved on the PC, and the Thrall told." }
+    Check ($w3.ok -and $w3.value.found) "the photo's receipt shows under it, in the app's own words"
+    $fake1 = Join-Path $work "evil.jpg"
+    [System.IO.File]::WriteAllText($fake1, "<!DOCTYPE html><html><script>alert(1)</script></html>", $utf8)
+    $np = Invoke-Browser @{ cmd = "chatPhoto"; path = $fake1; mailbox = $mailbox; expectNone = $true }
+    Check ($np.ok -and $np.value.put -eq 0 -and $np.value.prompts -eq 0 -and $np.value.notice.Contains("not a picture")) ("an HTML page called .jpg is refused on the phone by its first bytes, in a plain line, with no passkey asked and nothing sent (" + $(if ($np.ok) { $np.value.notice } else { $np.reason }) + ")")
+    # A PHOTO ARRIVING WHILE HE READS BACK (chat-scroll.js; the founder, 2026-10-15): one that comes into the
+    # chat without his touch here - as one sent from another window of the app - neither yanks him down
+    # nor goes uncounted: it is a new message for Jump to latest.
+    $sbmp = New-Object System.Drawing.Bitmap 64, 48
+    $sgfx = [System.Drawing.Graphics]::FromImage($sbmp); $sgfx.Clear([System.Drawing.Color]::SteelBlue); $sgfx.Dispose()
+    $smallPath = Join-Path $work "small.jpg"
+    $sbmp.Save($smallPath, [System.Drawing.Imaging.ImageFormat]::Jpeg); $sbmp.Dispose()
+    $up2 = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    $pb = Invoke-Browser @{ cmd = "chatPhotoBehind"; path = $smallPath; mailbox = $mailbox; id = ("b" * 32) }
+    $pbSaid = $(if ($pb.ok) { ConvertTo-Json $pb.value -Compress -Depth 4 } else { $pb.reason })
+    Check ($up2.ok -and $up2.value.jumpShown -and $pb.ok -and $pb.value.sent.ok -and $pb.value.put -ge 2 -and $pb.value.place.firstKey -ceq $up2.value.firstKey -and [math]::Abs($pb.value.place.firstTop - $up2.value.firstTop) -le 2 -and $pb.value.place.dist -gt 48) ("A PHOTO ARRIVING while he is scrolled up does not move him: the same message stands where it stood (" + $pbSaid + ")")
+    Check ($pb.ok -and $pb.value.place.jumpShown -and $pb.value.place.jumpText -ceq "Jump to latest (1 new)" -and $pb.value.place.news -ceq "1 new message below. Jump to latest to read it.") ("and it counts as a new message: Jump to latest (1 new), said once in the live region (" + $pbSaid + ")")
+    $run = Invoke-Run -Turns 2
+    $landed2 = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    Check ($landed2.Count -eq 2) ("and the PC takes it too (" + $landed2.Count + " file(s) in its inbox; exit " + $run.code + ")")
+    $null = Invoke-Browser @{ cmd = "chatJumpTouch" }
+    # THE HOUR (the founder's choice, 2026-10-16): a photo the PC has not taken waits for it, and says so;
+    # past the hour the manifest names it says plainly it was not delivered, and Send again sends it again.
+    # The page's clock stands 61 minutes back while it is sent, so by the real clock its hour has passed:
+    # nothing is waited, and the PC, run only afterwards, sees a manifest whose window ended.
+    $postsBeforeHour = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    $null = Invoke-Browser @{ cmd = "clock"; ms = -3660000 }
+    $late = Invoke-Browser @{ cmd = "chatPhoto"; path = $smallPath; mailbox = $mailbox; parts = 2 }
+    $wt1 = Invoke-Browser @{ cmd = "chatWait"; text = "Sent: waiting for your PC to take it (it waits up to an hour)."; timeoutMs = 10000 }
+    $sa0 = Invoke-Browser @{ cmd = "chatSendAgain"; mailbox = $mailbox }
+    $null = Invoke-Browser @{ cmd = "clock"; ms = 0 }
+    Check ($late.ok -and $late.value.put -ge 2 -and $wt1.ok -and $wt1.value.found) ("PC OFF: a photo sent and not yet taken says it waits for the PC, up to an hour (" + $(if ($late.ok) { "" + $late.value.put + " put(s)" } else { $late.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "chatRefresh" }
+    $nd = Invoke-Browser @{ cmd = "chatWait"; text = "No receipt yet: your PC has not said it took the photo within an hour. If it is still off, Send again."; timeoutMs = 10000 }
+    Check ($nd.ok -and $nd.value.found) "PAST THE HOUR with no word from the PC, it says plainly it was not delivered"
+    $sa = Invoke-Browser @{ cmd = "chatSendAgain"; mailbox = $mailbox }
+    Check ($sa0.ok -and $sa0.value.shown -eq 0 -and $sa.ok -and $sa.value.shown -eq 1 -and $sa.value.put -ge 2 -and $sa.value.left -eq 0) ("and offers Send again - not while it still waits - which sends it again, and is then offered no more (" + $(if ($sa.ok) { ConvertTo-Json $sa.value -Compress } else { $sa.reason }) + "; while waiting: " + $(if ($sa0.ok) { $sa0.value.shown } else { $sa0.reason }) + ")")
+    $run = Invoke-Run -Turns 2
+    $landed3 = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    $postsAfterHour = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    Check ($landed3.Count -eq 3 -and $postsAfterHour -eq $postsBeforeHour + 1) ("the PC takes the photo sent again and not the late one: one more file and one more line to the Thrall (" + $landed3.Count + " file(s), " + $postsBeforeHour + " -> " + $postsAfterHour + " line(s); exit " + $run.code + ")")
+    $null = Save-Shot "phone-chat-photo"
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"
@@ -773,19 +861,29 @@ try {
     $a3 = Invoke-Browser @{ cmd = "answer"; text = "Three, no prompt."; via = "touch"; mailbox = $mailbox; question = $sTitles[2] }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "chat" }
     $cl = Invoke-Browser @{ cmd = "chatSend"; text = "A line, no prompt."; via = "enter"; mailbox = $mailbox }
+    # A PHOTO TOO (PR 285; SESSION_SIGNED names "chat photo"): its manifest is the one envelope that is
+    # signed, by the session key; its parts are data items, signed by nobody (Photo.ps1, THE PARTS).
+    $photoPostsBefore = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    $sp = Invoke-Browser @{ cmd = "chatPhoto"; path = $photoPath; mailbox = $mailbox; parts = 2 }
+    # Every part put before the envelopes are read: the count stops growing.
+    $was = -1; for ($i = 0; $i -lt 40 -and $was -ne (Get-MachineCount); $i++) { $was = Get-MachineCount; Start-Sleep -Milliseconds 500 }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $c2 = (Invoke-Browser @{ cmd = "assertions" }).value
-    Check ($a1.value.put -and $a2.value.put -and $a3.value.put -and $cl.value.put -and $c2 -eq $c1) ("ONE PROMPT IN ALL: the unlock, then three answers and a chat line, sent with no passkey prompt (" + ($c2 - $c0) + " assertion(s) since the lock)")
-    Write-Host "  [NOT RUN] a photo: the phone's photo send is PR 285's (feature/chat-photos), not on this branch's base; it goes through the same sealAndSign and SESSION_SIGNED names it" -ForegroundColor Yellow
-    $sentS = @(Get-MachineEnvelopes -Skip $skip)
+    Check ($a1.value.put -and $a2.value.put -and $a3.value.put -and $cl.value.put -and $sp.ok -and $sp.value.put -ge 2 -and $sp.value.prompts -eq 0 -and $c2 -eq $c1) ("ONE PROMPT IN ALL: the unlock, then three answers, a chat line and a photo, sent with no passkey prompt (" + ($c2 - $c0) + " assertion(s) since the lock; the photo " + $(if ($sp.ok) { "" + $sp.value.prompts + " prompt(s), " + $sp.value.put + " put(s)" } else { $sp.reason }) + ")")
+    $sentAll = @(Get-MachineEnvelopes -Skip $skip)
+    $sentS = @($sentAll | Where-Object { $_.ok })
+    $dataN = $sentAll.Count - $sentS.Count
     $why = @($sentS | ForEach-Object { Test-SessionEnvelope $_ })
-    $kinds = @($sentS | Where-Object { $_.ok } | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
-    Check ($sentS.Count -eq 5 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line") ("the opening envelope, the three answers and the line are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
+    $kinds = @($sentS | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
+    Check ($sentS.Count -eq 6 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line,chat/photo") ("the opening envelope, the three answers, the line and the photo's manifest are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
+    Check ($sp.ok -and $dataN -ge 1) ("and the photo's parts went beside them, as items that are no envelopes (" + $dataN + " part(s))")
     $vouchId1 = $(if ($sentS.Count -and $sentS[0].ok) { $sentS[0].value.sig.vouchId } else { "" })
     $run = Invoke-Run -Turns 1
     $run = Invoke-Run -Turns 1
     $posts = @(Get-HordeTestFleetPosts -Folder $fake)
     Check ((Get-Landed "One, no prompt.") -eq 1 -and (Get-Landed "Two, no prompt.") -eq 1 -and (Get-Landed "Three, no prompt.") -eq 1 -and @($posts | Where-Object { $_.body.EndsWith("A line, no prompt.") }).Count -eq 1) "THE REAL PC TAKES THEM: the three session-signed answers land once each, and the line is posted to the Thrall once"
+    $photoPostsNow = @($posts | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    Check ($photoPostsNow -eq $photoPostsBefore + 1) ("and the session-signed photo lands whole, its one line posted to the Thrall once (" + $photoPostsBefore + " -> " + $photoPostsNow + ")")
     # needsPasskey: one more prompt, signed by the passkey, and the PC takes it.
     $skip = Get-MachineCount
     $np = Invoke-Browser @{ cmd = "answer"; text = "Yes, deploy."; via = "enter"; mailbox = $mailbox; question = $sTitles[3] }

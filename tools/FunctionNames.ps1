@@ -27,7 +27,7 @@
 # (test/test-identity.ps1 replaces Get-HordeProcessTable with a tripwire), and each suite runs in its
 # own process.
 
-$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers", "files", "channels", "notices")
+$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers", "files", "channels", "notices", "orcs", "fleet-db", "hooks", "fleet-metrics")
 $script:HordeShippedCodeFiles = @("horde.ps1")
 
 function Get-HordeShippedScriptFiles {

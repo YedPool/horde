@@ -96,5 +96,8 @@
         @{ Name = "pin-comparison-skipped"
            Find = 'if ("$env:WEZTERM_UNIX_SOCKET" -ne "$($Instance.socket)") {'
            Replace = 'if ($false) {' }
+        @{ Name = "cli-loads-the-persons-config"
+           Find = '$script:HordeIsoCli = @("--skip-config", "cli", "--no-auto-start")'
+           Replace = '$script:HordeIsoCli = @("cli", "--no-auto-start")' }
     )
 }
