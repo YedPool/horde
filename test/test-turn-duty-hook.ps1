@@ -1,0 +1,287 @@
+# DOES THE TURN-DUTY STOP HOOK NUDGE AN ORC THAT HAS NOT PUBLISHED ITS DECISIONS LIST - ONCE, AND NEVER AT ITS OWN EXPENSE?
+#
+# hooks/horde-turn-duty.mjs is a Stop hook. This suite drives the real .mjs with real JSON payloads on stdin, in
+# folders it makes under %TEMP%, with a stand-in `horde` (a .cmd that runs a small node script) that answers
+# `decisions published -Orc <X> -Json` the way the shipped verb does, and writes a marker line whenever it is run:
+#   - stop_hook_active, a throttled session, a session not in the registry and a Warg pass WITHOUT spawning the
+#     stand-in (the marker must stay absent: the cheap path is the point);
+#   - an Orc or the Thrall that published within 30 minutes passes; one that never published, or published 45
+#     minutes ago, is blocked ONCE with the exact reason, and the next stop passes;
+#   - the state file is written before the block (a state folder that cannot be written means no block);
+#   - fleet.db missing, a timeout, bad JSON, bad stdin: the hook passes, logs one line and records the check;
+#   - the task-list check is OFF unless the suite switches it on, and two failed checks make ONE block.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $node) {
+    Write-Host "  [SKIP] no node here: the hook cannot run" -ForegroundColor Yellow
+    Complete-HordeSuite -Success "NOTHING RUN: no node" -PassCode 3
+}
+$hook = Join-Path $root "hooks\horde-turn-duty.mjs"
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+
+$work = Join-Path $env:TEMP ("horde-turn-duty-" + [guid]::NewGuid().ToString("N"))
+$stateDir = Join-Path $work "state"
+$registry = Join-Path $work "registry"
+$marker = Join-Path $work "marker.txt"
+$log = Join-Path $work "hook.log"
+New-Item -ItemType Directory -Path $registry -Force | Out-Null
+
+$firstLine = "publish your decisions list with horde decisions publish -File <list.json> (empty list is valid)"
+
+# THE STAND-IN. TD_MODE answers `decisions published`, TD_TASK answers the (placeholder) task-list verb.
+$standinJs = @'
+import { appendFileSync } from "node:fs";
+const a = process.argv.slice(2);
+if (process.env.TD_MARKER) appendFileSync(process.env.TD_MARKER, a.join(" ") + "\n");
+const mode = (a[0] === "decisions" ? process.env.TD_MODE : process.env.TD_TASK) || "never";
+const orc = a[a.indexOf("-Orc") + 1];
+const list = (who, minutes) => JSON.stringify({ lists: [{ orc: who, snapshot: "s1", publishedAt: new Date(Date.now() - minutes * 60000).toISOString(), count: 0, items: [] }] });
+if (mode === "never") { console.log('{"lists":[]}'); }
+else if (mode.startsWith("age:")) { console.log(list(orc, Number(mode.slice(4)))); }
+else if (mode === "otherorc") { console.log(list("ZZ", 1)); }
+else if (mode === "badjson") { console.log("this is not json"); }
+else if (mode === "dbmissing") { console.error("horde decisions published: refused: fleet.db does not exist yet at X; run horde db init"); process.exitCode = 1; }
+else if (mode === "hang") { setTimeout(() => { console.log('{"lists":[]}'); }, 6000); }
+'@
+[System.IO.File]::WriteAllText((Join-Path $work "standin.mjs"), $standinJs, $utf8)
+$standin = Join-Path $work "standin.cmd"
+[System.IO.File]::WriteAllText($standin, ("@`"" + $node.Source + "`" `"" + (Join-Path $work "standin.mjs") + "`" %*`r`n"), $utf8)
+
+function Text { param([string]$Path) return [System.IO.File]::ReadAllText($Path) }
+function Reset-Marks { foreach ($f in @($marker, $log)) { if ([System.IO.File]::Exists($f)) { [System.IO.File]::Delete($f) } } }
+function Ran { return [System.IO.File]::Exists($marker) }
+function Log-Lines { if (-not [System.IO.File]::Exists($log)) { return 0 }; return @((Text $log).TrimEnd("`n") -split "`n").Count }
+function State-Path { param([string]$Sid) return (Join-Path $stateDir ($Sid + ".json")) }
+function New-Sid { return [guid]::NewGuid().ToString() }
+function Put-Session {
+    # A registry record, in the shape the real ones have (read from the live registry, read only).
+    param([string]$Sid, [string]$Role, [string]$Label, [string]$Parent = "")
+    $rec = [ordered]@{ role = $Role; label = $Label; owner = $(if ($Role -eq "master") { "" } else { $Label }) }
+    if ($Parent -ne "") { $rec["parent"] = $Parent }
+    [System.IO.File]::WriteAllText((Join-Path $registry ($Sid + ".json")), (ConvertTo-Json -InputObject $rec), $utf8)
+}
+function Put-State { param([string]$Sid, [int]$CheckedMinutesAgo) New-Item -ItemType Directory -Path $stateDir -Force | Out-Null; $ms = [long]([datetimeoffset]::UtcNow.AddMinutes(-$CheckedMinutesAgo).ToUnixTimeMilliseconds()); [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $ms + ',"lastBlockedAt":0}'), $utf8) }
+function Get-StateObj { param([string]$Sid) $p = State-Path $Sid; if (-not [System.IO.File]::Exists($p)) { return $null }; return (Text $p | ConvertFrom-Json) }
+
+function Invoke-Hook {
+    # Runs the hook with this payload text on stdin. Returns { code; err; out }.
+    param([string]$Stdin, [hashtable]$Env = @{})
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $node.Source
+    $psi.Arguments = '"' + $hook + '"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_STATE_DIR"] = $stateDir
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_REGISTRY"] = $registry
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_HORDE"] = $standin
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_LOG"] = $log
+    $psi.EnvironmentVariables["HORDE_TURN_DUTY_TIMEOUT_MS"] = "4000"
+    $psi.EnvironmentVariables["TD_MARKER"] = $marker
+    $psi.EnvironmentVariables["TD_MODE"] = "never"
+    $psi.EnvironmentVariables["TD_TASK"] = "never"
+    foreach ($k in @("HORDE_TURN_DUTY_TEST_TASKLIST")) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } }
+    foreach ($k in $Env.Keys) { $psi.EnvironmentVariables[$k] = $Env[$k] }
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $bytes = $utf8.GetBytes($Stdin)
+        $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        $p.StandardInput.Close()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $out = $p.StandardOutput.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ code = $p.ExitCode; err = $errTask.Result; out = $out }
+    } finally { $p.Dispose() }
+}
+function Payload { param([string]$Sid, [bool]$Active = $false) return (ConvertTo-Json -Compress -InputObject @{ session_id = $Sid; transcript_path = "x.jsonl"; cwd = $work; stop_hook_active = $Active; hook_event_name = "Stop" }) }
+function Stop-Hook { param([string]$Sid, [hashtable]$Env = @{}, [bool]$Active = $false) return (Invoke-Hook (Payload $Sid $Active) $Env) }
+function Test-Pass { param($R) return ($R.code -eq 0 -and $R.out -eq "" -and $R.err -eq "") }
+function Get-Block {
+    # The block, parsed, or $null when stdout is not exactly one block object.
+    param($R)
+    if ($R.code -ne 0 -or $R.out -eq "") { return $null }
+    try { $o = $R.out | ConvertFrom-Json } catch { return $null }
+    if ($o.decision -cne "block") { return $null }
+    return $o
+}
+
+try {
+
+Write-Host ""
+Write-Host "--- CONTROL: the harness can tell a run from a non-run, and a block from a pass ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s
+$b = Get-Block $r
+Check ($null -ne $b -and (Ran)) "an Orc that never published is blocked, AND the stand-in ran (so a missing marker below means it was not spawned)"
+Check ((Text $marker).Trim() -ceq "decisions published -Orc K -Json") "the hook asks for THIS Orc's list: decisions published -Orc K -Json"
+
+Write-Host ""
+Write-Host "--- the cheap paths spawn nothing ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{} $true
+Check ((Test-Pass $r) -and -not (Ran) -and -not [System.IO.File]::Exists((State-Path $s))) "stop_hook_active true: exit 0, silent, nothing spawned, no state touched (it never loops)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 5
+$r = Stop-Hook $s
+Check ((Test-Pass $r) -and -not (Ran)) "checked 5 minutes ago: exit 0, silent, nothing spawned (the throttle)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 31
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Ran)) "checked 31 minutes ago: the throttle is over, the check runs and blocks"
+Reset-Marks
+$s = New-Sid
+$r = Stop-Hook $s
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and -not (Ran)) "a session not in the registry: exit 0, silent, nothing spawned"
+Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -eq 0) "   and the check is recorded, so the registry is not read again every turn"
+Reset-Marks
+$s = New-Sid; Put-Session $s "warg" "K" "parent-1"
+$r = Stop-Hook $s
+Check ((Test-Pass $r) -and -not (Ran)) "a Warg (role warg, with a parent): exit 0, silent, nothing spawned"
+Reset-Marks
+$s = New-Sid; Put-Session $s "worker" "K" "parent-1"
+$r = Stop-Hook $s
+Check ((Test-Pass $r) -and -not (Ran)) "a role the hook does not know: left alone"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "lowercase" "parent-1"
+$r = Stop-Hook $s
+Check ((Test-Pass $r) -and -not (Ran)) "an Orc whose label is not a lane letter: left alone"
+
+Write-Host ""
+Write-Host "--- the Orcs and the Thrall ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "master" "M"
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Text $marker).Trim() -ceq "decisions published -Orc M -Json") "the Thrall (role master) that never published is blocked, asked for as M"
+Reset-Marks
+$s = New-Sid; Put-Session $s "master" "M"
+$r = Stop-Hook $s @{ TD_MODE = "age:3" }
+Check ((Test-Pass $r) -and (Ran)) "the Thrall that published 3 minutes ago passes"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:5" }
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and (Ran)) "an Orc that published 5 minutes ago passes"
+Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -eq 0) "   and the check is recorded, with no block"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:45" }
+$b = Get-Block $r
+$st = Get-StateObj $s
+Check ($null -ne $b) "an Orc whose list is 45 minutes old is blocked"
+if ($null -ne $b) {
+    $lines = @($b.reason -split "`n")
+    Check ($lines[0] -ceq $firstLine) "   the reason's first line is exactly: $firstLine"
+    Check ($lines.Count -eq 2 -and $lines[1] -like 'list.json shape: *"items"*"text"*') "   and one more line gives the file shape"
+    Check (@($b.PSObject.Properties).Count -eq 2) "   the block holds a decision and a reason and nothing else"
+}
+Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -gt 0) "   lastCheckedAt AND lastBlockedAt are recorded"
+Reset-Marks
+$r = Stop-Hook $s @{ TD_MODE = "age:45" }
+Check ((Test-Pass $r) -and -not (Ran)) "the very next stop after a block passes, and spawns nothing (one block per 30 minutes)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "otherorc" }
+Check ($null -ne (Get-Block $r)) "a list published by ANOTHER Orc does not count for this one"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+# The bytes are put on stdin by cmd's own redirection from a file, so exactly one byte-order mark arrives under
+# either PowerShell (a redirected stdin of Windows PowerShell 5.1 adds one by itself, PowerShell 7 does not).
+$bomFile = Join-Path $work "bom-payload.json"
+[System.IO.File]::WriteAllBytes($bomFile, [byte[]](0xEF, 0xBB, 0xBF) + $utf8.GetBytes((Payload $s)))
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $env:ComSpec
+$psi.Arguments = '/d /c ""' + $node.Source + '" "' + $hook + '" < "' + $bomFile + '""'
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.CreateNoWindow = $true
+foreach ($kv in @{ HORDE_TURN_DUTY_STATE_DIR = $stateDir; HORDE_TURN_DUTY_REGISTRY = $registry; HORDE_TURN_DUTY_HORDE = $standin; HORDE_TURN_DUTY_LOG = $log; HORDE_TURN_DUTY_TIMEOUT_MS = "4000"; TD_MARKER = $marker; TD_MODE = "never" }.GetEnumerator()) { $psi.EnvironmentVariables[$kv.Key] = $kv.Value }
+$p = [System.Diagnostics.Process]::Start($psi)
+$errTask = $p.StandardError.ReadToEndAsync()
+$out = $p.StandardOutput.ReadToEnd()
+$p.WaitForExit()
+$r = [pscustomobject]@{ code = $p.ExitCode; err = $errTask.Result; out = $out }
+$p.Dispose()
+Check ($null -ne (Get-Block $r)) "stdin that starts with a byte-order mark is read all the same"
+
+Write-Host ""
+Write-Host "--- the state is written BEFORE the block ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_STATE_DIR = $stateDir }
+Check ($null -ne (Get-Block $r) -and [System.IO.File]::Exists((State-Path $s))) "after a block the state file exists"
+Reset-Marks
+$blockedPath = Join-Path $work "state-is-a-file"
+[System.IO.File]::WriteAllText($blockedPath, "x", $utf8)
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_STATE_DIR = $blockedPath }
+Check ((Test-Pass $r) -and (Ran) -and (Log-Lines) -ge 1) "a state folder that cannot be written: NO block (it could not be remembered), logged"
+
+Write-Host ""
+Write-Host "--- it fails open ---" -ForegroundColor Cyan
+foreach ($c in @(
+        @{ n = "fleet.db missing (the verb says run horde db init)"; env = @{ TD_MODE = "dbmissing" } }
+        @{ n = "the verb past the timeout"; env = @{ TD_MODE = "hang" } }
+        @{ n = "output that is not JSON"; env = @{ TD_MODE = "badjson" } }
+        @{ n = "horde not found"; env = @{ HORDE_TURN_DUTY_HORDE = (Join-Path $work "no-such-horde.cmd") } }
+    )) {
+    Reset-Marks
+    $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+    $r = Stop-Hook $s $c.env
+    $st = Get-StateObj $s
+    Check ((Test-Pass $r) -and (Log-Lines) -eq 1) ("exit 0, silent, exactly one log line: " + $c.n)
+    Check ($null -ne $st -and $st.lastCheckedAt -gt 0 -and $st.lastBlockedAt -eq 0) ("   the check is recorded, so it is not retried every turn: " + $c.n)
+    Reset-Marks
+    $r = Stop-Hook $s $c.env
+    Check ((Test-Pass $r) -and -not (Ran)) ("   and the next stop spawns nothing: " + $c.n)
+}
+foreach ($bad in @(@{ n = "malformed JSON"; s = "{not json" }, @{ n = "empty stdin"; s = "" }, @{ n = "a JSON array"; s = "[1,2]" }, @{ n = "a session id that is a path"; s = '{"session_id":"..\\..\\x"}' }, @{ n = "no session id"; s = '{"hook_event_name":"Stop"}' })) {
+    Reset-Marks
+    $r = Invoke-Hook $bad.s
+    Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1) ("exit 0, silent, nothing spawned, one log line: " + $bad.n)
+}
+
+Write-Host ""
+Write-Host "--- the task-list check: off until its writer exists, and ONE block when both fail ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "never" }
+Check ((Test-Pass $r) -and -not ((Ran) -and (Text $marker) -match 'tasklist')) "decisions fresh and the task list never written, check OFF: pass, the task verb is never asked"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "never"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason -match 'numbered task list' -and $b.reason -cnotmatch 'publish your decisions list') "check ON, only the task list due: a block with the task-list reason alone"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "age:50"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason -match 'publish your decisions list' -and $b.reason -match 'numbered task list') "both due: one block holding both reasons"
+Reset-Marks
+$r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "age:50"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+Check ((Test-Pass $r) -and -not (Ran)) "   and the stop right after passes"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:50"; TD_TASK = "dbmissing"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason -match 'publish your decisions list' -and $b.reason -cnotmatch 'numbered task list' -and (Log-Lines) -eq 1) "one check cannot tell (logged), the other is due: the block holds only the due one"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "age:2"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+Check (Test-Pass $r) "both checks done: pass"
+
+} finally {
+    if ((Split-Path -Leaf $work) -match '\Ahorde-turn-duty-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
+}
+
+Complete-HordeSuite -Success "the turn-duty hook blocks an Orc or the Thrall once per 30 minutes for an unpublished list, passes everyone else, and fails open"
