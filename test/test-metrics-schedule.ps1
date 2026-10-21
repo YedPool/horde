@@ -134,6 +134,19 @@ try {
         $keep = { param($Task, $Name, $Path) [void]$calls.Add([pscustomobject]@{ task = $Task; name = $Name; path = $Path; given = $args.Count }) }
         Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $keep
         Check ($calls.Count -eq 1 -and $calls[0].name -ceq $bootJob.name -and $calls[0].path -ceq "\HordeTest\" -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U" -and $calls[0].given -eq 0 -and @($calls[0].task.Triggers).Count -eq 2) "install registers the task once, by its name in Horde's folder, S4U, with nothing else handed over - no password"
+        # T-0325: a shell refused new S4U tasks skips the real install checks, so what the task carries is
+        # checked here, on what the scheduler is handed, in every shell.
+        Check ($calls[0].task.Settings.Priority -eq 7 -and "$($calls[0].task.Settings.ExecutionTimeLimit)" -ceq "PT5M") ("the task is handed below-normal priority and the job's own time limit (" + $calls[0].task.Settings.Priority + ", " + $calls[0].task.Settings.ExecutionTimeLimit + ")")
+        $otherHomeJob = New-HordeScheduledJob -Name ($testName + " boot") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome (Join-Path $env:TEMP ($testName + " other home")) -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled
+        $oldOtherHome = [pscustomobject]@{ Author = "Horde"; Description = $otherHomeJob.description; Principal = [pscustomobject]@{ LogonType = "S4U" } }
+        $calls.Clear()
+        Check (Throws { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldOtherHome } -Register $keep } "serves the Horde home") "a job serving another Horde home is not taken over: install refuses it by name"
+        Check ($calls.Count -eq 0) "CONTROL: and the scheduler was never asked"
+        # The real registration overwrites Horde's own task (-Force); the cmdlet is stood in for, in this scope only.
+        $script:forcedRegister = $null
+        function Register-ScheduledTask { param($InputObject, [string]$TaskName, [string]$TaskPath, [switch]$Force, $ErrorAction) $script:forcedRegister = $Force.IsPresent }
+        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Elevated { $false } } finally { Remove-Item Function:\Register-ScheduledTask }
+        Check ($script:forcedRegister -eq $true) "installing over Horde's own task asks the scheduler to replace it (-Force), so a second install does not fail"
         # The job that was there: Horde's, for this home, made in the person's session.
         $oldInteractive = [pscustomobject]@{ Author = "Horde"; Description = $bootJob.description; Principal = [pscustomobject]@{ LogonType = "Interactive" } }
         $calls.Clear()
@@ -145,9 +158,18 @@ try {
         try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Register $refuse -Elevated { $false } } catch { $said = $_.Exception.Message }
         Check ($said -like "*refused to register*Access is denied.*the task that was there is left exactly as it was*run this again from an elevated prompt*") ("a failed S4U registration is reported plainly, with what to do (" + $said + ")")
         Check ($calls.Count -eq 1 -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U") "with no silent fallback to interactive: the scheduler was asked once, for the S4U job, and never for another form"
+        $refuseOther = { param($Task, $Name, $Path) throw "The RPC server is unavailable." }
         $calls.Clear(); $said = ""
-        try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuse } catch { $said = $_.Exception.Message }
+        try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuseOther -Elevated { $false } } catch { $said = $_.Exception.Message }
         Check ($said -like "*refused to register*nothing was registered.") ("CONTROL: a job that does not run at start-up is not told to need an elevated prompt (" + $said + ")")
+        # T-0325: a non-elevated shell is refused a NEW S4U job of any kind (measured 2026-10-21), so
+        # Access denied gets the hint for every job - but only when not elevated.
+        $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuse -Elevated { $false } } catch { $said = $_.Exception.Message }
+        Check ($said -like "*(Access is denied.)*nothing was registered.*may not be allowed*run this again from an elevated prompt*") ("a job that does not run at start-up, refused with Access denied in a shell that is not elevated, is told to elevate (" + $said + ")")
+        $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuse -Elevated { $true } } catch { $said = $_.Exception.Message }
+        Check ($said -like "*(Access is denied.)*nothing was registered." -and $said -notlike "*elevated prompt*") ("the same refusal in an elevated shell is not told to elevate (" + $said + ")")
 
         $calls.Clear(); $said = ""
         try { Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $refuse -Elevated { $true } } catch { $said = $_.Exception.Message }
@@ -155,10 +177,11 @@ try {
         $calls.Clear(); $said = ""
         try { Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $refuse -Elevated { $false } } catch { $said = $_.Exception.Message }
         $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        Check ($said -like ("*to run as " + $me + " (Access is denied.)*run this again from an elevated prompt, signed in as " + $me + ", the account the job runs as.")) ("one that is not elevated is told to elevate, and which account the job runs as (" + $said + ")")
+        Check ($said -like ("*to run as " + $me + " (Access is denied.)*can be registered only by an administrator: run this again from an elevated prompt, signed in as " + $me + ", the account the job runs as."))("one that is not elevated is told to elevate, and which account the job runs as (" + $said + ")")
         $logonJob = New-HordeScheduledJob -Name ($testName + " logon") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson -AtLogon -Disabled
         $lt = @((New-HordeTaskSchedulerTask -Job $logonJob -UserId "someone").Triggers)
         Check ($logonJob.atLogon -eq $true -and $lt.Count -eq 2 -and "$($lt[0].Repetition.Interval)" -ceq "PT1M" -and "$($lt[1].CimClass.CimClassName)" -ceq "MSFT_TaskLogonTrigger" -and "$($lt[1].UserId)" -ceq "someone") "a job made -AtLogon also runs when the account it runs as signs in"
+        Check ("$((New-HordeTaskSchedulerTask -Job $logonJob -UserId "someone").Principal.LogonType)" -ceq "Interactive") "a job made -WithPerson runs in the person's session (Interactive), never unseen"
 
         Write-Host ""
         Write-Host "--- what this machine's scheduler is asked, with its listing stood in for (review of PR 249, N1 and N2) ---" -ForegroundColor Cyan
@@ -174,6 +197,10 @@ try {
         function Get-ScheduledTaskInfo { param([string]$TaskPath, [string]$TaskName, $ErrorAction) return $null }
         $fst = Get-HordeTaskSchedulerStatus -Name "x" -Folder "HordeTest"
         Check ($fst.state -ceq "known" -and $fst.value.everyMinutes -eq 7 -and $fst.value.atStartup -eq $true -and $fst.value.runsAs -ceq "PC\person") ("the interval is read from the trigger that repeats, wherever it stands, and status names the account it runs as (" + $fst.value.everyMinutes + ")")
+        $plainTask = New-ScheduledTask -Action (New-ScheduledTaskAction -Execute "cmd.exe") -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 7)) -Principal (New-ScheduledTaskPrincipal -UserId "PC\person" -LogonType S4U -RunLevel Limited) -Description $bootJob.description
+        $fakeTask = [pscustomobject]@{ TaskName = "x"; Author = "Horde"; Description = $bootJob.description; Triggers = $plainTask.Triggers; Settings = $plainTask.Settings; Principal = $plainTask.Principal; State = "Ready"; Actions = $plainTask.Actions }
+        $pst = Get-HordeTaskSchedulerStatus -Name "x" -Folder "HordeTest"
+        Check ($pst.state -ceq "known" -and $pst.value.atStartup -eq $false) "CONTROL: a task with no start-up trigger is not shown as running at start-up"
         Remove-Item Function:\Get-ScheduledTask, Function:\Get-ScheduledTaskInfo
 
         Write-Host ""
@@ -192,24 +219,51 @@ try {
             Unregister-ScheduledTask -TaskName $testName -TaskPath "\HordeTest\" -Confirm:$false
             # A task of the same name outside Horde's folder is never seen.
             & $foreignTask $testName "\"
-            $i1 = "installed"; try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $i1 = $_.Exception.Message }
-            Check ($i1 -eq "installed") ("install succeeds and sees its own job afterwards (" + $i1 + ")")
-            $st = & $sch.status $testName "HordeTest"
-            Check ($st.state -eq "known" -and $st.value.marked -and $st.value.author -eq "Horde" -and $st.value.enabled -eq $false -and $st.value.home -eq $env:HORDE_HOME) "install makes the job in Horde's folder, marked as Horde's, for this home, disabled"
-            Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M" -and $st.value.logonType -eq "S4U" -and $st.value.atStartup -eq $false) "every 30 minutes, priority 7, stopped after 20 minutes, as the current user with no window, and not at start-up"
-            $again = "installed"
-            try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $again = $_.Exception.Message }
-            Check ($again -eq "installed" -and @(& $tasksIn "\HordeTest\").Count -eq 1) ("installing again replaces Horde's own job: one job, not two (" + $again + ")")
-            $realHome = $env:HORDE_HOME
-            $env:HORDE_HOME = Join-Path $work "another home"
-            Set-Gate '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-10-01T00:00:00Z" }'
-            Check (Throws { Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } "serves the Horde home") "a job serving one home is not taken over for another"
-            $env:HORDE_HOME = $realHome
+            # A BARE PROBE FIRST (T-0325, measured 2026-10-21): this shell may not be allowed to register a NEW S4U task
+            # at all (non-elevated: "Access is denied"), whatever Horde does. A task of no Horde code, disabled, TEST in
+            # its name, removed in finally, says which case this is; only the probe may excuse the checks below.
+            $probeName = $testName + " probe"
+            $probeS4U = {
+                Assert-TestName $probeName
+                try {
+                    $pa = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c rem probe"
+                    $pp = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
+                    $ps = New-ScheduledTaskSettingsSet -Disable
+                    $pt = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(30))
+                    $null = Register-ScheduledTask -TaskName $probeName -TaskPath "\HordeTest\" -Action $pa -Principal $pp -Settings $ps -Trigger $pt -ErrorAction Stop
+                    return ""
+                } catch { return ("" + $_.Exception.Message).Trim() }
+                finally { if (@(& $tasksIn "\HordeTest\" | Where-Object { $_.TaskName -ceq $probeName }).Count -gt 0) { Unregister-ScheduledTask -TaskName $probeName -TaskPath "\HordeTest\" -Confirm:$false } }
+            }
+            $probeSaid = & $probeS4U
+            Check ($probeSaid -eq "" -or $probeSaid -like "*Access is denied*") ("CONTROL: the bare S4U probe either registers or is refused with Access is denied (" + $probeSaid + ")")
             $envs = @{ HORDE_HOME = $env:HORDE_HOME }
-            $cs = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest") -Env $envs
-            Check ($cs.code -eq 0 -and $cs.out -like "*metrics gate: usage*" -and $cs.out -like "*DISABLED*Horde's*") "horde metrics schedule status shows the gate and the job"
-            $cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "remove", "-TaskName", $testName, "-TaskFolder", "HordeTest") -Env $envs
-            Check ($cr.code -eq 0 -and $cr.out -like "*removed*" -and (& $sch.status $testName "HordeTest").state -eq "absent") "horde metrics schedule remove removes it"
+            if ($probeSaid -eq "") {
+                $i1 = "installed"; try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $i1 = $_.Exception.Message }
+                Check ($i1 -eq "installed") ("install succeeds and sees its own job afterwards (" + $i1 + ")")
+                $st = & $sch.status $testName "HordeTest"
+                Check ($st.state -eq "known" -and $st.value.marked -and $st.value.author -eq "Horde" -and $st.value.enabled -eq $false -and $st.value.home -eq $env:HORDE_HOME) "install makes the job in Horde's folder, marked as Horde's, for this home, disabled"
+                Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M" -and $st.value.logonType -eq "S4U" -and $st.value.atStartup -eq $false) "every 30 minutes, priority 7, stopped after 20 minutes, as the current user with no window, and not at start-up"
+                $again = "installed"
+                try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $again = $_.Exception.Message }
+                Check ($again -eq "installed" -and @(& $tasksIn "\HordeTest\").Count -eq 1) ("installing again replaces Horde's own job: one job, not two (" + $again + ")")
+                $realHome = $env:HORDE_HOME
+                $env:HORDE_HOME = Join-Path $work "another home"
+                Set-Gate '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-10-01T00:00:00Z" }'
+                Check (Throws { Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } "serves the Horde home") "a job serving one home is not taken over for another"
+                $env:HORDE_HOME = $realHome
+                $envs = @{ HORDE_HOME = $env:HORDE_HOME }
+                $cs = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest") -Env $envs
+                Check ($cs.code -eq 0 -and $cs.out -like "*metrics gate: usage*" -and $cs.out -like "*DISABLED*Horde's*") "horde metrics schedule status shows the gate and the job"
+                $cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "remove", "-TaskName", $testName, "-TaskFolder", "HordeTest") -Env $envs
+                Check ($cr.code -eq 0 -and $cr.out -like "*removed*" -and (& $sch.status $testName "HordeTest").state -eq "absent") "horde metrics schedule remove removes it"
+            } else {
+                Set-Gate '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-10-01T00:00:00Z" }'
+                $ci = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "install", "-TaskName", $testName, "-TaskFolder", "HordeTest", "-Disabled") -Env $envs
+                Check ($ci.code -ne 0 -and $ci.out -like "*refused to register*Access is denied*run this again from an elevated prompt*") ("refused by the scheduler, install exits non-zero and says to run elevated (" + $ci.out.Trim() + ")")
+                Check (@(& $tasksIn "\HordeTest\").Count -eq 0 -and (& $sch.status $testName "HordeTest").state -eq "absent") "and it registered nothing: no job in Horde's folder, in any logon type"
+                Write-Host "  [SKIP] this shell may not register S4U tasks (bare probe refused); the install/replace/status/remove checks need an elevated run"
+            }
             # A -WithPerson job (core/Schedule.ps1): the person's own session, and only while logged on.
             Assert-TestName $personJob.name
             & $sch.install $personJob
