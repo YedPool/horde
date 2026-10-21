@@ -123,6 +123,8 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     }
     if (verb === 'import') {
       if (!fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; run horde db init');
+      // A dry run must not migrate an older file as a side effect: it is refused, not upgraded.
+      if (request.dryRun) openForReading(file).close();
       db = openStore(file);
       printImport(importFleet(db, request.sources, { dryRun: request.dryRun }), out);
       return 0;

@@ -23,6 +23,9 @@
         @{ Name = "import-makes-the-database"
            Find = '      if (!fs.existsSync(file)) throw'
            Replace = '      if (false) throw' }
+        @{ Name = "dry-run-migrates-an-older-file"
+           Find = 'if (request.dryRun) openForReading(file).close();'
+           Replace = 'if (false) openForReading(file).close();' }
         @{ Name = "import-dry-run-flag-dropped"
            Find = 'dryRun: request.dryRun'
            Replace = 'dryRun: false' }

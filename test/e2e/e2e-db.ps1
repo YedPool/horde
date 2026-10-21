@@ -136,7 +136,7 @@ Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^task_event: 0 rows\r?$'
 $i1 = Invoke-Db $impArgs $impEnv
 Check ($i1.code -eq 0 -and $i1.out -cmatch '(?m)^import: done\r?$') ("import ends 0 (" + $i1.code + ")")
 Check ($i1.out -cmatch '(?m)^orc: 2 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^task: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^task_event: 3 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^pr: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^session: 2 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^changelog_entry: 1 added, 0 already there\r?$' -and $i1.out -cmatch '(?m)^orc_status: 2 added, 0 already there\r?$') "it names the rows added in every table (a session and its missing parent's stub among them)"
-Check ($i1.out -like "*ledger: by C13 names no Orc row (kept as by_text): 1*" -and $i1.out -like "*registry: parent is not in the registry (stub row made): 1*") "and the lines it could not link, with their counts"
+Check ($i1.out -like "*ledger: by analyst-backfill names no Orc row (kept as by_text): 1*" -and $i1.out -like "*registry: parent is not in the registry (stub row made): 1*") "and the lines it could not link, with their counts"
 Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^task_event: 3 rows\r?$') "status counts the imported events"
 $i2 = Invoke-Db $impArgs $impEnv
 Check ($i2.code -eq 0 -and $i2.out -cmatch '(?m)^task_event: 0 added, 3 already there\r?$' -and $i2.out -cmatch '(?m)^session: 0 added, 1 already there\r?$' -and $i2.out -cmatch '(?m)^orc_status: 0 added, 2 already there\r?$' -and $i2.out -cmatch '(?m)^changelog_entry: 0 added, 1 already there\r?$') "a second import adds nothing in any table"

@@ -42,8 +42,8 @@
            Find = '.run(p, ctx.nodeId, child.first, child.first);'
            Replace = '.run(p, ctx.nodeId, child.last, child.last);' }
         @{ Name = "second-live-seat-not-refused"
-           Find = 'if (held) { rep.unlink(''registry'', ''a second live seat'
-           Replace = 'if (false) { rep.unlink(''registry'', ''a second live seat' }
+           Find = 'if (claimed.has(row.orcId) || seat.get(row.orcId, ctx.nodeId)) {'
+           Replace = 'if (false) {' }
         @{ Name = "stalest-session-takes-the-seat"
            Find = '.sort((a, b) => b.last - a.last ||'
            Replace = '.sort((a, b) => a.last - b.last ||' }
@@ -113,6 +113,60 @@
         @{ Name = "dry-run-commits"
            Find = 'if (dryRun) throw new DryRunDone();'
            Replace = 'if (false) throw new DryRunDone();' }
+        @{ Name = "stalest-session-claims-the-seat-first"
+           Find = 'for (const row of order) {'
+           Replace = 'for (const row of [...order].reverse()) {' }
+        @{ Name = "seat-claims-not-remembered"
+           Find = 'claimed.has(row.orcId) || '
+           Replace = '' }
+        @{ Name = "seats-in-the-database-ignored"
+           Find = ' || seat.get(row.orcId, ctx.nodeId)) {'
+           Replace = ') {' }
+        @{ Name = "sub-session-writer-gives-no-orc"
+           Find = 'if (lead !== null) row.by_orc_id = lead;'
+           Replace = 'if (false) row.by_orc_id = lead;' }
+        @{ Name = "sub-session-handed-target-not-resolved"
+           Find = '(orcRef(ctx, to) ?? labelOrc(ctx, to))'
+           Replace = 'orcRef(ctx, to)' }
+        @{ Name = "sub-session-wait-not-resolved"
+           Find = 'orc: labelOrc(ctx, raw), unlinked: labelOrc(ctx, raw) === null }'
+           Replace = 'orc: null, unlinked: true }' }
+        @{ Name = "handed-needs-a-person-not-said"
+           Find = 'names no Orc row (event not imported; needs a person)'
+           Replace = 'names no Orc row (event not imported)' }
+        @{ Name = "first-seen-substitution-silent"
+           Find = '{ rep.unlink(''registry'', ''firstSeen is not a time (lastSeen used)'', id); first = last; }'
+           Replace = '{ first = last; }' }
+        @{ Name = "last-seen-substitution-silent"
+           Find = '{ rep.unlink(''registry'', ''lastSeen is not a time (firstSeen used)'', id); last = first; }'
+           Replace = '{ last = first; }' }
+        @{ Name = "retired-at-substitution-silent"
+           Find = '{ rep.unlink(''registry'', ''retiredAt is not a time (lastSeen used)'', row.id); row.retiredAt = row.last; }'
+           Replace = '{ row.retiredAt = row.last; }' }
+        @{ Name = "ledger-without-orcs-accepted"
+           Find = '.get().n === 0) {'
+           Replace = '.get().n === -1) {' }
+        @{ Name = "changelog-without-orcs-accepted"
+           Find = '(data.ledger !== null || data.changelog !== null) &&'
+           Replace = 'data.ledger !== null &&' }
+        @{ Name = "older-duplicate-card-reported-as-newer"
+           Find = 'const drop = c.mtime > prev.mtime ? prev : c;'
+           Replace = 'const drop = c.mtime > prev.mtime ? c : prev;' }
+        @{ Name = "older-duplicate-card-imported"
+           Find = 'newest.set(c.orc, c.mtime > prev.mtime ? c : prev);'
+           Replace = 'newest.set(c.orc, c.mtime > prev.mtime ? prev : c);' }
+        @{ Name = "cut-text-not-reported"
+           Find = 'rep.unlink(source, field + '' longer than '' + max + '' characters (cut)'', example);'
+           Replace = 'void example;' }
+        @{ Name = "pr-repo-case-kept"
+           Find = 'const repo = m[1].toLowerCase();'
+           Replace = 'const repo = m[1];' }
+        @{ Name = "pr-checked-time-is-now"
+           Find = 'checked = firstNamed.get(m.key) ?? mergedAt ?? 0;'
+           Replace = 'checked = Date.now();' }
+        @{ Name = "pr-first-named-is-the-last"
+           Find = '!(firstNamed.get(ref.key) <= t)'
+           Replace = 'true' }
         @{ Name = "failure-after-changelog-not-seen"
            Find = 'onStep(''changelog'');'
            Replace = '' }

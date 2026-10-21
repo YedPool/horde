@@ -171,6 +171,11 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
       ctx.nodeId = stepNode(ctx);
       onStep('node');
       stepOrcs(ctx, data);
+      // Event hashes hold Orc ids: a ledger or changelog imported before any Orc row exists would be
+      // written again, as other rows, by the next import that has the cards. So it is refused, whole.
+      if ((data.ledger !== null || data.changelog !== null) && db.prepare('SELECT count(*) AS n FROM orc').get().n === 0) {
+        throw new Error('the ledger and the changelog name Orcs, and fleet.db has no Orc rows: give the status cards (--cards, --thrall-card) in the same run, or import them first');
+      }
       onStep('orcs');
       stepSessions(ctx, data);
       onStep('sessions');
@@ -179,7 +184,7 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
       onStep('tasks');
       stepChangelog(ctx, data);
       onStep('changelog');
-      stepStatus(ctx, data);
+      stepStatus(ctx);
       onStep('status');
       if (dryRun) throw new DryRunDone();
     });
@@ -256,7 +261,19 @@ function stepNode(ctx) {
 
 function stepOrcs(ctx, data) {
   const { db, rep } = ctx;
-  const cards = [...data.cards, ...(data.thrall ? [data.thrall] : [])].filter(Boolean);
+  const all = [...data.cards, ...(data.thrall ? [data.thrall] : [])].filter(Boolean);
+  // Two cards naming one Orc (a stale copy under another folder): only the newer card is imported, so one
+  // Orc has one status history from one place. The tie goes to the card read first.
+  const newest = new Map();
+  for (const c of all) {
+    const prev = newest.get(c.orc);
+    if (prev === undefined) { newest.set(c.orc, c); continue; }
+    const drop = c.mtime > prev.mtime ? prev : c;
+    newest.set(c.orc, c.mtime > prev.mtime ? c : prev);
+    rep.unlink('cards', 'two cards name orc ' + c.orc + ' (only the newer card is imported)', drop.folder);
+  }
+  const cards = all.filter((c) => newest.get(c.orc) === c);
+  ctx.cards = cards;
   ctx.cardOrc = new Map(); // card -> orc id
   const find = db.prepare('SELECT id FROM orc WHERE lane_dir = ? OR letter = ? ORDER BY letter = ? DESC LIMIT 1');
   const findThrall = db.prepare("SELECT id FROM orc WHERE rank = 'thrall' AND retired_at IS NULL");
@@ -285,6 +302,20 @@ function loadOrcMaps(ctx) {
     ctx.byDir.set(o.lane_dir, o.id);
     if (o.rank === 'thrall') ctx.thrallId = o.id;
   }
+}
+
+// A sub-session label (a letter and digits: C1, C13, M2) to the Orc of its lead letter, else null.
+function labelOrc(ctx, name) {
+  const m = typeof name === 'string' ? /^([A-Z])\d+$/.exec(name) : null;
+  return m ? (ctx.byLetter.get(m[1]) ?? null) : null;
+}
+
+// Text cut to what its column holds is reported, per field, never cut in silence.
+function fit(rep, source, field, value, max, example) {
+  const v = String(value);
+  if (v.length <= max) return v;
+  rep.unlink(source, field + ' longer than ' + max + ' characters (cut)', example);
+  return v.slice(0, max);
 }
 
 // A letter (C) or a lane folder (form-fill) to an Orc id, else null.
@@ -328,17 +359,42 @@ function stepSessions(ctx, data) {
     let last = parseTime(rec.lastSeen);
     if (first === null && last === null) { rep.unlink('registry', 'firstSeen and lastSeen are not times (not imported)', id); continue; }
     if (isUsLocale(rec.firstSeen) && first !== null) rep.unlink('registry', 'firstSeen was in US-locale form (read as MM/DD/YYYY, UTC)', id);
-    if (first === null) first = last;
-    if (last === null) last = first;
+    if (first === null) { rep.unlink('registry', 'firstSeen is not a time (lastSeen used)', id); first = last; }
+    if (last === null) { rep.unlink('registry', 'lastSeen is not a time (firstSeen used)', id); last = first; }
     if (last < first) { rep.unlink('registry', 'lastSeen is before firstSeen (lastSeen set to firstSeen)', id); last = first; }
     rows.set(id, { id, rec, first, last });
   }
-  // The freshest session takes an Orc's one live seat; the schema allows one per Orc and PC.
   const order = [...rows.values()].sort((a, b) => b.last - a.last || (a.id < b.id ? -1 : 1));
   const done = new Set();
   const visiting = new Set();
   const exists = db.prepare('SELECT 1 FROM session WHERE id = ?');
   const seat = db.prepare("SELECT id FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
+  // SEATS ARE DECIDED BEFORE ANY INSERT, freshest session first: the schema allows one live seat per Orc
+  // and PC, and the freshest session must hold it. Inserting a parent early (for its child) never claims
+  // one, because the claim was made here, by freshness, not by the order the rows happen to be written in.
+  const claimed = new Set();
+  for (const row of order) {
+    if (exists.get(row.id)) continue;
+    const rec = row.rec;
+    row.rank = rankOf(rec);
+    row.orcId = sessionOrc(ctx, rec, row.rank, rep);
+    if ((row.rank === 'orc' || row.rank === 'thrall') && row.orcId === null) {
+      rep.unlink('registry', 'a ' + row.rank + ' session names no Orc row (rank unknown)', row.id);
+      row.rank = 'unknown';
+    }
+    row.retired = rec.retired === true;
+    row.retiredAt = null;
+    if (row.retired) {
+      row.retiredAt = parseTime(rec.retiredAt);
+      if (row.retiredAt === null) { rep.unlink('registry', 'retiredAt is not a time (lastSeen used)', row.id); row.retiredAt = row.last; }
+    }
+    if ((row.rank === 'orc' || row.rank === 'thrall') && !row.retired) {
+      if (claimed.has(row.orcId) || seat.get(row.orcId, ctx.nodeId)) {
+        rep.unlink('registry', 'a second live seat for one Orc (rank unknown)', row.id);
+        row.rank = 'unknown';
+      } else claimed.add(row.orcId);
+    }
+  }
   const link = (child, field, parentId) => {
     if (parentId === null || parentId === undefined || parentId === '') return null;
     const p = String(parentId).toLowerCase();
@@ -364,27 +420,15 @@ function stepSessions(ctx, data) {
     const rec = row.rec;
     const parent = link(row, 'parent', rec.parent);
     const resumed = link(row, 'resumed-from', rec.resumedFrom ?? rec.resumedFromId);
-    let rank = rankOf(rec);
-    const orcId = sessionOrc(ctx, rec, rank, rep);
-    if ((rank === 'orc' || rank === 'thrall') && orcId === null) {
-      rep.unlink('registry', 'a ' + rank + ' session names no Orc row (rank unknown)', row.id);
-      rank = 'unknown';
-    }
-    const retired = rec.retired === true;
-    const retiredAt = retired ? (parseTime(rec.retiredAt) ?? row.last) : null;
-    if ((rank === 'orc' || rank === 'thrall') && !retired) {
-      const held = seat.get(orcId, ctx.nodeId);
-      if (held) { rep.unlink('registry', 'a second live seat for one Orc (rank unknown)', row.id); rank = 'unknown'; }
-    }
     // A process is recorded only when both its id and its start time are there (the schema needs both).
     const pid = Number.isSafeInteger(rec.pid) && rec.pid > 0 ? rec.pid : null;
     const started = parseTime(rec.processStartedAt);
     const hasProc = pid !== null && started !== null;
     db.prepare(`INSERT INTO session (id, node_id, orc_id, rank, parent_session_id, resumed_from_id, pid, process_started_at, start_cwd, cwd,
       transcript_path, origin, fleet_session_id, fleet_run_dir, first_seen, last_seen, retired_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(row.id, ctx.nodeId, orcId, rank, parent, resumed,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(row.id, ctx.nodeId, row.orcId, row.rank, parent, resumed,
       hasProc ? pid : null, hasProc ? started : null, nz(rec.firstCwd), nz(rec.cwd), nz(rec.transcriptPath),
-      str(nz(rec.origin), 40), str(nz(rec.fleetSessionId), 120), nz(rec.fleetRunDir), row.first, row.last, retiredAt);
+      str(nz(rec.origin), 40), str(nz(rec.fleetSessionId), 120), nz(rec.fleetRunDir), row.first, row.last, row.retiredAt);
     rep.count('session', true);
     visiting.delete(row.id);
     done.add(row.id);
@@ -398,23 +442,41 @@ function stepSessions(ctx, data) {
 function stepPrCache(ctx, data) {
   const { db, rep } = ctx;
   ctx.prIds = new Map(); // 'repo#number' -> id
-  for (const r of db.prepare('SELECT id, repo, number FROM pr').all()) ctx.prIds.set(r.repo + '#' + r.number, r.id);
+  for (const r of db.prepare('SELECT id, repo, number FROM pr').all()) ctx.prIds.set(r.repo.toLowerCase() + '#' + r.number, r.id);
   if (data.prCache === null) return;
+  // The first ledger line that names each PR: the time a PR with no checked time of its own takes.
+  const firstNamed = new Map();
+  for (const { obj } of data.ledger ?? []) {
+    const ref = typeof obj.pr === 'string' ? prKey(obj.pr) : null;
+    const t = parseTime(obj.ts);
+    if (ref && t !== null && !(firstNamed.get(ref.key) <= t)) firstNamed.set(ref.key, t);
+  }
   for (const key of Object.keys(data.prCache).sort()) {
-    const m = PR_REF.exec(key);
+    const m = prKey(key);
     const v = data.prCache[key];
     if (!m || v === null || typeof v !== 'object') { rep.unlink('pr-cache', 'key is not OWNER/REPO#N or its value is not an object (not imported)', key); continue; }
-    if (ctx.prIds.has(key)) { rep.count('pr', false); continue; }
-    const checked = parseTime(v.checked);
-    if (checked === null) rep.unlink('pr-cache', 'checked is not a time (import time used)', key);
+    if (ctx.prIds.has(m.key)) { rep.count('pr', false); continue; }
+    let checked = parseTime(v.checked);
     let state = String(v.state ?? '').toLowerCase();
     if (!['open', 'closed', 'merged'].includes(state)) { rep.unlink('pr-cache', 'state ' + state + ' is not known (kept open)', key); state = 'open'; }
     let mergedAt = parseTime(v.mergedAt);
     if (state === 'merged' && mergedAt === null) { rep.unlink('pr-cache', 'merged with no mergedAt time (kept open)', key); state = 'open'; }
     if (state !== 'merged' && mergedAt !== null) { rep.unlink('pr-cache', 'mergedAt on a PR that is not merged (time ignored)', key); mergedAt = null; }
+    if (checked === null) {
+      checked = firstNamed.get(m.key) ?? mergedAt ?? 0;
+      rep.unlink('pr-cache', 'checked is not a time (the first ledger line naming it, else mergedAt, else 0, used)', key);
+    }
     const sha = v.mergeSha ?? v.merge_sha ?? null;
-    insertPr(ctx, key, m[1], Number(m[2]), state, mergedAt, typeof sha === 'string' && SHA40.test(sha) ? sha : null, checked ?? Date.now(), null);
+    insertPr(ctx, m.key, m.repo, m.number, state, mergedAt, typeof sha === 'string' && SHA40.test(sha) ? sha : null, checked, null);
   }
+}
+
+// OWNER/REPO#N to its parts; GitHub names are not case-sensitive, so the repo is lower-cased and one PR is one row.
+function prKey(ref) {
+  const m = PR_REF.exec(ref);
+  if (!m) return null;
+  const repo = m[1].toLowerCase();
+  return { key: repo + '#' + m[2], repo, number: Number(m[2]) };
 }
 
 function insertPr(ctx, key, repo, number, state, mergedAt, mergeSha, checkedAt, title) {
@@ -479,7 +541,7 @@ function makeTasks(ctx, events) {
     }
     const id = newId(p.at);
     db.prepare('INSERT INTO task (id, key, title, source, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, p.key, p.title.slice(0, 400), p.source.slice(0, 40), parentId, p.at);
+      .run(id, p.key, fit(rep, 'ledger', 'title', p.title, 400, p.key), fit(rep, 'ledger', 'source', p.source, 40, p.key), parentId, p.at);
     ctx.taskIds.set(p.key, id);
     rep.count('task', true);
     visiting.delete(p.key);
@@ -496,20 +558,20 @@ function classifyOn(ctx, raw) {
   const lane = /^lane:(.+)$/.exec(raw);
   if (lane) return { kind: 'orc', orc: orcRef(ctx, lane[1]), unlinked: orcRef(ctx, lane[1]) === null };
   if (/^[A-Z]$/.test(raw)) return { kind: 'orc', orc: orcRef(ctx, raw), unlinked: orcRef(ctx, raw) === null };
-  if (/^[A-Z]\d+$/.test(raw)) return { kind: 'orc', orc: null, unlinked: true };
+  if (/^[A-Z]\d+$/.test(raw)) return { kind: 'orc', orc: labelOrc(ctx, raw), unlinked: labelOrc(ctx, raw) === null };
   if (EXTERNAL_WAITS.includes(raw)) return { kind: 'external', orc: null };
   return { kind: 'other', orc: null };
 }
 
 function prFor(ctx, ev, at) {
   if (ev.pr === undefined || ev.pr === null) return null;
-  const m = typeof ev.pr === 'string' ? PR_REF.exec(ev.pr) : null;
+  const m = typeof ev.pr === 'string' ? prKey(ev.pr) : null;
   if (!m) { ctx.rep.unlink('ledger', 'pr value is not OWNER/REPO#N (no PR linked)', ev.pr); return null; }
-  const known = ctx.prIds.get(ev.pr);
+  const known = ctx.prIds.get(m.key);
   if (known) return known;
   // A PR the cache does not know: open until the cache says merged, and said so in the report.
   ctx.rep.unlink('ledger', 'pr is not in the PR cache (row made open, merge time unknown)', ev.pr);
-  return insertPr(ctx, ev.pr, m[1], Number(m[2]), 'open', null, null, at, null);
+  return insertPr(ctx, m.key, m.repo, m.number, 'open', null, null, at, null);
 }
 
 function putEvent(ctx, e) {
@@ -522,7 +584,13 @@ function putEvent(ctx, e) {
   const by = nz(ev.by);
   if (by === null) rep.unlink('ledger', 'line has no by', where);
   else if (ctx.byLetter.has(by)) row.by_orc_id = ctx.byLetter.get(by);
-  else { row.by_text = by.slice(0, 64); rep.unlink('ledger', 'by ' + by + ' names no Orc row (kept as by_text)', ev.task); }
+  else {
+    // The full label stays in by_text; a sub-session label (C13) also gives its lead letter's Orc.
+    row.by_text = fit(rep, 'ledger', 'by', by, 64, ev.task);
+    const lead = labelOrc(ctx, by);
+    if (lead !== null) row.by_orc_id = lead;
+    else rep.unlink('ledger', 'by ' + by + ' names no Orc row (kept as by_text)', ev.task);
+  }
 
   if (ev.event === 'opened' || ev.event === 'priority') {
     const prio = Number.isInteger(ev.prio) && ev.prio >= 0 && ev.prio <= 9 ? ev.prio : null;
@@ -539,9 +607,9 @@ function putEvent(ctx, e) {
   }
   if (ev.event === 'handed') {
     const to = nz(ev.to);
-    const target = to === null ? null : orcRef(ctx, to);
+    const target = to === null ? null : (orcRef(ctx, to) ?? labelOrc(ctx, to));
     if (target === null) {
-      rep.unlink('ledger', to === null ? 'handed has no to (event not imported)' : 'handed to ' + to + ' names no Orc row (event not imported)', ev.task);
+      rep.unlink('ledger', to === null ? 'handed has no to (event not imported; needs a person to say who took it)' : 'handed to ' + to + ' names no Orc row (event not imported; needs a person)', ev.task);
       return;
     }
     row.to_orc_id = target;
@@ -553,7 +621,7 @@ function putEvent(ctx, e) {
   }
   const on = nz(ev.on);
   if (on !== null) {
-    row.on_text = on.slice(0, 400);
+    row.on_text = fit(rep, 'ledger', 'on', on, 400, ev.task);
     if (ev.event === 'waiting') {
       const c = classifyOn(ctx, on);
       row.on_kind = c.kind;
@@ -563,8 +631,8 @@ function putEvent(ctx, e) {
   } else if (ev.event === 'waiting') {
     rep.unlink('ledger', 'waiting has no on', ev.task);
   }
-  if (nz(ev.proof)) row.proof = String(ev.proof).slice(0, 4000);
-  if (nz(ev.reason)) row.reason = String(ev.reason).slice(0, 4000);
+  if (nz(ev.proof)) row.proof = fit(rep, 'ledger', 'proof', ev.proof, 4000, ev.task);
+  if (nz(ev.reason)) row.reason = fit(rep, 'ledger', 'reason', ev.reason, 4000, ev.task);
   const prId = prFor(ctx, ev, e.at);
   if (prId) row.pr_id = prId;
 
@@ -633,7 +701,7 @@ function stepChangelog(ctx, data) {
       row.corrects_id = ids.get(e.corrects) ?? null;
       if (row.corrects_id === null) rep.unlink('changelog', 'corrects ' + e.corrects + ' is not an imported entry (no link)', x.legacy);
     }
-    row.title = (nz(e.title) ?? '(no title)').slice(0, 400);
+    row.title = fit(rep, 'changelog', 'title', nz(e.title) ?? '(no title)', 400, x.legacy);
     if (nz(e.title) === null) rep.unlink('changelog', 'entry has no title (set to (no title))', x.legacy);
     row.text = String(e.text ?? '');
     const r = appendHistory(db, 'changelog_entry', row);
@@ -666,10 +734,9 @@ function tagEntry(ctx, entryId, lane, at, legacy) {
 // ---------------------------------------------------------------------------------------------------------
 // orc_status
 
-function stepStatus(ctx, data) {
+function stepStatus(ctx) {
   const { db, rep } = ctx;
-  const cards = [...data.cards, ...(data.thrall ? [data.thrall] : [])].filter(Boolean);
-  for (const c of cards) {
+  for (const c of ctx.cards) {
     const orcId = ctx.cardOrc.get(c);
     const doing = c.doing;
     if (doing.length < 1 || doing.length > 120) {

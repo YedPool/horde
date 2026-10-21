@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../store.mjs';
+import { ulid } from '../ids.mjs';
 import { importFleet, parseTime, parseCard } from '../import.mjs';
 import { findProblems, main, parseImportArgs } from '../cli.mjs';
 
@@ -166,6 +168,9 @@ function world() {
   }
   return { root, sources: { ledger, prCache, changelog, cards, thrallCard: thrall, registry } };
 }
+
+const cardsOf = () => makeCards(tempDir()).cards;
+const ulidTime = (t) => ulid(t, Buffer.alloc(10)).slice(0, 10);
 
 function imported() {
   const w = world();
@@ -358,17 +363,17 @@ test('session: a record whose lastSeen precedes firstSeen is repaired and report
 test('pr: every cache row becomes a PR (state, merge time, a 40-hex merge sha), a bad row is reported, a stale one is never inferred from merged', () => {
   const { db, report } = imported();
   const pr = Object.fromEntries(rows(db, 'SELECT repo, number, state, merged_at, merge_sha, checked_at, title FROM pr').map((r) => [r.repo + '#' + r.number, r]));
-  assert.equal(pr['OrahVision/horde#5'].state, 'merged');
-  assert.equal(pr['OrahVision/horde#5'].merged_at, ms('2026-10-14T10:00:00Z'));
-  assert.equal(pr['OrahVision/horde#5'].checked_at, ms('2026-10-15T19:49:05Z'));
-  assert.equal(pr['OrahVision/horde#5'].merge_sha, null);
-  assert.equal(pr['OrahVision/horde#9'].merge_sha, 'a'.repeat(40));
-  assert.equal(pr['OrahVision/horde#6'].state, 'open');
-  assert.equal(pr['YedPool/horde#7'].state, 'closed');
-  assert.equal(pr['X/y#8'].state, 'open', 'merged with no time cannot be merged');
-  assert.equal(pr['YedPool/horde#999'].state, 'open', 'the ledger said merged: true; only the cache can say merged');
-  assert.equal(pr['YedPool/horde#999'].merged_at, null);
-  assert.equal(pr['OrahVision/horde#10'].merge_sha, null, 'a merge sha that is not 40 hex is not kept');
+  assert.equal(pr['orahvision/horde#5'].state, 'merged');
+  assert.equal(pr['orahvision/horde#5'].merged_at, ms('2026-10-14T10:00:00Z'));
+  assert.equal(pr['orahvision/horde#5'].checked_at, ms('2026-10-15T19:49:05Z'));
+  assert.equal(pr['orahvision/horde#5'].merge_sha, null);
+  assert.equal(pr['orahvision/horde#9'].merge_sha, 'a'.repeat(40));
+  assert.equal(pr['orahvision/horde#6'].state, 'open');
+  assert.equal(pr['yedpool/horde#7'].state, 'closed');
+  assert.equal(pr['x/y#8'].state, 'open', 'merged with no time cannot be merged');
+  assert.equal(pr['yedpool/horde#999'].state, 'open', 'the ledger said merged: true; only the cache can say merged');
+  assert.equal(pr['yedpool/horde#999'].merged_at, null);
+  assert.equal(pr['orahvision/horde#10'].merge_sha, null, 'a merge sha that is not 40 hex is not kept');
   assert.equal(count(db, 'pr'), 7);
   assert.ok(unlinked(report, 'pr-cache', 'key is not OWNER/REPO#N'));
   assert.ok(unlinked(report, 'pr-cache', 'merged with no mergedAt'));
@@ -427,11 +432,12 @@ test('task_event: by is an Orc row for a known letter, else by_text; a line with
   const ev = (key, kind, n = 0) => one(db, `SELECT e.by_orc_id, e.by_text, o.letter FROM task_event e JOIN task t ON t.id = e.task_id LEFT JOIN orc o ON o.id = e.by_orc_id
     WHERE t.key = ? AND e.kind = ? ORDER BY e.at LIMIT 1 OFFSET ?`, key, kind, n);
   assert.deepEqual(ev('T-0001', 'started'), { by_orc_id: one(db, "SELECT id FROM orc WHERE letter = 'C'").id, by_text: null, letter: 'C' });
-  assert.deepEqual(ev('T-0002', 'started'), { by_orc_id: null, by_text: 'C13', letter: null });
+  assert.deepEqual(ev('T-0002', 'started'), { by_orc_id: one(db, "SELECT id FROM orc WHERE letter = 'C'").id, by_text: 'C13', letter: 'C' }, 'a sub-session label gives its Orc and keeps the label');
   assert.deepEqual(ev('T-0001', 'opened'), { by_orc_id: null, by_text: 'analyst-backfill', letter: null });
   assert.deepEqual(ev('T-0002', 'done'), { by_orc_id: null, by_text: null, letter: null });
   assert.equal(ev('T-0005', 'opened').letter, 'M');
-  assert.equal(unlinked(report, 'ledger', 'by C13 names no Orc row (kept as by_text)').count, 1);
+  assert.equal(unlinked(report, 'ledger', 'by C13 names no Orc row'), undefined);
+  assert.equal(unlinked(report, 'ledger', 'by analyst-backfill names no Orc row (kept as by_text)').count, 1);
   assert.equal(unlinked(report, 'ledger', 'by analyst names no Orc row').count, 1);
   assert.equal(unlinked(report, 'ledger', 'line has no by').count, 2);
 });
@@ -451,8 +457,8 @@ test('task_event: handed takes the Orc named by a lane folder; one with no known
   const { db, report } = imported();
   assert.equal(one(db, "SELECT o.letter FROM task_now n JOIN orc o ON o.id = n.owner_orc_id WHERE n.key = 'T-0003'").letter, 'K', 'sleeping-sessions is K');
   assert.equal(one(db, "SELECT count(*) AS n FROM task_event e JOIN task t ON t.id = e.task_id WHERE t.key = 'T-0003' AND e.kind = 'handed'").n, 1);
-  assert.equal(unlinked(report, 'ledger', 'handed to T-0036 names no Orc row (event not imported)').count, 1);
-  assert.equal(unlinked(report, 'ledger', 'handed has no to').count, 1);
+  assert.equal(unlinked(report, 'ledger', 'handed to T-0036 names no Orc row (event not imported; needs a person)').count, 1);
+  assert.match(unlinked(report, 'ledger', 'handed has no to').reason, /needs a person/);
 });
 
 test('task_event: waiting on keeps the words as on_text and the class as on_kind', () => {
@@ -462,10 +468,10 @@ test('task_event: waiting on keeps the words as on_text and the class as on_kind
   assert.deepEqual(waits['lane:F'], { on_text: 'lane:F', on_kind: 'orc', on_letter: 'F' });
   assert.deepEqual(waits.M, { on_text: 'M', on_kind: 'orc', on_letter: 'M' }, 'the Thrall');
   assert.deepEqual(waits.device, { on_text: 'device', on_kind: 'external', on_letter: null });
-  assert.deepEqual(waits.C3, { on_text: 'C3', on_kind: 'orc', on_letter: null }, 'a session label names no Orc row');
+  assert.deepEqual(waits.C3, { on_text: 'C3', on_kind: 'orc', on_letter: 'C' }, 'a session label waits on its lead letter Orc');
   assert.equal(waits['founder word for PRODUCTION rollout (question 50, via M)'].on_kind, 'other');
   assert.deepEqual(waits['lane:ZZ'], { on_text: 'lane:ZZ', on_kind: 'orc', on_letter: null });
-  assert.equal(unlinked(report, 'ledger', 'on C3 names no Orc row').count, 1);
+  assert.equal(unlinked(report, 'ledger', 'on C3 names no Orc row'), undefined);
   assert.equal(unlinked(report, 'ledger', 'on lane:ZZ names no Orc row').count, 1);
   // A non-waiting line's `on` is words only: a class on anything but a wait is refused by the schema.
   const prog = one(db, "SELECT on_text, on_kind FROM task_event WHERE kind = 'progress' AND on_text IS NOT NULL");
@@ -485,7 +491,7 @@ test('task_event: proof and reason are kept; superseded points at its replacemen
 test('task_pr: a PR named by a line is linked to the task once, by backfill, at the line time; merged is not copied', () => {
   const { db, report } = imported();
   const links = rows(db, "SELECT t.key, p.repo, p.number, l.linked_by, l.linked_at FROM task_pr l JOIN task t ON t.id = l.task_id JOIN pr p ON p.id = l.pr_id ORDER BY t.key");
-  assert.deepEqual(links.map((l) => l.key + ' ' + l.repo + '#' + l.number), ['T-0001 OrahVision/horde#5', 'T-0002 YedPool/horde#999']);
+  assert.deepEqual(links.map((l) => l.key + ' ' + l.repo + '#' + l.number), ['T-0001 orahvision/horde#5', 'T-0002 yedpool/horde#999']);
   assert.ok(links.every((l) => l.linked_by === 'backfill'));
   assert.equal(links[0].linked_at, ms('2026-10-05T20:10:00Z'), 'the first line that names it');
   assert.deepEqual(report.tables.task_pr, { added: 2, existing: 0 });
@@ -548,7 +554,7 @@ test('changelog_entry: two lines with one id keep the first and say so; a line w
   const file = path.join(tempDir(), 'c.jsonl');
   const a = { v: 1, id: 'X-1', ts: '2026-10-11T03:57:00Z', kind: 'note', title: 'one', text: 't', lane: 'fleet-wide' };
   fs.writeFileSync(file, jl([a, { ...a, title: 'two' }, { ...a, id: undefined }, { ...a, id: 'X-2', ts: 'later' }, { ...a, id: 'X-3', title: '   ' }]));
-  const r = importFleet(db, { changelog: file });
+  const r = importFleet(db, { changelog: file, cards: cardsOf() });
   assert.equal(count(db, 'changelog_entry'), 2);
   assert.equal(one(db, "SELECT title FROM changelog_entry WHERE legacy_id = 'X-1'").title, 'one');
   assert.equal(one(db, "SELECT title FROM changelog_entry WHERE legacy_id = 'X-3'").title, '(no title)');
@@ -601,10 +607,9 @@ test('only the sources given are read', () => {
   assert.equal(r.unlinked.filter((u) => u.source !== 'pr-cache').length, 0);
   // The ledger without cards: every lane is unlinked, and still nothing fails.
   const { db: db2 } = fresh();
-  const r2 = importFleet(db2, { ledger: w.sources.ledger });
-  assert.equal(count(db2, 'task'), 6);
-  assert.ok(unlinked(r2, 'ledger', 'lane C names no Orc row'));
-  assert.deepEqual(findProblems(db2), []);
+  // The ledger without cards is refused whole: its hashes hold Orc ids.
+  assert.throws(() => importFleet(db2, { ledger: w.sources.ledger }), /no Orc rows/);
+  assert.equal(count(db2, 'node'), 0);
 });
 
 test('a dry run reports what a real run adds and changes nothing, node included', () => {
@@ -669,7 +674,7 @@ test('a ledger line with a very long reason is cut to what the table allows; a m
     { ts: '2026-10-05T17:02:00Z', task: 'T-0001', event: 'priority', by: 'C' },
     { ts: '2026-10-05T17:03:00Z', task: 'T-0001', event: 'waiting', by: 'C' },
   ]));
-  const r = importFleet(db, { ledger: file });
+  const r = importFleet(db, { ledger: file, cards: cardsOf() });
   assert.equal(one(db, 'SELECT length(title) AS n FROM task').n, 400);
   assert.equal(one(db, 'SELECT length(source) AS n FROM task').n, 40);
   assert.equal(one(db, "SELECT length(reason) AS a, length(on_text) AS b FROM task_event WHERE kind = 'progress'").a, 4000);
@@ -721,7 +726,7 @@ test('horde db import: one line per table and the unlinked report, exit 0; the s
   assert.equal(first.code, 0, first.err);
   assert.match(first.out, /^import: done/);
   assert.match(first.out, /^orc: 6 added, 0 already there$/m);
-  assert.match(first.out, /^ledger: by C13 names no Orc row \(kept as by_text\): 1 \(e\.g\. T-0002\)$/m);
+  assert.match(first.out, /^ledger: by analyst-backfill names no Orc row \(kept as by_text\): 1 \(e\.g\. T-0001\)$/m);
   assert.match(first.out, /^cards: card is not valid, no Orc row made: orc line 'F1' is not one capital letter: 1 \(e\.g\. horde-merge-master\)$/m);
   assert.match(run(['status'], env).out, /^task_event: 21 rows$/m);
   const second = run(['import', ...flags], env);
@@ -763,7 +768,184 @@ test('task: when a task is opened twice, the earlier opening by time makes the t
     { ts: '2026-10-06T10:00:00Z', task: 'T-0007', event: 'opened', title: 'late title', source: 'orc', lane: 'C', prio: 1, by: 'C' },
     { ts: '2026-10-05T10:00:00Z', task: 'T-0007', event: 'opened', title: 'early title', source: 'founder', lane: 'C', prio: 2, by: 'C' },
   ]));
-  importFleet(db, { ledger: file });
+  importFleet(db, { ledger: file, cards: cardsOf() });
   assert.deepEqual(one(db, 'SELECT title, source, created_at FROM task'), { title: 'early title', source: 'founder', created_at: ms('2026-10-05T10:00:00Z') });
   assert.equal(count(db, 'task_event'), 2);
+});
+
+test('seats: the freshest session holds the seat even when an older one is its parent, which is inserted first', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  const put = (id, extra) => fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({ origin: 'fleet', owner: 'M', label: 'C', role: 'orchestrator', firstSeen: '2026-10-06T10:00:00Z', ...extra }));
+  put(U(30), { lastSeen: '2026-10-07T10:00:00Z' });
+  put(U(31), { lastSeen: '2026-10-09T10:00:00Z', parent: U(30) });
+  const cards = makeCards(tempDir()).cards;
+  const r = importFleet(db, { cards, registry: dir });
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(31)).rank, 'orc', 'B, the newer, holds the seat');
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(30)).rank, 'unknown');
+  assert.equal(one(db, 'SELECT parent_session_id AS p FROM session WHERE id = ?', U(31)).p, U(30));
+  assert.equal(unlinked(r, 'registry', 'a second live seat').examples[0], U(30));
+  // A second import, with the seat already in the database, gives nothing new.
+  assert.equal(importFleet(db, { cards, registry: dir }).tables.session.added, 0);
+  assert.deepEqual(findProblems(db), []);
+});
+
+test('seats: a stub parent never claims a seat, and a session cannot take a seat the database already gave', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  const put = (id, extra) => fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({ origin: 'fleet', owner: 'M', label: 'C', role: 'orchestrator', firstSeen: '2026-10-06T10:00:00Z', ...extra }));
+  const cards = makeCards(tempDir()).cards;
+  put(U(32), { lastSeen: '2026-10-07T10:00:00Z', parent: U(98) });
+  importFleet(db, { cards, registry: dir });
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(98)).rank, 'unknown');
+  put(U(33), { lastSeen: '2026-10-20T10:00:00Z' });
+  const r = importFleet(db, { cards, registry: dir });
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(33)).rank, 'unknown', 'the seat was given already');
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(32)).rank, 'orc');
+  assert.ok(unlinked(r, 'registry', 'a second live seat'));
+});
+
+test('sub-session labels: C1, C13 and M2 resolve to their lead letter, the label stays in the text, other writers stay by_text', () => {
+  const { db } = fresh();
+  const file = path.join(tempDir(), 'l.jsonl');
+  const base = { source: 'orc', prio: 1, parent: null };
+  fs.writeFileSync(file, jl([
+    { ...base, ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'a', lane: 'C', by: 'C13' },
+    { ts: '2026-10-05T17:01:00Z', task: 'T-0001', event: 'handed', by: 'M2', to: 'C1' },
+    { ts: '2026-10-05T17:02:00Z', task: 'T-0001', event: 'waiting', by: 'analyst', on: 'C3' },
+    { ts: '2026-10-05T17:03:00Z', task: 'T-0001', event: 'waiting', by: 'analyst-arrival', on: 'Q7' },
+    { ts: '2026-10-05T17:04:00Z', task: 'T-0001', event: 'handed', by: 'F', to: 'Q9' },
+    { ts: '2026-10-05T17:05:00Z', task: 'T-0001', event: 'handed', by: 'F' },
+  ]));
+  const mk = makeCards(tempDir());
+  const r = importFleet(db, { ledger: file, cards: mk.cards, thrallCard: mk.thrall });
+  const ev = (kind, n = 0) => one(db, `SELECT e.by_text, bo.letter AS by_letter, oo.letter AS on_letter, tt.letter AS to_letter, e.on_kind FROM task_event e
+    LEFT JOIN orc bo ON bo.id = e.by_orc_id LEFT JOIN orc oo ON oo.id = e.on_orc_id LEFT JOIN orc tt ON tt.id = e.to_orc_id WHERE e.kind = ? ORDER BY e.at LIMIT 1 OFFSET ?`, kind, n);
+  assert.deepEqual(ev('opened'), { by_text: 'C13', by_letter: 'C', on_letter: null, to_letter: 'C', on_kind: null });
+  assert.deepEqual(ev('handed'), { by_text: 'M2', by_letter: 'M', on_letter: null, to_letter: 'C', on_kind: null });
+  assert.deepEqual(ev('waiting'), { by_text: 'analyst', by_letter: null, on_letter: 'C', to_letter: null, on_kind: 'orc' });
+  assert.equal(ev('waiting', 1).by_letter, null, 'analyst-arrival stays by_text');
+  assert.equal(ev('waiting', 1).on_letter, null, 'Q is no Orc');
+  assert.equal(count(db, 'task_event'), 4, 'the two handed lines with no target are not imported');
+  assert.equal(unlinked(r, 'ledger', 'handed to Q9').count, 1);
+  assert.match(unlinked(r, 'ledger', 'handed has no to').reason, /needs a person/);
+  assert.match(unlinked(r, 'ledger', 'handed to Q9').reason, /needs a person/);
+  assert.equal(unlinked(r, 'ledger', 'on Q7 names no Orc row').count, 1);
+  assert.equal(unlinked(r, 'ledger', 'by analyst names no Orc row').count, 1);
+  assert.equal(unlinked(r, 'ledger', 'by C13'), undefined);
+});
+
+test('registry times: a firstSeen, lastSeen or retiredAt that does not parse is replaced and each replacement is reported', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, U(40) + '.json'), JSON.stringify({ firstSeen: 'junk', lastSeen: '2026-10-05T10:00:00Z' }));
+  fs.writeFileSync(path.join(dir, U(41) + '.json'), JSON.stringify({ firstSeen: '2026-10-05T10:00:00Z', lastSeen: 'junk' }));
+  fs.writeFileSync(path.join(dir, U(42) + '.json'), JSON.stringify({ firstSeen: '2026-10-05T10:00:00Z', lastSeen: '2026-10-06T10:00:00Z', retired: true, retiredAt: 'junk' }));
+  fs.writeFileSync(path.join(dir, U(43) + '.json'), JSON.stringify({ firstSeen: '2026-10-05T10:00:00Z', lastSeen: '2026-10-06T10:00:00Z', retired: true, retiredAt: '2026-10-06T11:00:00Z' }));
+  const r = importFleet(db, { registry: dir });
+  assert.equal(unlinked(r, 'registry', 'firstSeen is not a time').examples[0], U(40));
+  assert.equal(unlinked(r, 'registry', 'lastSeen is not a time').examples[0], U(41));
+  assert.equal(unlinked(r, 'registry', 'retiredAt is not a time').count, 1, 'only the junk one');
+  assert.equal(one(db, 'SELECT retired_at FROM session WHERE id = ?', U(42)).retired_at, ms('2026-10-06T10:00:00Z'));
+  assert.equal(one(db, 'SELECT retired_at FROM session WHERE id = ?', U(43)).retired_at, ms('2026-10-06T11:00:00Z'));
+  assert.equal(one(db, 'SELECT first_seen FROM session WHERE id = ?', U(40)).first_seen, ms('2026-10-05T10:00:00Z'));
+});
+
+test('a ledger or a changelog with no Orc rows to name is refused whole; with the cards in the same run, or the rows already there, it goes in', () => {
+  const w = world();
+  const empty = path.join(w.root, 'no-cards');
+  fs.mkdirSync(path.join(empty, 'horde-merge-master'), { recursive: true });
+  for (const sources of [{ ledger: w.sources.ledger }, { changelog: w.sources.changelog }, { ledger: w.sources.ledger, cards: empty }]) {
+    const { db } = fresh();
+    assert.throws(() => importFleet(db, sources), /no Orc rows/);
+    for (const t of ['node', 'task', 'task_event', 'pr', 'changelog_entry', 'orc']) assert.equal(count(db, t), 0, t);
+  }
+  const { db } = fresh();
+  importFleet(db, { cards: w.sources.cards, thrallCard: w.sources.thrallCard });
+  assert.ok(importFleet(db, { ledger: w.sources.ledger }).tables.task_event.added > 0, 'the rows are already there');
+  // Sources that name no Orc (the PR cache, the registry) do not need any.
+  assert.equal(importFleet(fresh().db, { prCache: w.sources.prCache }).tables.pr.added, 6);
+});
+
+test('two cards naming one Orc: the newer card is imported, the other is reported', () => {
+  const root = tempDir();
+  const cards = path.join(root, 'orcs');
+  const old = writeCard(cards, 'form-fill', card({ orc: 'C', lane: 'Form fill', doing: 'old words' }));
+  fs.utimesSync(old, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
+  writeCard(cards, 'form-fill-copy', card({ orc: 'C', lane: 'Form fill copy', doing: 'new words' }));
+  const { db } = fresh();
+  const r = importFleet(db, { cards });
+  assert.equal(count(db, 'orc'), 1);
+  assert.equal(one(db, 'SELECT lane_dir FROM orc').lane_dir, 'form-fill-copy');
+  assert.deepEqual(rows(db, 'SELECT doing FROM orc_status').map((x) => x.doing), ['new words']);
+  assert.equal(unlinked(r, 'cards', 'two cards name orc C').examples[0], 'form-fill');
+  // The other way round: the older folder sorts last, the newer card still wins.
+  const { db: db2 } = fresh();
+  fs.utimesSync(path.join(cards, 'form-fill-copy', 'status.txt'), new Date('2026-09-01T00:00:00Z'), new Date('2026-09-01T00:00:00Z'));
+  importFleet(db2, { cards });
+  assert.deepEqual(rows(db2, 'SELECT doing FROM orc_status').map((x) => x.doing), ['old words']);
+});
+
+test('truncated text is reported with a count per field', () => {
+  const { db } = fresh();
+  const file = path.join(tempDir(), 'l.jsonl');
+  fs.writeFileSync(file, jl([
+    { ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'x'.repeat(401), source: 's'.repeat(41), lane: 'C', prio: 1, by: 'C'.repeat(65) },
+    { ts: '2026-10-05T17:01:00Z', task: 'T-0001', event: 'progress', by: 'C', reason: 'r'.repeat(4001), proof: 'p'.repeat(4001), on: 'o'.repeat(401) },
+    { ts: '2026-10-05T17:02:00Z', task: 'T-0001', event: 'progress', by: 'C', reason: 'r'.repeat(4002) },
+  ]));
+  const chg = path.join(tempDir(), 'c.jsonl');
+  fs.writeFileSync(chg, jl([{ v: 1, id: 'X-1', ts: '2026-10-11T03:57:00Z', kind: 'note', title: 't'.repeat(401), text: 't', lane: 'C' }]));
+  const r = importFleet(db, { ledger: file, changelog: chg, cards: cardsOf() });
+  const cut = (source, field) => unlinked(r, source, field + ' longer than');
+  assert.equal(cut('ledger', 'title').count, 1);
+  assert.equal(cut('ledger', 'source').count, 1);
+  assert.equal(cut('ledger', 'by').count, 1);
+  assert.equal(cut('ledger', 'reason').count, 2);
+  assert.equal(cut('ledger', 'proof').count, 1);
+  assert.equal(cut('ledger', 'on').count, 1);
+  assert.equal(cut('changelog', 'title').count, 1);
+});
+
+test('pr: repo names match without case, and a PR with no checked time takes its first ledger line time for checked_at and its id', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  const ledger = path.join(dir, 'l.jsonl');
+  fs.writeFileSync(ledger, jl([
+    { ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'a', source: 'orc', lane: 'C', prio: 1, by: 'C', pr: 'OrahVision/Horde#5' },
+    { ts: '2026-10-04T17:00:00Z', task: 'T-0001', event: 'progress', by: 'C', pr: 'YEDPOOL/horde#8' },
+    { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'progress', by: 'C', pr: 'yedpool/HORDE#8' },
+  ]));
+  const cache = path.join(dir, 'c.json');
+  fs.writeFileSync(cache, JSON.stringify({
+    'orahvision/horde#5': { checked: '2026-10-15T00:00:00+00:00', mergedAt: null, state: 'OPEN' },
+    'YedPool/horde#8': { mergedAt: null, state: 'OPEN' },
+  }));
+  const r = importFleet(db, { ledger, prCache: cache, cards: cardsOf() });
+  assert.equal(count(db, 'pr'), 2, 'one row per PR whatever the case');
+  assert.equal(unlinked(r, 'ledger', 'pr is not in the PR cache'), undefined);
+  const p = one(db, 'SELECT id, repo, checked_at FROM pr WHERE number = 8');
+  assert.equal(p.repo, 'yedpool/horde');
+  assert.equal(p.checked_at, ms('2026-10-04T17:00:00Z'), 'the earliest line that names it');
+  assert.equal(p.id.slice(0, 10), ulidTime(ms('2026-10-04T17:00:00Z')), 'the id is minted from that time');
+  assert.ok(unlinked(r, 'pr-cache', 'checked is not a time'));
+  assert.equal(one(db, 'SELECT count(*) AS n FROM task_pr').n, 2);
+  assert.equal(importFleet(db, { ledger, prCache: cache }).tables.pr.added, 0);
+});
+
+test('horde db import --dry-run on an older schema is refused and the file is not migrated', () => {
+  const home = tempDir();
+  const env = { HORDE_HOME: home };
+  assert.equal(run(['init'], env).code, 0);
+  const file = path.join(home, 'fleet.db');
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA user_version = 2');
+  raw.close();
+  const w = world();
+  const dry = run(['import', '--cards', w.sources.cards, '--dry-run'], env);
+  assert.equal(dry.code, 1);
+  assert.match(dry.err, /run horde db init/);
+  const after = new DatabaseSync(file);
+  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 2);
+  after.close();
 });

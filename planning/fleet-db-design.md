@@ -195,6 +195,17 @@ row's own time. The report counts, per table, rows added and rows already there.
 | ledger | `task`, `task_event`, `task_pr`, `pr` | tasks by key, title/source/parent from the first `opened`, parents created first. Every line is one event, sorted by time (Z and +00:00 alike; file order breaks ties); `by` is `by_orc_id` for a known letter, else `by_text`; opened lane and handed `to` map letters or lane folders to Orcs; `waiting on` keeps the words in `on_text` with the class in `on_kind` (founder; `M`, a letter or `lane:X` = orc; device, merge, push, gate, service = external; anything else = other); superseded `to` = replacement task. The ledger's `merged` flag is not copied. A `pr` is linked through `task_pr` (linked_by backfill, at the line's time); a PR the cache lacks is made open and reported |
 | changelog | `changelog_entry`, `tag`, `entity_tag` | legacy_id = the entry id; lane letter = orc_id, `Thrall` = the Thrall, `fleet-wide` = fleet_wide; a comma list gives the first letter as orc_id and a `lane:x` tag for every letter; task = the leading T-NNNN (suffix dropped); `corrects` = corrects_id, the original written first; an unknown kind is a note; `area` is not imported yet. An entry whose legacy id is there is kept |
 
+Refused, whole, with nothing written: a ledger or a changelog in a run when the database has no `orc` rows and
+the same run brings no usable cards. Event hashes hold Orc ids (`by_orc_id`, `to_orc_id`, `on_orc_id`), so a
+ledger imported before the Orcs exist would be written again, as other rows, by the next import that has them.
+A sub-session label (a letter and digits: C1, C13, M2) gives its lead letter's Orc for `by` (the label stays in
+`by_text`), `handed to` and `waiting on`; `analyst*` writers stay `by_text`. A `handed` with no target at all
+is reported as needing a person. Live seats are decided first, freshest session first, before any row is
+written, so a parent inserted early for its child never takes the seat; a session that loses it is kept with rank
+unknown. A time that does not parse is replaced and each replacement is reported. Two cards naming one Orc: only
+the newer is imported. Text cut to its column is reported per field. PR repo names are lower-cased, and a PR
+with no checked time takes its first ledger line's time. `--dry-run` refuses a file that needs migrating.
+
 Reported, never dropped in silence: `report.unlinked` lists, by source and reason, with a count and up to five
 examples, every row that could not be linked or read (for example `ledger: by C13 names no Orc row (kept as
 by_text): 12`). A `handed` line with no known target and a ledger line without a usable ts/task/event are the
