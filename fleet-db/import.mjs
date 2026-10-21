@@ -11,7 +11,9 @@
 //   registry    the registry sessions folder (one <session id>.json per session) -> session
 //   decisions   the decisions store folder (storedecisions, one record per file) -> question, question_event,
 //               answer, answer_route and their side tables, decisions_read
-// Order: node -> orcs -> sessions -> tasks + events + PRs -> changelog -> decisions -> orc_status.
+//   lots        the hibernations folder (<hid>\parking_lot.json, parking_lot_member.json, wakes\<id>\wake.json and
+//               wake_member.json, lane K's one-file-per-table form) -> parking_lot, parking_lot_member, wake, wake_member
+// Order: node -> orcs -> sessions -> tasks + events + PRs -> changelog -> decisions -> lots -> orc_status.
 //
 // THE WHOLE IMPORT IS ONE inWrite TRANSACTION: a failure leaves the database as it was, and a dry run runs
 // the same code and rolls it back, so its report is exactly what a real run would have added.
@@ -39,7 +41,8 @@ const TASK_KEY = /^T-\d{4,}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA40 = /^[0-9a-f]{40}$/;
 const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
-  'question', 'question_event', 'answer', 'answer_extra', 'answer_route', 'answer_route_extra', 'decisions_read'];
+  'question', 'question_event', 'answer', 'answer_extra', 'answer_route', 'answer_route_extra', 'decisions_read',
+  'parking_lot', 'parking_lot_member', 'wake', 'wake_member'];
 
 class DryRunDone extends Error {}
 
@@ -51,6 +54,26 @@ class Report {
     this.tables = {};
     for (const t of TABLES) this.tables[t] = { added: 0, existing: 0 };
     this.groups = new Map();
+    // A state table that a re-import moves forward says how many rows it moved.
+    this.tables.parking_lot_member.updated = 0;
+  }
+
+  // A lot's own report folded into the run's, once the lot has been kept (a lot that is rolled back adds none).
+  merge(other) {
+    for (const t of TABLES) {
+      for (const k of Object.keys(other.tables[t])) this.tables[t][k] += other.tables[t][k];
+    }
+    for (const g of other.groups.values()) {
+      const key = g.source + '\n' + g.reason;
+      let mine = this.groups.get(key);
+      if (!mine) { mine = { source: g.source, reason: g.reason, count: 0, examples: [] }; this.groups.set(key, mine); }
+      mine.count += g.count;
+      for (const e of g.examples) if (mine.examples.length < EXAMPLES && !mine.examples.includes(e)) mine.examples.push(e);
+    }
+  }
+
+  updated(table) {
+    this.tables[table].updated += 1;
   }
 
   count(table, inserted) {
@@ -191,6 +214,8 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
       onStep('changelog');
       stepDecisions(ctx, data);
       onStep('decisions');
+      stepLots(ctx, data);
+      onStep('lots');
       stepStatus(ctx);
       onStep('status');
       if (dryRun) throw new DryRunDone();
@@ -203,10 +228,11 @@ export function importFleet(db, sources, { dryRun = false, onStep = () => {} } =
 
 // Every file is read before the transaction opens, so a missing or unreadable file fails before a write.
 function loadSources(src, rep) {
-  const d = { ledger: null, prCache: null, changelog: null, cards: [], thrall: null, sessions: null, decisions: null };
+  const d = { ledger: null, prCache: null, changelog: null, cards: [], thrall: null, sessions: null, decisions: null, lots: null };
   if (src.ledger) d.ledger = readJsonl(src.ledger, 'ledger', rep);
   if (src.changelog) d.changelog = readJsonl(src.changelog, 'changelog', rep);
   if (src.decisions) d.decisions = readDecisions(src.decisions, rep);
+  if (src.lots) d.lots = readLots(src.lots, rep);
   if (src.prCache) {
     const cache = readJsonFile(src.prCache);
     if (cache === null || typeof cache !== 'object' || Array.isArray(cache)) throw new Error('the PR cache is not a JSON object');
@@ -1155,6 +1181,237 @@ function compareFold(ctx, msg) {
     // Authorization includes arrival, so it is compared only when arrival agrees: one cause is one line.
     if (arrivalAgrees && s.authorizes !== (m.authorizes && !m.arrived ? 1 : 0)) {
       rep.unlink('decisions', m.authorizes && !m.arrived ? 'rules say the message authorizes; answer_now says it does not (unsigned on a passkey question)' : 'rules say the message does not authorize; answer_now says it does', where);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// parking lots (phase 1c part 2b). Lane K writes one JSON file per table, {"v":1,"table":...,"rows":[...]}:
+//   <hid>\parking_lot.json, parking_lot_member.json, wakes\<wake id>\wake.json, wake_member.json
+// (fleet/LotTables.ps1). A row has exactly the table's columns and a column K did not know is left out, so a
+// missing column is NULL here. Ids are K's ULIDs and are kept.
+
+const LOT_COLUMNS = {
+  parking_lot: ['id', 'created_at', 'created_by_session_id', 'created_by_orc_id', 'reason', 'selection_kind', 'keep_visible'],
+  parking_lot_member: ['lot_id', 'session_id', 'orc_id', 'tier', 'state', 'note'],
+  wake: ['id', 'lot_id', 'requested_at', 'requested_by_session_id'],
+  wake_member: ['wake_id', 'session_id', 'new_session_id', 'outcome'],
+};
+// How far a member has got. A park is the start; a wake (woken) or a leave (dropped, it never slept) ends it.
+// A member row carries no time, so "newer" is "further along": a file may move a parked member on, never back.
+const MEMBER_RANK = { parked: 0, woken: 1, dropped: 1 };
+
+// A file or row the lot cannot be imported with: the lot is rolled back whole and the reason reported.
+class LotRefused extends Error {}
+const refuse = (msg) => { throw new LotRefused(msg); };
+
+// The rows of one table file, or a sentence saying why the file is refused.
+function readLotTable(file, table) {
+  let doc;
+  try { doc = JSON.parse(readText(file)); } catch { return { error: 'is not JSON' }; }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || doc.v !== 1 || doc.table !== table || !Array.isArray(doc.rows)) {
+    return { error: 'is not version 1 of table ' + table };
+  }
+  if (doc.rows.some((r) => r === null || typeof r !== 'object' || Array.isArray(r))) return { error: 'holds a row that is not an object' };
+  return { rows: doc.rows };
+}
+
+function readLots(dir, rep) {
+  const out = [];
+  const dirs = (p) => fs.readdirSync(p, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  for (const hid of dirs(dir)) {
+    const base = path.join(dir, hid);
+    if (!fs.existsSync(path.join(base, 'parking_lot.json'))) {
+      if (fs.existsSync(path.join(base, 'record.json'))) rep.unlink('lots', "legacy record, run K's lot backfill first (not imported)", hid);
+      else rep.unlink('lots', 'folder holds neither parking_lot.json nor record.json (ignored)', hid);
+      continue;
+    }
+    const lot = { hid, bad: null, lot: null, members: [], wakes: [] };
+    const take = (rel, table) => {
+      const full = path.join(base, rel);
+      if (!fs.existsSync(full)) { lot.bad = lot.bad ?? (rel + ' is missing'); return null; }
+      const r = readLotTable(full, table);
+      if (r.error) { lot.bad = lot.bad ?? (rel + ' ' + r.error); return null; }
+      return r.rows;
+    };
+    const lotRows = take('parking_lot.json', 'parking_lot');
+    lot.members = take('parking_lot_member.json', 'parking_lot_member') ?? [];
+    if (lotRows !== null && lotRows.length !== 1) lot.bad = lot.bad ?? ('parking_lot.json holds ' + lotRows.length + ' rows, not one');
+    lot.lot = lotRows === null ? null : lotRows[0];
+    const wroot = path.join(base, 'wakes');
+    if (fs.existsSync(wroot) && fs.statSync(wroot).isDirectory()) {
+      for (const wid of dirs(wroot)) {
+        const rel = path.join('wakes', wid);
+        if (!fs.existsSync(path.join(base, rel, 'wake.json'))) { rep.unlink('lots', 'wake folder has no wake.json (an unfinished write, not imported)', hid + '/' + wid); continue; }
+        const w = take(path.join(rel, 'wake.json'), 'wake');
+        const wm = take(path.join(rel, 'wake_member.json'), 'wake_member');
+        if (w !== null && w.length !== 1) lot.bad = lot.bad ?? (rel + ' wake.json holds ' + w.length + ' rows, not one');
+        lot.wakes.push({ wid, wake: w === null ? null : w[0], members: wm ?? [] });
+      }
+    }
+    if (lot.bad) rep.unlink('lots', 'a file is missing or is not version 1 of its table (nothing imported from this lot)', hid + ': ' + lot.bad);
+    out.push(lot);
+  }
+  return out;
+}
+
+// Each lot is its own savepoint: a row the schema refuses (a broken key, a bad state) rolls that lot back and
+// is reported, so a lot is whole or absent, and the other lots go on.
+function stepLots(ctx, data) {
+  if (data.lots === null) return;
+  const { db, rep } = ctx;
+  for (const lot of data.lots) {
+    if (lot.bad) continue;
+    const lr = new Report();
+    db.exec('SAVEPOINT lot_import');
+    try {
+      importLot({ ...ctx, rep: lr }, lot);
+      db.exec('RELEASE lot_import');
+      rep.merge(lr);
+    } catch (e) {
+      db.exec('ROLLBACK TO lot_import');
+      db.exec('RELEASE lot_import');
+      if (!(e instanceof LotRefused) && e.code !== 'ERR_SQLITE_ERROR') throw e;
+      rep.unlink('lots', 'a row was refused, nothing imported from this lot: ' + String(e.message).slice(0, 160), lot.hid);
+    }
+  }
+}
+
+function unknownColumns(rep, table, row, hid) {
+  for (const k of Object.keys(row)) if (!LOT_COLUMNS[table].includes(k)) rep.unlink('lots', table + ' column ' + k.slice(0, 40) + ' is not known (not stored)', hid);
+}
+
+// A text column: a string, or NULL when the file left it out. Anything else is refused.
+function lotText(row, col, where) {
+  const v = row[col];
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') refuse(where + ': ' + col + ' is not text');
+  return v;
+}
+
+// A tier is the whole number 1 or 2 (or left out). Anything else would reach the driver unchecked.
+function lotTier(row, where) {
+  const v = row.tier;
+  if (v === undefined || v === null) return null;
+  if (v !== 1 && v !== 2) refuse(where + ': tier is not 1 or 2');
+  return v;
+}
+
+function lotTime(row, col, where) {
+  const t = typeof row[col] === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(row[col]) ? parseTime(row[col]) : null;
+  if (t === null) refuse(where + ': ' + col + ' is not a UTC time like 2026-10-14T09:00:00Z');
+  return t;
+}
+
+// A session id from a lot file, made a stub row if fleet.db does not know it (as part 1 does for a parent).
+function lotSession(c, id, at, where) {
+  if (id === null) return null;
+  if (!UUID.test(id)) refuse(where + ': ' + id.slice(0, 40) + ' is not a session uuid');
+  if (c.db.prepare('SELECT 1 FROM session WHERE id = ?').get(id)) return id;
+  c.db.prepare("INSERT INTO session (id, node_id, rank, first_seen, last_seen) VALUES (?, ?, 'unknown', ?, ?)").run(id, c.nodeId, at, at);
+  c.rep.count('session', true);
+  c.rep.unlink('lots', 'session is not in fleet.db (stub row made)', id);
+  return id;
+}
+
+// An Orc named in a lot file: the orc table's own id, else a letter, a lane folder or a sub-session label.
+function lotOrc(c, name, hid) {
+  if (name === null) return null;
+  if (c.db.prepare('SELECT 1 FROM orc WHERE id = ?').get(name)) return name;
+  const id = orcRef(c, name) ?? labelOrc(c, name);
+  if (id === null) c.rep.unlink('lots', 'orc ' + name.slice(0, 40) + ' names no Orc row (left empty)', hid);
+  return id;
+}
+
+function importLot(c, lot) {
+  const { db, rep } = c;
+  const hid = lot.hid;
+  unknownColumns(rep, 'parking_lot', lot.lot, hid);
+  for (const m of lot.members) unknownColumns(rep, 'parking_lot_member', m, hid);
+  const l = lot.lot;
+  const where = 'lot ' + hid;
+  const created = lotTime(l, 'created_at', where);
+  const lotId = lotText(l, 'id', where);
+  if (lotId === null) refuse(where + ': id is missing');
+  const byOrc = lotOrc(c, lotText(l, 'created_by_orc_id', where), hid);
+  const bySession = lotSession(c, lotText(l, 'created_by_session_id', where), created, where);
+  if (l.keep_visible !== undefined && l.keep_visible !== 0 && l.keep_visible !== 1) refuse(where + ': keep_visible is not 0 or 1');
+  const r = db.prepare(`INSERT INTO parking_lot (id, created_at, created_by_session_id, created_by_orc_id, reason, selection_kind, keep_visible)
+    VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`).run(lotId, created, bySession, byOrc, lotText(l, 'reason', where), lotText(l, 'selection_kind', where), l.keep_visible ?? 0);
+  rep.count('parking_lot', r.changes === 1);
+  if (r.changes !== 1) {
+    const was = db.prepare('SELECT created_at, created_by_session_id, created_by_orc_id, reason, selection_kind, keep_visible FROM parking_lot WHERE id = ?').get(lotId);
+    const now = { created_at: created, created_by_session_id: bySession, created_by_orc_id: byOrc, reason: lotText(l, 'reason', where), selection_kind: lotText(l, 'selection_kind', where), keep_visible: l.keep_visible ?? 0 };
+    if (Object.keys(now).some((k) => was[k] !== now[k])) rep.unlink('lots', 'lot already in fleet.db with other content (kept as fleet.db has it)', lotId);
+  }
+  if (lot.members.length === 0) rep.unlink('lots', 'lot holds no member (K never writes one)', hid);
+
+  const seen = new Set();
+  for (const m of lot.members) {
+    const mw = where + ' member';
+    const sid = lotText(m, 'session_id', mw);
+    if (sid === null) refuse(mw + ': session_id is missing');
+    if (lotText(m, 'lot_id', mw) !== lotId) refuse(mw + ' ' + sid.slice(0, 36) + ': lot_id is not this lot');
+    if (seen.has(sid)) refuse(mw + ' ' + sid.slice(0, 36) + ': the session is in the lot twice');
+    seen.add(sid);
+    lotSession(c, sid, created, mw);
+    const state = lotText(m, 'state', mw);
+    lotTier(m, mw);
+    if (!Object.hasOwn(MEMBER_RANK, state)) refuse(mw + ' ' + sid + ': state ' + String(state).slice(0, 20) + ' is not parked, woken or dropped');
+    const have = db.prepare('SELECT state, orc_id, tier, note FROM parking_lot_member WHERE lot_id = ? AND session_id = ?').get(lotId, sid);
+    const orc = lotOrc(c, lotText(m, 'orc_id', mw), hid);
+    const tier = lotTier(m, mw);
+    const note = lotText(m, 'note', mw);
+    if (have !== undefined && (have.orc_id !== orc || have.tier !== tier || have.note !== note)) {
+      rep.unlink('lots', 'member already in fleet.db with another orc_id, tier or note (kept as fleet.db has it)', sid);
+    }
+    if (have === undefined) {
+      db.prepare('INSERT INTO parking_lot_member (lot_id, session_id, orc_id, tier, state, note) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(lotId, sid, orc, tier, state, note);
+      rep.count('parking_lot_member', true);
+    } else if (MEMBER_RANK[state] > MEMBER_RANK[have.state]) {
+      db.prepare('UPDATE parking_lot_member SET state = ? WHERE lot_id = ? AND session_id = ?').run(state, lotId, sid);
+      rep.count('parking_lot_member', false);
+      rep.updated('parking_lot_member');
+    } else {
+      rep.count('parking_lot_member', false);
+      if (state !== have.state) rep.unlink('lots', 'member state in the file is not further along than the one in fleet.db (kept as fleet.db has it)', sid);
+    }
+  }
+
+  for (const w of lot.wakes) {
+    const ww = where + ' wake ' + w.wid;
+    unknownColumns(rep, 'wake', w.wake, hid);
+    for (const m of w.members) unknownColumns(rep, 'wake_member', m, hid);
+    const wid = lotText(w.wake, 'id', ww);
+    if (wid === null) refuse(ww + ': id is missing');
+    if (lotText(w.wake, 'lot_id', ww) !== lotId) refuse(ww + ': lot_id is not this lot');
+    const at = lotTime(w.wake, 'requested_at', ww);
+    const by = lotSession(c, lotText(w.wake, 'requested_by_session_id', ww), at, ww);
+    const wr = db.prepare('INSERT INTO wake (id, lot_id, requested_at, requested_by_session_id) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING').run(wid, lotId, at, by);
+    rep.count('wake', wr.changes === 1);
+    if (wr.changes !== 1) {
+      const was = db.prepare('SELECT lot_id, requested_at, requested_by_session_id FROM wake WHERE id = ?').get(wid);
+      if (was.lot_id !== lotId) refuse(ww + ': the wake id is already in fleet.db under another lot');
+      if (was.requested_at !== at || was.requested_by_session_id !== by) rep.unlink('lots', 'wake already in fleet.db with other content (kept as fleet.db has it)', wid);
+    }
+    const wseen = new Set();
+    for (const m of w.members) {
+      const sid = lotText(m, 'session_id', ww + ' member');
+      if (sid === null) refuse(ww + ' member: session_id is missing');
+      if (lotText(m, 'wake_id', ww + ' member') !== wid) refuse(ww + ' member ' + sid.slice(0, 36) + ': wake_id is not this wake');
+      if (!seen.has(sid)) refuse(ww + ' member ' + sid.slice(0, 36) + ': the session is not a member of the lot');
+      if (wseen.has(sid)) refuse(ww + ' member ' + sid.slice(0, 36) + ': the session is in the wake twice');
+      wseen.add(sid);
+      lotSession(c, sid, at, ww);
+      const fresh = lotSession(c, lotText(m, 'new_session_id', ww), at, ww);
+      const mr = db.prepare('INSERT INTO wake_member (wake_id, session_id, outcome, new_session_id) VALUES (?, ?, ?, ?) ON CONFLICT (wake_id, session_id) DO NOTHING')
+        .run(wid, sid, lotText(m, 'outcome', ww), fresh);
+      rep.count('wake_member', mr.changes === 1);
+      if (mr.changes !== 1) {
+        const was = db.prepare('SELECT outcome, new_session_id FROM wake_member WHERE wake_id = ? AND session_id = ?').get(wid, sid);
+        if (was.outcome !== lotText(m, 'outcome', ww) || was.new_session_id !== fresh) rep.unlink('lots', 'wake member already in fleet.db with other content (kept as fleet.db has it)', sid);
+      }
     }
   }
 }

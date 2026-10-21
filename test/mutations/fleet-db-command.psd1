@@ -21,11 +21,17 @@
            Find = '"--registry" = $Registry;'
            Replace = '"--registry" = $null;' }
         @{ Name = "import-decisions-not-passed"
-           Find = '"--decisions" = $Decisions }'
-           Replace = '"--decisions" = $null }' }
+           Find = '"--decisions" = $Decisions;'
+           Replace = '"--decisions" = $null;' }
         @{ Name = "decisions-flag-accepted-on-other-verbs"
-           Find = '"Registry", "Decisions", "DryRun")'
-           Replace = '"Registry", "DryRun")' }
+           Find = '"Registry", "Decisions", "Lots", "DryRun")'
+           Replace = '"Registry", "Lots", "DryRun")' }
+        @{ Name = "import-lots-not-passed"
+           Find = '"--lots" = $Lots }'
+           Replace = '"--lots" = $null }' }
+        @{ Name = "lots-flag-accepted-on-other-verbs"
+           Find = '"Registry", "Decisions", "Lots", "DryRun")'
+           Replace = '"Registry", "Decisions", "DryRun")' }
         @{ Name = "import-thrall-card-not-passed"
            Find = '"--thrall-card" = $ThrallCard;'
            Replace = '"--thrall-card" = $null;' }
