@@ -35,6 +35,15 @@
 #     the boot trigger, and never as an Interactive task. A failed registration leaves the task that
 #     was there, if any, exactly as it was. S4U also needs the right to log on as a batch job when it
 #     RUNS, which administrators hold by default.
+#     MEASURED AGAIN 2026-10-21 on Windows 11 26200 (the founder's PC), in a NON-ELEVATED shell
+#     (not in the Administrators role): a bare Register-ScheduledTask of a disabled S4U task with
+#     only a time trigger, no Horde code, was REFUSED "Access is denied" (an Interactive one was
+#     accepted), while the S4U job already registered here (\Horde\Horde metrics collect) keeps
+#     running every 30 minutes with last result 0. So registering a NEW S4U job can need an elevated
+#     shell even without a boot trigger - likely the "Log on as a batch job" right, which a filtered
+#     token may lack; this contradicts the runas /trustlevel result above for this shell. A refusal
+#     of a not-elevated shell is therefore told to run again elevated, boot trigger or not, and
+#     test\test-metrics-schedule.ps1 probes this with a bare task before it relies on installing.
 #   - A JOB MADE -AtLogon HAS A TRIGGER AT THE SIGN-IN OF THE ACCOUNT IT RUNS AS. Measured 2026-10-14
 #     the same way: an Interactive task with one registered elevated and non-elevated alike.
 #   - THE JOB RUNS AS THE ACCOUNT THAT REGISTERS IT. An elevated prompt opened with another
@@ -184,7 +193,7 @@ function Install-HordeTaskSchedulerJob {
         # was refused was refused for some other reason, which the scheduler's own words say.
         $up = $true
         try { $up = (& $Elevated) -eq $true } catch { $up = $true }
-        $rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true -and -not $up) { " A job that runs at start-up, whether or not anyone is signed in, can be registered only by an administrator: run this again from an elevated prompt, signed in as " + $user + ", the account the job runs as." } else { "" })
+        $rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true -and -not $up) { " A job that runs at start-up, whether or not anyone is signed in, can be registered only by an administrator: run this again from an elevated prompt, signed in as " + $user + ", the account the job runs as." } elseif (-not $up -and $why -like "*Access is denied*") { " This shell may not be allowed to register a job that runs whether or not anyone is signed in: run this again from an elevated prompt, signed in as " + $user + ", the account the job runs as." } else { "" })
         throw ("Task Scheduler refused to register '" + $Job.name + "' in \" + $Job.folder + "\ to run as " + $user + " (" + $why + "); " + $was + "." + $rights)
     }
 }
