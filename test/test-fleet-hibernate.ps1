@@ -261,6 +261,11 @@ Check ((@($script:w.exits | ForEach-Object { $_.label }) -join ",") -ceq "K2,K1,
 Check ((@($script:w.exits | ForEach-Object { $_.why }) | Select-Object -Unique) -ceq ("hibernation " + $r.id)) "the exit says which hibernation asked for it"
 Check ((Outcome $r "K") -ceq "exited" -and (Outcome $r "K1") -ceq "exited" -and (Outcome $r "K2") -ceq "exited") "all three exited"
 $rec = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
+# THE PARK IS ONE LOT (T-0216): one parking_lot row for each run, a member row for each session, chosen by orcs.
+$lotAns = Read-HordeFleetLot -Id $r.id -HordeHome $script:hh
+Check ($lotAns.state -ceq "known" -and $lotAns.value.lot.selection_kind -ceq "orcs" -and $lotAns.value.lot.reason -like "hibernate tier 2*") ("a hibernate run writes its lot: selection orcs, reason hibernate tier 2 (" + $lotAns.reason + ")")
+Check (@($lotAns.value.members).Count -eq 3 -and @($lotAns.value.members | Where-Object { $_.tier -eq 2 }).Count -eq 3) "with a member row for each of its three sessions, in tier 2"
+Check (@(Get-ChildItem -LiteralPath (Get-HordeFleetHibernationsDir -HordeHome $script:hh) -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "parking_lot.json") }).Count -eq (Count-Records)) "every hibernation this suite has taken has exactly one lot: as many lots as records"
 Check ("" + (Get-HordeTestMember $rec "phase") -ceq "done" -and "" + (Get-HordeTestMember $rec "selection.kind") -ceq "orcs") "the record reads back, phase done, chosen by Orcs"
 $k = @($rec.sessions | Where-Object { $_.sessionId -ceq $script:sids["K"] })[0]
 Check ((@($k.history | ForEach-Object { $_.state }) -join ",") -ceq "recorded,asked,parked,exited") ("K's history is recorded, asked, parked, exited (" + (@($k.history | ForEach-Object { $_.state }) -join ",") + ")")

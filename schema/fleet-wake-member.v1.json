@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/fleet-wake-member.v1",
+  "title": "fleet wake_member row v1",
+  "description": "ONE ROW OF THE wake_member TABLE (work-data-ssot-audit-2026-10-19): one session a wake was asked to wake, primary key (wake_id, session_id), with what came of it. outcome: woken (seen running again), still-awake (it ran, or may have, so it was left alone), failed (the wake tried and it did not come up, or could not start it), held (an earlier wake may still be loading it; wake again with -Retry), asleep (left asleep by the memory gate). new_session_id is the id it came back under, when the harness gave the resumed conversation a new one. wake_member.json beside wake.json.",
+  "type": "object",
+  "required": ["wake_id", "session_id", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "wake_id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
+    "session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "new_session_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "outcome": { "type": "string", "enum": ["woken", "still-awake", "failed", "held", "asleep"] }
+  }
+}

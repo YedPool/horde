@@ -384,7 +384,7 @@ function Invoke-HordeFleetHibernate {
     # (Get-HordeFleetTierExclusion) is always on, so a tier 1 Orc, or one with no tier, is never hibernated, not
     # even when named, and a name that is not a tier 2 Orc refuses the whole run.
     param([Parameter(Mandatory = $true)]$Deps, [string[]]$Names = @(), [int]$Tier = 2, [switch]$DryRun, [int]$WaitMinutes = 15,
-          [scriptblock]$Selector = $null, [string]$HordeHome = (Get-HordeHome))
+          [scriptblock]$Selector = $null, [string]$HordeHome = (Get-HordeHome), [switch]$KeepVisible)
     if ($Tier -ne 2) { throw ("-Tier is 2, not " + $Tier + ": only an Orc in tier 2 is ever hibernated, and a tier 1 Orc never") }
     if ($WaitMinutes -lt 1 -or $WaitMinutes -gt $script:HordeFleetHibernateMostWaitMinutes) { throw ("-WaitMinutes is 1 to " + $script:HordeFleetHibernateMostWaitMinutes + ", not " + $WaitMinutes) }
     $Names = @($Names | Where-Object { "" + $_ -ne "" })
@@ -484,7 +484,7 @@ function Invoke-HordeFleetHibernate {
     } while ($moved)
     $folder = "" + $Deps.ParkedFolder
     $what = $(if ($Names.Count -gt 0) { ($Names -join ", ") + " (tier 2)" } else { "tier 2" })
-    & $say ("hibernate " + $what + ": " + $chosen.Count + " to hibernate, " + $excluded.Count + " left running" + $(if ($DryRun) { " (dry run: nothing is changed, nothing is posted)" } else { "" }))
+    & $say ("hibernate " + $what + ": " + $chosen.Count + " to hibernate, " + $excluded.Count + " left running" + $(if ($KeepVisible) { ", cards kept visible" } else { "" }) + $(if ($DryRun) { " (dry run: nothing is changed, nothing is posted)" } else { "" }))
     if ($staleNote -ne "") { & $say ("  " + $staleNote) }
     foreach ($e in $excluded) {
         & $say ("  left running " + (& $nameOf $e.candidate) + ": " + $e.reason + " - " + $e.detail)
@@ -526,9 +526,11 @@ function Invoke-HordeFleetHibernate {
         $fixed = { param($cands) @(@($cands) | Where-Object { $ids -ccontains ("" + $_.sessionId) }) }.GetNewClosure()
         $selLabels = $(if ($Names.Count -gt 0) { @($Names) } else { @(@($chosen | Where-Object { "" + $_.role -ceq "orc" } | ForEach-Object { "" + $_.label }) | Sort-Object -Unique) })
         $selection = [pscustomobject][ordered]@{ kind = "orcs"; labels = @($selLabels); exclude = @() }
+        # THE LOT'S WHY (T-0216): what was asked, in one line - the tier, and the Orcs when the run was narrowed to some.
+        $lotWhy = "hibernate tier " + $Tier + $(if ($Names.Count -gt 0) { " (" + (@($Names) -join ", ") + ")" } else { "" })
         $candBySid = @{}
         foreach ($c in $chosen) { $candBySid["" + $c.sessionId] = $c }
-        $made = Invoke-HordeFleetRecord -Deps ([pscustomobject]@{ Now = $Deps.Now; Registry = $Deps.Registry; Agent = $Deps.Agent; Host = $Deps.Host }) -Selector $fixed -Selection $selection -HordeHome $HordeHome
+        $made = Invoke-HordeFleetRecord -Deps ([pscustomobject]@{ Now = $Deps.Now; Registry = $Deps.Registry; Agent = $Deps.Agent; Host = $Deps.Host }) -Selector $fixed -Selection $selection -HordeHome $HordeHome -By $caller -Why $lotWhy -Tier $Tier -KeepVisible:$KeepVisible
         $record = $made.record; $id = $made.id; $dir = Split-Path -Parent $made.path
         foreach ($n in @($made.notes)) { & $say ("  note: " + $n) }
         $bySid = @{}
