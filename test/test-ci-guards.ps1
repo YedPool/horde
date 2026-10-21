@@ -29,6 +29,7 @@ $red = 'Write-Output "  [FAIL] stand-in red"; Write-Output ""; Write-Output "===
 $nobanner = 'Write-Output "  [PASS] stand-in, cut short"; exit 0'
 $failbanner = 'Write-Output "==== 2 FAILURE(S) ===="; exit 0'
 $exit1 = 'Write-Output "  [PASS] stand-in"; Write-Output "==== looks green ===="; exit 1'
+$slow = 'Write-Output "partial line before the hang"; Start-Sleep -Seconds 60'
 $modules = '$s = $PSVersionTable.PSVersion.Major; Write-Output ("shell " + $s + " modules=" + $env:PSModulePath); Write-Output "==== modules ===="; exit 0'
 
 function New-Tree {
@@ -95,6 +96,11 @@ foreach ($shell in @($script51, $script7)) {
     $t = New-Tree -Name ("exit1-" + $label) -Lines "test/test-e.ps1`n" -Files @{ "test-e.ps1" = $exit1 }
     $r = Invoke-Runner -Exe $shell -Tree $t
     Check ($r.code -eq 1 -and $r.out -clike "*[[]RED] test-e in Windows PowerShell 5.1 (exit 1, ==== looks green ====)*") "a green-looking banner with a non-zero exit is red: the exit code counts"
+
+    $t = New-Tree -Name ("slow-" + $label) -Lines "test/test-s.ps1`n" -Files @{ "test-s.ps1" = $slow }
+    $r = Invoke-Runner -Exe $shell -Tree $t -More @("-Seconds", "4")
+    Check ($r.code -eq 1 -and $r.out -clike "*[[]RED] test-s in Windows PowerShell 5.1 (exit -1*" -and $r.out -clike "*ran past 4 s and was stopped*") "a guard that runs past its time is red, never waited on for ever"
+    Check ($r.out -clike "*partial line before the hang*") "  and what it printed before is kept, so a hang can be diagnosed"
 
     $t = New-Tree -Name ("nobanner-" + $label) -Lines "test/test-n.ps1`n" -Files @{ "test-n.ps1" = $nobanner }
     $r = Invoke-Runner -Exe $shell -Tree $t

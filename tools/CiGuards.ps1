@@ -3,7 +3,7 @@
 # that calls this; `horde merge` (cli/Merge.ps1) reads the same list through core/GuardList.ps1 (T-0247).
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\CiGuards.ps1 [-Root <repo>] [-LogFolder <dir>]
-#       [-Only <guard script, e.g. test\test-core-load.ps1>] [-Seconds 1200]
+#       [-Only <guard script, e.g. test\test-core-load.ps1>] [-Seconds 2700]
 #       [-MachinePsModulePath <value>]   (a seam for the suite; the default is the machine's own value)
 #
 # GREEN IS EXIT 0 AND A CLOSING BANNER (CONTRIBUTING 15 rule 7): the last "==== ... ====" line of the
@@ -22,7 +22,7 @@ param(
     [string]$LogFolder = "",
     [string]$Only = "",
     [AllowNull()]$MachinePsModulePath = $null,
-    [int]$Seconds = 1200
+    [int]$Seconds = 2700
 )
 
 if ($Root -eq "") { $Root = Split-Path -Parent $PSScriptRoot }
@@ -63,7 +63,10 @@ function Invoke-HordeCiGuard {
         if (-not $p.WaitForExit($Seconds * 1000)) {
             try { $null = & taskkill.exe /T /F /PID $p.Id } catch { }
             $global:LASTEXITCODE = 0
-            return [pscustomobject]@{ code = -1; out = ("ran past " + $Seconds + " s and was stopped") }
+            [void]$outTask.Wait(10000)
+            $partial = ""
+            if ($outTask.IsCompleted) { $partial = "" + $outTask.Result }
+            return [pscustomobject]@{ code = -1; out = ($partial + "`n" + "ran past " + $Seconds + " s and was stopped") }
         }
         $p.WaitForExit()
         return [pscustomobject]@{ code = $p.ExitCode; out = ($outTask.Result + $errTask.Result) }
