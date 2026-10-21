@@ -96,8 +96,9 @@ function Read-HordeCollectIndex {
 function Write-HordeCollectIndex {
     # Written whole, by temp file and replace (Write-HordeMetricsFile), AFTER EVERY TRANSCRIPT (review of
     # #70, NEW-1: written once at the end, a run killed by the scheduler's time limit lost all its work,
-    # and a large backlog never finished). Serialised by .NET in one call, not ConvertTo-Json, so a commit
-    # per transcript stays cheap.
+    # and a large backlog never finished). Serialised in one ConvertTo-Json -Compress call over plain
+    # dictionaries, so a commit per transcript stays cheap: byte-identical to the old JavaScriptSerializer
+    # output on 5.1 and faster (20,000 entries: 136 ms against 246 ms, T-0323 review), and it works on pwsh 7.
     param([Parameter(Mandatory = $true)][hashtable]$Entries)
     $out = [System.Collections.Generic.Dictionary[string,object]]::new()
     foreach ($k in @($Entries.Keys | Sort-Object)) {
