@@ -40,3 +40,32 @@ export function costOf(family, usage) {
     1e6
   );
 }
+
+// CONTEXT WINDOW SIZES, in tokens, by family: the denominator of "how full is this session". THESE ARE
+// ASSUMPTIONS, not numbers any transcript states (a transcript carries the model id and the token counts
+// of each request, never the window):
+//   - 200000 is the standard window the model maker documents for these families. It is
+//     the figure used for every family here, INCLUDING 'fable', whose window was not looked up (assumed).
+//   - 1000000 is the extended window some models offer as an opt-in; the harness marks the opt-in with a
+//     "[1m]" suffix on the model id. The suffix is not always recorded in the transcript, so a session is
+//     also taken to have the extended window once ONE of its requests filled more than the standard
+//     window: a request cannot hold more than the window, so that is evidence, and the only evidence
+//     available. A 1M-window session that has not yet passed 200000 is shown with the smaller limit.
+//   - An unknown model gets the standard window.
+// If a window is wrong, change this table and nothing else; the limit is worked out when a usage row is
+// refreshed, so the next refresh restates it.
+export const CONTEXT_LIMITS = {
+  opus: 200000,
+  fable: 200000,
+  sonnet: 200000,
+  haiku: 200000,
+};
+export const CONTEXT_LIMIT_DEFAULT = 200000;
+export const CONTEXT_LIMIT_EXTENDED = 1000000;
+
+// model: the model id as recorded; maxContext: the largest context_tokens any request of the session had.
+export function contextLimitOf(model, maxContext = 0) {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('[1m]') || Number(maxContext) > CONTEXT_LIMIT_DEFAULT) return CONTEXT_LIMIT_EXTENDED;
+  return CONTEXT_LIMITS[familyOf(model)] || CONTEXT_LIMIT_DEFAULT;
+}

@@ -11,8 +11,8 @@
            Find = 'failures.push({ file: todo[i].file, message: e && e.message ? e.message : String(e) });'
            Replace = 'throw e;' }
         @{ Name = "a-bad-file-not-counted"
-           Find = 'errors: failures.length, failures };'
-           Replace = 'errors: 0, failures };' }
+           Find = 'errors: failures.length, failures, mail };'
+           Replace = 'errors: 0, failures, mail };' }
         @{ Name = "rewrite-at-equal-size-not-noticed"
            Find = ' && headOf(fd, headLen) === wantHead) offset = prev.offset;'
            Replace = ') offset = prev.offset;' }
@@ -34,5 +34,11 @@
         @{ Name = "reader-skips-not-added-up"
            Find = 'acc.skipped += batch.skipped || 0;'
            Replace = '' }
+        @{ Name = "a-mail-failure-fails-the-collect"
+           Find = 'mail = { added: 0, skipped: 0, seen: 0, errors: 1, message: e && e.message ? e.message : String(e) };'
+           Replace = 'throw e;' }
+        @{ Name = "usage-rows-counted-per-file"
+           Find = 'if (acc.usage) { for (const k of counts.usageKeys) acc.usage.add(k); rows.tokens_usage = acc.usage.size; }'
+           Replace = 'if (acc.usage) { rows.tokens_usage += counts.tokens_usage; }' }
     )
 }

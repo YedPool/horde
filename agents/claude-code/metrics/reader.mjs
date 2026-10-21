@@ -15,6 +15,10 @@
 //   - A USAGE-LIMIT HIT is an assistant record with model "<synthetic>", isApiErrorMessage true and
 //     apiError "usage_limit_reached"; the kind of limit is apiErrorParams.rate_limit_info.rateLimitType
 //     and the reset is its resetsAt in epoch SECONDS (stored here in ms).
+//   - THE LIVE VIEW (tokens_usage) needs two facts the request rows do not hold: when this file's records
+//     begin and end (every assistant or user record is a sign of life), and when the parent's tool result for
+//     an Agent call came back (a user record whose tool_result block names the call's tool_use_id). The
+//     totals themselves are summed by the store from the request rows, never parsed a second time.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -140,12 +144,14 @@ function whoIs(file, ctx) {
 
 function consume({ path: file, lines, store, ctx }) {
   const who = whoIs(file, ctx);
-  const batch = { tokens_requests: [], tokens_turns: [], tokens_agents: [], tokens_limits: [], limit_resumes: [] };
+  const batch = { tokens_requests: [], tokens_turns: [], tokens_agents: [], tokens_limits: [], limit_resumes: [], tokens_usage: [], agent_returns: [] };
   if (!who) return batch;
   let turn = who.kind === 'main' ? store.latestTurnUuid(who.sessionId, null) : null;
   let openHit = store.hasOpenLimit(who.sessionId, who.agentId);
   let firstModel = null;
   batch.skipped = 0;
+  let firstAt = Infinity;
+  let lastAt = 0;
 
   for (const line of lines) {
     let o;
@@ -156,6 +162,8 @@ function consume({ path: file, lines, store, ctx }) {
     const at = Date.parse(o.timestamp);
     if (!Number.isFinite(at)) { batch.skipped++; continue; }
     const m = o.message && typeof o.message === 'object' ? o.message : {};
+    if (at < firstAt) firstAt = at;
+    if (at > lastAt) lastAt = at;
 
     if (o.type === 'assistant' || o.type === 'user') {
       if (isLimitHit(o)) {
@@ -170,6 +178,11 @@ function consume({ path: file, lines, store, ctx }) {
       }
       // Any other record after a hit means the session is moving again.
       if (openHit) { batch.limit_resumes.push({ at, session_id: who.sessionId, agent_id: who.agentId }); openHit = false; }
+    }
+
+    if (o.type === 'user' && Array.isArray(m.content)) {
+      // Which tool calls just returned. Most are not Agent calls; the store ignores those.
+      for (const c of m.content) if (c && c.type === 'tool_result' && text(c.tool_use_id)) batch.agent_returns.push({ at, tool_use_id: c.tool_use_id });
     }
 
     if (o.type === 'assistant') {
@@ -200,6 +213,10 @@ function consume({ path: file, lines, store, ctx }) {
       turn = o.uuid;
       batch.tokens_turns.push({ at, session_id: who.sessionId, agent_id: null, turn_uuid: o.uuid, trigger: triggerOf(textOf(content)) });
     }
+  }
+
+  if (firstAt !== Infinity) {
+    batch.tokens_usage.push({ session_id: who.sessionId, agent_id: who.agentId || '', started_at: firstAt, last_seen_at: lastAt });
   }
 
   // The sidecar links this file to the parent's Agent call. It is read on every pass over the file.
@@ -250,9 +267,25 @@ function inspectTail({ path: file, text, partialFirst, ctx }) {
   return { session_id: who.sessionId, agent_id: who.agentId, orc: who.orc, hits, last_is_hit: lastIsHit, last_at: lastAt };
 }
 
+// The files of ONE session (its own transcript and its subagents'), found without walking every project:
+// each project folder is asked for <session>.jsonl and <session>/subagents. Used by the live view.
+function sessionFiles(root, sessionId) {
+  const out = [];
+  let projects = [];
+  try { projects = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
+  for (const p of projects) {
+    if (!p.isDirectory()) continue;
+    const main = path.join(root, p.name, sessionId + '.jsonl');
+    if (fs.existsSync(main)) out.push(main);
+    walk(path.join(root, p.name, sessionId, 'subagents'), out);
+  }
+  return out.filter((f) => describeFile(f) !== null);
+}
+
 export default {
   id: 'claude-code',
   roots: (opts) => [projectsFolder(opts)],
+  sessionFiles,
   listFiles(root) {
     const all = [];
     walk(root, all);
