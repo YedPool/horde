@@ -142,6 +142,7 @@ foreach ($chatAdapterFile in @(Get-HordeConversationAdapterFiles)) {
 }
 . (Join-Path $PSScriptRoot "Photo.ps1")
 . (Join-Path $PSScriptRoot "Taken.ps1")
+. (Join-Path $PSScriptRoot "Pointer.ps1")
 foreach ($chatMessengerFile in @(Get-HordeMessengerFiles)) {
     if (@(Get-HordeMessengerNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatMessengerFile))) { . $chatMessengerFile }
 }
@@ -348,13 +349,20 @@ function Get-HordeChatChannelLineMark {
 
 function Select-HordeChatChannelShown {
     # The turns the phone is shown, of those read (A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN):
-    # user, assistant and system as they are; a delivered turn as the founder's line when it is one this
+    # user, assistant and system as they are (a wezfleet pointer or relay line as a marker, no words); a delivered turn as the founder's line when it is one this
     # machine posted, word for word; any other delivered turn not at all.
     param([object[]]$Turns, [string[]]$Lines)
     $byId = @{}
     foreach ($l in @($Lines)) { $p = $l.Split([char]':'); $byId[$p[0]] = [pscustomobject]@{ length = [int]$p[1]; mark = $l } }
     $out = New-Object System.Collections.ArrayList
     foreach ($t in @($Turns)) {
+        # A WEZFLEET POINTER OR RELAY LINE IS A MARKER: its time, none of its words (channels/chat/Pointer.ps1).
+        if (($t.role -ceq "user" -or $t.role -ceq "delivered") -and (Test-HordeChatPointerLine -Text ([string]$t.text))) {
+            $mk = [ordered]@{ role = "marker"; text = ""; turnId = $t.turnId; source = $t.source }
+            if ($null -ne $t.PSObject.Properties["time"]) { $mk["time"] = $t.time }
+            [void]$out.Add([pscustomobject]$mk)
+            continue
+        }
         if ($t.role -cne "delivered") { [void]$out.Add($t); continue }
         $text = [string]$t.text
         $at = $text.IndexOf("FOUNDER LINE from the phone (line ", [System.StringComparison]::Ordinal)

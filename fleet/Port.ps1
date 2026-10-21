@@ -17,6 +17,12 @@
 #     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd; start } each
 #     ResumeLine ($id)                       the one shell line that resumes session $id
 #     Scrub      ()                          environment map for the woken pane: name -> $null removes it
+#     LastTyped  ($transcriptPath, $since)   OPTIONAL (hibernate, slice 2): the turns a person typed into
+#                                            the session at or after $since, as an answer: known list of
+#                                            { at (UTC [datetime]); text (its first 200 characters) },
+#                                            newest first; unknown when the transcript cannot be read. A
+#                                            line the fleet's own tools typed (a mail pointer) may be
+#                                            among them: telling those apart is fleet/Hibernate.ps1's
 #   hosts/<name>/Fleet.ps1   Register-HordeFleetHost
 #     Placement  ($refs)                     where each session sits now: $refs are { sessionId; instance;
 #                                            pane } as the fleet registry stores them; answer known map
@@ -38,6 +44,19 @@
 #                                            of that one session, as an answer: known "removed" or "none",
 #                                            unknown with the reason. A wake calls it just before the
 #                                            session's spawn, after its last liveness check.
+#     Mark       ($sessionId, $reason, $at)  optional: write the terminal restore's "do not restore" marker of
+#                                            that one session (reason parked or hibernated, at the UTC time
+#                                            it was put to sleep), whole, as an answer: known (where) or
+#                                            unknown with the reason. Hibernate calls it for each session it
+#                                            parks, once its process is gone; the Release above is its pair.
+#     Unmark     ($sessionId, $reason)       optional: remove the "do not restore" marker of that one session
+#                                            ONLY IF it is the one a hibernation wrote - the file names this
+#                                            session and says the reason given (hibernated) - as an answer:
+#                                            known "removed", "none" (no marker) or "kept" (another marker, a
+#                                            parked one someone else wrote, or one that cannot be read),
+#                                            unknown with the reason. The wake watcher, a wake and a hibernate
+#                                            call it for a session a record holds and that is RUNNING, so a hand
+#                                            restart does not leave it barred from the next restore.
 #
 # ONE OF EACH. The fleet registry holds one harness's sessions and one terminal's panes; when more than
 # one adapter of a kind is loaded, which one a session belongs to cannot be told from the record, so
@@ -60,11 +79,12 @@ function Register-HordeFleetAgent {
         [Parameter(Mandatory = $true)][scriptblock]$Verdict,
         [Parameter(Mandatory = $true)][scriptblock]$Running,
         [Parameter(Mandatory = $true)][scriptblock]$ResumeLine,
-        [Parameter(Mandatory = $true)][scriptblock]$Scrub
+        [Parameter(Mandatory = $true)][scriptblock]$Scrub,
+        [scriptblock]$LastTyped = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in @($script:HordeFleetAgents)) { if ($a.name -ceq $Name) { $script:HordeFleetAgents.Remove($a) } }
-    [void]$script:HordeFleetAgents.Add([pscustomobject]@{ name = $Name; snapshot = $Snapshot; verdict = $Verdict; running = $Running; resumeLine = $ResumeLine; scrub = $Scrub })
+    [void]$script:HordeFleetAgents.Add([pscustomobject]@{ name = $Name; snapshot = $Snapshot; verdict = $Verdict; running = $Running; resumeLine = $ResumeLine; scrub = $Scrub; lastTyped = $LastTyped })
 }
 
 function Register-HordeFleetHost {
@@ -74,11 +94,13 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][scriptblock]$Placement,
         [Parameter(Mandatory = $true)][scriptblock]$Open,
         [Parameter(Mandatory = $true)][scriptblock]$Describe,
-        [scriptblock]$Release = $null
+        [scriptblock]$Release = $null,
+        [scriptblock]$Mark = $null,
+        [scriptblock]$Unmark = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark; unmark = $Unmark })
 }
 
 function Resolve-HordeFleetAdapter {

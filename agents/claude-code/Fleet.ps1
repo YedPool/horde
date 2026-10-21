@@ -275,9 +275,121 @@ function Get-ClaudeCodeFleetScrub {
     return $out
 }
 
+# THE TURNS A PERSON TYPED (the port's LastTyped; hibernate never puts to sleep a session the founder
+# typed into lately). Read from the transcript's TAIL, never the whole file: a transcript is appended to
+# in time order, so the tail back to -Since is all that can hold one. Read 2026-10-16 from the user lines
+# of the 80 newest local transcripts (shapes and first words only):
+#   origin.kind "human"   every line typed into the box: promptSource typed 4,792, queued 270,
+#                         suggestion_accepted 8. The fleet's mail pointer ("wezfleet: a message is
+#                         waiting for you ...", 3,677 + 61 queued) and its spawn and handoff texts are
+#                         typed into the box too and carry the same mark: they are returned here and told
+#                         apart by fleet/Hibernate.ps1, which knows the fleet's lines.
+#   no origin             "[Request interrupted by user..." (55: a person pressed Escape; the fleet's tools
+#                         never send Escape) and "<command-name>/..." (a slash command typed, 32) - both
+#                         returned. A compaction summary (99), a command's echoed output and every
+#                         other no-origin line are not.
+#   isMeta                mail handed over by a Stop hook ("Stop hook feedback:\nMESSAGE FROM ...", 800+),
+#                         reminders and skill texts: never a person's, never returned.
+# THE TIME IS THE LINE'S OWN "timestamp" TEXT, read as written (UTC, Z), not the parsed value: PowerShell 7
+# turns a date-shaped string into a local [datetime] (agents/claude-code/Conversation.ps1 says so).
+$script:ClaudeCodeFleetTypedTailBytes = 4194304
+$script:ClaudeCodeFleetTypedMostBytes = 67108864
+$script:ClaudeCodeFleetTypedTextChars = 200
+$script:ClaudeCodeFleetStampPattern = '"timestamp":"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,7})?Z)"'
+
+function ConvertFrom-ClaudeCodeFleetStamp {
+    # The first "timestamp" of -Line as a UTC [datetime], or $null.
+    param([AllowEmptyString()][string]$Line)
+    $m = [regex]::Match($Line, $script:ClaudeCodeFleetStampPattern)
+    if (-not $m.Success) { return $null }
+    $at = [datetime]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal
+    if ([datetime]::TryParse($m.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$at)) { return $at }
+    return $null
+}
+
+function ConvertFrom-ClaudeCodeFleetTypedLine {
+    # One transcript line as a typed turn { at; text }, or $null when it is not one (the comment above).
+    param([AllowEmptyString()][string]$Line)
+    if ($Line.IndexOf('"type":"user"', [System.StringComparison]::Ordinal) -lt 0) { return $null }
+    $j = $null
+    try { $j = ConvertFrom-HordeJson -Text $Line } catch { return $null }
+    if ($null -eq $j -or "" + $j.type -cne "user") { return $null }
+    foreach ($flag in @("isSidechain", "isMeta", "isCompactSummary")) {
+        $p = $j.PSObject.Properties[$flag]
+        if ($null -ne $p -and $p.Value -eq $true) { return $null }
+    }
+    $msg = $j.PSObject.Properties["message"]
+    if ($null -eq $msg -or $null -eq $msg.Value) { return $null }
+    $content = $msg.Value.PSObject.Properties["content"]
+    if ($null -eq $content) { return $null }
+    $text = $null
+    if ($content.Value -is [string]) { $text = $content.Value }
+    else {
+        foreach ($b in @($content.Value)) {
+            if ($null -ne $b -and $b.PSObject.Properties["type"] -and "" + $b.type -ceq "text" -and $b.PSObject.Properties["text"]) { $text = "" + $b.text; break }
+        }
+    }
+    if ($null -eq $text) { return $null }
+    $kind = ""
+    $origin = $j.PSObject.Properties["origin"]
+    if ($null -ne $origin -and $null -ne $origin.Value -and $origin.Value.PSObject.Properties["kind"]) { $kind = "" + $origin.Value.kind }
+    $typed = $false
+    if ($kind -ceq "human") { $typed = $true }
+    elseif ($null -eq $origin -and ($text.StartsWith("[Request interrupted by user", [System.StringComparison]::Ordinal) -or $text.StartsWith("<command-name>/", [System.StringComparison]::Ordinal))) { $typed = $true }
+    if (-not $typed) { return $null }
+    $at = ConvertFrom-ClaudeCodeFleetStamp -Line $Line
+    if ($null -eq $at) { return $null }
+    if ($text.Length -gt $script:ClaudeCodeFleetTypedTextChars) { $text = $text.Substring(0, $script:ClaudeCodeFleetTypedTextChars) }
+    return [pscustomobject]@{ at = $at; text = $text }
+}
+
+function Get-ClaudeCodeFleetTyped {
+    # The port's LastTyped: the turns a person typed into the session whose transcript is -Path, at or
+    # after -Since, newest first, as an answer; unknown when the file cannot be read. The tail read grows
+    # four times over until its first whole line is older than -Since or it reaches the file's start, and
+    # past -MostBytes it gives up as unknown rather than answer from part of the window.
+    param([AllowEmptyString()][string]$Path, [Parameter(Mandatory = $true)][datetime]$Since,
+          [long]$TailBytes = $script:ClaudeCodeFleetTypedTailBytes, [long]$MostBytes = $script:ClaudeCodeFleetTypedMostBytes)
+    if ($Path -eq "" -or -not [System.IO.Path]::IsPathRooted($Path)) { return (New-HordeUnknown -Reason "the registry names no transcript for it") }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeUnknown -Reason ("its transcript is not there: " + (Split-Path -Leaf $Path))) }
+    $sinceUtc = $Since.ToUniversalTime()
+    $want = [Math]::Max([long]1024, $TailBytes)
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+        try {
+            while ($true) {
+                $len = $fs.Length
+                $start = [Math]::Max([long]0, $len - $want)
+                $count = [int]($len - $start)
+                $buf = New-Object byte[] $count
+                $fs.Position = $start
+                $got = 0
+                while ($got -lt $count) { $n = $fs.Read($buf, $got, $count - $got); if ($n -le 0) { break }; $got += $n }
+                $lines = @([System.Text.Encoding]::UTF8.GetString($buf, 0, $got) -split "`n")
+                # A tail that starts mid-line drops that part; the file's own first line is whole.
+                if ($start -gt 0 -and $lines.Count -gt 0) { $lines = @($lines | Select-Object -Skip 1) }
+                $first = $null
+                foreach ($l in $lines) { $first = ConvertFrom-ClaudeCodeFleetStamp -Line $l; if ($null -ne $first) { break } }
+                if ($start -eq 0 -or ($null -ne $first -and $first -lt $sinceUtc)) {
+                    $out = New-Object System.Collections.ArrayList
+                    foreach ($l in $lines) {
+                        $t = ConvertFrom-ClaudeCodeFleetTypedLine -Line $l.TrimEnd([char]13)
+                        if ($null -ne $t -and $t.at -ge $sinceUtc) { [void]$out.Add($t) }
+                    }
+                    return (New-HordeKnown -Value @($out | Sort-Object -Property at -Descending))
+                }
+                if ($want -ge $MostBytes) { return (New-HordeUnknown -Reason ("its transcript's last " + $want + " bytes are all newer than the window, so the window was not read whole")) }
+                $want = [Math]::Min($MostBytes, $want * 4)
+            }
+        } finally { $fs.Dispose() }
+    } catch { return (New-HordeUnknown -Reason ("its transcript could not be read: " + $_.Exception.Message)) }
+}
+
 Register-HordeFleetAgent -Name "claude-code" `
     -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) } `
     -Verdict { param($snapshot, $id, $cwd, $ignore, $since, $process) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since -Process $process } `
     -Running { param($snapshot) Get-ClaudeCodeFleetRunning -Snapshot $snapshot } `
     -ResumeLine { param($id) $st = Get-ClaudeCodeFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { throw ("the harness's fleet settings are refused, so no resume line is built: " + (@($st.findings) -join "; ")) }; Get-ClaudeCodeFleetResumeLine -SessionId $id -Command ("" + $st.values.command) } `
-    -Scrub { Get-ClaudeCodeFleetScrub }
+    -Scrub { Get-ClaudeCodeFleetScrub } `
+    -LastTyped { param($path, $since) Get-ClaudeCodeFleetTyped -Path $path -Since $since }

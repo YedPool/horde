@@ -1,6 +1,6 @@
 # test/fixtures/fleet - the phone/PC contract for sleeping sessions
 
-The founder hibernates and wakes sessions from his phone. These four files are the contract, agreed
+The founder hibernates and wakes sessions from his phone. These files are the contract, agreed
 between the PC side (the hibernation lane) and the phone side (the relay and phone lane), before
 either side builds against it. They are data: no suite reads them yet. The first suite that does
 must fail on any member that is not listed here.
@@ -81,3 +81,88 @@ Each carries `v`, `setId` and `machine` (above), and exactly the members listed.
   Tier 2 Orcs? Wake brings them back") instead of a fresh passkey, because Wake undoes it.
 - `wake` carries no `version` on purpose: a hibernation id does not depend on the Orc registry. Do
   not add one for symmetry.
+
+## Parking lots (T-0216, 2026-10-19)
+
+The founder's words: "When we park, the park is one entity showing a list of orcs parked. Could
+choose to resurrect any combination of them or all. If I subsequently park other Orcs, they are
+another parking lot - new datetime and list this way I can see things organized by when they got
+parked."
+
+A **lot** is one park, and the shapes below are the founder's SSOT audit's tables (`parking_lot`,
+`parking_lot_member`, `wake`, `wake_member`; work-data-ssot-audit-2026-10-19, "Target schema
+sketch"), with the audit's column names and ULID ids, so the rows move into the future fleet.db
+unchanged. A lot's id is a 26-character ULID whose time is `created_at`. Each lot also sits in a
+folder named by that same time (`yyyymmdd-hhmmss`, UTC), which is the old hibernation id, so
+`hibernationId` in `wake.json` and `hibernation_id` below name the lot they always named, and a wake
+accepts either id.
+
+### PC to phone: `lots.json`
+
+What `horde fleet lots -Json` prints. Replaced whole each time; lots newest first by `created_at`.
+
+| member | shape |
+|---|---|
+| `v` | `1` |
+| `lots` | list of lots, newest first |
+| `skipped` | list of plain-word lines, one for each lot the PC could not read (empty when none) |
+
+A lot: `{ id, hibernation_id, created_at, by, reason, selection_kind, keep_visible, members, wakes }`.
+- `id`, `created_at`, `reason`, `selection_kind` are `parking_lot` columns. `selection_kind` is
+  `"orcs"` (the tier-2 hibernate), `"all"` or `"labels"` (`horde fleet record`) or `"backfill"` (a
+  park from before lots existed, written from a file).
+- `by` is the parking session in words (a label, or a session id when it has none); `""` if unknown.
+- `reason` is one line.
+- `keep_visible` is the lot's one flag, `0` or `1`, set by the park (`horde fleet hibernate -KeepVisible`):
+  `1` keeps every member's card on the founder's pages while it sleeps. A lot written before the flag reads `0`.
+
+A member: `{ session_id, label, role, parent, cwd, pane, note, state, stored }`.
+- `session_id` and `note` are `parking_lot_member` columns. `label`, `role`, `parent`, `cwd` and `pane`
+  are the session's own (the audit's `session` table); `pane` is only a hint, a terminal reuses pane ids.
+  A value not known is `""`. `role` is `"orc"`, `"warg"` or `"other"`.
+- `state` is what to show: `"asleep"` (in the lot AND not running now), `"woken"`, `"still-awake"`
+  (running, or never slept) or `"failed"`. A member whose process runs is never `"asleep"`.
+- `stored` is the lot's own last word (`recorded`, `asked`, `parked`, `exited`, `still-awake`,
+  `waking`, `woken`, `failed`). Show `state`; `stored` is for a detail view.
+- A session can be in more than one lot (parked, woken, parked again). Each lot says what happened
+  in that park.
+
+A wake: `{ id, requested_at, members }`, the `wake` row and its `wake_member` rows
+(`{ session_id, new_session_id, outcome }`; outcome is `woken`, `still-awake`, `failed`, `held` or
+`asleep`; `new_session_id` is `""` unless the session came back under another id).
+
+### Phone to PC: `wake-lot.json`
+
+Wake a whole lot, or any combination of its members.
+
+| member | shape |
+|---|---|
+| `v`, `setId`, `machine` | as above |
+| `lotId` | the lot's `id` (its hibernation id is accepted too) |
+| `members` | list of `session_id`s to wake; an empty list wakes the whole lot |
+
+- The envelope kind is `wake` (as `wake.json`); a body with `lotId` is a lot wake and one with
+  `hibernationId` is the older whole-hibernation wake. Exactly one of the two.
+- The PC runs `horde fleet wake -Lot <lotId> -Members <ids>`. It keeps every safety rule a wake has:
+  a session that runs is left alone, spawns are held after an earlier wake, free memory is checked
+  before each start, and the no-restore marker is removed. A `members` entry that names no member of
+  the lot refuses the whole request with the reason, and nothing is woken.
+- `fleet wake <hibernation id> -Only` takes the same names as `-Members`: a label, a session id or a unique
+  id prefix of eight or more characters.
+- Every wake that is not a dry run is recorded as a `wake` row with a `wake_member` row for each
+  session it was asked to wake; the next `lots.json` carries it in the lot's `wakes`.
+- Signing is the same as `wake` (the founder's unlocked session).
+
+### Seed: `backfill-lots.json`
+
+Not a phone file. The two parks that happened before lots existed, for
+`horde fleet lots backfill -File test/fixtures/fleet/backfill-lots.json`: the 2026-10-16 parks
+(by K) and M's park of 2026-10-19. It carries session ids and labels only; the working directory,
+pane and parent are read from the fleet registry when it is applied, so the file names no machine
+path. Applying it twice writes nothing the second time. It is not applied by any test.
+
+Who parked (`by`): a session id is the lot's `created_by_session_id`; the label of one of the lot's members
+is resolved to that member's id; any other word is kept only in the record's `parkedBy`, which the listing
+reads first. `created_by_orc_id` is never written from it: that column is the orc table's key in fleet.db,
+and a free word there would break the import. A lot with no record (no member has a working directory)
+and a `by` that is not a member's label therefore shows no parker.

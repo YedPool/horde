@@ -50,7 +50,11 @@
 # The pane tool (test/lib/PaneTool.ps1): what Assert-HordePaneEnvironment runs inside a pane.
 . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "test\lib\PaneTool.ps1")
 
-$script:HordeIsoCli = @("cli", "--no-auto-start")
+# --skip-config BEFORE cli (T-0216): a cli call is a wezterm start like any other and loads the person's
+# config, whose plugin manager clones plugins into the profile it finds. In the fleet e2e that clone client
+# held the scenario's folder for over 60 s (2026-10-16). The flag is a wezterm option, so it goes before cli;
+# measured on this box: `wezterm --skip-config cli --no-auto-start list` answers as without it.
+$script:HordeIsoCli = @("--skip-config", "cli", "--no-auto-start")
 
 function Invoke-HordeWeztermCli {
     # Every wezterm CLI call in this file goes through here, so none can forget --no-auto-start.

@@ -113,6 +113,7 @@ import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } f
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
 import { createChatScroll } from "./chat-scroll.js";
+import { trackBarHeight, scrollToNewest } from "./bar-height.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 import { sessionLines } from "./session-view.js";
 
@@ -391,6 +392,8 @@ function timeStamp(ms, before, key, shortForm = clockTime) {
   return t;
 }
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
+// THE BAR'S REAL HEIGHT, in --bar-h, kept current (bar-height.js): app.css hangs the cards' scroll margin on it.
+trackBarHeight($("bar"), document.documentElement);
 // WHERE THE CHAT STANDS (chat-scroll.js): at the newest message when it opens, his place kept on a refresh
 // while he reads back, and Jump to latest while he is away from the bottom.
 const chatScroll = createChatScroll({ win: window, log: $("chatLog"), compose: $("chatCompose"), button: $("chatJump"), news: $("chatNews"), field: $("chatText"), topInset: () => $("bar").getBoundingClientRect().bottom });
@@ -416,12 +419,15 @@ function drawChat(rec) {
     box.dataset.key = key;
     who.className = "chat-who";
     const name = document.createElement("span");
-    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : it.role === "marker" ? "Message received" : "The machine";
     who.appendChild(name);
     const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", key);
     if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
     box.appendChild(who);
+    // A MARKER (channels/chat/Pointer.ps1): a wezfleet pointer line the machine kept back, so its time and
+    // nothing else is shown - no words, no id.
+    if (it.role === "marker") { log.appendChild(box); continue; }
     if (it.kind === "photo") {
       // A PHOTO: the small picture this page drew when it was sent (kept in memory only, like the chat);
       // from another phone, or after a reload, the words say what it is.
@@ -786,12 +792,15 @@ function drawProgress(rec, own = true) {
     // (or nothing read yet), the newest end, or the start.
     const mark = $("progressNew");
     if (mark) window.scrollTo(0, Math.max(0, window.scrollY + mark.getBoundingClientRect().top - $("bar").getBoundingClientRect().bottom - 8));
-    else if (progressMark >= 0) window.scrollTo(0, document.documentElement.scrollHeight);
+    else if (progressMark >= 0) progressToNewest();
     else window.scrollTo(0, 0);
   }
   // Only now, with the page where it will stand, is what is on the screen taken as seen.
   watchEntries();
 }
+// The newest entry seen from its top, below the bar (bar-height.js): an entry taller than the screen would
+// otherwise have its top under the bar at the foot of the page (the founder, 2026-10-20).
+function progressToNewest() { scrollToNewest(window, document.documentElement, $("progressLog").lastElementChild, $("bar").getBoundingClientRect().bottom); }
 // HE HAS READ WHAT HE HAS SEEN, IN ORDER. An entry is seen once half of it - or, for one taller than the
 // screen, half a screen of it - has stood between the bar and the foot; the browser tells the page so as
 // entries pass (an IntersectionObserver), whether he reads slowly or scrolls on. His place moves on from
@@ -833,7 +842,7 @@ function readAsSeen() {
 }
 // A browser with no such observer is told by the scroll itself.
 window.addEventListener("scroll", () => { if (!watcher) noteSeen(); }, { passive: true });
-$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));
+$("progressNewest").addEventListener("click", progressToNewest);
 $("progressAllRead").addEventListener("click", () => { bridge.request("progress-read", { all: true }).then((rec) => { if (rec.state === "known") { progressLast = rec.value; showProgressCount(rec.value); } else say("action", rec.reason || ""); }); });
 bridge.on("progress-changed", (rec) => {
   if (!stream || stream.entry === current) { drawProgress(rec, true); return; }

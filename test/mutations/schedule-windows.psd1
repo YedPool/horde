@@ -79,6 +79,15 @@
         @{ Name = "elevation-hint-for-everyone"
            Find = '-and $Job.atStartup -eq $true -and -not $up) {'
            Replace = '-and $Job.atStartup -eq $true) {' }
+        @{ Name = "denied-hint-when-elevated"
+           Find = '} elseif (-not $up -and $why -like "*Access is denied*") {'
+           Replace = '} elseif ($why -like "*Access is denied*") {' }
+        @{ Name = "denied-hint-for-any-refusal"
+           Find = '} elseif (-not $up -and $why -like "*Access is denied*") {'
+           Replace = '} elseif (-not $up) {' }
+        @{ Name = "no-denied-hint"
+           Find = '} elseif (-not $up -and $why -like "*Access is denied*") {'
+           Replace = '} elseif ($false) {' }
         @{ Name = "refusal-names-no-account"
            Find = '\ to run as " + $user + " (" + $why'
            Replace = '\ (" + $why' }

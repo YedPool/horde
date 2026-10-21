@@ -62,6 +62,7 @@ $script:HordePwaSiteFiles = [ordered]@{
     "app/read-banner.js" = "surfaces/pwa/page/read-banner.js"
     "app/photo.js" = "surfaces/pwa/page/photo.js"
     "app/chat-scroll.js" = "surfaces/pwa/page/chat-scroll.js"
+    "app/bar-height.js" = "surfaces/pwa/page/bar-height.js"
     "app/session-view.js" = "surfaces/pwa/page/session-view.js"
     "app/keywrap.js" = "surfaces/pwa/page/keywrap.js"
     "app/relay-client.js" = "surfaces/pwa/page/relay-client.js"

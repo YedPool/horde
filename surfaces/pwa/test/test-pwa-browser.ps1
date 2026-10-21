@@ -169,7 +169,7 @@ try {
     $chatFixtures = @(Get-HordeTestChatFixtureFiles | ForEach-Object { . $_ -Root $root })
     $thrall = New-HordeTestChatThrall -Fixtures $chatFixtures
     Check ($null -ne $thrall -and (New-HordeTestFleetMessenger -HordeHome $hh -Folder $fake) -cne "") "CONTROL: a synthetic Thrall and a messenger stand-in are ready for the chat"
-    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) })
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) }, @{ role = "user"; text = "wezfleet: a message is waiting for you (id 7a5e99735c69f1bc6fdc90f7530561bc) - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing" })
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
     Check ($id.state -ceq "known") "CONTROL: the machine has its relay identity"
     $keysMade = @(@{ n = $id.value.sign.name; s = $id.value.scope }, @{ n = $id.value.agree.name; s = $id.value.scope })
@@ -414,6 +414,9 @@ try {
     Check ($tab.ok -and $tab.value.chat -and -not $tab.value.doc -and -not $tab.value.keys) "the chat tab shows the chat, and the answering row of the questions goes"
     $w1 = Invoke-Browser @{ cmd = "chatWait"; text = "three chimes recorded" }
     Check ($w1.ok -and $w1.value.found -and $w1.value.log.Contains("how is the chime going?")) ("the Thrall's turns are drawn (" + $(if ($w1.ok) { ($w1.value.log -replace '\s+', ' ') } else { $w1.reason }) + ")")
+    # THE POINTER LINE IS A MARKER (T-0309, the founder 2026-10-20): the third turn above is wezfleet's pointer, typed at the
+    # Thrall's prompt; the phone shows "Message received" and its time, and nothing of the line - no id, no wording.
+    Check ($w1.ok -and $w1.value.log.Contains("Message received") -and -not $w1.value.log.Contains("wezfleet") -and -not $w1.value.log.Contains("7a5e9973") -and -not $w1.value.log.Contains("pointer")) ("the wezfleet pointer line is drawn as a Message received marker, with none of its words or its id (" + $(if ($w1.ok) { ($w1.value.log -replace '\s+', ' ') } else { $w1.reason }) + ")")
     $cn = Invoke-Browser @{ cmd = "chatNewline"; mailbox = $mailbox }
     Check ($cn.ok -and $cn.value.value -ceq "one`ntwo`nthree" -and -not $cn.value.sent) ("Shift+Enter and the New line key each add a line and send nothing (" + $(if ($cn.ok) { ($cn.value.value -replace "`n", "|") } else { $cn.reason }) + ")")
     $cs = Invoke-Browser @{ cmd = "chatSend"; text = "Use the second chime."; via = "enter"; mailbox = $mailbox }
