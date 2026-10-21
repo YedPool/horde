@@ -40,6 +40,18 @@ export const LOT_SELECTIONS = ['all', 'labels', 'orcs', 'backfill'];
 export const MEMBER_STATES = ['parked', 'woken', 'dropped'];
 export const WAKE_OUTCOMES = ['woken', 'still-awake', 'failed', 'held', 'asleep'];
 export const LABEL_KINDS = ['task', 'question'];
+// The main tables whose rows are objects of the Horde (migration 3), each with the column that says when
+// the object came to be; null where the table keeps no time, and the entity row takes the time of writing.
+export const ENTITY_TABLES = {
+  horde: 'created_at', node: 'created_at', person: 'created_at', orc: 'created_at', session: 'first_seen',
+  pane: 'opened_at', task: 'created_at', pr: 'checked_at', question: 'asked_at', answer: 'at',
+  decisions_snapshot: 'published_at', changelog_entry: 'at', parking_lot: 'created_at', service: null,
+  deploy: 'at', orc_status: 'at',
+};
+export const ENTITY_KINDS = Object.keys(ENTITY_TABLES);
+export const LINK_RELATIONS = ['blocks', 'relates-to', 'answers', 'implements', 'duplicates', 'follows-up',
+  'caused-by', 'mentions'];
+export const PERSON_ROLES = ['founder', 'staff', 'other'];
 
 const q = (list) => list.map((s) => "'" + s + "'").join(', ');
 // Crockford base32, 26 characters: the same pattern as schema/fleet-parking-lot.v1.json.
@@ -52,6 +64,28 @@ const flag = (col) => `CHECK (${col} IN (0, 1))`;
 const appendOnly = (table) => `
   CREATE TRIGGER ${table}_no_update BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, '${table} is append-only'); END;
   CREATE TRIGGER ${table}_no_delete BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, '${table} is append-only'); END;`;
+const NOW_MS = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
+// An object's entity row is made, touched and removed with it, so nothing can point at an object that is
+// not there and no object is missing from the registry; an entity row cannot be made for an object that
+// does not exist. Its id cannot change: every pointer is to it. NEVER INSERT OR REPLACE an object: the
+// replace deletes it and makes it again, so its entity row comes back without created_by and updated_at
+// (review of phase 1b); change it with UPDATE, or INSERT ... ON CONFLICT DO UPDATE.
+const entityTriggers = (table) => `
+  CREATE TRIGGER ${table}_entity_add AFTER INSERT ON ${table} BEGIN
+    INSERT INTO entity (id, kind, created_at) VALUES (NEW.id, '${table}', ${ENTITY_TABLES[table] ? 'NEW.' + ENTITY_TABLES[table] : NOW_MS}); END;
+  CREATE TRIGGER ${table}_entity_touch AFTER UPDATE ON ${table} BEGIN
+    UPDATE entity SET updated_at = ${NOW_MS} WHERE id = NEW.id; END;
+  CREATE TRIGGER ${table}_entity_drop AFTER DELETE ON ${table} BEGIN DELETE FROM entity WHERE id = OLD.id; END;
+  CREATE TRIGGER ${table}_id_fixed BEFORE UPDATE OF id ON ${table} WHEN NEW.id IS NOT OLD.id
+  BEGIN SELECT RAISE(ABORT, '${table}: an id never changes'); END;
+  CREATE TRIGGER entity_keeps_${table} BEFORE DELETE ON entity
+  WHEN OLD.kind = '${table}' AND EXISTS (SELECT 1 FROM ${table} x WHERE x.id = OLD.id)
+  BEGIN SELECT RAISE(ABORT, 'entity: its ${table} row is still there'); END;
+  CREATE TRIGGER entity_needs_${table} BEFORE INSERT ON entity
+  WHEN NEW.kind = '${table}' AND NOT EXISTS (SELECT 1 FROM ${table} x WHERE x.id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'entity: no ${table} row has this id'); END;`;
+const entityBackfill = (table) =>
+  `INSERT INTO entity (id, kind, created_at) SELECT id, '${table}', ${ENTITY_TABLES[table] ?? NOW_MS} FROM ${table};`;
 
 export const MIGRATIONS = [
   // 1: the first shape (phase 0 of planning/fleet-db-design.md).
@@ -440,6 +474,249 @@ export const MIGRATIONS = [
        AND e.kind IN ('closed', 'reopened') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) = 'closed' THEN 0
       WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes
   FROM answer a JOIN question qn ON qn.id = a.question_id;
+  `,
+
+  // 2: what the Progress and Decisions pages show (M's orders of 2026-10-19 and 10-20).
+  `
+  -- A park that says keep-visible leaves its Orcs on the Progress and Decisions pages; any other park
+  -- takes them off. Lot level (agreed with lane K, schema/fleet-parking-lot.v1.json).
+  ALTER TABLE parking_lot ADD COLUMN keep_visible INTEGER NOT NULL DEFAULT 0 ${flag('keep_visible')};
+
+  -- Every member still parked, with its lot's keep_visible. A member's own orc_id is the one the park
+  -- recorded; a member that has none falls back to its session's.
+  CREATE VIEW parked_now AS
+  SELECT m.lot_id, m.session_id, coalesce(m.orc_id, s.orc_id) AS orc_id, m.tier, l.keep_visible,
+    l.created_at AS parked_at, l.reason
+  FROM parking_lot_member m JOIN parking_lot l ON l.id = m.lot_id JOIN session s ON s.id = m.session_id
+  WHERE m.state = 'parked';
+
+  -- DECISIONS LISTS ----------------------------------------------------------------------------------
+
+  -- Each list an Orc (or the Thrall, through its orc row) publishes for the founder, whole, as it was.
+  -- The live list is the newest snapshot of each Orc (decisions_live); every older one is the archive.
+  -- There is no superseded_by column: which snapshot is newest is already a fact of published_at, and a
+  -- stored pointer would be a second copy of it. sha256 is of the canonical items (fleet-db/write.mjs,
+  -- publishDecisions) and is NOT unique: a list that goes A, B, A records the second A. A publish equal
+  -- to the Orc's newest list is refused below, so "unchanged" writes nothing. An empty list is a list.
+  CREATE TABLE decisions_snapshot (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    orc_id TEXT NOT NULL REFERENCES orc (id),
+    published_at INTEGER NOT NULL CHECK (published_at >= 0),
+    by_session_id TEXT REFERENCES session (id),
+    item_count INTEGER NOT NULL CHECK (item_count >= 0),
+    sha256 TEXT NOT NULL ${sha('sha256')},
+    -- One Orc cannot publish twice in one millisecond, and an import of the same file twice hits this.
+    UNIQUE (orc_id, published_at)
+  ) STRICT;
+
+  CREATE TRIGGER decisions_snapshot_not_same BEFORE INSERT ON decisions_snapshot
+  WHEN NEW.sha256 = (SELECT s.sha256 FROM decisions_snapshot s WHERE s.orc_id = NEW.orc_id
+    ORDER BY s.published_at DESC, s.id DESC LIMIT 1)
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot: same as the live list'); END;
+
+  -- One line of a list. question_id is NULL for an item that is not a numbered question yet.
+  CREATE TABLE decisions_snapshot_item (
+    snapshot_id TEXT NOT NULL REFERENCES decisions_snapshot (id),
+    position INTEGER NOT NULL CHECK (position >= 1),
+    question_id TEXT REFERENCES question (id),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 400),
+    recommendation TEXT CHECK (length(recommendation) <= 400),
+    importance TEXT CHECK (length(importance) BETWEEN 1 AND 40),
+    blocks TEXT CHECK (length(blocks) <= 400),
+    PRIMARY KEY (snapshot_id, position)
+  ) STRICT;
+  CREATE INDEX decisions_snapshot_item_question ON decisions_snapshot_item (question_id);
+
+  -- Positions run 1..item_count: with the primary key, a list can hold no gap and no extra line. That
+  -- every position is present, and that the lines still hash to the snapshot's sha256, is checked by
+  -- horde db check, since the items come after their snapshot.
+  CREATE TRIGGER decisions_snapshot_item_in_range BEFORE INSERT ON decisions_snapshot_item
+  WHEN NEW.position > (SELECT s.item_count FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot_item: position beyond the list''s item_count'); END;
+
+  -- Lines go only into the Orc's newest list, as it is published: an older snapshot is the archive and is
+  -- frozen, even one left short. An import therefore writes each Orc's lists in time order.
+  CREATE TRIGGER decisions_snapshot_item_newest_only BEFORE INSERT ON decisions_snapshot_item
+  WHEN NEW.snapshot_id <> (SELECT l.id FROM decisions_live l
+    WHERE l.orc_id = (SELECT s.orc_id FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id))
+  BEGIN SELECT RAISE(ABORT, 'decisions_snapshot_item: lines go only into the newest list of its Orc'); END;
+
+  ${appendOnly('decisions_snapshot')}
+  ${appendOnly('decisions_snapshot_item')}
+
+  -- The newest snapshot of each Orc: the list the Decisions page shows. "Same as the live list" above is
+  -- against this one only, so a backdated import equal to an older list is written (the design's A, B, A).
+  CREATE VIEW decisions_live AS
+  SELECT id, orc_id, published_at, by_session_id, item_count, sha256 FROM (
+    SELECT s.*, row_number() OVER (PARTITION BY s.orc_id ORDER BY s.published_at DESC, s.id DESC) AS rn
+    FROM decisions_snapshot s)
+  WHERE rn = 1;
+
+  CREATE VIEW decisions_live_item AS
+  SELECT l.orc_id, l.published_at, i.snapshot_id, i.position, i.question_id, i.text, i.recommendation,
+    i.importance, i.blocks
+  FROM decisions_live l JOIN decisions_snapshot_item i ON i.snapshot_id = l.id;
+  `,
+
+  // 3: the glue (founder, 2026-10-20: every object of the Horde in one database, tagged, linked and
+  // sortable, the Thrall with a status of its own, every Orc's tasks a numbered tree).
+  `
+  -- WHO AND WHERE ----------------------------------------------------------------------------------
+
+  -- A Horde: one Thrall across machines. Every node belongs to one (NULL on a file made before this).
+  CREATE TABLE horde (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 64),
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  ALTER TABLE node ADD COLUMN horde_id TEXT REFERENCES horde (id);
+
+  -- A person: the founder and staff. Signs answers, owns subscriptions, asks for tasks.
+  CREATE TABLE person (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
+    role TEXT NOT NULL CHECK (role IN (${q(PERSON_ROLES)})),
+    handle TEXT UNIQUE CHECK (length(handle) BETWEEN 1 AND 64 AND handle NOT GLOB '*[^a-z0-9._-]*'),
+    created_at INTEGER NOT NULL,
+    retired_at INTEGER
+  ) STRICT;
+  CREATE UNIQUE INDEX person_one_founder ON person (role) WHERE role = 'founder' AND retired_at IS NULL;
+
+  -- The model a session runs (a Warg's is chosen per brief).
+  ALTER TABLE session ADD COLUMN model TEXT CHECK (length(model) BETWEEN 1 AND 80);
+
+  -- STATUS ------------------------------------------------------------------------------------------
+
+  -- Each Orc's status, the Thrall's included, history kept. doing and blocked are the only typed words
+  -- (the card's 120 characters, plain words); the card's finished and waiting-on lines are derived.
+  CREATE TABLE orc_status (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    orc_id TEXT NOT NULL REFERENCES orc (id),
+    session_id TEXT REFERENCES session (id),
+    at INTEGER NOT NULL,
+    doing TEXT NOT NULL CHECK (length(doing) BETWEEN 1 AND 120),
+    blocked TEXT CHECK (length(blocked) BETWEEN 1 AND 200),
+    backfill INTEGER NOT NULL DEFAULT 0 ${flag('backfill')},
+    sha256 TEXT NOT NULL UNIQUE ${sha('sha256')}
+  ) STRICT;
+  CREATE INDEX orc_status_orc ON orc_status (orc_id, at);
+
+  -- THE ENTITY REGISTRY -------------------------------------------------------------------------------
+
+  -- One row per object of every main table (ENTITY_TABLES), made, touched and removed with it by
+  -- triggers. Tags, links, notifications and created_by point here, so they work for every kind of
+  -- object and the database still refuses a pointer to nothing. kind is the table that holds the object.
+  CREATE TABLE entity (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN (${q(ENTITY_KINDS)})),
+    created_at INTEGER NOT NULL,
+    created_by_id TEXT REFERENCES entity (id),
+    updated_at INTEGER,
+    CHECK (created_by_id IS NULL OR created_by_id <> id)
+  ) STRICT;
+  CREATE INDEX entity_kind ON entity (kind, created_at);
+  CREATE INDEX entity_created_by ON entity (created_by_id);
+  -- Only who made it and when it last changed may change; what it is and when it began are fixed.
+  CREATE TRIGGER entity_fixed BEFORE UPDATE ON entity
+  WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.created_at IS NOT OLD.created_at
+  BEGIN SELECT RAISE(ABORT, 'entity: id, kind and created_at never change'); END;
+  ${ENTITY_KINDS.map(entityBackfill).join('\n  ')}
+  ${ENTITY_KINDS.map(entityTriggers).join('\n')}
+
+  -- TAGS AND LINKS ---------------------------------------------------------------------------------
+
+  -- A tag is a row, never words inside a field. name is lower case; a colon makes a family (area:relay).
+  CREATE TABLE tag (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 64 AND name NOT GLOB '*[^a-z0-9:._-]*'),
+    meaning TEXT CHECK (length(meaning) <= 400),
+    created_at INTEGER NOT NULL
+  ) STRICT;
+
+  CREATE TABLE entity_tag (
+    entity_id TEXT NOT NULL REFERENCES entity (id),
+    tag_id TEXT NOT NULL REFERENCES tag (id),
+    at INTEGER NOT NULL,
+    by_entity_id TEXT REFERENCES entity (id),
+    PRIMARY KEY (entity_id, tag_id)
+  ) STRICT;
+  CREATE INDEX entity_tag_tag ON entity_tag (tag_id);
+
+  -- Loose relations between any two objects (task blocks task, question answers task, PR implements task).
+  -- Fixed ones stay foreign keys on their tables (a task's parent, a question's task). A link is retired,
+  -- not deleted, and one relation between two objects is live at most once.
+  CREATE TABLE link (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    subject_id TEXT NOT NULL REFERENCES entity (id),
+    relation TEXT NOT NULL CHECK (relation IN (${q(LINK_RELATIONS)})),
+    object_id TEXT NOT NULL REFERENCES entity (id),
+    at INTEGER NOT NULL,
+    by_entity_id TEXT REFERENCES entity (id),
+    retired_at INTEGER,
+    CHECK (subject_id <> object_id),
+    CHECK (retired_at IS NULL OR retired_at >= at)
+  ) STRICT;
+  CREATE UNIQUE INDEX link_one_live ON link (subject_id, relation, object_id) WHERE retired_at IS NULL;
+  CREATE INDEX link_object ON link (object_id, relation);
+
+  -- THE TASK TREE AND THE PER-TURN CHECK-IN ---------------------------------------------------------
+
+  -- position orders a task among its siblings, and breaks ties of priority in its owner's list; gaps are
+  -- fine, since the number shown (3.2.1) is derived by task_tree. due_at: when the task is wanted by.
+  ALTER TABLE task ADD COLUMN position INTEGER CHECK (position >= 1);
+  ALTER TABLE task ADD COLUMN due_at INTEGER;
+  CREATE INDEX task_parent ON task (parent_id, position);
+  -- A task cannot sit under its own subtask: the tasks of a loop would have no top and would drop out of
+  -- every list unseen. An insert cannot make a loop (nothing points at a new id yet); a move can.
+  CREATE TRIGGER task_no_loop BEFORE UPDATE OF parent_id ON task
+  WHEN NEW.parent_id IS NOT NULL AND NEW.id IN (
+    WITH RECURSIVE up (x) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM task p JOIN up ON p.id = up.x WHERE p.parent_id IS NOT NULL)
+    SELECT x FROM up)
+  BEGIN SELECT RAISE(ABORT, 'task: it cannot sit under its own subtask'); END;
+
+  -- "I looked at my task list this turn": one row per turn that checked in, with the hash of the list it
+  -- saw. Lane K's Stop hook reads the newest per session.
+  CREATE TABLE task_checkin (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    session_id TEXT NOT NULL REFERENCES session (id),
+    orc_id TEXT REFERENCES orc (id),
+    at INTEGER NOT NULL,
+    list_sha256 TEXT NOT NULL ${sha('list_sha256')},
+    item_count INTEGER NOT NULL CHECK (item_count >= 0)
+  ) STRICT;
+  CREATE INDEX task_checkin_session ON task_checkin (session_id, at);
+
+  ${appendOnly('orc_status')}
+  ${appendOnly('task_checkin')}
+
+  -- Each Orc's current status: its newest row.
+  CREATE VIEW status_now AS
+  SELECT id, orc_id, session_id, at, doing, blocked FROM (
+    SELECT st.*, row_number() OVER (PARTITION BY st.orc_id ORDER BY st.at DESC, st.id DESC) AS rn FROM orc_status st)
+  WHERE rn = 1;
+
+  -- Every open task with its number in its owner's list: top tasks by priority, then position, then age;
+  -- subtasks by position under their parent, numbered within the parent. A subtask sits in the tree of its
+  -- top task's owner; one whose parent is closed leaves the tree with it. sort orders the rows as shown.
+  CREATE VIEW task_tree AS
+  WITH RECURSIVE live AS (
+    SELECT t.id, t.key, t.title, t.parent_id, t.position, t.due_at, t.created_at, n.state, n.prio, n.owner_orc_id
+    FROM task t JOIN task_now n ON n.id = t.id
+    WHERE n.state IS NULL OR n.state NOT IN ('done', 'verified', 'dropped', 'superseded')),
+  sib AS (
+    SELECT id, row_number() OVER (PARTITION BY parent_id ORDER BY position IS NULL, position, created_at, id) AS n
+    FROM live WHERE parent_id IS NOT NULL),
+  top AS (
+    SELECT id, row_number() OVER (PARTITION BY owner_orc_id ORDER BY prio IS NULL, prio, position IS NULL, position, created_at, id) AS n
+    FROM live WHERE parent_id IS NULL),
+  tree (id, owner_orc_id, depth, path, sort) AS (
+    SELECT top.id, l.owner_orc_id, 0, CAST(top.n AS TEXT), printf('%06d', top.n)
+    FROM top JOIN live l ON l.id = top.id
+    UNION ALL
+    SELECT c.id, tree.owner_orc_id, tree.depth + 1, tree.path || '.' || sib.n, tree.sort || '.' || printf('%06d', sib.n)
+    FROM live c JOIN sib ON sib.id = c.id JOIN tree ON tree.id = c.parent_id)
+  SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
+  FROM tree JOIN live l ON l.id = tree.id;
   `,
 ];
 

@@ -24,7 +24,7 @@
            Find = 'if (upTo) bridge.request("progress-read", { id: upTo })'
            Replace = 'if (false) bridge.request("progress-read", { id: upTo })' }
         @{ Name = "progress-jump-goes-nowhere"
-           Find = '$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));'
+           Find = '$("progressNewest").addEventListener("click", progressToNewest);'
            Replace = '$("progressNewest").addEventListener("click", () => window.scrollTo(0, window.scrollY));' }
         @{ Name = "progress-mark-all-marks-nothing"
            Find = 'bridge.request("progress-read", { all: true })'

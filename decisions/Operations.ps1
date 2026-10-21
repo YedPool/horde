@@ -106,7 +106,7 @@ $script:HordeDecisionOperations = [ordered]@{
     # for a repost of it, so the two answers cannot differ.
     add    = @{ writes = $true;  kind = "question-added";    content = "Get-HordeDecisionAddContent";   complete = "Complete-HordeDecisionAddData" }
     update = @{ writes = $true;  kind = "question-updated";  content = "Get-HordeDecisionUpdateContent" }
-    close  = @{ writes = $true;  kind = "question-closed";   content = "Get-HordeDecisionCloseContent" }
+    close  = @{ writes = $true;  kind = "question-closed";   content = "Get-HordeDecisionCloseContent"; complete = "Complete-HordeDecisionCloseData" }
     # retired: an operation that is no longer done. Its records in the store are read as they always
     # were (decisions/Rules.ps1 applies them); a NEW request is refused with this sentence - {0} is the
     # question's number - after a repost of one recorded before has been answered from its record.
@@ -116,6 +116,9 @@ $script:HordeDecisionOperations = [ordered]@{
     # (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED; decisions/Route.ps1 makes route).
     route  = @{ writes = $true;  kind = "answer-routed";     content = "Get-HordeDecisionRouteContent" }
     ack    = @{ writes = $true;  kind = "question-acked";    content = "Get-HordeDecisionAckContent";   complete = "Complete-HordeDecisionAckData" }
+    # change-reply: the Orc that asked says what became of its work when the founder changed his answer
+    # (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER).
+    "change-reply" = @{ writes = $true; kind = "answer-change-replied"; content = "Get-HordeDecisionChangeReplyContent" }
     say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData"; parts = "Get-HordeDecisionSayParts" }
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
@@ -303,9 +306,62 @@ function Complete-HordeDecisionAckData {
     # founder changed a second before. The notice names the record, so none is taken for the asking.
     # Whether it may close the question is the rules' (Step-HordeDecisionAcked), asked when it is applied.
     param($Request, $List, $Data)
-    if ($Data.Contains("answer")) { return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data } }
     $number = [int]$Data["number"]
+    # THE ORC MAY NOT ACKNOWLEDGE A CHANGED ANSWER BEFORE IT SAYS WHAT BECAME OF ITS WORK (review of PR 335, M1): the
+    # first answer may already be deployed, and the founder must hear whether it was acted on. Refused at the
+    # request, naming the command; stored records stay facts.
+    # It is asked only of the Orc that asked, naming the answer that stands: any other ack is refused by the rules
+    # in their own words (another Orc, a stale record, a closed question), as it always was.
+    if ($Data.Contains("answer") -and $List.questions.ContainsKey($number) -and "$($List.questions[$number].state)" -ceq "open") {
+        $ackQuestion = $List.questions[$number]
+        $ackAsker = Get-HordeDecisionAsker -AskedBy "$($ackQuestion.askedBy)"
+        $ackStanding = Get-HordeDecisionStandingAnswer -Question $ackQuestion
+        $ackUnreplied = $null
+        if ($ackAsker.seat -ceq "orc" -and $ackAsker.label -ceq "$($Data['by'])" -and $null -ne $ackStanding -and [long]$ackStanding.sequence -eq [long]$Data["answer"]) { $ackUnreplied = Get-HordeDecisionUnrepliedChange -Question $ackQuestion }
+        if ($null -ne $ackUnreplied) { return [pscustomobject]@{ why = (Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $ackUnreplied); write = $false; more = $null; data = $null } }
+    }
+    if ($Data.Contains("answer")) { return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data } }
     return [pscustomobject]@{ why = ("an acknowledgement names the answer it acknowledges: the record the notice gave you (horde decisions ack " + $number + " -Answer <record>); nothing was written, because without it the question would be closed over whatever stands now"); write = $false; more = $null; data = $null }
+}
+
+function Complete-HordeDecisionCloseData {
+    # A question an Orc asked is not closed over a changed answer its Orc has not replied to (the same rule as the
+    # acknowledgement, above: review of PR 335, M1). THE WARCHIEF'S WAY OUT (the coordinator, 2026-10-17): an Orc
+    # that never replies (parked, retired) leaves the question on his list for ever, so the warchief alone may
+    # close it, and only with an outcome in words; his page then says "The warchief closed it: <outcome>". Any
+    # other Orc, and a close with no words, stay refused. Any other close goes through as it always did.
+    param($Request, $List, $Data)
+    $number = [int]$Data["number"]
+    $closeWords = $(if ($Data.Contains("outcome")) { "$($Data['outcome'])".Trim() } else { "" })
+    # THE PROOF IS RECORDED ON THE CLOSE (review of PR 335, round 4, M1): closedBySeat = "warchief" is written only for
+    # a close that carries the proven callerSeat, so a later reader (the closing notice) can tell a close the warchief's
+    # own session made from one any other session made.
+    $provenWarchief = ("$($Request.actor)" -ceq "warchief" -and $closeWords -ne "" -and "$(Get-HordeDecisionMember -Object $Request -Name 'callerSeat')" -ceq "warchief")
+    if ($provenWarchief) { $Data["closedBySeat"] = "warchief" }
+    if ($List.questions.ContainsKey($number) -and "$($List.questions[$number].state)" -ceq "open") {
+        $closeUnreplied = Get-HordeDecisionUnrepliedChange -Question $List.questions[$number]
+        # THE SEAT IS PROVEN, NEVER TRUSTED: the command line sends every write as the actor "warchief", so the
+        # actor proves nothing. Only a request that carries callerSeat = "warchief", which decisions/Console.ps1 sets
+        # after proving the calling session holds the warchief's seat in the fleet's records, may close over it.
+        $warchiefCloses = $provenWarchief
+        if ($null -ne $closeUnreplied -and -not $warchiefCloses) { return [pscustomobject]@{ why = ((Get-HordeDecisionUnrepliedChangeLine -Question $List.questions[$number] -Change $closeUnreplied) + ". Only the warchief's own session, proven from the fleet's records, may close it without that reply, and only with an outcome that says why"); write = $false; more = $null; data = $null } }
+    }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
+}
+
+function Get-HordeDecisionChangeReplyContent {
+    # A checked change-reply request as { body; findings }: which Orc, which changed answer, what became of
+    # its work and, for cannot-undo, why in one line. Whether the Orc asked and the record is a changed
+    # answer is the rules' (Step-HordeDecisionChangeReplied), asked when it is applied.
+    param($Request, $Definitions)
+    $body = [ordered]@{ by = [string]$Request.by; answer = [long]$Request.answer; reply = [string]$Request.reply }
+    $found = New-Object System.Collections.ArrayList
+    if (Test-HordeDecisionMember -Object $Request -Name "why") {
+        $line = [string](Get-HordeDecisionMember -Object $Request -Name "why")
+        foreach ($f in @(Test-HordeDecisionNote -Text $line -Name "why" -OneLine)) { [void]$found.Add($f) }
+        $body["why"] = $line
+    }
+    return [pscustomobject]@{ body = $body; findings = @($found) }
 }
 
 function Get-HordeDecisionReopenContent {
@@ -364,6 +420,16 @@ function Complete-HordeDecisionSayData {
     # question, which take no turn; and so is every word of his own.
     param($Request, $List, $Data)
     $number = [int]$Data["number"]
+    # A CHANGE OF HIS ANSWER TO A CLOSED QUESTION IS REFUSED BY NAME (decisions/Rules.ps1, THE FOUNDER
+    # CHANGES HIS ANSWER): the work is finished, and he asks a follow-up instead. The first answer to a
+    # closed question is not a change and is kept as it always was.
+    if ($List.questions.ContainsKey($number)) {
+        $changePart = $(if ($Data.Contains("part")) { "$($Data['part'])" } else { "" })
+        $changeAsks = (-not ($Data.Contains("asks") -and $Data["asks"] -eq $false))
+        $changeAct = $(if ($Data.Contains("act")) { "$($Data['act'])" } else { "" })
+        $closedChange = Get-HordeDecisionChangeRefusal -Question $List.questions[$number] -Speaker "$($Data['speaker'])" -Part $changePart -Asks $changeAsks -Act $changeAct -Route "$($Data['route'])"
+        if ($closedChange -ne "") { return [pscustomobject]@{ why = $closedChange; write = $false; more = $null; data = $null } }
+    }
     $asking = (-not $Data.Contains("asks")) -and (-not $Data.Contains("act"))
     if ($asking -and (Get-HordeDecisionNoteSpeakers) -ccontains "$($Data['speaker'])" -and $List.questions.ContainsKey($number)) {
         $question = $List.questions[$number]

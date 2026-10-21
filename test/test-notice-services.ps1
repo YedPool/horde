@@ -101,6 +101,19 @@ try {
     # The owner rule, with the environment made a parameter (an elevated process owns what it creates as Administrators).
     Check ((Test-HordeSecretFileOwner -Owner "S-1-5-21-1-2-3-1001" -Mine "S-1-5-21-1-2-3-1001" -Elevated $false) -and -not (Test-HordeSecretFileOwner -Owner "S-1-5-21-1-2-3-1002" -Mine "S-1-5-21-1-2-3-1001" -Elevated $true)) "the owner must be the current user; another user never"
     Check ((Test-HordeSecretFileOwner -Owner "S-1-5-32-544" -Mine "S-1-5-21-1-2-3-1001" -Elevated $true) -and -not (Test-HordeSecretFileOwner -Owner "S-1-5-32-544" -Mine "S-1-5-21-1-2-3-1001" -Elevated $false)) "the Administrators group may own it only when the process is elevated"
+    # T-0304: a secret file made by an ELEVATED registrar was owned by Administrators, and the non-elevated service then refused it.
+    # The owner is part of the security the file is made with, so the registrar's elevation cannot change it.
+    $meSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Check ("$((New-HordeSecretFileSecurity).GetOwner([System.Security.Principal.SecurityIdentifier]))" -ceq $meSid) "the security a secret file is made with names the current user as its OWNER (not left to the elevated default)"
+    $ownedPath = Join-Path $work "owned-by-me.secret"
+    New-HordeLockedSecretFile -Path $ownedPath -Text "x"
+    Check ((Get-HordeFileAcl -Path $ownedPath).GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ceq $meSid) "a secret file made by New-HordeLockedSecretFile is owned by the current user"
+    Check ((Test-HordeSecretFileOpen -Path $ownedPath) -ceq "") "CONTROL: a file made that way passes the sender's own check"
+    $adminWhy = Get-HordeSecretOwnerRefusal -Owner "S-1-5-32-544" -Mine $meSid -Elevated $false -Path "C:\sa.secret" -MineName "PC\me"
+    Check ($adminWhy -like "*is owned by S-1-5-32-544*" -and $adminWhy -like '*icacls "C:\sa.secret" /setowner "PC\me"*') "a file owned by Administrators is refused for a non-elevated sender, with the one command that fixes it"
+    $otherWhy = Get-HordeSecretOwnerRefusal -Owner "S-1-5-21-1-2-3-1002" -Mine $meSid -Elevated $true -Path "C:\sa.secret" -MineName "PC\me"
+    Check ($otherWhy -like "*is owned by S-1-5-21-1-2-3-1002*" -and $otherWhy -like "*/setowner*") "a file owned by another user is refused even for an elevated sender, with the fix text"
+    Check ((Get-HordeSecretOwnerRefusal -Owner $meSid -Mine $meSid -Elevated $false -Path "p" -MineName "n") -ceq "" -and (Get-HordeSecretOwnerRefusal -Owner "S-1-5-32-544" -Mine $meSid -Elevated $true -Path "p" -MineName "n") -ceq "") "CONTROL: the current user passes, and Administrators pass only for an elevated sender"
     $rr2 = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile (Join-Path $work "outside\net.txt") -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -TestSeamRepoRoot $fakeRepo
     Check ($rr2.ok) "CONTROL: a secret file beside the checkout, not in it, is accepted"
     $null = Remove-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -HordeHome $H

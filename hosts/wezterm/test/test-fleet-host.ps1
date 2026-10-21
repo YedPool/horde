@@ -186,6 +186,78 @@ $a = Remove-HordeWeztermFleetNoRestore -SessionId $sidC -Dir $nr
 Check ($a.state -ceq "unknown" -and $a.reason -like "*could not be removed*") ("a marker that cannot be removed is unknown, with the reason (" + $a.reason + ")")
 Remove-Item -LiteralPath $nr -Recurse -Force -ErrorAction SilentlyContinue
 
+Section "hibernate writes the marker a wake removes (T-0216)"
+# {v:1, sessionId, by:"horde", reason:"hibernated", at}, at <profile>\.wezurrect\no-restore\<uuid>.json, written whole by
+# rename so the terminal's restore never reads half of one.
+# The markers folder sits one level down in a folder of its own, so an id that climbs out of it lands inside the
+# folder this test removes, never in TEMP.
+$nwRoot = Join-Path $env:TEMP ("horde-test-fleet-host-mark-" + [guid]::NewGuid().ToString("N"))
+$nw = Join-Path $nwRoot "no-restore"
+$sidW = "cccccccc-3333-4333-8333-333333333333"
+$at = [datetime]::new(2026, 10, 16, 11, 30, 5, [System.DateTimeKind]::Utc)
+$w = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $nw
+$mp = Join-Path $nw ($sidW + ".json")
+Check ($w.state -ceq "known" -and "" + $w.value -ceq $mp -and (Test-Path -LiteralPath $mp -PathType Leaf)) ("the marker is written, in a folder it makes, named by the session id (" + $w.state + ")")
+$mj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+Check ($mj.v -eq 1 -and $mj.sessionId -ceq $sidW -and $mj.by -ceq "horde" -and $mj.reason -ceq "hibernated" -and $mj.at -ceq "2026-10-16T11:30:05Z") "it holds v 1, the session id, by horde, the reason hibernated and the time"
+Check ((@($mj.PSObject.Properties.Name | Sort-Object) -join ",") -ceq "at,by,reason,sessionId,v") "and nothing else"
+Check (@(Get-ChildItem -LiteralPath $nw -Force | Where-Object { $_.Name -ne ($sidW + ".json") }).Count -eq 0) "no temporary file is left beside it"
+$bytes = [System.IO.File]::ReadAllBytes($mp)
+Check (-not ($bytes.Count -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB)) "it has no byte-order mark, which the restore plugin's JSON reader would trip on"
+$again = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at.AddMinutes(1) -Dir $nw
+Check ($again.state -ceq "known" -and ([System.IO.File]::ReadAllText($mp) | ConvertFrom-Json).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
+# A time given in local time is written as the same moment in UTC (the Z on the end says so).
+$localAt = [datetime]::new(2026, 10, 16, 7, 30, 5, [System.DateTimeKind]::Local)
+[void](Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "parked" -At $localAt -Dir $nw)
+$lj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+Check ($lj.at -ceq $localAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) -and $lj.reason -ceq "parked") ("a local time is written as UTC (" + $lj.at + ")")
+$rm = Remove-HordeWeztermFleetNoRestore -SessionId $sidW -Dir $nw
+Check ($rm.state -ceq "known" -and $rm.value -ceq "removed") "THE TWO MATCH: the wake's remover finds and removes exactly the marker the writer made"
+$bad = Write-HordeWeztermFleetNoRestore -SessionId "..\x" -Reason "hibernated" -At $at -Dir $nw
+Check ($bad.state -ceq "unknown" -and -not (Test-Path -LiteralPath (Join-Path $nwRoot "x.json"))) "an id that is not a session id writes nothing, not even beside the folder"
+$bad = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "because" -At $at -Dir $nw
+Check ($bad.state -ceq "unknown" -and -not (Test-Path -LiteralPath $mp)) "a reason that is not parked or hibernated writes nothing"
+$blocked = Join-Path $env:TEMP ("horde-test-fleet-host-markfile-" + [guid]::NewGuid().ToString("N"))
+[System.IO.File]::WriteAllText($blocked, "a file where the folder should be")
+$bad = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $blocked
+Check ($bad.state -ceq "unknown" -and $bad.reason -like "*could not be written*") ("a folder that cannot be made is unknown, with the reason (" + $bad.reason + ")")
+Remove-Item -LiteralPath $blocked -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $nwRoot -Recurse -Force -ErrorAction SilentlyContinue
+$hh2 = Resolve-HordeFleetAdapter -Kind "host"
+Check ($null -ne $hh2.value.PSObject.Properties["mark"] -and $null -ne $hh2.value.mark) "the adapter registers its marker writer with the port"
+
+Section "a stale hibernated marker of a session found running is removed, and only that (T-0216)"
+# The watcher, a wake and a hibernate remove the marker of a session they find running, so a hand restart does not
+# leave it barred from the next terminal restore. Only that exact file; only when it says hibernated and names the
+# session; never a parked marker, which park wrote and which is not theirs to remove.
+$ur = Join-Path $env:TEMP ("horde-test-fleet-host-unmark-" + [guid]::NewGuid().ToString("N"))
+[void](New-Item -ItemType Directory -Path $ur -Force)
+$sidH = "dddddddd-4444-4444-8444-444444444444"; $sidP = "eeeeeeee-5555-4555-8555-555555555555"; $sidO = "ffffffff-6666-4666-8666-666666666666"
+$sidN = "99999999-7777-4777-8777-777777777777"; $sidJ = "88888888-8888-4888-8888-888888888888"
+$mk = { param($sid, $inner, $reason) '{"v":1,"sessionId":"' + $inner + '","by":"horde","reason":"' + $reason + '","at":"2026-10-16T10:00:00Z"}' }
+[System.IO.File]::WriteAllText((Join-Path $ur ($sidH + ".json")), (& $mk $sidH $sidH "hibernated"))
+[System.IO.File]::WriteAllText((Join-Path $ur ($sidP + ".json")), (& $mk $sidP $sidP "parked"))
+[System.IO.File]::WriteAllText((Join-Path $ur ($sidO + ".json")), (& $mk $sidO $sidH "hibernated"))
+[System.IO.File]::WriteAllText((Join-Path $ur ($sidJ + ".json")), "{ not json")
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidH -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "known" -and $a.value -ceq "removed" -and -not (Test-Path -LiteralPath (Join-Path $ur ($sidH + ".json")))) ("a hibernated marker naming the session is removed (" + $a.state + " " + $a.value + ")")
+Check ((Test-Path -LiteralPath (Join-Path $ur ($sidP + ".json"))) -and (Test-Path -LiteralPath (Join-Path $ur ($sidO + ".json")))) "no other marker is touched"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidP -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "known" -and $a.value -ceq "kept" -and (Test-Path -LiteralPath (Join-Path $ur ($sidP + ".json")))) "a PARKED marker, which someone else wrote, is kept"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidO -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "known" -and $a.value -ceq "kept" -and (Test-Path -LiteralPath (Join-Path $ur ($sidO + ".json")))) "a marker whose file names another session is kept, though its name is this session's"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidJ -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "known" -and $a.value -ceq "kept" -and (Test-Path -LiteralPath (Join-Path $ur ($sidJ + ".json")))) "a marker that cannot be read is kept: nothing is removed on a guess"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidN -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "known" -and $a.value -ceq "none") "no marker is fine: nothing to remove"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId "..\x" -Reason "hibernated" -Dir $ur
+Check ($a.state -ceq "unknown") "an id that is not a session id removes nothing"
+$a = Remove-HordeWeztermFleetNoRestoreIf -SessionId $sidP -Reason "because" -Dir $ur
+Check ($a.state -ceq "unknown" -and (Test-Path -LiteralPath (Join-Path $ur ($sidP + ".json")))) "a reason that is not parked or hibernated removes nothing"
+Remove-Item -LiteralPath $ur -Recurse -Force -ErrorAction SilentlyContinue
+$hu = Resolve-HordeFleetAdapter -Kind "host"
+Check ($null -ne $hu.value.PSObject.Properties["unmark"] -and $null -ne $hu.value.unmark) "the adapter registers its conditional remover with the port"
+
 Section "the adapter registers itself"
 $h = Resolve-HordeFleetAdapter -Kind "host"
 Check ($h.state -ceq "known" -and $h.value.name -ceq "wezterm") "loading the file registers the fleet host adapter"

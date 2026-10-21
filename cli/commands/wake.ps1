@@ -63,6 +63,10 @@ $HordeCommand = @{
         $root = Get-HordeRoot
         . (Join-Path $root "core\WakeRun.ps1")
         foreach ($w in @(Get-HordeWakerFiles)) { . $w }
+        # The fleet's adapters, for the one question the watcher asks of them: is a session a hibernation
+        # record calls asleep running after all (fleet/Asleep.ps1)? Loaded here, in the command's own scope, for
+        # the reason the wakers are.
+        foreach ($f in @(Get-HordeFleetAdapterFiles -Root $root)) { . $f }
 
         if ($Verb -eq "status") {
             # EVERY MODE, EACH BY ITS OWN FILES: a shadow run says nothing of whether the live watcher

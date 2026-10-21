@@ -766,6 +766,9 @@ function Test-HordeDecisionsChannelSuperseded {
     $how = ""
     foreach ($m in @($shown.value.question.thread.messages)) {
         if ($null -eq $m -or "$($m.speaker)" -cne "founder" -or "$($m.act)" -cne "" -or "$($m.part)" -cne "$($Answer.part)") { continue }
+        # ONLY WHAT MAY STAND AS HIS ANSWER COUNTS AS "THE NEWEST ANSWER" (decisions/Rules.ps1, Test-HordeDecisionMessageAuthorizes):
+        # his chat words under a needsPasskey question, and words that arrived after the question closed, are words.
+        if (-not (Test-HordeDecisionMessageAuthorizes -Message $m)) { continue }
         $given = Get-HordeDecisionsChannelGivenAt -Context $Context -Message $m
         if ($given -gt $newest) { $newest = $given; $how = "$($m.route)" }
     }

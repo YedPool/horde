@@ -57,6 +57,7 @@ with correct efficient and proper unique ids and relational structure." DDL: `fl
 | `session`, `pane`, `session_pane` | K (SessionStart/SessionEnd hooks, resume binding) | `horde db seat bind` (one transaction) |
 | `parking_lot`, `parking_lot_member`, `wake`, `wake_member` | K | `horde fleet hibernate / wake` calling the access layer |
 | `question`, `question_event`, `answer`, `answer_route`, `answer_route_taken` (TAKEN from the target's hook) | F (decisions verbs; routing reads `orc_seat`) | decisions store writes the DB in the same call |
+| `decisions_snapshot`, `decisions_snapshot_item` (append-only; live list = newest per Orc) | F (the publish verb; until then an interim JSON per publish, imported by N) | `publishDecisions` in `fleet-db/write.mjs` |
 | `service`, `deploy` | F (relay tend), L (router) | `horde db deploy add` after verify |
 | meter tables (`tokens_*`, `mail_hops`) | L, in `metrics/fleet.sqlite` | ATTACH; ids from here |
 
@@ -101,3 +102,71 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
 - Every multi-row write is one `inWrite` call. Take a label inside the write that uses it.
 - History rows are inserted with their sha256; on a UNIQUE conflict on sha256 the write is a no-op.
 - A new column or table is a new migration appended to `MIGRATIONS`; an old one is never edited.
+- History rows go in through `appendHistory` (`fleet-db/write.mjs`): the hash is of the whole stored row
+  (every column but `id` and `sha256`, a column left out taking its default or null), so it can be
+  recomputed from the row alone; the conflict clause names `sha256` only, so a row that breaks a CHECK,
+  a NOT NULL or another UNIQUE still fails loudly (a plain INSERT OR IGNORE would drop it in silence).
+- Ids come from one minter per process (`newId`): a second id in the same millisecond is the last one
+  plus one, so rows written in one millisecond sort in the order they were written.
+
+## Migration 2: what the Progress and Decisions pages show (M's orders of 2026-10-19 and 10-20)
+
+- `parking_lot.keep_visible` (0/1, default 0, lot level, agreed with lane K): a parked Orc's card and
+  questions leave the Progress and Decisions pages unless its park says keep-visible. `parked_now` is
+  every member still parked, with its lot's `keep_visible` and an `orc_id` (the member's own, else its
+  session's). Lane F's lists read it.
+- `decisions_snapshot` and `decisions_snapshot_item` (founder, 10-20: the Decisions page showed stale
+  lists): each Orc publishes its whole list; the live list is the newest snapshot per Orc
+  (`decisions_live`, `decisions_live_item`) and every older one is the archive. No `superseded_by`
+  column: "newest" is already a fact of `published_at`, and a pointer would be a second copy of it.
+  `sha256` is of the canonical items and is not unique (A, B, A records the second A); a trigger
+  refuses a snapshot equal to that Orc's newest, and `publishDecisions` answers "unchanged" instead of
+  writing. Positions run 1..`item_count` (a trigger); that every position is present is checked by
+  `horde db check`, since the items are written after their snapshot. An empty list is a list.
+- Until lane F's publish verb calls the access layer, F writes one JSON per publish
+  (`{orc, publishedAt, sessionId, items: [{position, questionNumber, text, recommendation, importance,
+  blocks}]}`) and the phase 1 importer hashes it; F need not match the canonical form.
+
+## Migration 3: the glue (founder, 2026-10-20: every object of the Horde in one database)
+
+- `entity` is the registry of every object: one row per row of `horde`, `node`, `person`, `orc`,
+  `session`, `pane`, `task`, `pr`, `question`, `answer`, `decisions_snapshot`, `changelog_entry`,
+  `parking_lot`, `service`, `deploy` and `orc_status` (`ENTITY_TABLES` in `schema.mjs`), made, touched
+  (`updated_at`) and removed with its object by triggers, so it can never drift. `kind` is the table;
+  `created_by_id` is who made it (a person, an Orc or a session, itself an entity). An object's id never
+  changes, an entity cannot be deleted from under its object, and `horde db check` lists any object
+  missing from the registry and any entry whose object is gone. Existing rows are entered by the migration.
+- `tag` + `entity_tag` tag any object (lower-case names; a colon makes a family, `area:relay`). `link`
+  relates any two objects with a typed relation (`blocks`, `relates-to`, `answers`, `implements`,
+  `duplicates`, `follows-up`, `caused-by`, `mentions`); a link is retired, not deleted, and live at most
+  once. Fixed relations stay foreign keys (a task's parent, a question's task). Lane F's notification
+  tables (event, subscription, delivery) point their subjects and owners at `entity` in a later migration.
+- `horde` (one Thrall across machines, `node.horde_id`), `person` (one live founder; staff), and
+  `session.model`.
+- `orc_status`: the status of every Orc and of the Thrall, history kept, append-only and hashed;
+  `status_now` is the newest per Orc. Only `doing` and `blocked` are typed (the card's limits); the card's
+  finished and waiting-on lines are derived (phase 3 plan above).
+- `task.position` and `task.due_at`; the view `task_tree` numbers every open task in its owner's list
+  (top tasks by priority, then position, then age; subtasks by position under their parent: 3, 3.1,
+  3.1.2), with a sort key that orders 1.10 after 1.9. `task_checkin` records each turn that looked at its
+  list (the list's hash), for lane K's per-turn Stop hook.
+- Writers never INSERT OR REPLACE an object (the replace deletes and re-makes it, so its entity row loses
+  created_by and updated_at): UPDATE, or INSERT ... ON CONFLICT DO UPDATE. A tagged or linked object
+  cannot be deleted until its tags and links are removed (their foreign keys hold its entity row). A task
+  cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
+  columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
+
+## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
+
+The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in
+`fleet/StatusPanel.ps1`) is rendered from fleet.db, not typed:
+
+- a new `orc_status` table holds the only human words: `doing` and `blocked`, set through lane K's
+  validating writer (`horde status set`), so the reader's rules (120 characters, plain words, no bare
+  references) hold when the words are written;
+- `finished` and `waiting on` are derived: from `task_now` (done and verified tasks), `pr` (merged
+  work) and `question_now` (open founder questions of that Orc);
+- the renderer writes `status.txt` through K's writer, and its tests read the result back with
+  `ConvertFrom-HordeFleetStatusBytes`, so a rendered card that the reader refuses fails the build;
+- lane F's Progress page lists cards only for registry Orcs today, and for live `orc` rows once
+  fleet.db holds them.

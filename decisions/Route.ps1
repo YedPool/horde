@@ -166,6 +166,39 @@ function Test-HordeDecisionRouted {
     return (@($Question.routes | Where-Object { [long]$_.answer -eq $Answer -and "$($_.purpose)" -ceq $Purpose }).Count -gt 0)
 }
 
+function Get-HordeDecisionRouteClosedWork {
+    # PURE. The one closing notice a question is due, as { purpose = "closed"; question; answer; why }, or $null. Due
+    # when the warchief closed it (closed, and not by an acknowledgement), an Orc asked it, no closing notice was
+    # recorded, it closed within -WithinHours, and either its Orc never replied to the founder's change
+    # (the view's warchiefClosedUnreplied) or all he said was chat words under a question that needs a passkey
+    # (or some part of it was only chat words). ONLY A CLOSE PROVEN FROM THE WARCHIEF'S SEAT IS TOLD AS HIS (review of
+    # PR 335, round 4, M1): the view's closedByWarchief must be set, which the close record carries only when the
+    # command line proved the seat. Any other session's close tells nobody that "the warchief closed" anything: the
+    # Orc is not sent a notice at all (the smallest honest choice; the list still shows the close and its outcome).
+    # answer is the newest of his records made while it was open: the record the notice is kept against.
+    param($Question, [datetime]$Now, [int]$WithinHours)
+    $q = $Question
+    if ("$($q.state)" -cne "closed" -or ($null -ne $q.PSObject.Properties["closedBy"] -and "$($q.closedBy)" -ne "") -or $null -eq $q.thread.PSObject.Properties["messages"]) { return $null }
+    if (-not ($null -ne $q.PSObject.Properties["closedByWarchief"] -and [bool]$q.closedByWarchief)) { return $null }
+    if ((Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").seat -cne "orc") { return $null }
+    $at = ConvertFrom-HordeDecisionRouteTime -Text "$($q.closedAt)"
+    if ($null -eq $at -or $at -lt $Now.ToUniversalTime().AddHours(-$WithinHours)) { return $null }
+    $his = @($q.thread.messages | Where-Object { $null -ne $_ -and "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" -and -not ($null -ne $_.PSObject.Properties["arrivedAfterClosing"] -and [bool]$_.arrivedAfterClosing) })
+    if ($his.Count -eq 0) { return $null }
+    $unreplied = ($null -ne $q.PSObject.Properties["warchiefClosedUnreplied"] -and [bool]$q.warchiefClosedUnreplied)
+    $wordsOnly = ($null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and @($his | Where-Object { -not ($null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey) }).Count -eq 0)
+    # N3: a question in parts where one part was signed and another got only chat words never completed: the Orc that
+    # waited on the unsigned part is told as well (why = "parts").
+    # S2 (review of PR 335, round 5): a SIGNED answer to the WHOLE question (no part named) answers every part, so it
+    # takes this notice away; only an answer to one part, or none, leaves a part without a passkey answer.
+    $wholeSigned = (@($his | Where-Object { [bool]$_.asks -and "$($_.part)" -eq "" -and -not ($null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey) }).Count -gt 0)
+    $partsUnsigned = (-not $wordsOnly -and -not $wholeSigned -and $null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and $null -ne $q.thread.PSObject.Properties["parts"] -and @($q.thread.parts | Where-Object { -not [bool]$_.answered }).Count -gt 0 -and @($his | Where-Object { $null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey }).Count -gt 0)
+    if (-not $unreplied -and -not $wordsOnly -and -not $partsUnsigned) { return $null }
+    $last = $his[$his.Count - 1]
+    if (Test-HordeDecisionRouted -Question $q -Answer ([long]$last.sequence) -Purpose "closed") { return $null }
+    return [pscustomobject]@{ purpose = "closed"; question = $q; answer = $last; why = $(if ($unreplied) { "unreplied" } elseif ($partsUnsigned) { "parts" } else { "words" }) }
+}
+
 function Get-HordeDecisionRouteWork {
     # PURE. What a pass has to send, from a list result read with every question and its messages:
     # { purpose; question; answer } for each answer of the founder's under an open question, no older than
@@ -178,6 +211,10 @@ function Get-HordeDecisionRouteWork {
     foreach ($q in @($List.questions)) {
         if ($null -eq $q) { continue }
         $byNumber[[int]$q.number] = $q
+        # THE WARCHIEF CLOSED AN ORC'S QUESTION (review of PR 335, S3): over a change its Orc never replied to, or
+        # over chat words only under a question that needs a passkey. The Orc is told once, whatever it waits for.
+        $told = Get-HordeDecisionRouteClosedWork -Question $q -Now $Now -WithinHours $WithinHours
+        if ($null -ne $told) { [void]$work.Add($told); continue }
         if ("$($q.state)" -cne "open" -or $null -eq $q.thread.PSObject.Properties["messages"]) { continue }
         foreach ($m in @($q.thread.messages)) {
             if ($null -eq $m -or "$($m.speaker)" -cne (Get-HordeDecisionFirstTurn) -or "$($m.act)" -ne "") { continue }
@@ -276,6 +313,32 @@ function Get-HordeDecisionRouteWording {
     return [pscustomobject]@{ differs = ($answered -ne $now); answered = $answered; now = $now; stated = [bool]$Item.answer.wordingStated }
 }
 
+function Format-HordeDecisionRouteClosedNotice {
+    # The notice that the warchief closed an Orc's question: the first line says so in the outcome's own
+    # words (cut to one line), then why the Orc is told, then the warchief's words and his, each as quoted
+    # lines (a line of either that starts like a command is still only a quoted line), and the list as authority.
+    param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)]$Target, [string]$HordeHome = "")
+    $q = $Item.question
+    $number = [int]$q.number
+    $outcome = "$($q.outcome)"
+    $lines = New-Object System.Collections.ArrayList
+    $quote = "> "
+    [void]$lines.Add("The warchief closed question " + $number + ": " + (Get-HordeDecisionRouteOneLine -Text $outcome))
+    if (-not ($Target.seat -ceq "orc")) { [void]$lines.Add("This is for " + (Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").shown + ", who asked it; its seat could not be found, so it came to you.") }
+    [void]$lines.Add("Question " + $number + ": " + $q.title)
+    if ("$($Item.why)" -ceq "unreplied") { [void]$lines.Add("The founder changed his answer and you had not said what became of your work, so the warchief closed it without that reply. If you had acted on his first answer, ask the warchief whether it needs undoing.") }
+    elseif ("$($Item.why)" -ceq "parts") { [void]$lines.Add("Some part of this question has no passkey answer from him, and it needs a passkey: none will be routed now that it is closed. Any chat words he said are below; the list shows which parts he signed.") }
+    else { [void]$lines.Add("All he said was chat words, and this question needs a passkey: no passkey answer came, and none will be routed now that it is closed.") }
+    [void]$lines.Add("The warchief's words (the outcome):")
+    foreach ($l in @($outcome -split "\r\n|\r|\n")) { [void]$lines.Add($quote + $l) }
+    [void]$lines.Add("His last words (record " + [long]$Item.answer.sequence + ", " + $Item.answer.routeShown + ", " + $Item.answer.at + "):")
+    foreach ($l in @(([string]$Item.answer.text) -split "\r\n|\r|\n")) { [void]$lines.Add($quote + $l) }
+    [void]$lines.Add("The list is the authority; read it with:")
+    [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions show " + $number) -HordeHome $HordeHome))
+    [void]$lines.Add("This copy authorizes nothing.")
+    return ($lines -join "`r`n")
+}
+
 function Format-HordeDecisionRouteNotice {
     # The notice's body: plain lines, the question's number and title, who answered and by what route,
     # his words whole, what to do, and that it authorizes nothing (header, ROUTING IS NOT AUTHORIZING).
@@ -288,14 +351,23 @@ function Format-HordeDecisionRouteNotice {
     $lines = New-Object System.Collections.ArrayList
     $part = $(if ("$($m.part)" -ne "") { " (part " + $m.part + ")" } else { "" })
     $mine = ($Target.seat -ceq "orc")
+    # A CHANGED ANSWER (decisions/Rules.ps1, THE FOUNDER CHANGES HIS ANSWER) is routed like any answer of his,
+    # verified on the same terms; the notice says it is a change, with the OLD and the NEW words and the time,
+    # and gives the asking Orc the command that says what became of its work.
+    $changed = ($null -ne $m.PSObject.Properties["changedFrom"] -and [long]$m.changedFrom -ge 1)
+    # WORDS THAT ARE NOT A PASSKEY ANSWER (decisions/Rules.ps1, A QUESTION THAT NEEDS A PASSKEY): his words recorded
+    # from chat under a question that needs a passkey are routed and said plainly to be no answer to it.
+    $unsigned = ($null -ne $m.PSObject.Properties["notPasskey"] -and [bool]$m.notPasskey)
+    $headWords = $(if ($unsigned) { "FOUNDER'S CHAT WORDS, NOT A PASSKEY ANSWER" } elseif ($changed) { "FOUNDER CHANGED HIS ANSWER" } else { "FOUNDER ANSWER" })
+    if ($Item.purpose -ceq "closed") { return (Format-HordeDecisionRouteClosedNotice -Item $Item -Target $Target -HordeHome $HordeHome) }
     if ($Item.purpose -ceq "nudge") {
         [void]$lines.Add("UNCLOSED QUESTION " + $number + ": " + $Item.flag + ". This is the one reminder for this answer.")
     }
     elseif ($mine -or ($Target.resolved -and $Target.seat -ceq "warchief")) {
-        [void]$lines.Add("FOUNDER ANSWER to your question " + $number + $part + ", routed to you by Horde.")
+        [void]$lines.Add($headWords + " to your question " + $number + $part + ", routed to you by Horde.")
     }
     else {
-        [void]$lines.Add("FOUNDER ANSWER to question " + $number + $part + ", asked by '" + $q.askedBy + "', sent to you, the warchief: " + $Target.note + ".")
+        [void]$lines.Add($headWords + " to question " + $number + $part + ", asked by '" + $q.askedBy + "', sent to you, the warchief: " + $Target.note + ".")
     }
     $wording = Get-HordeDecisionRouteWording -Item $Item
     $reworded = ($wording.stated -and $wording.differs)
@@ -304,16 +376,37 @@ function Format-HordeDecisionRouteNotice {
     # notice says so instead of letting the current title stand for it.
     if ($reworded) { [void]$lines.Add("NOTE: the question was reworded after he answered (he answered wording " + $wording.answered + ", it is now wording " + $wording.now + "). The title above is the CURRENT wording; the list does not keep the one he saw, so read his words as an answer to that earlier wording.") }
     [void]$lines.Add("Answered by the founder, " + "$($m.routeShown)" + " (record " + $seq + ", " + $m.at + ").")
+    if ($unsigned) { [void]$lines.Add("THIS IS NOT A PASSKEY ANSWER. Question " + $number + " needs a passkey, and these words were recorded from chat: no passkey signed them. They are kept and shown, but they do not answer the question. It stays waiting for his answer on the phone; do not act on these words as his answer.") }
     # HIS WORDS GO WITH EVERY NOTICE, THE REMINDER TOO (review of 2026-10-16, finding 2): the reminder's
     # target is found again when it is sent, and an Orc that never received the answer (it went to the
     # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
-    [void]$lines.Add("His words:")
+    if ($changed) {
+        [void]$lines.Add("He CHANGED his answer at " + $m.at + ": record " + $seq + " replaces record " + $m.changedFrom + ". If you already acted on the first one, it may need undoing.")
+        [void]$lines.Add("His OLD words (record " + $m.changedFrom + "):")
+        foreach ($l in @(([string]$m.changedFromText) -split "\r\n|\r|\n")) { [void]$lines.Add(("> " + $l)) }
+        [void]$lines.Add("His NEW words (record " + $seq + "):")
+    }
+    else { [void]$lines.Add("His words:") }
     foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }
-    if ($mine) {
-        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
+    if ($unsigned) {
+        [void]$lines.Add("A passkey answer, if he gives one before this question is closed, will be routed to you. Until then there is nothing to acknowledge: an acknowledgement of these words is refused.")
+    }
+    elseif ($changed -and $mine) {
+        [void]$lines.Add("FIRST say what became of your work, with ONE of these (he is shown your reply in plain words, and sees 'waiting for Orc " + $Target.label + " to confirm' until you do). In PowerShell, with -HordeHome naming the founder's list:")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply not-acted") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had not acted yet and are using the new answer)")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply undoing") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had already acted on the first answer and are undoing it)")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply cannot-undo -Why 'why it cannot be undone, in one line'") -HordeHome $HordeHome))
+        [void]$lines.Add("     (you had already acted and cannot undo it; say why)")
+    }
+    if ($unsigned) { }
+    elseif ($mine) {
+        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer" + $(if ($changed) { " (an acknowledgement is refused until you have run the change-reply above)" } else { "" }) + ". In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
     }
     else {
+        if ($changed -and (Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").seat -ceq "orc") { [void]$lines.Add("A changed answer is closed over only after the Orc that asked has said what became of its work (horde decisions change-reply " + $number + " -Answer " + $seq + " -Reply <not-acted, undoing or cannot-undo>); until then the Orc's own close is refused. The warchief can close it without the reply, with an outcome that says why.") }
         [void]$lines.Add("When it is dealt with, close it, with your own one line of outcome in place of the text in quotes. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions close " + $number + " -Outcome 'what was done, in one line'") -HordeHome $HordeHome))
     }
@@ -356,7 +449,8 @@ function Format-HordeDecisionRouteAnalystLine {
     $cut = { param([string]$Text) $first = @(([string]$Text) -split "\r\n|\r|\n")[0]; if ($first.Length -gt $script:HordeDecisionRouteAnalystChars) { $first = $first.Substring(0, $script:HordeDecisionRouteAnalystChars) + "..." }; return $first }
     $why = $(if ($Target.resolved) { "" } elseif ("$($Target.asker)" -ceq "orc") { " (askedBy '" + $Item.question.askedBy + "' is clear, but that Orc's seat was not found)" } else { " (askedBy '" + $Item.question.askedBy + "' could not be resolved)" })
     $to = $(if ($Target.seat -ceq "orc") { "Orc " + $Target.label } else { "the warchief" + $why })
-    return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder, " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
+    $changedNote = $(if ($null -ne $Item.answer.PSObject.Properties["changedFrom"] -and [long]$Item.answer.changedFrom -ge 1) { " CHANGED HIS ANSWER (was: " + (& $cut ([string]$Item.answer.changedFromText)) + "), now" } else { "" })
+    return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder," + $changedNote + " " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
 }
 
 function Invoke-HordeDecisionRoutePass {
@@ -395,7 +489,7 @@ function Invoke-HordeDecisionRoutePass {
     foreach ($item in $work) {
         $number = [int]$item.question.number
         $seq = [long]$item.answer.sequence
-        $what = $(if ($item.purpose -ceq "nudge") { "the reminder for question " + $number } else { "answer record " + $seq + " of question " + $number })
+        $what = $(if ($item.purpose -ceq "nudge") { "the reminder for question " + $number } elseif ($item.purpose -ceq "closed") { "the closing notice of question " + $number } else { "answer record " + $seq + " of question " + $number })
         $target = Resolve-HordeDecisionRouteTarget -Question $item.question -Seat $Seat
         # AN ORC SEAT THAT CANNOT BE PROVEN JUST NOW is waited for, not given up: the route record is one
         # per answer and purpose, so an answer sent to the warchief for a seat that was only restarting
@@ -417,6 +511,8 @@ function Invoke-HordeDecisionRoutePass {
         # The founder, verified, or only his label (header): asked as the notice is made, for this one answer.
         $signer = @([pscustomobject]@{ question = $number; message = "" + $seq; at = "$($item.answer.at)"; route = "$($item.answer.route)"; evidence = "$($item.answer.evidence)"; signedBy = "$($item.answer.signedBy)" })
         $who = Get-HordeDecisionNotifyVerified -Items $signer -Trust $Trust
+        # THE CLOSING NOTICE IS HORDE'S OWN WORD, never the founder's: it vouches for nothing of his.
+        if ($item.purpose -ceq "closed") { $who = [pscustomobject]@{ verified = $null; why = ""; claimed = $false } }
         # THE WORDING HE SAW (header): his signature vouches for words against the wording he answered; a
         # question reworded since is not vouched for, whatever the passkey says.
         $wording = Get-HordeDecisionRouteWording -Item $item
@@ -454,7 +550,7 @@ function Invoke-HordeDecisionRoutePass {
         elseif ($who.claimed) { $how = $how + ", not verified: " + $who.why }
         if ($wrote.state -ceq "known" -and @("done", "replayed") -ccontains "$($wrote.value.outcome)") {
             $routed++
-            $verb = $(if ($item.purpose -ceq "nudge") { "reminded " + $to + " of question " + $number + " (answer record " + $seq + ", still open)" } else { "routed " + $what + " to " + $to })
+            $verb = $(if ($item.purpose -ceq "nudge") { "reminded " + $to + " of question " + $number + " (answer record " + $seq + ", still open)" } elseif ($item.purpose -ceq "closed") { "told " + $to + " that the warchief closed question " + $number } else { "routed " + $what + " to " + $to })
             [void]$lines.Add($verb + ", " + $how + $(if ($target.note -ne "") { "; " + $target.note } else { "" }))
             continue
         }

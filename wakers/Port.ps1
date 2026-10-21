@@ -98,6 +98,15 @@
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
 #            two passes and never repeated inside one, however slow the fleet was to answer.
+#   Exit     param([string]$Id, [string]$Reason)  -> known { id; outcome; reason; at }, or unknown. ENDS
+#            THE SESSION THE WAY A PERSON WOULD, by its harness's own exit command typed into its box
+#            - never a kill - for hibernation (fleet/Hibernate.ps1), which has already read the box
+#            empty and the session idle and not mid-turn. The waker types it only through a checked
+#            path that reads the box again and confirms what the command means before it submits.
+#            outcome is submitted (the command left the box), refused (nothing was typed: the box or
+#            the session was not as required, or the caller may not), left-behind (typed and NOT
+#            removed: the box now holds it) or killed (stopped part-way: the box may hold it). Only
+#            refused may be asked again. -Reason is one line saying why, kept on the waker's record.
 # role is warchief, orc, warg or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable, nothing (the mail was taken before the nudge, so nobody was rung) or killed (the waker
@@ -182,6 +191,7 @@ function Register-HordeWaker {
         [scriptblock]$Confirm = $null,
         [scriptblock]$Source = $null,
         [scriptblock]$Reserved = $null,
+        [scriptblock]$Exit = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -197,7 +207,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source; reserved = $Reserved }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source; reserved = $Reserved; exit = $Exit }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -424,6 +434,46 @@ function Test-HordeWakerConfirms {
     # that has already said all it can.
     param($Waker)
     return ((Test-HordeWakerRegistered $Waker) -and $null -ne $Waker.confirm)
+}
+
+# What an Exit answers (ADAPTER CONTRACT, Exit), and which of them say why.
+$script:HordeWakerExitOutcomes = @("submitted", "refused", "left-behind", "killed")
+
+function Test-HordeWakerExits {
+    # Can this waker end a session (ADAPTER CONTRACT, Exit)?
+    param($Waker)
+    return ((Test-HordeWakerRegistered $Waker) -and $null -ne $Waker.exit)
+}
+
+function Send-HordeWakeExit {
+    # Ask -Waker to end one session with its harness's own exit command: known { id; outcome; reason;
+    # at }, or unknown with the reason - which a caller must read as "it may have been typed" and never
+    # ask again. WHETHER to is not decided here: fleet/Hibernate.ps1 decides, from the state.
+    param($Waker, [string]$Id, [string]$Reason = "")
+    if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so nobody was asked to exit")) }
+    if ($null -eq $Waker.exit) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' cannot end a session")) }
+    if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked to end it")) }
+    if ($Reason.Trim() -eq "" -or $Reason -cmatch '[\x00-\x1F]') { return (New-HordeUnknown -Reason "an exit is asked for with one line of reason, and this one is empty or holds a control character; nothing was asked") }
+    try { $a = & $Waker.exit $Id $Reason }
+    catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to end " + $Id) -ErrorRecord $_) }
+    $first = ConvertFrom-HordeWakerAnswer -Answer $a -What ("the exit of " + $Id) -Waker $Waker.name
+    if (-not $first.ok) { return $first.answer }
+    $v = $a.value
+    if (-not (Test-HordeWakerRecord $v)) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " with something that is not an object")) }
+    $said = Get-HordeWakerMember $v "id"
+    if (-not $said.has -or $said.value -isnot [string] -or $said.value -cne $Id) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' was asked to end " + $Id + " and did not answer about it")) }
+    $outcome = Get-HordeWakerMember $v "outcome"
+    if (-not $outcome.has -or $outcome.value -isnot [string] -or $script:HordeWakerExitOutcomes -cnotcontains $outcome.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " with an outcome that is not one of " + ($script:HordeWakerExitOutcomes -join ", "))) }
+    $at = Get-HordeWakerMember $v "at"
+    if (-not $at.has -or $at.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " with a time that is not a time")) }
+    $when = ConvertTo-HordeWakerUtc $at.value
+    if ($null -eq $when) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " with a time with no zone")) }
+    $exitWhy = ""
+    $r = Get-HordeWakerMember $v "reason"
+    if ($r.has -and $null -ne $r.value) { $exitWhy = "$($r.value)" }
+    if ($exitWhy -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " with a reason holding a line break")) }
+    if ($outcome.value -cne "submitted" -and $exitWhy.Trim() -eq "") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the exit of " + $Id + " " + $outcome.value + " without saying why")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $exitWhy; at = $when }) -ObservedAt $a.observedAt)
 }
 
 function Start-HordeWakePass {
