@@ -444,3 +444,63 @@ test('a lot time that is not UTC to the second is refused with that reason, not 
     assert.equal(count(db, 'parking_lot'), 0, String(bad));
   }
 });
+
+test('a tier that is not 1 or 2 refuses only its lot, whatever its type', () => {
+  for (const tier of [true, {}, [1], 'x', 3, 1.5]) {
+    const { db } = fresh();
+    const r = root();
+    const bad = lotA();
+    bad.members[0].tier = tier;
+    writeLot(r, '20261019-202000', bad);
+    writeLot(r, '20261016-091500', lotB());
+    const rep = importFleet(db, { lots: r });
+    assert.ok(lots(rep, 'tier is not 1 or 2'), JSON.stringify(tier));
+    assert.deepEqual(rows(db, 'SELECT id FROM parking_lot').map((x) => x.id), [LOT_B], JSON.stringify(tier));
+  }
+});
+
+test('a wake member that is not in the lot, or twice in a wake, refuses the lot', () => {
+  const { db } = fresh();
+  const r = root();
+  const b = lotB();
+  b.wakes[0].members.push({ wake_id: WAKE_1, session_id: S1, outcome: 'woken' });
+  writeLot(r, '20261016-091500', b);
+  assert.ok(lots(importFleet(db, { lots: r }), 'not a member of the lot'));
+  assert.equal(count(db, 'parking_lot'), 0);
+  const d = fresh().db;
+  const r2 = root();
+  const b2 = lotB();
+  b2.wakes[0].members.push({ wake_id: WAKE_1, session_id: S3, outcome: 'woken' });
+  writeLot(r2, '20261016-091500', b2);
+  assert.ok(lots(importFleet(d, { lots: r2 }), 'in the wake twice'));
+  assert.equal(count(d, 'wake_member'), 0);
+});
+
+test('a lot with no member is reported', () => {
+  const { db } = fresh();
+  const r = root();
+  const a = lotA();
+  a.members = [];
+  writeLot(r, '20261019-202000', a);
+  assert.ok(lots(importFleet(db, { lots: r }), 'holds no member'));
+});
+
+test('a lot, wake or wake member already there with other content is kept and reported', () => {
+  const { db } = fresh();
+  const r = root();
+  const dir = writeLot(r, '20261016-091500', lotB());
+  importFleet(db, { lots: r });
+  const b = lotB();
+  b.lot.reason = 'other';
+  b.wakes[0].wake.requested_at = '2026-10-16T12:00:00Z';
+  b.wakes[0].members[0].outcome = 'failed';
+  writeTable(path.join(dir, 'parking_lot.json'), 'parking_lot', [b.lot]);
+  writeTable(path.join(dir, 'wakes', WAKE_1, 'wake.json'), 'wake', [b.wakes[0].wake]);
+  writeTable(path.join(dir, 'wakes', WAKE_1, 'wake_member.json'), 'wake_member', b.wakes[0].members);
+  const rep = importFleet(db, { lots: r });
+  assert.ok(lots(rep, 'lot already in fleet.db with other content'));
+  assert.ok(lots(rep, 'wake already in fleet.db with other content'));
+  assert.ok(lots(rep, 'wake member already in fleet.db with other content'));
+  assert.equal(one(db, 'SELECT reason FROM parking_lot').reason, 'hibernate tier 2');
+  assert.equal(one(db, 'SELECT outcome FROM wake_member WHERE session_id = ?', S3).outcome, 'woken');
+});

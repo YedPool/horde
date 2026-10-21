@@ -71,5 +71,26 @@
         @{ Name = "lots-time-not-checked"
            Find = 'if (t === null) refuse(where + '': '' + col + '' is not a UTC time'
            Replace = 'if (false) refuse(where + '': '' + col + '' is not a UTC time' }
+        @{ Name = "lots-tier-not-checked"
+           Find = 'if (v !== 1 && v !== 2) refuse('
+           Replace = 'if (false) refuse(' }
+        @{ Name = "lots-wake-member-not-a-lot-member"
+           Find = 'if (!seen.has(sid)) refuse(ww'
+           Replace = 'if (false) refuse(ww' }
+        @{ Name = "lots-wake-member-twice-accepted"
+           Find = 'if (wseen.has(sid)) refuse('
+           Replace = 'if (false) refuse(' }
+        @{ Name = "lots-empty-lot-not-reported"
+           Find = 'if (lot.members.length === 0) rep.unlink('
+           Replace = 'if (false) rep.unlink(' }
+        @{ Name = "lots-lot-mismatch-silent"
+           Find = 'if (Object.keys(now).some((k) => was[k] !== now[k])) rep.unlink('
+           Replace = 'if (false) rep.unlink(' }
+        @{ Name = "lots-wake-mismatch-silent"
+           Find = 'was.requested_at !== at ||'
+           Replace = 'false ||' }
+        @{ Name = "lots-wake-member-mismatch-silent"
+           Find = 'was.outcome !== lotText(m, ''outcome'', ww) ||'
+           Replace = 'false ||' }
     )
 }

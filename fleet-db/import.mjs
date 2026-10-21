@@ -1289,6 +1289,14 @@ function lotText(row, col, where) {
   return v;
 }
 
+// A tier is the whole number 1 or 2 (or left out). Anything else would reach the driver unchecked.
+function lotTier(row, where) {
+  const v = row.tier;
+  if (v === undefined || v === null) return null;
+  if (v !== 1 && v !== 2) refuse(where + ': tier is not 1 or 2');
+  return v;
+}
+
 function lotTime(row, col, where) {
   const t = typeof row[col] === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(row[col]) ? parseTime(row[col]) : null;
   if (t === null) refuse(where + ': ' + col + ' is not a UTC time like 2026-10-14T09:00:00Z');
@@ -1331,6 +1339,12 @@ function importLot(c, lot) {
   const r = db.prepare(`INSERT INTO parking_lot (id, created_at, created_by_session_id, created_by_orc_id, reason, selection_kind, keep_visible)
     VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`).run(lotId, created, bySession, byOrc, lotText(l, 'reason', where), lotText(l, 'selection_kind', where), l.keep_visible ?? 0);
   rep.count('parking_lot', r.changes === 1);
+  if (r.changes !== 1) {
+    const was = db.prepare('SELECT created_at, created_by_session_id, created_by_orc_id, reason, selection_kind, keep_visible FROM parking_lot WHERE id = ?').get(lotId);
+    const now = { created_at: created, created_by_session_id: bySession, created_by_orc_id: byOrc, reason: lotText(l, 'reason', where), selection_kind: lotText(l, 'selection_kind', where), keep_visible: l.keep_visible ?? 0 };
+    if (Object.keys(now).some((k) => was[k] !== now[k])) rep.unlink('lots', 'lot already in fleet.db with other content (kept as fleet.db has it)', lotId);
+  }
+  if (lot.members.length === 0) rep.unlink('lots', 'lot holds no member (K never writes one)', hid);
 
   const seen = new Set();
   for (const m of lot.members) {
@@ -1342,12 +1356,13 @@ function importLot(c, lot) {
     seen.add(sid);
     lotSession(c, sid, created, mw);
     const state = lotText(m, 'state', mw);
+    lotTier(m, mw);
     if (!Object.hasOwn(MEMBER_RANK, state)) refuse(mw + ' ' + sid + ': state ' + String(state).slice(0, 20) + ' is not parked, woken or dropped');
     const have = db.prepare('SELECT state FROM parking_lot_member WHERE lot_id = ? AND session_id = ?').get(lotId, sid);
     if (have === undefined) {
       const orc = lotOrc(c, lotText(m, 'orc_id', mw), hid);
       db.prepare('INSERT INTO parking_lot_member (lot_id, session_id, orc_id, tier, state, note) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(lotId, sid, orc, m.tier ?? null, state, lotText(m, 'note', mw));
+        .run(lotId, sid, orc, lotTier(m, mw), state, lotText(m, 'note', mw));
       rep.count('parking_lot_member', true);
     } else if (MEMBER_RANK[state] > MEMBER_RANK[have.state]) {
       db.prepare('UPDATE parking_lot_member SET state = ? WHERE lot_id = ? AND session_id = ?').run(state, lotId, sid);
@@ -1370,15 +1385,27 @@ function importLot(c, lot) {
     const by = lotSession(c, lotText(w.wake, 'requested_by_session_id', ww), at, ww);
     const wr = db.prepare('INSERT INTO wake (id, lot_id, requested_at, requested_by_session_id) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING').run(wid, lotId, at, by);
     rep.count('wake', wr.changes === 1);
+    if (wr.changes !== 1) {
+      const was = db.prepare('SELECT lot_id, requested_at, requested_by_session_id FROM wake WHERE id = ?').get(wid);
+      if (was.lot_id !== lotId || was.requested_at !== at || was.requested_by_session_id !== by) rep.unlink('lots', 'wake already in fleet.db with other content (kept as fleet.db has it)', wid);
+    }
+    const wseen = new Set();
     for (const m of w.members) {
       const sid = lotText(m, 'session_id', ww + ' member');
       if (sid === null) refuse(ww + ' member: session_id is missing');
       if (lotText(m, 'wake_id', ww + ' member') !== wid) refuse(ww + ' member ' + sid.slice(0, 36) + ': wake_id is not this wake');
+      if (!seen.has(sid)) refuse(ww + ' member ' + sid.slice(0, 36) + ': the session is not a member of the lot');
+      if (wseen.has(sid)) refuse(ww + ' member ' + sid.slice(0, 36) + ': the session is in the wake twice');
+      wseen.add(sid);
       lotSession(c, sid, at, ww);
       const fresh = lotSession(c, lotText(m, 'new_session_id', ww), at, ww);
       const mr = db.prepare('INSERT INTO wake_member (wake_id, session_id, outcome, new_session_id) VALUES (?, ?, ?, ?) ON CONFLICT (wake_id, session_id) DO NOTHING')
         .run(wid, sid, lotText(m, 'outcome', ww), fresh);
       rep.count('wake_member', mr.changes === 1);
+      if (mr.changes !== 1) {
+        const was = db.prepare('SELECT outcome, new_session_id FROM wake_member WHERE wake_id = ? AND session_id = ?').get(wid, sid);
+        if (was.outcome !== lotText(m, 'outcome', ww) || was.new_session_id !== fresh) rep.unlink('lots', 'wake member already in fleet.db with other content (kept as fleet.db has it)', sid);
+      }
     }
   }
 }
