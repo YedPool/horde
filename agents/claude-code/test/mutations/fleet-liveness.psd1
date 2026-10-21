@@ -69,5 +69,41 @@
         @{ Name = "named-program-ignored"
            Find = 'return ("& ''" + $Command + "'' --resume " + $SessionId)'
            Replace = 'return ("claude --resume " + $SessionId)' }
+        @{ Name = "resume-argv-ignored"
+           Find = 'if ($null -ne $argvPid) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "listing-error-ignored"
+           Find = 'if ($null -ne $Snapshot.PSObject.Properties["resumedError"] -and "" + $Snapshot.resumedError -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "snapshot-drops-listing-error"
+           Find = '$resumedIds = $Resumed.resumed; $resumedErr = "" + $Resumed.error'
+           Replace = '$resumedIds = $Resumed.resumed' }
+        @{ Name = "listing-answer-trusted"
+           Find = 'if ($null -eq $answer -or "" + $answer.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "listing-throw-trusted"
+           Find = 'error = ("the process listing could not be read: " + $_.Exception.Message)'
+           Replace = 'error = ""' }
+        @{ Name = "resume-id-case-matters"
+           Find = 'if ($null -ne $cand -and $cand.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern)'
+           Replace = 'if ($null -ne $cand -and $cand -cmatch $script:ClaudeCodeFleetIdPattern)' }
+        @{ Name = "resume-equals-form-ignored"
+           Find = 'elseif ($a.StartsWith("--resume=", [System.StringComparison]::OrdinalIgnoreCase))'
+           Replace = 'elseif ($false)' }
+        @{ Name = "resume-short-flag-ignored"
+           Find = 'if ($a -ieq "--resume" -or $a -ieq "-r") {'
+           Replace = 'if ($a -ieq "--resume") {' }
+        @{ Name = "id-anywhere-counts"
+           Find = '{ $cand = $a.Substring(9) }'
+           Replace = '{ $cand = $a.Substring(9) } elseif ($a.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern) { $cand = $a }' }
+        @{ Name = "quotes-do-not-group"
+           Find = 'if ($c -ceq [char]34) { $inQuote = -not $inQuote; $have = $true; $i++; continue }'
+           Replace = 'if ($c -ceq [char]34) { $have = $true; $i++; continue }' }
+        @{ Name = "any-process-image"
+           Find = 'if ($null -eq $p -or "" + $p.name -ine $script:ClaudeCodeFleetProcessImage) { continue }'
+           Replace = 'if ($null -eq $p) { continue }' }
+        @{ Name = "adapter-snapshot-skips-listing"
+           Find = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) -Resumed (Read-ClaudeCodeFleetResumeArgv) }'
+           Replace = '-Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) }' }
     )
 }

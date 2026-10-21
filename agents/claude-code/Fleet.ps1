@@ -46,6 +46,7 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ReadShared.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Platform.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Port.ps1")
 
 # procStart and a process's start time are FILETIME ticks (100 ns). One second of slack, the guard's
@@ -132,10 +133,99 @@ function Get-ClaudeCodeFleetRecordState {
     return "dead"
 }
 
+# THE SECOND WITNESS: A PROCESS STARTED TO RESUME THE SESSION (T-0320). A session resumed by hand
+# (`claude --resume <id>` in a new pane) can run with no control file (measured 2026-10-21: two lot
+# members, pids 28356 and 19364, ran for minutes with none), and the control files alone then read it
+# "stopped" - so a wake would start a second copy of it. The harness process's command line names the id
+# it was started with, so every session id that follows --resume (-r, --resume=<id>) in a running harness
+# process is collected. WHY THIS ONLY ARGUES AGAINST "STOPPED": after /clear or a compaction the process
+# keeps its old --resume id while the live id changes, so argv cannot prove which id is live - but it does
+# prove that something resumed from that id is running, and that is enough to never call it stopped.
+$script:ClaudeCodeFleetProcessImage = "claude.exe"
+
+function Split-ClaudeCodeFleetCommandLine {
+    # A Windows command line as its arguments, the way CommandLineToArgvW reads one for the cases that
+    # matter here: white space separates, a double quote groups (and is dropped), backslashes before a
+    # quote are halved and an odd one escapes the quote. So a prompt text holding "--resume" stays one
+    # argument and never reads as a flag.
+    param([AllowEmptyString()][AllowNull()][string]$Line)
+    if ($null -eq $Line) { return @() }
+    $out = New-Object System.Collections.ArrayList
+    $sb = New-Object System.Text.StringBuilder
+    $inQuote = $false; $have = $false
+    $i = 0
+    while ($i -lt $Line.Length) {
+        $c = $Line[$i]
+        if ($c -ceq [char]92) {
+            $n = 0
+            while ($i -lt $Line.Length -and $Line[$i] -ceq [char]92) { $n++; $i++ }
+            $have = $true
+            if ($i -lt $Line.Length -and $Line[$i] -ceq [char]34) {
+                [void]$sb.Append([string]::new([char]92, [int][Math]::Floor($n / 2)))
+                if ($n % 2 -eq 1) { [void]$sb.Append([char]34); $i++ }
+            } else { [void]$sb.Append([string]::new([char]92, $n)) }
+            continue
+        }
+        if ($c -ceq [char]34) { $inQuote = -not $inQuote; $have = $true; $i++; continue }
+        if (-not $inQuote -and [char]::IsWhiteSpace($c)) {
+            if ($have) { [void]$out.Add($sb.ToString()); [void]$sb.Clear(); $have = $false }
+            $i++; continue
+        }
+        [void]$sb.Append($c); $have = $true; $i++
+    }
+    if ($have) { [void]$out.Add($sb.ToString()) }
+    return $out.ToArray()
+}
+
+function Get-ClaudeCodeFleetResumeIds {
+    # The session ids (lower-cased) that -Argv resumes: the argument after --resume or -r, or the value of
+    # --resume=<id>. Only an argument in that place counts, and only when it is a uuid: an id elsewhere
+    # (a path, a prompt text, the id after another flag) is not a resume of it.
+    param([string[]]$Argv = @())
+    $ids = New-Object System.Collections.ArrayList
+    $list = @($Argv)
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $a = "" + $list[$i]
+        $cand = $null
+        if ($a -ieq "--resume" -or $a -ieq "-r") { if ($i + 1 -lt $list.Count) { $cand = "" + $list[$i + 1] } }
+        elseif ($a.StartsWith("--resume=", [System.StringComparison]::OrdinalIgnoreCase)) { $cand = $a.Substring(9) }
+        if ($null -ne $cand -and $cand.ToLowerInvariant() -cmatch $script:ClaudeCodeFleetIdPattern) { [void]$ids.Add($cand.ToLowerInvariant()) }
+    }
+    return $ids.ToArray()
+}
+
+function Read-ClaudeCodeFleetResumeArgv {
+    # One process listing, read-only: { resumed (id -> pid of the first process resuming it); error }.
+    # error is "" when the listing may be trusted. -Table replaces the platform's process table in a test:
+    # a script block returning an answer (core/Tristate) holding rows { pid; name; commandLine }.
+    param([scriptblock]$Table = $null)
+    $resumed = @{}
+    $answer = $null
+    try {
+        if ($null -ne $Table) { $answer = & $Table } else { $answer = Read-HordePlatformProcessTable -Platform (Get-HordeLocalPlatform) }
+    } catch { return [pscustomobject]@{ resumed = $resumed; error = ("the process listing could not be read: " + $_.Exception.Message) } }
+    if ($null -eq $answer -or "" + $answer.state -cne "known") {
+        $why = "no answer"
+        if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["reason"]) { $why = "" + $answer.reason }
+        return [pscustomobject]@{ resumed = $resumed; error = ("the process listing could not be read: " + $why) }
+    }
+    $rows = $answer.value
+    if ($rows -is [System.Collections.IDictionary]) { $rows = @($rows.Values) }
+    foreach ($p in @($rows)) {
+        if ($null -eq $p -or "" + $p.name -ine $script:ClaudeCodeFleetProcessImage) { continue }
+        foreach ($id in @(Get-ClaudeCodeFleetResumeIds -Argv @(Split-ClaudeCodeFleetCommandLine -Line $p.commandLine))) {
+            if (-not $resumed.ContainsKey($id)) { $resumed[$id] = "" + $p.pid }
+        }
+    }
+    return [pscustomobject]@{ resumed = $resumed; error = "" }
+}
+
 function New-ClaudeCodeFleetSnapshot {
     # The reading as the guard's build_snapshot makes it: { sessions (id -> { state; pid }); records
     # (each with its state); error }. error is "" when the reading may be trusted.
-    param([Parameter(Mandatory = $true)]$Read)
+    # -Resumed is Read-ClaudeCodeFleetResumeArgv's answer; left out (a test of the control files alone),
+    # the process command lines are not consulted at all.
+    param([Parameter(Mandatory = $true)]$Read, $Resumed = $null)
     $rank = @{ dead = 1; unknown = 2; live = 3 }
     $sessions = @{}
     $records = New-Object System.Collections.ArrayList
@@ -156,7 +246,9 @@ function New-ClaudeCodeFleetSnapshot {
         $known = $sessions[$r.sessionId]
         if ($null -eq $known -or $rank[$state] -gt $rank[$known.state]) { $sessions[$r.sessionId] = [pscustomobject]@{ state = $state; pid = "" + $r.pid } }
     }
-    return [pscustomobject]@{ sessions = $sessions; records = $records.ToArray(); error = $err }
+    $resumedIds = @{}; $resumedErr = ""
+    if ($null -ne $Resumed) { $resumedIds = $Resumed.resumed; $resumedErr = "" + $Resumed.error }
+    return [pscustomobject]@{ sessions = $sessions; records = $records.ToArray(); error = $err; resumed = $resumedIds; resumedError = $resumedErr }
 }
 
 function ConvertTo-ClaudeCodeFleetCwd {
@@ -198,6 +290,20 @@ function Get-ClaudeCodeFleetVerdict {
     if ("" + $Snapshot.error -ne "") { return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = ("liveness unreadable (" + $Snapshot.error + ")"); pid = "" } }
     $s = $Snapshot.sessions[$SessionId]
     if ($null -eq $s -or $s.state -ceq "dead") {
+        # NO LIVE CONTROL FILE NAMES IT: ask the process command lines (T-0320). A process started with
+        # --resume <this id> means the session is not asleep, and it is reported "running", the strongest
+        # kind: every caller (Lots, Asleep, Wake, Hibernate, Hibernation) reads state "running" as neither
+        # asleep nor wakeable, and only state "stopped" as safe to start or as exited. "unknown" would
+        # also refuse a wake but a lot would not show the member as running. A listing that could not be
+        # read leaves a session with no control file unknown, never stopped.
+        $argvPid = $null
+        if ($null -ne $Snapshot.PSObject.Properties["resumed"] -and $null -ne $Snapshot.resumed) { $argvPid = $Snapshot.resumed["" + $SessionId.ToLowerInvariant()] }
+        if ($null -ne $argvPid) {
+            return [pscustomobject]@{ state = "running"; kind = "resume-argv"; reason = ("a process was started to resume it: pid " + $argvPid); pid = "" + $argvPid }
+        }
+        if ($null -ne $Snapshot.PSObject.Properties["resumedError"] -and "" + $Snapshot.resumedError -ne "") {
+            return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = ("liveness unreadable (" + $Snapshot.resumedError + ")"); pid = "" }
+        }
         if ($procPid -ne "") {
             foreach ($r in @($Snapshot.records)) {
                 $began = [long]0
@@ -387,7 +493,7 @@ function Get-ClaudeCodeFleetTyped {
 }
 
 Register-HordeFleetAgent -Name "claude-code" `
-    -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) } `
+    -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) -Resumed (Read-ClaudeCodeFleetResumeArgv) } `
     -Verdict { param($snapshot, $id, $cwd, $ignore, $since, $process) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since -Process $process } `
     -Running { param($snapshot) Get-ClaudeCodeFleetRunning -Snapshot $snapshot } `
     -ResumeLine { param($id) $st = Get-ClaudeCodeFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { throw ("the harness's fleet settings are refused, so no resume line is built: " + (@($st.findings) -join "; ")) }; Get-ClaudeCodeFleetResumeLine -SessionId $id -Command ("" + $st.values.command) } `
