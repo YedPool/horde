@@ -30,6 +30,16 @@
 # bare name a search path could answer with another program. The command itself goes in as -EncodedCommand
 # (base64), so no quote in a path can end a string.
 #
+# DESIGN NOTE, NOT REGISTERED (PR 2a): A TEN-SECOND LIVE LOOP. `horde meter live` refreshes the per-session view
+# (tokens_usage) from only the bytes written since the last pass. Measured on this fleet's real transcripts
+# (2026-10-19): 6 to 50 ms of work per pass once a file has an offset, a 156 MB session read cold in under
+# a second. The Windows task scheduler cannot repeat faster than once a minute and a node start is about a
+# second on a busy box, so a 10-second loop is NOT a scheduled task. It would be ONE long-running process that
+# calls the same refresh every 10 seconds (the collector module's runLive) and sleeps in between, started at
+# logon, below normal priority, one instance (a lock file), and exiting when the database cannot be opened.
+# Open questions for whoever builds it: who restarts it, and whether a panel that wants live numbers should
+# instead ask for a refresh when it opens. Nothing here registers it, and no task for it exists.
+#
 # POWERSHELL 5.1: no 2>&1, no $Args/$Home/$PID parameters (CONTRIBUTING 12). ASCII only.
 
 [CmdletBinding(SupportsShouldProcess = $true)]

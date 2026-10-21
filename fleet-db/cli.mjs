@@ -5,7 +5,7 @@
 //   status  the file, its schema version and the rows in every table; changes no data and never creates the
 //           database (SQLite may still make its -wal and -shm files beside it to read a WAL file)
 //   import  read the old files named by --ledger, --pr-cache, --changelog, --cards, --thrall-card,
-//           --registry and --decisions (every path explicit, none defaulted to the real files) into fleet.db, in one
+//           --registry, --decisions and --lots (every path explicit, none defaulted to the real files) into fleet.db, in one
 //           transaction; prints one line per table (added / already there) and what could not be linked;
 //           --dry-run does everything and rolls it back. fleet.db must exist (run init first)
 //   check   SQLite's integrity and foreign-key checks, plus the rules a single row cannot hold by itself
@@ -23,7 +23,7 @@ import { importFleet } from './import.mjs';
 export const VERBS = ['init', 'status', 'check', 'import'];
 
 // import's flags, each with the source it names (importFleet's sources).
-const SOURCE_FLAGS = { '--ledger': 'ledger', '--pr-cache': 'prCache', '--changelog': 'changelog', '--cards': 'cards', '--thrall-card': 'thrallCard', '--registry': 'registry', '--decisions': 'decisions' };
+const SOURCE_FLAGS = { '--ledger': 'ledger', '--pr-cache': 'prCache', '--changelog': 'changelog', '--cards': 'cards', '--thrall-card': 'thrallCard', '--registry': 'registry', '--decisions': 'decisions', '--lots': 'lots' };
 
 // The flags of import; an unknown flag, a flag with no path, or a flag given twice is refused, never ignored.
 export function parseImportArgs(args) {
@@ -46,7 +46,7 @@ export function parseImportArgs(args) {
 
 function printImport(report, out) {
   out(report.dryRun ? 'import: dry run, nothing was written' : 'import: done');
-  for (const [t, c] of Object.entries(report.tables)) out(t + ': ' + c.added + ' added, ' + c.existing + ' already there');
+  for (const [t, c] of Object.entries(report.tables)) out(t + ': ' + c.added + ' added, ' + c.existing + ' already there' + (c.updated === undefined ? '' : ', ' + c.updated + ' moved forward'));
   if (report.unlinked.length === 0) out('unlinked: none');
   for (const u of report.unlinked) out(u.source + ': ' + u.reason + ': ' + u.count + (u.examples.length ? ' (e.g. ' + u.examples.join(', ') + ')' : ''));
 }
@@ -98,7 +98,7 @@ function openForReading(file) {
 export function main(argv, env = process.env, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n')) {
   const verb = argv[0];
   if (!VERBS.includes(verb) || (verb !== 'import' && argv.length !== 1)) {
-    err('usage: cli.mjs init | status | check | import [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f] [--registry dir] [--decisions dir] [--dry-run]' + (VERBS.includes(verb) && argv.length > 1 ? ' (nothing may follow init, status or check)' : ''));
+    err('usage: cli.mjs init | status | check | import [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f] [--registry dir] [--decisions dir] [--lots dir] [--dry-run]' + (VERBS.includes(verb) && argv.length > 1 ? ' (nothing may follow init, status or check)' : ''));
     return 1;
   }
   let request;

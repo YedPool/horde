@@ -19,5 +19,11 @@
         @{ Name = "unreadable-file-not-named"
            Find = "for (const f of r.failures.slice(0, 5)) err('could not read ' + f.file + ': ' + f.message);"
            Replace = '' }
+        @{ Name = "bad-session-id-accepted"
+           Find = 'if (a.flags.session !== undefined && !SESSION_ID.test(a.flags.session))'
+           Replace = 'if (false)' }
+        @{ Name = "latency-reads-every-hop-ever"
+           Find = 'store.hopsSince(Date.now() - days * 86400000)'
+           Replace = 'store.allHops()' }
     )
 }
