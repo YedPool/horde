@@ -15,6 +15,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Price.ps1")
 . (Join-Path $PSScriptRoot "Transcript.ps1")
 . (Join-Path $PSScriptRoot "Metrics.ps1")
@@ -166,10 +167,7 @@ function Format-HordeMetricsSummary {
     $ixPath = Join-Path (Get-HordeMetricsDir) "collect-index.json"
     if (Test-Path -LiteralPath $ixPath -PathType Leaf) {
         try {
-            Add-Type -AssemblyName System.Web.Extensions
-            $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-            $ser.MaxJsonLength = [int]::MaxValue
-            $ix = $ser.DeserializeObject((Read-HordeSharedText -Path $ixPath))
+            $ix = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $ixPath))
             $big = @($ix["entries"].Keys | Where-Object { "$($ix["entries"][$_]["outcome"])" -ceq "tooLarge" } | ForEach-Object { $_.Substring($_.LastIndexOf('/') + 1) } | Sort-Object)
             if ($big.Count -gt 0) { [void]$lines.Add("WARNING: collect skips " + $big.Count + " transcripts as too large to read within a run, so they are not in the store: " + ($big -join ", ")) }
         } catch { [void]$lines.Add("WARNING: the collect index could not be read to say which transcripts it skips") }
@@ -177,8 +175,7 @@ function Format-HordeMetricsSummary {
     $recPath = Join-Path (Get-HordeMetricsDir) "collect-recovered.json"
     if (Test-Path -LiteralPath $recPath -PathType Leaf) {
         try {
-            Add-Type -AssemblyName System.Web.Extensions
-            $rn = (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject((Read-HordeSharedText -Path $recPath))
+            $rn = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $recPath))
             [void]$lines.Add("WARNING: collect recovered from a write that was killed half way, at " + $rn["at"] + ": " + $rn["what"])
         } catch { [void]$lines.Add("WARNING: collect recovered from a killed write, and its note cannot be read") }
     }

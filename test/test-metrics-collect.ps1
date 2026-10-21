@@ -18,11 +18,9 @@ foreach ($a in (Get-HordeTranscriptAdapterFiles -Root $root)) { . $a }
 $work = Join-Path $env:TEMP ("horde-collect-" + [guid]::NewGuid().ToString("N"))
 $saved = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
 # Every variable a stores.json names can move a real store into view; each is cleared for the run.
-Add-Type -AssemblyName System.Web.Extensions
-$ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
 $storeVars = @()
 foreach ($sj in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | ForEach-Object { Join-Path $_.FullName "stores.json" } | Where-Object { Test-Path -LiteralPath $_ })) {
-    foreach ($r in @($ser.DeserializeObject([System.IO.File]::ReadAllText($sj))["roots"])) { if ($r["env"] -is [string]) { $storeVars += $r["env"] } }
+    foreach ($r in @((ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($sj)))["roots"])) { if ($r["env"] -is [string]) { $storeVars += $r["env"] } }
 }
 foreach ($v in $storeVars) { $saved[$v] = [Environment]::GetEnvironmentVariable($v); [Environment]::SetEnvironmentVariable($v, $null) }
 
@@ -34,7 +32,7 @@ function Get-StoreSnapshot {
     return ((@(Get-ChildItem -LiteralPath $h -File -Recurse -Force | Where-Object { $_.Name -ne "collect.lock" } | Sort-Object FullName | ForEach-Object { $_.FullName + "|" + $_.Length + "|" + $_.LastWriteTimeUtc.Ticks + "|" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })) -join "`n")
 }
 function Get-Records { $d = Join-Path (Get-HordeMetricsDir) "summaries"; if (-not (Test-Path -LiteralPath $d)) { return @() }; return @(Get-ChildItem -LiteralPath $d -File -Recurse -Filter "*.json" | Where-Object { $_.Extension -ceq ".json" }) }
-function Get-Index { $p = Get-HordeCollectIndexPath; if (-not (Test-Path -LiteralPath $p)) { return $null }; return $ser.DeserializeObject((Read-HordeSharedText -Path $p)) }
+function Get-Index { $p = Get-HordeCollectIndexPath; if (-not (Test-Path -LiteralPath $p)) { return $null }; return ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $p)) }
 function Set-Old { param([string]$Path, [datetime]$At) (Get-Item -LiteralPath $Path).LastWriteTimeUtc = $At }
 
 try {
@@ -99,8 +97,8 @@ try {
     $sum = Measure-HordeTranscriptFile -Path $planted -PriceTable (Read-HordePriceBook)
     $plantedRec = Get-HordeMetricsRecordPath -Adapter $sum.value.read.adapter -Name $sum.value.read.recordKey
     Check (Test-Path -LiteralPath $plantedRec -PathType Leaf) "the record is named by the transcript's own identity, its session id"
-    $rec = @{ worker = $null; orc = $null; collection = @{} }; if (Test-Path -LiteralPath $plantedRec) { $rec = $ser.DeserializeObject([System.IO.File]::ReadAllText($plantedRec)) }
-    $sumRec = $ser.DeserializeObject((ConvertTo-Json -InputObject $sum.value.record -Depth 30))
+    $rec = @{ worker = $null; orc = $null; collection = @{} }; if (Test-Path -LiteralPath $plantedRec) { $rec = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($plantedRec)) }
+    $sumRec = ConvertFrom-HordeJsonObject -Text ((ConvertTo-Json -InputObject $sum.value.record -Depth 30))
     Check ((ConvertTo-Json $rec["worker"] -Depth 30 -Compress) -eq (ConvertTo-Json $sumRec["worker"] -Depth 30 -Compress) -and (ConvertTo-Json $rec["orc"] -Depth 30 -Compress) -eq (ConvertTo-Json $sumRec["orc"] -Depth 30 -Compress)) "a collected record measures what summarize measures"
     Check ($rec["collection"]["provisional"] -eq $false -and $rec["collection"]["sourceBytes"] -eq (Get-Item -LiteralPath $planted).Length) "and says it is final, and how big its transcript was"
 
@@ -165,13 +163,13 @@ try {
     [System.IO.File]::AppendAllText($planted, "`n")
     Set-Old $planted $now.AddMinutes(-2)
     $p1 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root -SettleMinutes 10
-    $prec = $ser.DeserializeObject([System.IO.File]::ReadAllText($recPath))
+    $prec = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($recPath))
     Check ($p1.provisional -eq 1 -and $prec["collection"]["provisional"] -eq $true -and "$($prec["collection"]["why"])" -like "*within the last 10 minutes*") "one written 2 minutes ago is recorded as provisional, and the record says why"
     $snap = Get-StoreSnapshot
     $p2 = Invoke-HordeMetricsCollect -Now $now.AddMinutes(5) -RepoRoot $root -SettleMinutes 10
     Check ($p2.read -eq 0 -and (Get-StoreSnapshot) -eq $snap) "while it has not settled and has not changed, it is left alone"
     $p3 = Invoke-HordeMetricsCollect -Now $now.AddMinutes(20) -RepoRoot $root -SettleMinutes 10
-    $frec = $ser.DeserializeObject([System.IO.File]::ReadAllText($recPath))
+    $frec = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($recPath))
     Check ($p3.read -eq 1 -and $p3.provisional -eq 0 -and $frec["collection"]["provisional"] -eq $false) "once it has settled it is collected again, and the record is final"
     $p4 = Invoke-HordeMetricsCollect -Now $now.AddMinutes(30) -RepoRoot $root -SettleMinutes 10
     Check ($p4.read -eq 0 -and -not $p4.wroteIndex) "CONTROL: and then it is unchanged"
@@ -229,7 +227,7 @@ try {
         Set-Old $file2 $settledAt.AddMinutes(6)
         $b5 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
     } finally { Set-Item -Path function:Measure-HordeTranscriptFile -Value $origMeasure }
-    $r2rec = $ser.DeserializeObject([System.IO.File]::ReadAllText($blocker))
+    $r2rec = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($blocker))
     Check ($b5.provisional -eq 1 -and $r2rec["collection"]["provisional"] -eq $true -and "$($r2rec["collection"]["why"])" -like "*changed while it was read*") "a transcript that grew while it was read is recorded as provisional, and says why"
     Set-Old $file2 $settledAt.AddMinutes(7)
     $b6 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
@@ -241,7 +239,7 @@ try {
     Check ($b7.provisional -eq 1) "CONTROL: the transcript is provisional now"
     Remove-Item -LiteralPath $file2 -Force
     $b8 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
-    $gone = $ser.DeserializeObject([System.IO.File]::ReadAllText($blocker))
+    $gone = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($blocker))
     Check ($b8.removed -eq 1 -and $gone["collection"]["sourceGone"] -eq $true -and "$($gone["collection"]["why"])" -like "*can never be made final*") "when its transcript is gone, the provisional record says it can never be made final"
     # F9: a recorded transcript whose time moves to before consent is still read, not skipped.
     Set-Old $planted ([datetime]::Parse("2026-08-01T00:00:00Z").ToUniversalTime())

@@ -48,6 +48,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "Price.ps1")
 . (Join-Path $PSScriptRoot "Schedule.ps1")
@@ -76,11 +77,8 @@ function Read-HordeCollectIndex {
     $path = Get-HordeCollectIndexPath
     $entries = @{}
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ entries = $entries; note = "" } }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $doc = $null
-    try { $doc = $ser.DeserializeObject((Read-HordeSharedText -Path $path)) } catch { $doc = $null }
+    try { $doc = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $path)) } catch { $doc = $null }
     if ($doc -isnot [System.Collections.IDictionary] -or $doc["schemaVersion"] -ne 2 -or $doc["entries"] -isnot [System.Collections.IDictionary]) {
         return [pscustomobject]@{ entries = $entries; note = "the index could not be read, so every transcript is collected again" }
     }
@@ -111,10 +109,7 @@ function Write-HordeCollectIndex {
     }
     $doc = [System.Collections.Generic.Dictionary[string,object]]::new()
     $doc["schemaVersion"] = 2; $doc["kind"] = "metrics.collectIndex"; $doc["entries"] = $out
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
-    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text $ser.Serialize($doc)
+    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text (ConvertTo-Json -InputObject $doc -Depth 30 -Compress)
 }
 
 function Get-HordeHashText {
@@ -155,10 +150,7 @@ function Set-HordeRecordSourceGone {
     $parts = $Record.Split("/", 2)
     $path = Get-HordeMetricsRecordPath -Adapter $parts[0] -Name $parts[1]
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
-    $doc = $ser.DeserializeObject([System.IO.File]::ReadAllText($path))
+    $doc = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($path))
     if ($doc -isnot [System.Collections.IDictionary] -or $doc["collection"] -isnot [System.Collections.IDictionary] -or $doc["collection"]["provisional"] -ne $true) { return }
     $doc["collection"]["sourceGone"] = $true
     $doc["collection"]["why"] = "its transcript is gone, so this provisional record can never be made final"
@@ -170,11 +162,8 @@ function Test-HordeMetricsFileValid {
     # record: a JSON object of kind transcript.summary.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $d = $null
-    try { $d = $ser.DeserializeObject((Read-HordeSharedText -Path $Path)) } catch { return $false }
+    try { $d = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $Path)) } catch { return $false }
     if ($d -isnot [System.Collections.IDictionary]) { return $false }
     if ($Name -ceq "collect-index.json") { return ($d["schemaVersion"] -eq 2 -and $d["entries"] -is [System.Collections.IDictionary]) }
     return ("$($d["kind"])" -ceq "transcript.summary")
