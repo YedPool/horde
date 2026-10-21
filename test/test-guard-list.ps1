@@ -40,7 +40,7 @@ foreach ($want in @("test-host-names", "test-mutation-specs", "test-function-nam
 
 
 Write-Host "== the shells"
-Check ((Get-HordeGuardEnvironment -Shell "5.1" -MachinePsModulePath "C:\m1;C:\m2").PSModulePath -ceq "C:\m1;C:\m2") "5.1 is given the machine value of PSModulePath"
+Check ((Get-HordeGuardEnvironment -Shell "5.1" -MachinePsModulePath "C:\m1;C:\m2")["PSModulePath"] -ceq "C:\m1;C:\m2") "5.1 is given the machine value of PSModulePath"
 Check ((Get-HordeGuardEnvironment -Shell "5.1" -MachinePsModulePath "").Count -eq 0) "  and none when the machine has none"
 Check ((Get-HordeGuardEnvironment -Shell "7" -MachinePsModulePath "C:\m1").Count -eq 0) "PowerShell 7 is given none: it builds its own"
 Check (((@(Get-HordeGuardShells) | ForEach-Object { $_.key }) -join ",") -ceq "5.1,7") "the guards run in 5.1 first, then 7"
