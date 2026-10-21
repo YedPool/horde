@@ -293,7 +293,8 @@ function Invoke-HordeFleetLotBackfill {
         # Directory.Move refuses a target that exists (Move-Item would put the staging folder INSIDE it), so a folder claimed
         # between the check and now is refused, not merged.
         try {
-            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -ErrorAction Stop }
+            # Directory.Delete without recursion: throws on a folder that is not empty, and never asks to confirm (Remove-Item can).
+            if (Test-Path -LiteralPath $dir) { [System.IO.Directory]::Delete($dir, $false) }
             [System.IO.Directory]::Move($stage, $dir)
         } catch {
             Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
@@ -382,8 +383,8 @@ function Invoke-HordeFleetWakeLot {
                     [void]$outcomes.Add([pscustomobject]@{ sessionId = $sid; label = $lab; outcome = "failed"; reason = ("the wake stopped on an error: " + $err.Exception.Message) })
                 }
                 $recordable = @($outcomes | Where-Object { @("woken", "still-awake", "failed", "held", "asleep") -ccontains ("" + $_.outcome) })
-                try { [void](Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes $recordable -NewIds (Get-HordeFleetWokenAs -Hid $hid -HordeHome $HordeHome)) }
-                catch { throw ($err.Exception.Message + " (and the wake could not be recorded: " + $_.Exception.Message + ")") }
+                if ($recordable.Count -gt 0) { try { [void](Write-HordeFleetWake -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $hid) -LotId ("" + $read.value.lot.id) -At $requestedAt -ById $By -Outcomes $recordable -NewIds (Get-HordeFleetWokenAs -Hid $hid -HordeHome $HordeHome)) }
+                catch { throw ($err.Exception.Message + " (and the wake could not be recorded: " + $_.Exception.Message + ")") } }
             }
             throw $err
         }
