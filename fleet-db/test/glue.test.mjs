@@ -76,7 +76,7 @@ const status = (w, row) => {
 
 // --- migration 3 -------------------------------------------------------------------------------------
 
-test('a version 2 file holding rows is brought to version 3, every row in the registry at its own time', () => {
+test('a version 2 file holding rows is brought to the current version, every row in the registry at its own time', () => {
   const file = tempFile();
   const raw = new DatabaseSync(file);
   raw.exec(MIGRATIONS[0]);
@@ -92,8 +92,8 @@ test('a version 2 file holding rows is brought to version 3, every row in the re
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(SCHEMA_VERSION, 3);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(SCHEMA_VERSION, 4);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const rows = db.prepare('SELECT id, kind, created_at FROM entity ORDER BY created_at').all().map((r) => ({ ...r }));
   assert.deepEqual(rows, [{ id: node, kind: 'node', created_at: 11 }, { id: orc, kind: 'orc', created_at: 22 },
     { id: uuid(9), kind: 'session', created_at: 33 }, { id: t, kind: 'task', created_at: 44 }]);

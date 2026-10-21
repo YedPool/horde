@@ -162,7 +162,7 @@
            Find = 'const repo = m[1].toLowerCase();'
            Replace = 'const repo = m[1];' }
         @{ Name = "pr-checked-time-is-now"
-           Find = 'checked = firstNamed.get(m.key) ?? mergedAt ?? 0;'
+           Find = 'checked = firstNamed.get(m.key) ?? mergedAt ?? Date.now();'
            Replace = 'checked = Date.now();' }
         @{ Name = "pr-first-named-is-the-last"
            Find = '!(firstNamed.get(ref.key) <= t)'
