@@ -335,6 +335,21 @@ test('an equal list writes a new confirm for the live snapshot and no new snapsh
   assert.deepEqual([live.published_at, live.confirmed_at], [T0, T0 + 9000]);
 });
 
+test('an equal list at an earlier time than the live one is unchanged and confirms at the live published_at', () => {
+  const w = world();
+  const a = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 1000, items: list(w) });
+  const b = publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  assert.deepEqual(b, { id: a.id, unchanged: true, confirmedAt: T0 + 1000 });
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 1);
+  assert.equal(confirms(w.db, w.f).length, 1, 'the new-list confirm is already at that time');
+  // A list from before migration 5 has no confirm: the earlier equal publish adds one, at the list's published_at.
+  w.db.exec('DROP TRIGGER decisions_confirm_no_delete');
+  w.db.exec('DELETE FROM decisions_confirm');
+  const c = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 - 5, items: list(w) });
+  assert.equal(c.confirmedAt, T0 + 1000);
+  assert.deepEqual(confirms(w.db, w.f).map((x) => x.confirmed_at), [T0 + 1000]);
+});
+
 test('an equal list in the same millisecond as the last confirm adds nothing', () => {
   const w = world();
   publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });

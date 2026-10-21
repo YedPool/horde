@@ -143,15 +143,16 @@ export function publishDecisions(db, { orcId, sessionId = null, publishedAt = Da
   const list = items.map(normalItem);
   const hash = sha256(list);
   // Every accepted publish leaves a confirm at its time (T-0299); a second at the same millisecond is a no-op.
-  const confirm = (snapshotId) => {
+  const confirm = (snapshotId, at) => {
     db.prepare('INSERT INTO decisions_confirm (id, orc_id, snapshot_id, session_id, confirmed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (snapshot_id, confirmed_at) DO NOTHING')
-      .run(mint(publishedAt), orcId, snapshotId, sessionId, publishedAt);
+      .run(mint(at), orcId, snapshotId, sessionId, at);
     return db.prepare('SELECT confirmed_at FROM decisions_live WHERE orc_id = ?').get(orcId).confirmed_at;
   };
   const publish = () => {
-    const live = db.prepare('SELECT id, sha256 FROM decisions_live WHERE orc_id = ?').get(orcId);
+    const live = db.prepare('SELECT id, sha256, published_at FROM decisions_live WHERE orc_id = ?').get(orcId);
     if (live && live.sha256 === hash) {
-      const confirmedAt = confirm(live.id);
+      // A clock stepped back must not lose the confirm: it is never earlier than the list it confirms.
+      const confirmedAt = confirm(live.id, Math.max(publishedAt, live.published_at));
       return { id: live.id, unchanged: true, confirmedAt };
     }
     if (live && db.prepare('SELECT published_at FROM decisions_snapshot WHERE id = ?').get(live.id).published_at >= publishedAt) {
@@ -164,7 +165,7 @@ export function publishDecisions(db, { orcId, sessionId = null, publishedAt = Da
       .run(id, orcId, publishedAt, sessionId, list.length, hash);
     const put = db.prepare('INSERT INTO decisions_snapshot_item (snapshot_id, position, question_id, text, recommendation, importance, blocks) VALUES (?, ?, ?, ?, ?, ?, ?)');
     for (const it of list) put.run(id, it.position, it.question_id, it.text, it.recommendation, it.importance, it.blocks);
-    return { id, unchanged: false, confirmedAt: confirm(id) };
+    return { id, unchanged: false, confirmedAt: confirm(id, publishedAt) };
   };
   return db.isTransaction ? publish() : inWrite(db, publish);
 }

@@ -79,22 +79,25 @@
            Find = '.run(id, orcId, publishedAt, sessionId, list.length, hash);'
            Replace = '.run(id, orcId, publishedAt, sessionId, list.length + 1, hash);' }
         @{ Name = "new-list-confirm-not-written"
-           Find = 'confirmedAt: confirm(id) }'
+           Find = 'confirmedAt: confirm(id, publishedAt) }'
            Replace = 'confirmedAt: publishedAt }' }
         @{ Name = "equal-list-confirm-not-written"
-           Find = 'const confirmedAt = confirm(live.id);'
+           Find = 'const confirmedAt = confirm(live.id, Math.max(publishedAt, live.published_at));'
            Replace = 'const confirmedAt = publishedAt;' }
         @{ Name = "confirm-loses-session"
-           Find = 'snapshotId, sessionId, publishedAt)'
-           Replace = 'snapshotId, null, publishedAt)' }
+           Find = 'snapshotId, sessionId, at)'
+           Replace = 'snapshotId, null, at)' }
         @{ Name = "confirm-time-off"
-           Find = 'snapshotId, sessionId, publishedAt)'
-           Replace = 'snapshotId, sessionId, publishedAt + 1)' }
+           Find = 'snapshotId, sessionId, at)'
+           Replace = 'snapshotId, sessionId, at + 1)' }
         @{ Name = "confirm-conflict-unnamed"
            Find = ' ON CONFLICT (snapshot_id, confirmed_at) DO NOTHING'
            Replace = '' }
         @{ Name = "confirmed-at-returns-published"
            Find = '.get(orcId).confirmed_at;'
            Replace = '.get(orcId).published_at;' }
+        @{ Name = "equal-list-confirm-without-max"
+           Find = 'confirm(live.id, Math.max(publishedAt, live.published_at))'
+           Replace = 'confirm(live.id, publishedAt)' }
     )
 }
