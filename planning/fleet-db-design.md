@@ -170,3 +170,43 @@ The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatus
   `ConvertFrom-HordeFleetStatusBytes`, so a rendered card that the reader refuses fails the build;
 - lane F's Progress page lists cards only for registry Orcs today, and for live `orc` rows once
   fleet.db holds them.
+
+## Importer (phase 1c part 1)
+
+`fleet-db/import.mjs`, `importFleet(db, sources, { dryRun })`, run by `horde db import` with explicit paths
+(`-Ledger`, `-PrCache`, `-Changelog`, `-Cards`, `-ThrallCard`, `-Registry`, `-DryRun`; no path is ever defaulted
+to the real files). Each source is optional. All files are read first; then one `inWrite` transaction
+runs node, orcs, sessions, PR cache, ledger, changelog and orc_status in that order, so a failure
+leaves the database as it was and a dry run rolls the same work back. Decisions and the parking lots
+are the next part.
+
+Idempotent: state rows (node, orc, session, task, pr) are found by their label and kept as they are
+(never renamed, never refreshed); history rows go through `appendHistory` with `backfill = 1`, so the
+second import of the same sources adds 0 rows to every table. Ids of history rows are minted from the
+row's own time. The report counts, per table, rows added and rows already there.
+
+| Source | Becomes | Mapping |
+|---|---|---|
+| node | one `node` row | this PC's hostname, `is_authority` 1, only if the database has no node; sessions use the existing authority node |
+| cards (`<folder>/status.txt`) | `orc` + `orc_status` | letter = the `orc:` line, `lane_dir` = folder name, name = the `lane:` text, rank orc. Read by the reader's rules (6-7 lines, ASCII, no BOM, one capital letter): an invalid card (`orc: F1`) makes no Orc and is reported. Existing rows are found by lane_dir or letter and kept. One status row per card: doing; blocked `no` (any case) is NULL, `none` and any sentence stay as words; `at` = the file's mtime |
+| thrall card | the Thrall's `orc` (rank thrall, lane_dir `thrall`) + its status | an existing live Thrall row is kept |
+| registry (`<id>.json`) | `session` | BOM stripped; id lower-cased; rank from `rank`, else role (master = thrall, orchestrator = orc), else unknown; Orc from the label letter for an Orc's own seat, else the owner letter (a label like C3 gives C); times to UTC ms (seven fraction digits read, the US-locale `MM/DD/YYYY` firstSeen read as UTC and flagged); pid only with its start time; a parent or resumed-from missing from the registry gets a stub row (rank unknown, times = the child's first_seen); freshest session takes an Orc's one live seat, a second live one is kept with rank unknown and reported |
+| pr-cache | `pr` | repo, number, state (OPEN/CLOSED/MERGED), merged_at from `mergedAt`, merge_sha only if 40 hex; MERGED with no time is kept open and reported |
+| ledger | `task`, `task_event`, `task_pr`, `pr` | tasks by key, title/source/parent from the first `opened`, parents created first. Every line is one event, sorted by time (Z and +00:00 alike; file order breaks ties); `by` is `by_orc_id` for a known letter, else `by_text`; opened lane and handed `to` map letters or lane folders to Orcs; `waiting on` keeps the words in `on_text` with the class in `on_kind` (founder; `M`, a letter or `lane:X` = orc; device, merge, push, gate, service = external; anything else = other); superseded `to` = replacement task. The ledger's `merged` flag is not copied. A `pr` is linked through `task_pr` (linked_by backfill, at the line's time); a PR the cache lacks is made open and reported |
+| changelog | `changelog_entry`, `tag`, `entity_tag` | legacy_id = the entry id; lane letter = orc_id, `Thrall` = the Thrall, `fleet-wide` = fleet_wide; a comma list gives the first letter as orc_id and a `lane:x` tag for every letter; task = the leading T-NNNN (suffix dropped); `corrects` = corrects_id, the original written first; an unknown kind is a note; `area` is not imported yet. An entry whose legacy id is there is kept |
+
+Refused, whole, with nothing written: a ledger or a changelog in a run when the database has no `orc` rows and
+the same run brings no usable cards. Event hashes hold Orc ids (`by_orc_id`, `to_orc_id`, `on_orc_id`), so a
+ledger imported before the Orcs exist would be written again, as other rows, by the next import that has them.
+A sub-session label (a letter and digits: C1, C13, M2) gives its lead letter's Orc for `by` (the label stays in
+`by_text`), `handed to` and `waiting on`; `analyst*` writers stay `by_text`. A `handed` with no target at all
+is reported as needing a person. Live seats are decided first, freshest session first, before any row is
+written, so a parent inserted early for its child never takes the seat; a session that loses it is kept with rank
+unknown. A time that does not parse is replaced and each replacement is reported. Two cards naming one Orc: only
+the newer is imported. Text cut to its column is reported per field. PR repo names are lower-cased, and a PR
+with no checked time takes its first ledger line's time. `--dry-run` refuses a file that needs migrating.
+
+Reported, never dropped in silence: `report.unlinked` lists, by source and reason, with a count and up to five
+examples, every row that could not be linked or read (for example `ledger: by C13 names no Orc row (kept as
+by_text): 12`). A `handed` line with no known target and a ledger line without a usable ts/task/event are the
+only lines not imported (the schema requires a target for a handing); each is in the report.
