@@ -65,7 +65,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 3, created\)') ("init creates the file at schema 3 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 4, created\)') ("init creates the file at schema 4 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -73,7 +73,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 3, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 4, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
@@ -147,6 +147,75 @@ $missing = Invoke-Db @("import", "-Ledger", (Join-Path $src "nope.jsonl")) $impE
 Check ($missing.code -ne 0 -and $missing.out -like "*ENOENT*") ("a source file that is not there is refused (" + $missing.code + ")")
 $none = Invoke-Db @("import") $impEnv
 Check ($none.code -ne 0 -and $none.out -like "*at least one source*") "import with no source is refused"
+
+Write-Host ""
+Write-Host "=== import: the decisions store, then a publish naming its question ===" -ForegroundColor Cyan
+# The fixture records are hashed by the store's own function (decisions/Rules.ps1), so a requestHash the
+# importer calls different would mean the importer's recomputation is not the store's.
+. (Join-Path $root "decisions\Rules.ps1")
+$decDir = Join-Path $src "store\decisions"
+New-Item -ItemType Directory -Path $decDir -Force | Out-Null
+function Save-DecisionRecord {
+    param([int]$Sequence, [string]$Kind, [string]$Operation, [string]$Actor, [int]$Number, $Body, $Data, [string]$At)
+    $hash = Get-HordeDecisionHash -Value ([ordered]@{ operation = $Operation; actor = $Actor; number = $Number; body = $Body })
+    $record = [ordered]@{ schemaVersion = 1; sequence = $Sequence; id = ("{0:x32}" -f $Sequence); kind = $Kind; at = $At; actor = $Actor; requestHash = $hash; data = $Data }
+    Save-Text (Join-Path $decDir ("{0:d10}.json" -f $Sequence)) (ConvertTo-Json -InputObject $record -Compress -Depth 12)
+}
+$question31 = [ordered]@{ title = "Does the fixture question import?"; kind = "yes-no"; options = @(); parts = @(); whatItIs = "A question made for this scenario."; yesMeans = "It imported."; recommendation = "yes."; group = "Fixture"; groupNote = ""; askedBy = "Orc C"; waiting = @(); files = @(); references = @(); needsSecret = $false }
+Save-DecisionRecord -Sequence 1 -Kind "question-added" -Operation "add" -Actor "warchief" -Number 0 -Body ([ordered]@{ question = $question31 }) -Data ([ordered]@{ number = 31; question = $question31 }) -At "2026-10-07T16:26:16.9667002Z"
+$said = [ordered]@{ speaker = "founder"; route = "window"; text = "yes"; wordingVersion = 1 }
+Save-DecisionRecord -Sequence 2 -Kind "message-said" -Operation "say" -Actor "founder" -Number 31 -Body $said -Data ([ordered]@{ number = 31; speaker = "founder"; route = "window"; text = "yes"; wordingVersion = 1 }) -At "2026-10-07T16:27:00.1000000Z"
+$decArgs = @("import", "-Decisions", $decDir)
+$decDry = Invoke-Db ($decArgs + "-DryRun") $impEnv
+Check ($decDry.code -eq 0 -and $decDry.out -cmatch '(?m)^question: 1 added, 0 already there\r?$' -and $decDry.out -cmatch '(?m)^answer: 1 added, 0 already there\r?$') ("a dry run says what the store would add (" + $decDry.code + ")")
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^question: 0 rows\r?$') "and wrote nothing"
+$dec1 = Invoke-Db $decArgs $impEnv
+Check ($dec1.code -eq 0 -and $dec1.out -cmatch '(?m)^question: 1 added, 0 already there\r?$' -and $dec1.out -cmatch '(?m)^answer: 1 added, 0 already there\r?$' -and $dec1.out -cmatch '(?m)^answer_extra: 1 added, 0 already there\r?$') ("the store imports: a question and its answer (" + $dec1.code + ")")
+Check ($dec1.out -notlike "*requestHash*") "and no record's requestHash differs from the one the importer recomputes (the store's own hash made them)"
+Check ($dec1.out -like "*decisions: question names no task*: 1*") "and the question that names no task is reported"
+$dec2 = Invoke-Db $decArgs $impEnv
+Check ($dec2.code -eq 0 -and $dec2.out -cmatch '(?m)^question: 0 added, 1 already there\r?$' -and $dec2.out -cmatch '(?m)^answer: 0 added, 1 already there\r?$') "a second import adds nothing"
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is still sound"
+$decWrongVerb = Invoke-Db @("check", "-Decisions", $decDir) $impEnv
+Check ($decWrongVerb.code -ne 0 -and $decWrongVerb.out -like "*-Decisions belongs to db import, not db check*") "-Decisions on another verb is refused"
+# A gap in the sequence refuses the store, whole.
+$gapDir = Join-Path $src "store-gap"
+New-Item -ItemType Directory -Path $gapDir | Out-Null
+Copy-Item -LiteralPath (Join-Path $decDir "0000000002.json") -Destination (Join-Path $gapDir "0000000002.json")
+$gap = Invoke-Db @("import", "-Decisions", $gapDir) $impEnv
+Check ($gap.code -eq 0 -and $gap.out -like "*decisions: source refused, nothing imported from it: a gap in the sequence: record 1 is not there*") "a store with a hole in its sequence is refused, whole, in words"
+# Publish: the node side of `horde decisions publish`, as the command calls it (the command itself proves the
+# calling session from the fleet's records, which this scenario has not got). The list names question 31.
+function Invoke-NodeCli {
+    param([string[]]$NodeArgs, [string]$HomeDir)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $node.Source
+    $psi.Arguments = ($NodeArgs | ForEach-Object { '"' + $_ + '"' }) -join " "
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $HomeDir
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $out = $p.StandardOutput.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ code = $p.ExitCode; out = ($out + "`n" + $errTask.Result) }
+    } finally { $p.Dispose() }
+}
+$decCli = Join-Path $root "fleet-db\decisions-cli.mjs"
+$pubOk = Join-Path $script:work "publish-31.json"
+Save-Text $pubOk '{"who":{"letter":"C"},"sessionId":"none","items":[{"questionNumber":31,"text":"Does the fixture question import?","recommendation":"yes"}]}'
+$pubBad = Join-Path $script:work "publish-99.json"
+Save-Text $pubBad '{"who":{"letter":"C"},"sessionId":"none","items":[{"questionNumber":99,"text":"A question that was never imported"}]}'
+$pBad = Invoke-NodeCli @($decCli, "publish", $pubBad) $impHome
+Check ($pBad.code -ne 0 -and $pBad.out -like "*item 1 names question 99, which is not in the decisions store*") ("CONTROL: a list naming a question that was never imported is refused (" + $pBad.code + ")")
+$pOk = Invoke-NodeCli @($decCli, "publish", $pubOk) $impHome
+Check ($pOk.code -eq 0 -and $pOk.out -cmatch 'published 1 item \(snapshot ') ("a list naming the imported question 31 is published (" + $pOk.code + ": " + $pOk.out.Trim() + ")")
+$listed = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
+Check ($listed.code -eq 0 -and $listed.out -like "*Does the fixture question import?*" -and $listed.out -like "*question 31*") ("and horde decisions published shows the line with its question number (" + $listed.code + ")")
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is sound with the list in it"
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan

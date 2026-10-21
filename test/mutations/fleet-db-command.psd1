@@ -18,8 +18,14 @@
            Find = 'if ($DryRun) { $nodeArgs += "--dry-run" }'
            Replace = 'if ($false) { $nodeArgs += "--dry-run" }' }
         @{ Name = "import-registry-not-passed"
-           Find = '"--registry" = $Registry }'
-           Replace = '"--registry" = $null }' }
+           Find = '"--registry" = $Registry;'
+           Replace = '"--registry" = $null;' }
+        @{ Name = "import-decisions-not-passed"
+           Find = '"--decisions" = $Decisions }'
+           Replace = '"--decisions" = $null }' }
+        @{ Name = "decisions-flag-accepted-on-other-verbs"
+           Find = '"Registry", "Decisions", "DryRun")'
+           Replace = '"Registry", "DryRun")' }
         @{ Name = "import-thrall-card-not-passed"
            Find = '"--thrall-card" = $ThrallCard;'
            Replace = '"--thrall-card" = $null;' }
