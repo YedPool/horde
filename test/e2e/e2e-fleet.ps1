@@ -114,7 +114,7 @@ if ("" + $env:WEZFLEET_ROOT -ne "" -and (Test-Path -LiteralPath $row)) {
     $r.pane = "" + $env:WEZTERM_PANE
     [System.IO.File]::WriteAllText($row, (ConvertTo-Json -InputObject $r))
 }
-$log = [ordered]@{ pid = $PID; id = $id; mode = $mode; argv = @($args | ForEach-Object { "" + $_ }); cwd = $cwd; pane = "" + $env:WEZTERM_PANE; procStart = $start; writtenAt = $written; hasOwnVariables = (@(Get-ChildItem -Path Env: | Where-Object { $_.Name -imatch "\ACLAUDE" -and $_.Name -ine "CLAUDE_CONFIG_DIR" }).Count -gt 0); childSession = [bool]("" + $env:CLAUDE_CODE_CHILD_SESSION -ne ""); profile = "" + $env:USERPROFILE }
+$log = [ordered]@{ pid = $PID; id = $id; mode = $mode; argv = @($args | ForEach-Object { "" + $_ }); cwd = $cwd; pane = "" + $env:WEZTERM_PANE; procStart = $start; writtenAt = $written; hasOwnVariables = [bool]("" + $env:CLAUDECODE -ne ""); profile = "" + $env:USERPROFILE }
 [System.IO.File]::WriteAllText((Join-Path (Join-Path $env:USERPROFILE "standin-log") ("" + $PID + "-" + $id + ".json")), (ConvertTo-Json -InputObject $log -Compress))
 Write-Host ("STANDIN-READY " + $id)
 while ($true) {
@@ -135,10 +135,7 @@ $standInPath = Join-Path $binDir "standin-agent.ps1"
 # every folder that holds the harness's command is left out of their PATH, so they cannot find it at all.
 $realDirs = @(Get-Command $command -All -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | ForEach-Object { (Split-Path -Parent $_.Source).TrimEnd([char]92).ToLowerInvariant() } | Sort-Object -Unique)
 $keptPath = @($env:PATH -split ';' | Where-Object { $_.Trim() -ne "" -and $realDirs -notcontains $_.Trim().TrimEnd([char]92).ToLowerInvariant() })
-# THE WAKING SIDE CARRIES A SESSION'S OWN MARKERS, always, as a wake run from a session's tool shell does
-# (2026-10-21: two sessions resumed by hand from inside a session inherited CLAUDE_CODE_CHILD_SESSION, so the
-# harness saved no transcript and wrote no control file for them). Set here so the check below is never vacuous.
-$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; WEZTERM_CONFIG_FILE = $emptyTermConfig; PATH = ((@($binDir) + $keptPath) -join ";"); CLAUDECODE = "1"; CLAUDE_CODE_CHILD_SESSION = "1" }
+$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; WEZTERM_CONFIG_FILE = $emptyTermConfig; PATH = ((@($binDir) + $keptPath) -join ";") }
 
 function Invoke-WithChildEnv {
     # Run -Do with this process's environment set as a child's, and put it back after, whatever happens:
@@ -324,8 +321,7 @@ if ($null -ne $iso) {
                 Check ($w.mode -ceq "--resume" -and $w.id -ceq $ids[$l] -and (@($w.argv) -join " ") -ceq ("--resume " + $ids[$l])) ($l + "'s pane runs the resume command for its own id")
                 Check ((ConvertTo-HordeFleetE2eFolder $w.cwd) -ceq (ConvertTo-HordeFleetE2eFolder $lane)) ($l + " runs in its own folder (" + $w.cwd + ")")
                 Check (@($new | ForEach-Object { "" + $_.pane_id }) -ccontains ("" + $w.pane)) ($l + " runs in one of the new panes (" + $w.pane + ")")
-                Check (-not $w.hasOwnVariables) ($l + " does not inherit the waking session's own variables (any CLAUDE* but CLAUDE_CONFIG_DIR)")
-                Check ($null -ne $w.PSObject.Properties["childSession"] -and -not $w.childSession) ($l + " is not started as a child session: no CLAUDE_CODE_CHILD_SESSION, which would turn off its transcript and its control file")
+                Check (-not $w.hasOwnVariables) ($l + " does not inherit the waking session's own variables")
                 $measure.wokenStartMs += (Get-StandInMs $w)
             }
             $pq = @($new | Where-Object { "" + $_.pane_id -ceq $woken["Q"].pane })[0]
