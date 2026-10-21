@@ -876,6 +876,33 @@ function readDecisions(dir, rep) {
   return found;
 }
 
+// The keys each kind of record is known to carry. A key outside the set is not stored anywhere; it is reported
+// by kind and key, so a field a later version of the store adds is seen the day it appears.
+const KNOWN_ENVELOPE = ['schemaVersion', 'sequence', 'id', 'kind', 'at', 'actor', 'requestHash', 'data'];
+const KNOWN_QUESTION = ['title', 'kind', 'options', 'parts', 'whatItIs', 'yesMeans', 'recommendation', 'group', 'groupNote', 'askedBy', 'waiting', 'files', 'references', 'needsSecret'];
+const KNOWN_DATA = {
+  'question-added': ['number', 'question', 'importance', 'blocks', 'followsUp', 'needsPasskey'],
+  'message-said': ['number', 'speaker', 'route', 'text', 'wordingVersion', 'evidence', 'signedBy', 'part', 'asks', 'act'],
+  'answer-routed': ['number', 'answer', 'purpose', 'seat', 'label', 'sessionId', 'resolved', 'notice', 'analyst', 'note'],
+  'question-closed': ['number', 'outcome', 'closedBySeat'],
+  'question-ranked': ['number', 'importance', 'blocks'],
+  'question-updated': ['number', 'changes'],
+  'question-reopened': ['number', 'reason'],
+  'question-acked': ['number', 'by', 'answer'],
+  'answer-change-replied': ['number', 'by', 'answer', 'reply', 'why'],
+  'messages-read': ['reader', 'upTo'],
+};
+function reportUnknownKeys(rep, rec) {
+  const extra = (obj, known, label) => {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const k of Object.keys(obj)) if (!known.includes(k)) rep.unlink('decisions', 'unknown key ' + label + '.' + k.slice(0, 40) + ' in ' + String(rec.kind).slice(0, 40) + ' records (not stored)', 'record ' + rec.sequence);
+  };
+  extra(rec, KNOWN_ENVELOPE, 'envelope');
+  if (KNOWN_DATA[rec.kind] === undefined) return;
+  extra(rec.data, KNOWN_DATA[rec.kind], 'data');
+  if (rec.kind === 'question-added' && rec.data !== null && typeof rec.data === 'object') extra(rec.data.question, KNOWN_QUESTION, 'data.question');
+}
+
 const isText = (v) => typeof v === 'string';
 const asList = (v) => (Array.isArray(v) ? v : []);
 
@@ -897,6 +924,7 @@ function stepDecisions(ctx, data) {
     if (!DECISION_KINDS.includes(rec.kind)) { rep.unlink('decisions', 'kind ' + String(rec.kind).slice(0, 40) + ' has no place in fleet.db (record not imported)', where); continue; }
     const d = rec.data;
     if (d === null || typeof d !== 'object' || Array.isArray(d)) { rep.unlink('decisions', 'record has no data object (record not imported)', where); continue; }
+    reportUnknownKeys(rep, rec);
     const want = recomputeRequestHash(rec);
     if (want === null || want !== rec.requestHash) rep.unlink('decisions', 'requestHash is not the one recomputed from the record (record imported as it stands)', where);
     const actor = isText(rec.actor) ? rec.actor.slice(0, 40) : 'unknown';
@@ -927,13 +955,10 @@ function stepDecisions(ctx, data) {
     } else if (rec.kind === 'question-updated') {
       foldUpdate(st, d.changes);
     } else if (rec.kind === 'question-acked') {
-      // An acknowledgement closes an open question in the rules (Step-HordeDecisionAcked); fleet.db derives
-      // closure from closed events alone, so this is a difference by construction and is reported as one.
-      const said = typeof d.answer === 'number' ? msg.get(d.answer) : undefined;
-      if (st.state === 'open' && said !== undefined && said.founderAnswer) {
-        st.state = 'closed';
-        rep.unlink('decisions', 'question-acked closes the question in the rules, but fleet.db closes only on a closed event (no closed event made)', where);
-      }
+      // An acknowledgement closes an open question in the rules (Step-HordeDecisionAcked), and in fleet.db's
+      // views (migration 4): the store writes an ack only when it applied.
+      if (st.state === 'closed') rep.unlink('decisions', 'question-acked on a question already closed (the rules would not apply it)', where);
+      st.state = 'closed';
     }
     const kind = DECISION_EVENT_KIND[rec.kind];
     const json = {};
@@ -981,7 +1006,40 @@ function addQuestion(ctx, q, known, rec, at, where) {
   if (q.has(d.number)) { rep.unlink('decisions', 'a second question-added for one number (the first kept)', where); return; }
   const st = { id: null, state: 'open', wording: 1, passkey: d.needsPasskey === true, fields: { ...f }, thread: [] };
   q.set(d.number, st);
-  if (known.has(d.number)) { st.id = known.get(d.number); rep.count('question', false); return; }
+  if (known.has(d.number)) {
+    st.id = known.get(d.number);
+    rep.count('question', false);
+    fillQuestion(ctx, st.id, questionColumns(ctx, new Report(), q, known, rec, where));
+    return;
+  }
+  const c = questionColumns(ctx, rep, q, known, rec, where);
+  rep.unlink('decisions', 'question names no task (task_id empty, backfill)', 'question ' + d.number);
+  const id = newId(at);
+  db.prepare(`INSERT INTO question (id, number, task_id, asked_by_orc_id, follows_up_id, kind, title, body, needs_passkey, asked_at, decisions_seq, backfill,
+      asked_by_text, yes_means, recommendation, group_name, group_note, importance, blocks, detail_json)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, d.number, c.asked_by_orc_id, c.follows_up_id,
+    c.kind, c.title, c.body, st.passkey ? 1 : 0, at, rec.sequence,
+    c.asked_by_text, c.yes_means, c.recommendation, c.group_name, c.group_note, c.importance, c.blocks, c.detail_json);
+  st.id = id;
+  known.set(d.number, id);
+  rep.count('question', true);
+}
+
+// The columns migration 4 added, on a question a version-3 database already holds: only a column that is NULL
+// is filled, and a value that is there is never overwritten.
+const FILLED_LATER = ['asked_by_text', 'yes_means', 'recommendation', 'group_name', 'group_note', 'importance', 'blocks', 'detail_json'];
+function fillQuestion(ctx, id, c) {
+  for (const col of FILLED_LATER) {
+    if (c[col] === null) continue;
+    ctx.db.prepare('UPDATE question SET ' + col + ' = ? WHERE id = ? AND ' + col + ' IS NULL').run(c[col], id);
+  }
+}
+
+// What a question-added record says, as the columns it fills. rep gets the reports (a throwaway for a question
+// that is already there).
+function questionColumns(ctx, rep, q, known, rec, where) {
+  const d = rec.data;
+  const f = d.question;
   const asker = askerOf(ctx, f.askedBy);
   let askedText = null;
   if (asker.orcId === null) {
@@ -993,20 +1051,15 @@ function addQuestion(ctx, q, known, rec, at, where) {
     follows = q.get(d.followsUp)?.id ?? known.get(d.followsUp) ?? null;
     if (follows === null) rep.unlink('decisions', 'followsUp names a question that is not earlier in the journal (no link)', where);
   }
-  rep.unlink('decisions', 'question names no task (task_id empty, backfill)', 'question ' + d.number);
   const detail = canonical({ options: asList(f.options), parts: asList(f.parts), waiting: asList(f.waiting), files: asList(f.files), references: asList(f.references), needsSecret: f.needsSecret === true });
   const text = (v, max, field) => (isText(v) ? fit(rep, 'decisions', field, v, max, where) : null);
-  const id = newId(at);
-  db.prepare(`INSERT INTO question (id, number, task_id, asked_by_orc_id, follows_up_id, kind, title, body, needs_passkey, asked_at, decisions_seq, backfill,
-      asked_by_text, yes_means, recommendation, group_name, group_note, importance, blocks, detail_json)
-    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, d.number, asker.orcId, follows,
-    text(f.kind, 40, 'kind'), text(f.title, 400, 'title'), isText(f.whatItIs) && f.whatItIs !== '' ? f.whatItIs : null, st.passkey ? 1 : 0, at, rec.sequence,
-    askedText, isText(f.yesMeans) && f.yesMeans !== '' ? f.yesMeans : null, isText(f.recommendation) && f.recommendation !== '' ? f.recommendation : null,
-    isText(f.group) && f.group !== '' ? text(f.group, 400, 'group') : null, isText(f.groupNote) && f.groupNote !== '' ? f.groupNote : null,
-    isText(d.importance) ? text(d.importance, 40, 'importance') : null, isText(d.blocks) ? text(d.blocks, 40, 'blocks') : null, detail);
-  st.id = id;
-  known.set(d.number, id);
-  rep.count('question', true);
+  return {
+    asked_by_orc_id: asker.orcId, follows_up_id: follows, kind: text(f.kind, 40, 'kind'), title: text(f.title, 400, 'title'),
+    body: isText(f.whatItIs) && f.whatItIs !== '' ? f.whatItIs : null, asked_by_text: askedText,
+    yes_means: isText(f.yesMeans) && f.yesMeans !== '' ? f.yesMeans : null, recommendation: isText(f.recommendation) && f.recommendation !== '' ? f.recommendation : null,
+    group_name: isText(f.group) && f.group !== '' ? text(f.group, 400, 'group') : null, group_note: isText(f.groupNote) && f.groupNote !== '' ? f.groupNote : null,
+    importance: isText(d.importance) ? text(d.importance, 40, 'importance') : null, blocks: isText(d.blocks) ? text(d.blocks, 40, 'blocks') : null, detail_json: detail,
+  };
 }
 
 // SHA-256 of a signing value, so the row says a key signed without saying which key.

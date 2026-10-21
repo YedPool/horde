@@ -228,14 +228,15 @@ test('a message after closing is reported as the rules fold it, and answer_now a
   assert.equal(now(22).open_at_arrival, 0);
 });
 
-test('a message said to an earlier wording is counted, and the ack that closes in the rules is reported', () => {
+test('a message said to an earlier wording is counted, and an ack closes its question with no closed event made up', () => {
   const { db } = fresh();
   const r = importAll(db, writeJournal(JOURNAL()));
   assert.equal(unlinked(r, 'said to an earlier wording').count, 1);
   assert.deepEqual(unlinked(r, 'said to an earlier wording').examples, ['record 12']);
-  const ack = unlinked(r, 'question-acked closes the question in the rules');
-  assert.equal(ack.count, 1);
-  assert.equal(count(db, 'question_event'), 8, 'and no closed event was made up for it');
+  assert.equal(unlinked(r, 'question-acked closes'), undefined, 'the ack is no longer a reported difference: the views close on it');
+  assert.equal(one(db, 'SELECT n.state FROM question_now n WHERE n.number = 2').state, 'closed', 'question 2 has an ack and no closed event, and reads closed');
+  assert.equal(one(db, "SELECT count(*) AS n FROM question_event e JOIN question q ON q.id = e.question_id WHERE q.number = 2 AND e.kind = 'closed'").n, 0);
+  assert.equal(count(db, 'question_event'), 8);
 });
 
 test('a passkey question: chat words are not an answer in the rules, an unsigned message is not in the schema, and the sealed key id is not the key id', () => {
@@ -425,4 +426,67 @@ test('migration 4: a version 3 file with a question keeps it, gains the new colu
   assert.throws(() => db.prepare("UPDATE decisions_read SET up_to_seq = 4").run(), /append-only/);
   assert.throws(() => db.prepare('DELETE FROM decisions_read').run(), /append-only/);
   assert.deepEqual(findProblems(db), []);
+});
+
+test('a message after an ack arrived after closing, in answer_now and in the fold (no difference reported)', () => {
+  const { db } = fresh();
+  const records = [
+    rec(1, 'question-added', { number: 1, question: Q('Acked?') }),
+    rec(2, 'message-said', { number: 1, speaker: 'founder', route: 'window', text: 'yes', wordingVersion: 1 }, { actor: 'founder' }),
+    rec(3, 'question-acked', { number: 1, by: 'F', answer: 2 }, { actor: 'orc' }),
+    rec(4, 'message-said', { number: 1, speaker: 'founder', route: 'window', text: 'after the ack', wordingVersion: 1 }, { actor: 'founder' }),
+  ];
+  const r = importAll(db, writeJournal(records));
+  assert.equal(one(db, 'SELECT state FROM question_now').state, 'closed');
+  const at = (seq) => one(db, 'SELECT n.open_at_arrival FROM answer_now n JOIN answer a ON a.id = n.id WHERE a.decisions_seq = ?', seq).open_at_arrival;
+  assert.deepEqual([at(2), at(4)], [1, 0]);
+  assert.equal(r.unlinked.filter((u) => /answer_now says/.test(u.reason)).length, 0);
+  assert.equal(count(db, 'question_event'), 1);
+});
+
+test('migration 4 on a version 3 file: a question already there gets only its empty new columns filled, never overwritten', () => {
+  const file = path.join(tempDir(), 'fleet.db');
+  const raw = new DatabaseSync(file);
+  for (let i = 0; i < 3; i++) raw.exec(MIGRATIONS[i]);
+  raw.exec('PRAGMA user_version = 3');
+  raw.prepare("INSERT INTO question (id, number, kind, title, asked_at, backfill) VALUES ('01J0000000000000000000000Q', 1, 'yes-no', 'old title', 5, 1)").run();
+  raw.close();
+  const db = openStore(file);
+  handles.push(db);
+  db.prepare("UPDATE question SET importance = 'kept', yes_means = 'my own words'").run();
+  const r = importAll(db, writeJournal(JOURNAL()));
+  const q = one(db, 'SELECT title, importance, yes_means, recommendation, group_name, blocks, detail_json, asked_by_text FROM question WHERE number = 1');
+  assert.equal(q.title, 'old title', 'columns that existed are left alone');
+  assert.equal(q.importance, 'kept', 'a value that is there is not overwritten (the journal says high)');
+  assert.equal(q.yes_means, 'my own words');
+  assert.equal(q.recommendation, 'yes.', 'an empty column is filled');
+  assert.equal(q.group_name, 'G');
+  assert.equal(q.blocks, 'all');
+  assert.ok(q.detail_json.includes('"parts"'));
+  assert.equal(r.tables.question.existing, 1);
+  assert.equal(r.tables.question.added, 3);
+  assert.equal(unlinked(r, 'question names no task').count, 3, 'and no report for the question that was already there');
+  assert.deepEqual(findProblems(db), []);
+});
+
+test('a key no importer knows is reported by kind and key, with counts, and the record is still imported', () => {
+  const { db } = fresh();
+  const records = JOURNAL();
+  records[0] = rec(1, 'question-added', { number: 1, question: Q('Ship it?', { colour: 'red' }), importance: 'high', blocks: 'all', mood: 'good' });
+  records[3] = rec(4, 'message-said', { ...records[3].data, mood: 'ok' }, { actor: 'founder' });
+  records[4] = rec(5, 'message-said', { ...records[4].data, mood: 'ok' }, { actor: 'founder' });
+  const bad = rec(8, 'answer-routed', { ...records[7].data });
+  bad.extra = 1;
+  records[7] = bad;
+  const r = importAll(db, writeJournal(records));
+  const key = (s) => unlinked(r, s);
+  assert.equal(key('unknown key data.mood in message-said records').count, 2);
+  assert.deepEqual(key('unknown key data.mood in message-said records').examples, ['record 4', 'record 5']);
+  assert.equal(key('unknown key data.mood in question-added records').count, 1);
+  assert.equal(key('unknown key data.question.colour in question-added records').count, 1);
+  assert.equal(key('unknown key envelope.extra in answer-routed records').count, 1);
+  assert.equal(count(db, 'question'), 4);
+  // CONTROL: the clean fixture reports none.
+  const { db: db2 } = fresh();
+  assert.equal(importAll(db2, writeJournal(JOURNAL())).unlinked.filter((u) => u.reason.includes('unknown key')).length, 0);
 });

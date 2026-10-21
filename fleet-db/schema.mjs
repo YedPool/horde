@@ -768,6 +768,25 @@ export const MIGRATIONS = [
     decisions_seq INTEGER NOT NULL UNIQUE
   ) STRICT;
   ${appendOnly('decisions_read')}
+
+  -- An acknowledgement closes the question it names (decisions/Rules.ps1 Step-HordeDecisionAcked: the Orc that
+  -- asked has the answer). So 'acked' counts with 'closed' in both views; no closed event is made up for it.
+  DROP VIEW answer_now;
+  DROP VIEW question_now;
+  CREATE VIEW question_now AS
+  SELECT qn.id, qn.number, qn.task_id, qn.asked_by_orc_id, qn.title, qn.asked_at,
+    CASE (SELECT e.kind FROM question_event e WHERE e.question_id = qn.id
+       AND e.kind IN ('closed', 'reopened', 'acked') ORDER BY e.at DESC, e.id DESC LIMIT 1)
+      WHEN 'closed' THEN 'closed' WHEN 'acked' THEN 'closed' ELSE 'open' END AS state
+  FROM question qn;
+  CREATE VIEW answer_now AS
+  SELECT a.id, a.question_id, a.at, a.part, a.signed_by, a.replaces_answer_id,
+    CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,
+    CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0
+      WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes
+  FROM answer a JOIN question qn ON qn.id = a.question_id;
   `,
 ];
 

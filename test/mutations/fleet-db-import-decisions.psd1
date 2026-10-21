@@ -53,9 +53,6 @@
         @{ Name = "decisions-resolved-without-session"
            Find = 'const resolved = claimed && sessionId !== null ? 1 : 0;'
            Replace = 'const resolved = claimed ? 1 : 0;' }
-        @{ Name = "decisions-ack-closure-not-reported"
-           Find = 'rep.unlink(''decisions'', ''question-acked closes the question in the rules, but fleet.db closes only on a closed event (no closed event made)'', where);'
-           Replace = 'void where;' }
         @{ Name = "decisions-unknown-kind-silent"
            Find = 'rep.unlink(''decisions'', ''kind '' + String(rec.kind).slice(0, 40) + '' has no place in fleet.db (record not imported)'', where); continue;'
            Replace = 'continue;' }
@@ -86,5 +83,17 @@
         @{ Name = "decisions-nit-pr-without-time-is-1970"
            Find = 'checked = firstNamed.get(m.key) ?? mergedAt ?? Date.now();'
            Replace = 'checked = firstNamed.get(m.key) ?? mergedAt ?? 0;' }
+        @{ Name = "decisions-fill-overwrites-existing"
+           Find = '= ? WHERE id = ? AND '' + col + '' IS NULL'''
+           Replace = '= ? WHERE id = ?''' }
+        @{ Name = "decisions-existing-question-not-filled"
+           Find = 'fillQuestion(ctx, st.id, questionColumns(ctx, new Report(), q, known, rec, where));'
+           Replace = 'void 0;' }
+        @{ Name = "decisions-unknown-key-silent"
+           Find = 'if (!known.includes(k)) rep.unlink('
+           Replace = 'if (false) rep.unlink(' }
+        @{ Name = "decisions-ack-not-imported"
+           Find = 'question-acked on a question already closed (the rules would not apply it)'', where);'
+           Replace = 'question-acked on a question already closed (the rules would not apply it)'', where); return;' }
     )
 }

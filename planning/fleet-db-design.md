@@ -259,10 +259,7 @@ counts - it asks, has no act, arrived while open, and is not chat words under a 
 latest earlier answer that counts to the same part). After the write, every message is compared with
 `answer_now`: arrival and authorization. Every difference is a line in the report. The differences that can arise
 by construction: a message in the same millisecond as the close that follows it (the schema counts the close as
-before); an acknowledgement, which closes an open question in the rules but is no `closed` event (reported, and no
-closed event is made up; this fold closes on an ack when the question is open and the ack names his answer that
-counts, a simplification of `Step-HordeDecisionAcked`, which also needs the asker and the standing answer); an
-unsigned phone answer under a passkey question (the schema calls it unauthorized, the rules do not). A message said
+before); an unsigned phone answer under a passkey question (the schema calls it unauthorized, the rules do not). A message said
 to an earlier wording has no flag in the schema: it is counted in the report and kept as an answer.
 
 **Parts.** A parts question is answered part by part, one `message-said` per part. The schema keeps a part as one
@@ -277,6 +274,18 @@ because those are hashed history: the hash is of every column, so a new column w
 before it recomputes (the phase 3 diff). `question` is state, not history, so it takes plain columns. Current
 importance, blocks and group are derived from the ranked and updated events; the question row keeps what was
 first asked.
+
+**Acknowledgements close.** `Step-HordeDecisionAcked` closes an open question when the Orc that asked has the
+answer. Migration 4 therefore recreates `question_now` and `answer_now` so that an `acked` event closes a
+question as a `closed` event does (a later `reopened` still opens it); no closed event is made up. The store
+writes an ack only when the rules applied it, so the fold closes on every ack (an ack on a closed question is
+reported). Messages after an ack are therefore `open_at_arrival` 0, as the rules say.
+
+**A question imported before migration 4** (a version-3 database already holding it) gets the new columns that are
+NULL filled from the journal, one `UPDATE ... WHERE column IS NULL` per column; a value that is there is never
+overwritten. **Unknown keys**: every record's top-level, `data` and `data.question` keys are compared with the
+known set, and an extra key is reported by kind and key with a count (`unknown key data.mood in message-said
+records`); it is not stored.
 
 **Idempotent and atomic** like part 1: the step runs inside the same transaction (a dry run rolls it back; a
 refused row, such as a lone surrogate in a message, undoes every row before it); questions are found by number and
