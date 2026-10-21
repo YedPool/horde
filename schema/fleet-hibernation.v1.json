@@ -18,11 +18,14 @@
       "additionalProperties": false,
       "description": "How the sessions were chosen, so a reader can tell 'all' from 'these'.",
       "properties": {
-        "kind": { "type": "string", "enum": ["all", "labels"], "description": "all: every running, unretired session but the master. labels: exactly the sessions named." },
-        "labels": { "type": "array", "items": { "$ref": "#/definitions/label" }, "description": "The labels asked for; empty for all." },
+        "kind": { "type": "string", "enum": ["all", "labels", "orcs", "backfill"], "description": "backfill: a park written after the fact by horde fleet lots backfill, which marks its own record. all: every running, unretired session but the master. labels: exactly the sessions named. orcs: horde fleet hibernate - each Orc named (by label or lane folder) and its wargs, less the exclusions." },
+        "labels": { "type": "array", "items": { "$ref": "#/definitions/label" }, "description": "The labels asked for (for orcs, the names given: labels or lane folders); empty for all." },
         "exclude": { "type": "array", "items": { "$ref": "#/definitions/label" }, "description": "The labels left out on purpose." }
       }
     },
+    "parkedBy": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,200}$", "description": "Who parked it, in plain words: a session label, or a session id when it has none. Written with the record; the lot row (fleet-parking-lot.v1) holds the id of the parking session, when known." },
+    "phase": { "type": "string", "enum": ["asking", "parking", "done"], "description": "Written by horde fleet hibernate only. asking: the record is written and each session is being asked to park. parking: the asks are out and sessions are being sent their exit as each parks. done: every session is exited or still-awake. A record with no phase was made by fleet record and is not a hibernation in progress." },
+    "excluded": { "type": "array", "items": { "$ref": "#/definitions/exclusion" }, "description": "Written by horde fleet hibernate: the sessions the selection named that were left running on purpose, each with its reason." },
     "sessions": { "type": "array", "items": { "$ref": "#/definitions/session" }, "description": "At least one: an empty hibernation is never written." },
     "expectedStarts": {
       "type": "object",
@@ -61,6 +64,17 @@
         "tabRows": { "$ref": "#/definitions/count" }
       }
     },
+    "exclusion": {
+      "type": "object",
+      "required": ["sessionId", "reason", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/sessionId" },
+        "label": { "$ref": "#/definitions/label" },
+        "reason": { "type": "string", "enum": ["master", "self", "analyst", "unlabelled", "founder-typed", "transcript-unreadable", "question"], "description": "One plain word: the master; the session running the command; the fleet analyst service; a session with no label, whose PARKED file could not be named; the founder typed into it in the last 30 minutes; its transcript could not be read, so that could not be ruled out; an Orc with an open question waiting on the founder." },
+        "detail": { "type": "string", "pattern": "^[^\\x00-\\x1F]{0,600}$" }
+      }
+    },
     "historyEntry": {
       "type": "object",
       "required": ["state", "at"],
@@ -82,6 +96,7 @@
         "role": { "type": "string", "enum": ["orc", "warg", "other"], "description": "Read from the fleet registry through core/Roles.ps1. A missing or unknown role is other, never guessed." },
         "parent": { "$ref": "#/definitions/sessionId", "description": "The session that owns it, as the fleet registry says. A wake puts a session in the window of its nearest owning orc in the same record." },
         "cwd": { "$ref": "#/definitions/path" },
+        "pane": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The terminal pane it sat in when it was recorded, from the fleet registry; a hint only, a terminal reuses pane ids. Copied to its row of the lot (fleet-lot-member.v1)." },
         "transcriptPath": { "$ref": "#/definitions/path" },
         "placement": { "$ref": "#/definitions/placement" },
         "process": {

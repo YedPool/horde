@@ -168,6 +168,10 @@ function New-HordeSecretFileSecurity {
     $sys = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
     $sec = New-Object System.Security.AccessControl.FileSecurity
     $sec.SetAccessRuleProtection($true, $false)
+    # THE OWNER IS SET, not left to the default: an elevated process would otherwise own the file as BUILTIN\Administrators,
+    # and the service (a non-elevated scheduled task) would then refuse it (T-0304, postmerge-net, 2026-10-20). The current user
+    # may always make itself the owner of a file it creates.
+    $sec.SetOwner($me)
     foreach ($sid in @($me, $sys)) { $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))) }
     return $sec
 }
@@ -200,6 +204,14 @@ function Test-HordeSecretFileOwner {
     return ($Owner -ceq $Mine -or ($Elevated -and $Owner -ceq "S-1-5-32-544"))
 }
 
+function Get-HordeSecretOwnerRefusal {
+    # "" when -Owner may own the secret file -Path (Test-HordeSecretFileOwner), else the reason, ending with the ONE command that
+    # makes the current user the owner. The rule stays strict: Administrators own it only for an elevated process.
+    param([string]$Owner, [string]$Mine, [bool]$Elevated, [string]$Path, [string]$MineName)
+    if (Test-HordeSecretFileOwner -Owner $Owner -Mine $Mine -Elevated $Elevated) { return "" }
+    return ("the secret file is owned by " + $Owner + ", not by the current user; its owner could give himself access. Fix: icacls """ + $Path + """ /setowner """ + $MineName + """ (run by " + $MineName + "; from an elevated prompt if that says access denied)")
+}
+
 function Test-HordeSecretFileOpen {
     # Can anyone but the current Windows user and SYSTEM read -Path? "" when not, else the reason. ONLY those two may hold an
     # allowing entry (S4): not Administrators, not Domain Users, not NETWORK, not a named other user. A file whose access
@@ -212,7 +224,8 @@ function Test-HordeSecretFileOpen {
         # the Administrators group, which owns what an elevated process creates).
         $owner = (Get-HordeFileAcl -Path $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
         $admin = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-        if (-not (Test-HordeSecretFileOwner -Owner $owner -Mine $mine -Elevated $admin)) { return ("the secret file is owned by " + $owner + ", not by the current user; its owner could give himself access") }
+        $ownerWhy = Get-HordeSecretOwnerRefusal -Owner $owner -Mine $mine -Elevated $admin -Path $Path -MineName ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+        if ($ownerWhy -cne "") { return $ownerWhy }
         foreach ($r in @((Get-HordeFileAcl -Path $Path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
             if ($r.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
             $sid = $r.IdentityReference.Value

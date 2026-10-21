@@ -96,6 +96,10 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
     # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
     route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
+    # publish: the Orc (or the Thrall) publishes its live, ordered list into fleet.db; which Orc it is, is proven from the session, never from the file.
+    publish   = @{ number = $false; flags = @("File"); usage = "publish -File <list.json>"; publishes = "publish" }
+    # published: read the live lists back from fleet.db's views.
+    published = @{ number = $false; flags = @("Orc", "Json"); usage = "published [-Orc <letter>] [-Json]"; publishes = "published" }
     # NOTIFY IS NOT AN OPERATION EITHER: it reads the inbox and rings the warchief's session through a
     # messenger (decisions/Notify.ps1); `notifies` tells the dispatch below to hand it on, like `opens`.
     notify = @{ number = $false; flags = @("Once");                                 usage = "notify [-Once]"; notifies = $true }
@@ -118,7 +122,7 @@ function Get-HordeDecisionCommandVerb {
     param([Parameter(Mandatory = $true)][string]$Verb)
     $entry = $script:HordeDecisionCommandVerbs[$Verb]
     if ($null -eq $entry) { return $null }
-    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens"); notifies = [bool]$entry.ContainsKey("notifies"); routes = [bool]$entry.ContainsKey("routes") }
+    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens"); notifies = [bool]$entry.ContainsKey("notifies"); routes = [bool]$entry.ContainsKey("routes"); publishes = [bool]$entry.ContainsKey("publishes") }
 }
 
 function Get-HordeDecisionCommandUsage {
@@ -526,6 +530,9 @@ function Format-HordeDecisionAnswer {
     else {
         $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; ack = "Closed question "; "change-reply" = "Replied to the changed answer of question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
+        # S1 (review of PR 335, round 5): a close that was not proven from the warchief's seat says so, so the closer is
+        # never left believing the asking Orc was told.
+        if ($Verb -ceq "close" -and -not ($null -ne $value.question.PSObject.Properties["closedByWarchief"] -and [bool]$value.question.closedByWarchief)) { [void]$lines.Add("  NOTE: this session was not proven as the warchief's seat, so the Orc that asked will not be told of this close. Tell it yourself if it is waiting.") }
         if ($Verb -ceq "ack") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note + ". " + $value.question.outcome) }
         if ($Verb -ceq "change-reply") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
         if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
@@ -684,9 +691,11 @@ function Invoke-HordeDecisionCommand {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
     elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
-    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true; notifies = $false; routes = $false } }
-    if ($spec.ContainsKey("notifies")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $true; routes = $false } }
-    if ($spec.ContainsKey("routes")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $false; routes = $true } }
+    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true; notifies = $false; routes = $false; publishes = "" } }
+    if ($spec.ContainsKey("notifies")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $true; routes = $false; publishes = "" } }
+    if ($spec.ContainsKey("routes")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $false; routes = $true; publishes = "" } }
+    # PUBLISH AND PUBLISHED ARE NOT OPERATIONS: the lists live in fleet.db (decisions/Publish.ps1), loaded by the command only now.
+    if ($spec.ContainsKey("publishes")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $false; routes = $false; publishes = "$($spec.publishes)" } }
     $id = [guid]::NewGuid().ToString("N")
     if ($have.ContainsKey("Id")) {
         $id = "$($have['Id'])"
@@ -847,5 +856,5 @@ function Invoke-HordeDecisionCommand {
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false; notifies = $false; routes = $false }
+    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false; notifies = $false; routes = $false; publishes = "" }
 }

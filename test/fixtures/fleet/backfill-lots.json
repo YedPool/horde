@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "lots": [
+    {
+      "at": "2026-10-16T19:59:00Z",
+      "by": "K",
+      "why": "double-restore cleanup",
+      "members": [
+        { "sessionId": "003f4e1a-5fad-433f-9512-73f21da583fa", "label": "C3" },
+        { "sessionId": "26f319f6-b35a-4f4b-8818-cb287e1ef8f0", "label": "C13" },
+        { "sessionId": "33cdd9b8-fa93-4e75-837d-8dbe8a06b07f", "label": "M4" },
+        { "sessionId": "3bd53aa3-3d2b-4063-977c-61274390b9e8", "label": "C1" },
+        { "sessionId": "4d469554-56b6-46d8-becb-d2716973c545" },
+        { "sessionId": "4e2bf794-d16d-4a82-bd1a-6a2320d7b7d9", "label": "H", "role": "orc" },
+        { "sessionId": "b111847a-3f66-4324-aedc-8157804f64b6" },
+        { "sessionId": "c039e4f8-f66e-465b-b051-61f91d287907", "label": "G", "role": "orc" },
+        { "sessionId": "dbbaa2f8-7831-48de-809f-66ea532d8fc4", "label": "M1" },
+        { "sessionId": "dde210c4-135c-44fd-ae2e-e541326db0c1" },
+        { "sessionId": "f331ec83-9e23-4720-8e9b-79d412470b63" },
+        { "sessionId": "fa221958-9294-400f-97dd-b37e18da494e", "label": "M2" }
+      ]
+    },
+    {
+      "at": "2026-10-19T20:20:00Z",
+      "by": "M",
+      "why": "free memory",
+      "members": [
+        { "sessionId": "3fc9bfc2-cfc7-4034-84b3-1a5b357bd2b8", "label": "B", "role": "orc" },
+        { "sessionId": "6168116b-625a-4db3-841c-af42e6516996", "label": "E", "role": "orc" }
+      ]
+    }
+  ]
+}

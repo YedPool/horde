@@ -28,7 +28,7 @@
            Find = "CHECK ((state = 'merged') = (merged_at IS NOT NULL))"
            Replace = "CHECK (1)" }
         @{ Name = "reopened-reads-closed"
-           Find = "WHEN 'closed' THEN 'closed' ELSE 'open' END AS state"
+           Find = "WHEN 'closed' THEN 'closed' WHEN 'acked' THEN 'closed' ELSE 'open' END AS state"
            Replace = "WHEN 'open' THEN 'open' ELSE 'closed' END AS state" }
         @{ Name = "state-from-progress"
            Find = "AND e.kind NOT IN ('progress', 'priority', 'handed')"
@@ -43,8 +43,8 @@
            Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;"
            Replace = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall';" }
         @{ Name = "answer-reopen-ignored"
-           Find = "WHEN 'closed' THEN 0 ELSE 1 END AS open_at_arrival,"
-           Replace = "WHEN 'reopened' THEN 0 ELSE (SELECT count(*) = 0 FROM question_event e WHERE e.question_id = a.question_id AND e.kind = 'closed' AND e.at <= a.at) END AS open_at_arrival," }
+           Find = "AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,"
+           Replace = "AND e.kind IN ('closed', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival," }
         @{ Name = "replaces-any-question"
            Find = "BEGIN SELECT RAISE(ABORT, 'an answer replaces an answer to the same question'); END;"
            Replace = "BEGIN SELECT 1; END;" }
@@ -55,7 +55,7 @@
            Find = "CHECK ((pid IS NULL) = (process_started_at IS NULL))"
            Replace = "CHECK (1)" }
         @{ Name = "unsigned-passkey-answer-authorizes"
-           Find = "WHEN qn.needs_passkey = 1 AND a.signed_by IS NULL THEN 0 ELSE 1 END AS authorizes"
+           Find = "WHEN a.signed_by IS NULL AND qn.needs_passkey = 1 THEN 0 ELSE 1 END AS authorizes"
            Replace = "ELSE 1 END AS authorizes" }
         @{ Name = "uuid-dashes-anywhere"
            Find = 'AND substr(${col}, 9, 1) = ''-'' AND substr(${col}, 14, 1) = ''-'''
@@ -66,5 +66,26 @@
         @{ Name = "taken-row-editable"
            Find = '${appendOnly(''answer_route_taken'')}'
            Replace = '' }
+        @{ Name = "confirm-of-any-snapshot-allowed"
+           Find = 'WHEN NEW.snapshot_id IS NOT (SELECT l.id FROM decisions_live l WHERE l.orc_id = NEW.orc_id)'
+           Replace = 'WHEN 0' }
+        @{ Name = "confirm-before-publish-allowed"
+           Find = 'WHEN NEW.confirmed_at < (SELECT s.published_at'
+           Replace = 'WHEN 0 AND NEW.confirmed_at < (SELECT s.published_at' }
+        @{ Name = "confirm-editable"
+           Find = '${appendOnly(''decisions_confirm'')}'
+           Replace = '' }
+        @{ Name = "confirmed-at-ignores-confirms"
+           Find = 'max(published_at, COALESCE('
+           Replace = 'min(published_at, COALESCE(' }
+        @{ Name = "confirmed-at-off-by-one"
+           Find = '), 0)) AS confirmed_at'
+           Replace = '), 0) + 1) AS confirmed_at' }
+        @{ Name = "live-view-loses-session"
+           Find = 'SELECT id, orc_id, published_at, by_session_id, item_count, sha256,'
+           Replace = 'SELECT id, orc_id, published_at, item_count, sha256,' }
+        @{ Name = "confirm-same-time-twice"
+           Find = 'UNIQUE (snapshot_id, confirmed_at)'
+           Replace = 'CHECK (1)' }
     )
 }

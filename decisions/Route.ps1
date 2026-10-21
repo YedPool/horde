@@ -189,7 +189,10 @@ function Get-HordeDecisionRouteClosedWork {
     $wordsOnly = ($null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and @($his | Where-Object { -not ($null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey) }).Count -eq 0)
     # N3: a question in parts where one part was signed and another got only chat words never completed: the Orc that
     # waited on the unsigned part is told as well (why = "parts").
-    $partsUnsigned = (-not $wordsOnly -and $null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and $null -ne $q.thread.PSObject.Properties["parts"] -and @($q.thread.parts | Where-Object { -not [bool]$_.answered }).Count -gt 0 -and @($his | Where-Object { $null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey }).Count -gt 0)
+    # S2 (review of PR 335, round 5): a SIGNED answer to the WHOLE question (no part named) answers every part, so it
+    # takes this notice away; only an answer to one part, or none, leaves a part without a passkey answer.
+    $wholeSigned = (@($his | Where-Object { [bool]$_.asks -and "$($_.part)" -eq "" -and -not ($null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey) }).Count -gt 0)
+    $partsUnsigned = (-not $wordsOnly -and -not $wholeSigned -and $null -ne $q.PSObject.Properties["needsPasskey"] -and [bool]$q.needsPasskey -and $null -ne $q.thread.PSObject.Properties["parts"] -and @($q.thread.parts | Where-Object { -not [bool]$_.answered }).Count -gt 0 -and @($his | Where-Object { $null -ne $_.PSObject.Properties["notPasskey"] -and [bool]$_.notPasskey }).Count -gt 0)
     if (-not $unreplied -and -not $wordsOnly -and -not $partsUnsigned) { return $null }
     $last = $his[$his.Count - 1]
     if (Test-HordeDecisionRouted -Question $q -Answer ([long]$last.sequence) -Purpose "closed") { return $null }
@@ -324,7 +327,7 @@ function Format-HordeDecisionRouteClosedNotice {
     if (-not ($Target.seat -ceq "orc")) { [void]$lines.Add("This is for " + (Get-HordeDecisionAsker -AskedBy "$($q.askedBy)").shown + ", who asked it; its seat could not be found, so it came to you.") }
     [void]$lines.Add("Question " + $number + ": " + $q.title)
     if ("$($Item.why)" -ceq "unreplied") { [void]$lines.Add("The founder changed his answer and you had not said what became of your work, so the warchief closed it without that reply. If you had acted on his first answer, ask the warchief whether it needs undoing.") }
-    elseif ("$($Item.why)" -ceq "parts") { [void]$lines.Add("Some part of this question got only chat words from him, and it needs a passkey: no passkey answer came for that part, and none will be routed now that it is closed. Read his words below, and the list, for which parts he signed.") }
+    elseif ("$($Item.why)" -ceq "parts") { [void]$lines.Add("Some part of this question has no passkey answer from him, and it needs a passkey: none will be routed now that it is closed. Any chat words he said are below; the list shows which parts he signed.") }
     else { [void]$lines.Add("All he said was chat words, and this question needs a passkey: no passkey answer came, and none will be routed now that it is closed.") }
     [void]$lines.Add("The warchief's words (the outcome):")
     foreach ($l in @($outcome -split "\r\n|\r|\n")) { [void]$lines.Add($quote + $l) }
