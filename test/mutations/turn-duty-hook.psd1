@@ -93,6 +93,48 @@
         @{ Name = "tell-n-line-dropped"
            Find = '    "if publish refuses because fleet.db has no row for your Orc, tell N",'
            Replace = '' }
+        @{ Name = "snapshot-quiet-removed"
+           Find = '&& now - state.lastBlockedAt < SNAPSHOT_QUIET_MS;'
+           Replace = '&& false;' }
+        @{ Name = "snapshot-quiet-forever"
+           Find = 'now - state.lastBlockedAt < SNAPSHOT_QUIET_MS;'
+           Replace = 'true;' }
+        @{ Name = "snapshot-quiet-window-shortened"
+           Find = 'const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;'
+           Replace = 'const SNAPSHOT_QUIET_MS = 20 * 60 * 1000;' }
+        @{ Name = "snapshot-quiet-window-lengthened"
+           Find = 'const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;'
+           Replace = 'const SNAPSHOT_QUIET_MS = 24 * 60 * 60 * 1000;' }
+        @{ Name = "any-snapshot-matches"
+           Find = 'r.snapshot === state.lastBlockedSnapshot &&'
+           Replace = '' }
+        @{ Name = "empty-snapshot-matches"
+           Find = 'r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot'
+           Replace = 'r.snapshot === state.lastBlockedSnapshot' }
+        @{ Name = "blocked-snapshot-not-recorded"
+           Find = 'if (active[i].snapshotQuiet) blockedSnapshot = r.snapshot || "";'
+           Replace = '' }
+        @{ Name = "snapshot-not-read-from-state"
+           Find = 'lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }'
+           Replace = 'lastBlockedSnapshot: "" }' }
+        @{ Name = "snapshot-list-field-ignored"
+           Find = 'const snapshot = typeof mine[0].snapshot === "string" ? mine[0].snapshot : "";'
+           Replace = 'const snapshot = "";' }
+        @{ Name = "confirmed-at-ignored"
+           Find = 'return confirmed === null ? published : Math.max(published, confirmed);'
+           Replace = 'return published;' }
+        @{ Name = "confirmed-at-wins-even-if-older"
+           Find = 'return confirmed === null ? published : Math.max(published, confirmed);'
+           Replace = 'return confirmed === null ? published : confirmed;' }
+        @{ Name = "malformed-confirmed-at-trusted"
+           Find = 'Number.isFinite(Date.parse(v)) ? Date.parse(v) : null'
+           Replace = 'true ? Date.parse(v) : null' }
+        @{ Name = "published-at-ignored"
+           Find = 'if (published === null) return confirmed;'
+           Replace = 'return confirmed;' }
+        @{ Name = "confirmed-field-names-emptied"
+           Find = 'const CONFIRMED_FIELDS = ["confirmedAt", "checkedAt", "lastConfirmedAt"];'
+           Replace = 'const CONFIRMED_FIELDS = [];' }
         @{ Name = "bom-not-stripped"
            Find = 'if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // PS 5.1 redirected stdin carries a BOM'
            Replace = '' }
