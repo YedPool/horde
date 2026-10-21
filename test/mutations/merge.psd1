@@ -45,9 +45,48 @@
         @{ Name = "guard-exit-code-ignored"
            Find = '$ok = ($Run.code -eq 0 -and $banner.Count -gt 0 -and $failedBanner.Count -eq 0)'
            Replace = '$ok = ($banner.Count -gt 0 -and $failedBanner.Count -eq 0)' }
-        @{ Name = "only-one-guard-runs"
-           Find = '$script:HordeMergeGuards = @("test\test-host-names.ps1", "test\test-mutation-specs.ps1")'
-           Replace = '$script:HordeMergeGuards = @("test\test-host-names.ps1")' }
+        @{ Name = "guard-list-not-read-from-the-tree"
+           Find = 'if ([System.IO.File]::Exists($listFile)) { $treeText = [System.IO.File]::ReadAllText($listFile) }'
+           Replace = '' }
+        @{ Name = "guards-the-base-lists-dropped"
+           Find = '$guards = @(Join-HordeGuardLists -Tree $treeGuards -Base $baseGuards)'
+           Replace = '$guards = @(Join-HordeGuardLists -Tree $treeGuards -Base $null)' }
+        @{ Name = "guards-the-tree-adds-dropped"
+           Find = '$guards = @(Join-HordeGuardLists -Tree $treeGuards -Base $baseGuards)'
+           Replace = '$guards = @(Join-HordeGuardLists -Tree @() -Base $baseGuards)' }
+        @{ Name = "base-list-not-read"
+           Find = 'if ($baseHas.out -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unusable-tree-list-not-refused"
+           Find = 'if (-not $treeRead.ok) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "unusable-base-list-not-refused"
+           Find = 'if (-not $baseRead.ok) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "no-list-anywhere-taken"
+           Find = 'if ($guards.Count -eq 0) { return (& $no'
+           Replace = 'if ($false) { return (& $no' }
+        @{ Name = "guards-run-in-one-shell-only"
+           Find = 'foreach ($sh in (Get-HordeGuardShells)) {'
+           Replace = 'foreach ($sh in @((Get-HordeGuardShells)[0])) {' }
+        @{ Name = "red-in-second-shell-ignored"
+           Find = 'if (-not $read.ok) { return (& $no ("the guard " + $g + " is red on " + $commit.Substring(0, 8) + " in " + $sh.label'
+           Replace = 'if (-not $read.ok -and $sh.key -ceq "5.1") { return (& $no ("the guard " + $g + " is red on " + $commit.Substring(0, 8) + " in " + $sh.label' }
+        @{ Name = "shell-7-runs-the-5-1-program"
+           Find = '$program = $shell7'
+           Replace = '$program = $shell' }
+        @{ Name = "missing-pwsh7-not-red"
+           Find = 'if (-not [System.IO.File]::Exists($program)) { return [pscustomobject]@{ code = -1;'
+           Replace = 'if ($false) { return [pscustomobject]@{ code = -1;' }
+        @{ Name = "unknown-shell-taken"
+           Find = 'elseif ($Shell -cne "5.1") { return'
+           Replace = 'elseif ($false) { return' }
+        @{ Name = "machine-module-path-not-given"
+           Find = '$env1 = & $guardEnvFor -Shell $Shell -MachinePsModulePath ("" + $machinePath)'
+           Replace = '$env1 = @{}' }
+        @{ Name = "environment-not-set-on-the-child"
+           Find = 'foreach ($k in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$k] = "" + $Environment[$k] }'
+           Replace = '' }
         @{ Name = "unknown-mergeable-asked-once"
            Find = 'if ("" + $pr.mergeable -cne "UNKNOWN") { break }'
            Replace = 'break' }

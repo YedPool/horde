@@ -1,7 +1,7 @@
 # cli/Merge - `horde merge`: one pull request merged the fleet's way, every step in one command.
 #
 # WHY ONE COMMAND (fleet audit of 2026-10-16, findings 2, 4 and 10). Merging was five steps each session
-# had to remember: the two text guards on the combined head, gh pr merge --merge, the task ledger's
+# had to remember: the repo-wide guards on the combined head, gh pr merge --merge, the task ledger's
 # merged event, telling the warchief, and a progress line. On 2026-10-14 PRs 278, 279 and 288 were
 # merged without the guards and main went red on both until PR 292; on 2026-10-06 three merges were
 # told to nobody, and the warchief told three lanes a fixed defect was still open. 7 of 12 lane-state
@@ -20,7 +20,9 @@
 #      does not already contain the base, a throwaway merge commit is made with git merge-tree (CONTRIBUTING
 #      15 rule 2: "mergeable" is not "green"). It is cloned, detached, into a fresh scratch folder whose
 #      origin/<base> is the base as fetched, because test-host-names compares the lists with origin/main.
-#   4. The two text guards run there (CONTRIBUTING 15 rule 9). A guard passes only on exit 0 AND its
+#   4. Every repo-wide guard listed in test\guards.txt runs there (CONTRIBUTING 15 rule 9), each in Windows
+#      PowerShell 5.1 AND in PowerShell 7. The list is the checked tree's plus the base's, so a PR may add
+#      a guard but not drop one. A guard passes only on exit 0 AND its
 #      closing banner: a suite with no banner was NOT RUN (rule 7). On a failure the failing lines are
 #      printed and nothing is merged. THE GUARDS RUN ARE THE PR'S OWN COPIES, as they stand in the merge
 #      result: a PR that weakens a guard is checked by the weakened guard. That is the same trust every
@@ -39,7 +41,7 @@
 # THE TOOLS ARE A TABLE (New-HordeMergeTools; tests hand in their own, as test/test-analyst-tend.ps1 does):
 #   Gh      param([string[]]$Arguments)                      -> { code; out; err }
 #   Git     param([string[]]$Arguments)                      -> { code; out; err }
-#   Guard   param([string]$Checkout, [string]$Suite)          -> { code; out; err }
+#   Guard   param([string]$Checkout, [string]$Suite, [string]$Shell)  -> { code; out; err }   Shell: "5.1" or "7"
 #   Ledger  param([string[]]$Arguments)                      -> { code; out; err }, run as <program> <script> <arguments>
 #   Tell    param([string]$Body)                             -> { ok; detail }   the warchief
 #   Mail    param([string]$Text)                             -> { ok; detail }   the analyst
@@ -52,6 +54,7 @@
 . (Join-Path $PSScriptRoot "..\core\ModuleSettings.ps1")
 . (Join-Path $PSScriptRoot "..\core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "..\core\ServiceHostPort.ps1")
+. (Join-Path $PSScriptRoot "..\core\GuardList.ps1")
 
 # THE SETTINGS of the module "merge", in <HORDE_HOME>\settings\merge.json. The ledger script has no
 # default: it is the fleet's file, and where it lives is the person's to say - with none, every merge is
@@ -62,7 +65,9 @@ $script:HordeMergeSettings = New-HordeModuleSettings -Module "merge" -Settings @
     @{ name = "git"; kind = "text"; min = 1; max = 260; default = "git"
        what = "The git program: a name on PATH or an absolute path." },
     @{ name = "guardShell"; kind = "text"; min = 1; max = 260; default = "powershell.exe"
-       what = "The PowerShell the two guards run in; the gate runs suites in Windows PowerShell." },
+       what = "The Windows PowerShell 5.1 the guards run in first; the gate runs suites in Windows PowerShell." },
+    @{ name = "guardShell7"; kind = "folder"; default = ""
+       what = "The absolute path of the PowerShell 7 the guards run in second. Empty: the MSI install, <Program Files>\PowerShell\7\pwsh.exe, never whatever pwsh the search path finds (it may be the Microsoft Store copy)." },
     @{ name = "ledgerProgram"; kind = "text"; min = 1; max = 260; default = "python"
        what = "The program that runs the task ledger script. A .ps1 is run with this PowerShell." },
     @{ name = "ledgerScript"; kind = "folder"; default = ""
@@ -76,7 +81,7 @@ $script:HordeMergeSettings = New-HordeModuleSettings -Module "merge" -Settings @
 $script:HordeMergeRounds = 3
 $script:HordeMergeUnknownTries = 4
 $script:HordeMergeUnknownWaitSeconds = 3
-$script:HordeMergeGuards = @("test\test-host-names.ps1", "test\test-mutation-specs.ps1")
+
 $script:HordeMergeProgramSeconds = 900
 # The most failing lines of a guard that are printed; the rest are counted.
 $script:HordeMergeFailLines = 40
@@ -294,13 +299,40 @@ function Invoke-HordeMergeCheck {
         if (-not $r.ok) { return (& $no $r.why) }
         $r = Invoke-HordeMergeGit -Tools $Tools -What "checking out the tree to check" -Arguments @("-C", $scratch, "-c", "core.longpaths=true", "checkout", "--detach", "--quiet", $commit)
         if (-not $r.ok) { return (& $no $r.why) }
-        foreach ($g in $script:HordeMergeGuards) {
+        # THE GUARDS ARE THE REPOSITORY'S OWN LIST (test\guards.txt): the checked tree's, plus every guard
+        # the base's list has, so a PR cannot drop a guard by editing the list. No list anywhere: refused.
+        $listFile = [System.IO.Path]::Combine($scratch, (Get-HordeGuardListPath))
+        $treeText = ""
+        if ([System.IO.File]::Exists($listFile)) { $treeText = [System.IO.File]::ReadAllText($listFile) }
+        $listGit = (Get-HordeGuardListPath).Replace("\", "/")
+        $baseHas = Invoke-HordeMergeGit -Tools $Tools -What "asking whether the base has a guard list" -Arguments @("-C", $cache, "ls-tree", "--name-only", $baseSha, "--", $listGit)
+        if (-not $baseHas.ok) { return (& $no $baseHas.why) }
+        $baseGuards = $null
+        if ($baseHas.out -ne "") {
+            $baseText = Invoke-HordeMergeGit -Tools $Tools -What "reading the base's guard list" -Arguments @("-C", $cache, "show", ($baseSha + ":" + $listGit))
+            if (-not $baseText.ok) { return (& $no $baseText.why) }
+            $baseRead = Read-HordeGuardList -Text $baseText.out
+            if (-not $baseRead.ok) { return (& $no ("the base's guard list is unusable: " + $baseRead.why)) }
+            $baseGuards = $baseRead.guards
+        }
+        $treeGuards = @()
+        if ($treeText -ne "") {
+            $treeRead = Read-HordeGuardList -Text $treeText
+            if (-not $treeRead.ok) { return (& $no ("the checked tree's guard list is unusable: " + $treeRead.why)) }
+            $treeGuards = $treeRead.guards
+        }
+        $guards = @(Join-HordeGuardLists -Tree $treeGuards -Base $baseGuards)
+        if ($guards.Count -eq 0) { return (& $no ("neither the checked tree nor " + $base + " has " + (Get-HordeGuardListPath) + ", so nothing can say it is green")) }
+        & $Tools["Say"] ("the guards, from " + (Get-HordeGuardListPath) + ": " + ($guards -join ", ") + " - each in " + (((Get-HordeGuardShells) | ForEach-Object { $_.label }) -join " and "))
+        foreach ($g in $guards) {
             if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($scratch, $g))) { return (& $no ("the guard " + $g + " is not in the checked tree, so nothing can say it is green")) }
-            & $Tools["Say"] ("running " + $g + " on " + $commit.Substring(0, 8))
-            $run = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($scratch, $g)
-            $read = Read-HordeMergeGuardResult -Run $run
-            if (-not $read.ok) { return (& $no ("the guard " + $g + " is red on " + $commit.Substring(0, 8) + "; nothing was merged") $read.lines) }
-            & $Tools["Say"] ($g + " is green")
+            foreach ($sh in (Get-HordeGuardShells)) {
+                & $Tools["Say"] ("running " + $g + " on " + $commit.Substring(0, 8) + " in " + $sh.label)
+                $run = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($scratch, $g, $sh.key)
+                $read = Read-HordeMergeGuardResult -Run $run
+                if (-not $read.ok) { return (& $no ("the guard " + $g + " is red on " + $commit.Substring(0, 8) + " in " + $sh.label + "; nothing was merged") $read.lines) }
+                & $Tools["Say"] ($g + " is green in " + $sh.label)
+            }
         }
     } finally {
         Remove-HordeMergeFolder -Path $scratch -Tools $Tools
@@ -435,7 +467,7 @@ function Invoke-HordeMergeProgram {
     # PSModulePath is left out of its environment: a Windows PowerShell started from PowerShell 7 or from
     # Git Bash with theirs could not load its own modules (measured 2026-10-16: test-mutation-specs failed
     # with 'Import-PowerShellDataFile' not recognized when started from Git Bash).
-    param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Arguments = @(), [string]$Directory = "", [int]$Seconds = $script:HordeMergeProgramSeconds)
+    param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Arguments = @(), [string]$Directory = "", [int]$Seconds = $script:HordeMergeProgramSeconds, [hashtable]$Environment = @{})
     # NEVER A .cmd OR .bat: Windows runs one through cmd, which reads the argument line again with its
     # own rules (& | < > ^ %), so a reason typed for the ledger could become a command. Name the program.
     if (Test-HordeMergeShellScript -Program $Program) { return [pscustomobject]@{ code = -1; out = ""; err = ($Program + " is a .cmd or .bat, which cmd would run and re-read; name the program itself") } }
@@ -454,6 +486,8 @@ function Invoke-HordeMergeProgram {
     $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
     if ($Directory -ne "") { $psi.WorkingDirectory = $Directory }
     if ($psi.EnvironmentVariables.ContainsKey("PSModulePath")) { $psi.EnvironmentVariables.Remove("PSModulePath") }
+    # -Environment is set after the drop, so a caller can give a child its own PSModulePath.
+    foreach ($k in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$k] = "" + $Environment[$k] }
     $psi.EnvironmentVariables["GH_PROMPT_DISABLED"] = "1"
     $psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0"
     $p = $null
@@ -487,8 +521,13 @@ function New-HordeMergeTools {
     # THE BLOCKS ARE CLOSURES, AND A CLOSURE RUNS IN A MODULE OF ITS OWN that sees global functions only, not
     # these, which a command dot-sources in its own scope. So each block holds the functions it calls as
     # values ($runProgram, $formatLine): a function's own block runs where it was defined.
-    param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail)
+    param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail, $MachinePsModulePath = $null)
     $gh = "" + $Values.gh; $git = "" + $Values.git; $shell = "" + $Values.guardShell
+    $shell7 = Get-HordeGuardPwsh7 -Setting ("" + $(if ($null -ne $Values.PSObject.Properties["guardShell7"]) { $Values.guardShell7 } else { "" }))
+    # -MachinePsModulePath is a seam for the suite; the command reads the machine value itself.
+    $machinePath = $MachinePsModulePath
+    if ($null -eq $machinePath) { $machinePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine") }
+    $guardEnvFor = ${function:Get-HordeGuardEnvironment}
     $ledgerProgram = "" + $Values.ledgerProgram; $ledgerScript = "" + $Values.ledgerScript
     # gh, git and the ledger run in the work folder, never in the caller's: gh reads the git checkout it is
     # started in, and nothing here may act on the caller's tree.
@@ -498,7 +537,19 @@ function New-HordeMergeTools {
     return @{
         Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments -Directory $place) }.GetNewClosure()
         Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments -Directory $place) }.GetNewClosure()
-        Guard = { param([string]$Checkout, [string]$Suite) return (& $runProgram -Program $shell -Arguments @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", [System.IO.Path]::Combine($Checkout, $Suite)) -Directory $Checkout) }.GetNewClosure()
+        # -Shell is "5.1" or "7" (the shells table). PowerShell 7 that is not there is a red guard with the
+        # path named, never a skipped one.
+        Guard = {
+            param([string]$Checkout, [string]$Suite, [string]$Shell)
+            $program = $shell
+            if ($Shell -ceq "7") {
+                $program = $shell7
+                if (-not [System.IO.File]::Exists($program)) { return [pscustomobject]@{ code = -1; out = ""; err = ("PowerShell 7 is not at " + $program + "; install the MSI or set guardShell7 in the merge settings") } }
+            }
+            elseif ($Shell -cne "5.1") { return [pscustomobject]@{ code = -1; out = ""; err = ("the guard shell '" + $Shell + "' is not 5.1 or 7") } }
+            $env1 = & $guardEnvFor -Shell $Shell -MachinePsModulePath ("" + $machinePath)
+            return (& $runProgram -Program $program -Arguments @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", [System.IO.Path]::Combine($Checkout, $Suite)) -Directory $Checkout -Environment $env1)
+        }.GetNewClosure()
         Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments)) -Directory $place) }.GetNewClosure()
         LedgerLine = { param([string[]]$Arguments) return (& $formatLine -Program $ledgerProgram -Script $ledgerScript -Arguments $Arguments) }.GetNewClosure()
         Tell = $Tell

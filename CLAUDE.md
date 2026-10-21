@@ -41,7 +41,7 @@ git worktree add -b <branch> ../horde-worktrees/<name> origin/main
 
 - One logical change per commit. One concern per pull request.
 - Merge with `horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane>`: it runs
-  the two text guards on the merge result, merges with `gh pr merge --merge`, records the ledger event
+  every repo-wide guard (test\guards.txt) on the merge result in both shells, merges with `gh pr merge --merge`, records the ledger event
   and tells the warchief and the analyst. Never squash.
 - Never switch branches in a checkout where a suite is running.
 
@@ -62,7 +62,7 @@ reason.
 - Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
   `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
   and to a guard added above a mutant. Never merge on it alone.
-- `test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are in every PR's targeted set:
+- Every guard in `test\guards.txt` (one line per guard; `horde merge` and CI both read it) is in every PR's targeted set:
   run them on the final head, in a clean tree, before every merge, by any Orc. They read the whole
   repository, so any PR can break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
 - `surfaces\pwa\test\test-pwa-browser.ps1` is in the targeted set of every PR that touches

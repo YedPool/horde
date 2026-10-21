@@ -46,10 +46,15 @@ function G {
 #   6 from C0, changes conflict.txt             conflicts with main
 #   7 from C1, guard.txt hostnames-red          test-host-names red
 #   8 from C1, deletes test-mutation-specs.ps1  a guard missing from the tree
+#   9 from C1, adds test-added.ps1 to guards.txt  a guard the PR adds; it is red
+#  10 from C1, drops test-mutation-specs from guards.txt, guard.txt specs-red  main's list still runs it
+#  11 from C1, guards.txt holds a line that is no guard  an unusable list
+#  12 from C1, deletes guards.txt                the base's list is used
+#  13 from C1, guard.txt red-in-7                test-host-names red in PowerShell 7 only
 $hostGuard = @'
 $flag = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "..\guard.txt"))
 $both = (Test-Path (Join-Path $PSScriptRoot "..\main-flag.txt")) -and (Test-Path (Join-Path $PSScriptRoot "..\pr-flag.txt"))
-if ($flag -match "hostnames-red" -or $both) { Write-Output "  [FAIL] stand-in: a file names a port it may not"; Write-Output ""; Write-Output "==== 1 FAILURE(S) ===="; exit 1 }
+if ($flag -match "hostnames-red" -or $both -or ($flag -match "red-in-7" -and $env:HORDE_MERGE_STUB_SHELL -eq "7")) { Write-Output "  [FAIL] stand-in: a file names a port it may not"; Write-Output ""; Write-Output "==== 1 FAILURE(S) ===="; exit 1 }
 Write-Output "  [PASS] stand-in host names"
 Write-Output "==== stand-in host names green ===="
 exit 0
@@ -72,6 +77,9 @@ $null = G $seed config core.autocrlf false
 [System.IO.File]::WriteAllText((Join-Path $seed "test\test-host-names.ps1"), $hostGuard, $utf8)
 [System.IO.File]::WriteAllText((Join-Path $seed "test\test-mutation-specs.ps1"), $specGuard, $utf8)
 [System.IO.File]::WriteAllText((Join-Path $seed "guard.txt"), "green", $utf8)
+$guardsText = "# stand-in guard list`ntest/test-host-names.ps1`ntest/test-mutation-specs.ps1`n"
+[System.IO.File]::WriteAllText((Join-Path $seed "test\guards.txt"), $guardsText, $utf8)
+$addedGuard = "Write-Output '  [FAIL] stand-in: the added guard is red'; Write-Output ''; Write-Output '==== 1 FAILURE(S) ===='; exit 1`n"
 [System.IO.File]::WriteAllText((Join-Path $seed "conflict.txt"), "a", $utf8)
 $null = G $seed add -A
 $null = G $seed commit -q -m C0
@@ -95,6 +103,11 @@ $heads = [ordered]@{
     "6" = (New-SeedCommit -From $c0 -Files @{ "conflict.txt" = "c" } -Message "pr 6")
     "7" = (New-SeedCommit -From $c1 -Files @{ "guard.txt" = "hostnames-red" } -Message "pr 7")
     "8" = (New-SeedCommit -From $c1 -Files @{ "test\test-mutation-specs.ps1" = $null } -Message "pr 8")
+    "9" = (New-SeedCommit -From $c1 -Files @{ "test\guards.txt" = ($guardsText + "test/test-added.ps1`n"); "test\test-added.ps1" = $addedGuard } -Message "pr 9")
+    "10" = (New-SeedCommit -From $c1 -Files @{ "test\guards.txt" = "test/test-host-names.ps1`n"; "guard.txt" = "specs-red" } -Message "pr 10")
+    "11" = (New-SeedCommit -From $c1 -Files @{ "test\guards.txt" = ($guardsText + "rm -rf /`n") } -Message "pr 11")
+    "13" = (New-SeedCommit -From $c1 -Files @{ "guard.txt" = "red-in-7" } -Message "pr 13")
+    "12" = (New-SeedCommit -From $c1 -Files @{ "test\guards.txt" = $null } -Message "pr 12")
 }
 $null = G $work init --bare -q $template
 $push = @(($c1 + ":refs/heads/main")) + @($heads.Keys | ForEach-Object { $heads[$_] + ":refs/pull/" + $_ + "/head" })
@@ -151,9 +164,10 @@ function New-SuiteTools {
         # The real git, but a call naming -GitFails as one of its words fails as git would.
         Git = { param([string[]]$Arguments) if ($script:gitFails -ne "" -and @($Arguments) -ccontains $script:gitFails) { return [pscustomobject]@{ code = 128; out = ""; err = ("fatal: stand-in failure of " + $script:gitFails) } }; return (& $script:realGit $Arguments) }
         Guard = {
-            param([string]$Checkout, [string]$Suite)
+            param([string]$Checkout, [string]$Suite, [string]$Shell)
             if ($null -ne $script:beforeGuard) { & $script:beforeGuard }
-            [void]$script:guardRuns.Add([pscustomobject]@{ suite = $Suite; commit = (G $Checkout rev-parse HEAD); originMain = (G $Checkout rev-parse refs/remotes/origin/main); parents = @((G $Checkout rev-list --parents -n 1 HEAD) -split " " | Select-Object -Skip 1); checkout = $Checkout })
+            [void]$script:guardRuns.Add([pscustomobject]@{ suite = $Suite; shell = $Shell; commit = (G $Checkout rev-parse HEAD); originMain = (G $Checkout rev-parse refs/remotes/origin/main); parents = @((G $Checkout rev-list --parents -n 1 HEAD) -split " " | Select-Object -Skip 1); checkout = $Checkout })
+            $env:HORDE_MERGE_STUB_SHELL = $Shell
             $o = & (Join-Path $Checkout $Suite)
             return [pscustomobject]@{ code = $LASTEXITCODE; out = (@($o) -join "`n"); err = "" }
         }
@@ -295,7 +309,7 @@ Check ($r.outcome -ceq "merged" -and $r.mergeSha -ceq $main) ("a green PR is mer
 Check ($parents.Count -eq 3 -and $parents[1] -ceq $c1 -and $parents[2] -ceq $heads["1"]) "main's new tip is a merge commit of main and the head, never a squash"
 $mergeCalls = @(Get-GhCalls $c | Where-Object { $_ -clike "pr merge *" })
 Check ($mergeCalls.Count -eq 1 -and $mergeCalls[0] -ceq ("pr merge 1 --repo YedPool/horde --merge --match-head-commit " + $heads["1"])) ("gh is asked for --merge with the checked head pinned: " + ($mergeCalls -join " | "))
-Check (@($script:guardRuns).Count -eq 2 -and $script:guardRuns[0].suite -ceq "test\test-host-names.ps1" -and $script:guardRuns[1].suite -ceq "test\test-mutation-specs.ps1") "both guards ran"
+Check (@($script:guardRuns).Count -eq 4 -and (@($script:guardRuns | ForEach-Object { $_.suite + "|" + $_.shell }) -join ",") -ceq "test\test-host-names.ps1|5.1,test\test-host-names.ps1|7,test\test-mutation-specs.ps1|5.1,test\test-mutation-specs.ps1|7") "both guards ran, each in both shells"
 Check ($script:guardRuns[0].commit -ceq $heads["1"] -and $script:guardRuns[0].originMain -ceq $c1) "they ran on the head, in a checkout whose origin/main is main"
 Check ((Said "the PR head * already contains main *: the head is what is checked")) "it says the head already contains main"
 Check (-not [System.IO.Directory]::Exists($script:guardRuns[0].checkout) -and @([System.IO.Directory]::GetDirectories((Join-Path $c.work "runs"))).Count -eq 0) "the scratch checkout, and a past run's left-over folder, are removed"
@@ -331,9 +345,9 @@ $moveGreen = {
 $c = New-Case
 $r = Invoke-Case -Case $c -BeforeGuard $moveGreen
 $moved = G $seed rev-parse HEAD
-Check ($r.outcome -ceq "merged" -and @($script:guardRuns).Count -eq 4) ("main moved once: the guards ran again before the merge (" + @($script:guardRuns).Count + " runs)")
+Check ($r.outcome -ceq "merged" -and @($script:guardRuns).Count -eq 8) ("main moved once: the guards ran again before the merge (" + @($script:guardRuns).Count + " runs)")
 Check ((Said "main moved from * to * while the guards ran: checking the new combination before merging")) "it says main moved and the new combination is checked"
-Check ($script:guardRuns[2].originMain -ceq $moved -and $script:guardRuns[2].commit -cne $heads["1"] -and @($script:guardRuns[2].parents)[0] -ceq $moved) "the second round checked the merge of the moved main and the head"
+Check ($script:guardRuns[4].originMain -ceq $moved -and $script:guardRuns[4].commit -cne $heads["1"] -and @($script:guardRuns[4].parents)[0] -ceq $moved) "the second round checked the merge of the moved main and the head"
 Check ((G $c.origin rev-parse ((Get-Main $c) + "^1")) -ceq $moved) "and the merge went onto the moved main"
 
 $script:moves = 0
@@ -411,6 +425,67 @@ $r = Invoke-Case -Case $c
 Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "gh said it merged YedPool/horde#1, but GitHub does not show it MERGED*ledger was NOT written*" -and @(Get-LedgerCalls $c).Count -eq 1 -and @($script:told).Count -eq 0) ("gh said merged, GitHub does not show it: nothing recorded, said: " + $r.why)
 Check (@($script:waited).Count -eq 3 -and @(Get-GhCalls $c | Where-Object { $_ -clike "pr view 1 --repo YedPool/horde --json state,mergeCommit" }).Count -eq 4) "  GitHub is asked 4 times, 3 waits apart, before that is said"
 
+Write-Host "== the guard list: test\guards.txt, read by the command and by CI"
+foreach ($case in @(
+    @{ N = "9"; Like = "the guard test\test-added.ps1 is red on * in Windows PowerShell 5.1; nothing was merged"; What = "a guard the PR adds to the list runs, and is red" },
+    @{ N = "10"; Like = "the guard test\test-mutation-specs.ps1 is red on * in Windows PowerShell 5.1; nothing was merged"; What = "a guard the PR drops from the list still runs, from the base's list" },
+    @{ N = "11"; Like = "the checked tree's guard list is unusable: line 4 of test\guards.txt is not a guard script*"; What = "a list with a line that is no guard" })) {
+    $c = New-Case
+    $r = Invoke-Case -Case $c -Pr ("YedPool/horde#" + $case.N)
+    Check ($r.outcome -ceq "refused" -and $r.why -clike $case.Like -and -not (Test-MergeCall $c)) ($case.What + " is refused: " + $r.why)
+}
+$c = New-Case
+$r = Invoke-Case -Case $c -Pr "YedPool/horde#13"
+Check ($r.outcome -ceq "refused" -and $r.why -clike "the guard test\test-host-names.ps1 is red on * in PowerShell 7; nothing was merged" -and @($script:guardRuns).Count -eq 2 -and -not (Test-MergeCall $c)) ("a guard green in 5.1 and red in 7 is refused: " + $r.why)
+$c = New-Case
+$r = Invoke-Case -Case $c -Pr "YedPool/horde#12"
+Check ($r.outcome -ceq "merged" -and @($script:guardRuns).Count -eq 4) ("a PR that deletes the list is still held to the base's: merged with " + @($script:guardRuns).Count + " guard runs")
+Check ((Said "the guards, from test\guards.txt: test\test-host-names.ps1, test\test-mutation-specs.ps1 - each in Windows PowerShell 5.1 and PowerShell 7")) "the guards that will run are said before they do"
+
+# THE BASE'S OWN LIST: main is moved (in the case's origin) to a commit whose list is unusable, or has none.
+$c = New-Case
+$null = G $seed checkout -q --detach $c1
+[System.IO.File]::WriteAllText((Join-Path $seed "test\guards.txt"), "not a guard`n", $utf8)
+$null = G $seed add -A
+$null = G $seed commit -q -m "main has a bad list"
+$null = G $seed push -q -f $c.origin "HEAD:refs/heads/main"
+$r = Invoke-Case -Case $c
+Check ($r.outcome -ceq "refused" -and $r.why -clike "the base's guard list is unusable: line 1 of test\guards.txt is not a guard script*" -and @($script:guardRuns).Count -eq 0 -and -not (Test-MergeCall $c)) ("a base whose list is unusable refuses the merge, no guard run: " + $r.why)
+$c = New-Case
+$null = G $seed checkout -q --detach $c1
+[System.IO.File]::Delete((Join-Path $seed "test\guards.txt"))
+$null = G $seed add -A
+$null = G $seed commit -q -m "main has no list"
+$null = G $seed push -q -f $c.origin "HEAD:refs/heads/main"
+$r = Invoke-Case -Case $c
+Check ($r.outcome -ceq "refused" -and $r.why -clike "neither the checked tree nor main has test\guards.txt*" -and @($script:guardRuns).Count -eq 0 -and -not (Test-MergeCall $c)) ("no list in the tree and none in the base: refused, never a green run of nothing: " + $r.why)
+Write-Host "== the two shells: PowerShell 5.1 gets the machine's PSModulePath, 7 gets its own"
+$echo = Invoke-HordeMergeProgram -Program "powershell.exe" -Arguments @("-NoProfile", "-NonInteractive", "-Command", '[Console]::Out.Write($env:PSModulePath)') -Environment @{ PSModulePath = "C:\horde-merge-probe\modules" }
+Check ($echo.code -eq 0 -and $echo.out -clike "*C:\horde-merge-probe\modules*") "a child is given the PSModulePath it was handed (Invoke-HordeMergeProgram -Environment)"
+$echo = Invoke-HordeMergeProgram -Program "powershell.exe" -Arguments @("-NoProfile", "-NonInteractive", "-Command", '[Console]::Out.Write($env:HORDE_MERGE_PROBE)') -Environment @{ HORDE_MERGE_PROBE = "kept" }
+Check ($echo.code -eq 0 -and $echo.out -ceq "kept") "  and any other variable it is handed"
+$probeFolder = Join-Path $work "probe"
+[void][System.IO.Directory]::CreateDirectory($probeFolder)
+$probe = '$psv = $PSVersionTable.PSVersion.Major; Write-Output ("shell " + $psv + " modules " + $env:PSModulePath); Write-Output "==== probe ===="; exit 0'
+[System.IO.File]::WriteAllText((Join-Path $probeFolder "probe.ps1"), $probe, $utf8)
+$machinePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+$realTools = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; guardShell7 = ""; ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py"; workFolder = $work }) -Tell { } -Mail { } -MachinePsModulePath "C:\horde-merge-probe\machine"
+$g51 = & $realTools["Guard"] $probeFolder "probe.ps1" "5.1"
+Check ($g51.code -eq 0 -and $g51.out -clike "shell 5 modules *") ("the real guard runner runs a guard in Windows PowerShell 5.1: " + ("" + $g51.out + "            ").Substring(0, 10))
+Check ($g51.out -clike "*C:\horde-merge-probe\machine*") "  with the machine's PSModulePath (a seam hands in the value), not the caller's"
+$pwsh7Path = Get-HordeGuardPwsh7
+if ([System.IO.File]::Exists($pwsh7Path)) {
+    $g7 = & $realTools["Guard"] $probeFolder "probe.ps1" "7"
+    Check ($g7.code -eq 0 -and $g7.out -clike "shell 7 modules *") ("the real guard runner runs a guard in PowerShell 7 (the MSI at " + $pwsh7Path + ")")
+    Check ($g7.out -cnotlike "*C:\horde-merge-probe*") "  and with none of the machine value handed to 5.1"
+    Check ($pwsh7Path -clike "*\PowerShell\7\pwsh.exe" -and $pwsh7Path -cnotlike "*WindowsApps*") "  and that is the MSI install, never the Store copy"
+} else { Check $false ("PowerShell 7 is installed from the MSI at " + $pwsh7Path) }
+$noSeven = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; guardShell7 = (Join-Path $work "no\pwsh.exe"); ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py"; workFolder = $work }) -Tell { } -Mail { }
+$gNo = & $noSeven["Guard"] $probeFolder "probe.ps1" "7"
+Check ($gNo.code -eq -1 -and $gNo.err -clike "PowerShell 7 is not at *no\pwsh.exe*") "a missing PowerShell 7 is a red guard that names the path, never a skipped one"
+$gBad = & $realTools["Guard"] $probeFolder "probe.ps1" "6"
+Check ($gBad.code -eq -1 -and $gBad.err -clike "*is not 5.1 or 7*") "a shell that is neither 5.1 nor 7 is refused"
+
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.
@@ -445,7 +520,7 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env $env1
     $main = Get-Main $c
     Check ($run.code -eq 1 -and $run.out -clike ("*MERGED YedPool/horde#1 as " + $main + "*") -and $main -cne $c1) ("the happy path merges and says so (" + $run.code + ")")
-    Check ($run.out -clike "*test\test-host-names.ps1 is green*test\test-mutation-specs.ps1 is green*") "  the guards ran through the real guard runner and were read green"
+    Check ($run.out -clike "*test\test-host-names.ps1 is green in Windows PowerShell 5.1*test\test-host-names.ps1 is green in PowerShell 7*test\test-mutation-specs.ps1 is green in Windows PowerShell 5.1*test\test-mutation-specs.ps1 is green in PowerShell 7*") "  the guards ran through the real guard runner in both shells and were read green"
     Check (@(Get-LedgerCalls $c)[-1] -ceq "merged T-0247 --pr YedPool/horde#1 --by F --state done") "  the ledger event was written through the settings' program"
     Check ($run.out -clike "*COULD NOT TELL THE WARCHIEF: this Horde home is under the temp folder, so it is a test's: nobody is told*" -and $run.out -clike "*MERGED, NOT FINISHED:*the warchief was not told*") "  a test's home tells the warchief nothing, and the command exits 1 saying so rather than pretend"
     $mailDir = Join-Path $c.home "analyst\mail"
