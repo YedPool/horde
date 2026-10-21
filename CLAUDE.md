@@ -76,7 +76,7 @@ reason.
   integrity levels, an interactive logon or the real stores: locally, one run at a time, through
   the local gate.
 - Ready PRs are merged in batches: on main plus every ready PR, run the touched suites, the full
-  suite and the changed-file mutation specs once; merge in order; drop a red one and rerun the rest.
+  suite and the changed-target mutation specs once; merge in order; drop a red one and rerun the rest.
 - No checks, or no closing banner, means NOT RUN. Gates and runners get a failure-case matrix
   before rollout.
 

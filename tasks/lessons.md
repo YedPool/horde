@@ -108,9 +108,10 @@ targets, and one full run of the three specs on them took 5556 s on the remote t
 (2026-10-02) - for each round, most of it on lines the round had not touched.
 
 **Rule:** each review round runs the suites covering the changed files and `Mutate.ps1 -Changed`.
-That selection is blind to anything off a mutant's own line, so the full suite and the full specs
-still run once per pull request, on the final head merged with current `main`, and nothing merges
-on `-Changed` alone (CONTRIBUTING 15).
+That selection is blind to anything off a mutant's own line, so the full suite and the mutation
+specs of every changed target still run once per pull request, on the final head merged with
+current `main`, and nothing merges on `-Changed` alone; the full sweep of every spec runs nightly
+(CONTRIBUTING 15, 2026-10-21).
 
 ## A spec that is never run can be broken on main for days
 

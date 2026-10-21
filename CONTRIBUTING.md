@@ -301,14 +301,13 @@ its branch can break main when main moved under it").
    edited config, schema or data file that is not itself a target; a guard inserted above a mutant
    whose own line did not change; and a suite edited to catch less. The review of its pull request
    (#63) probed the first three, and each time the affected mutants were skipped and the run
-   exited 0. It proves only the mutants on touched lines and never stands in for the full specs:
+   exited 0. It proves only the mutants on touched lines and never stands in for the changed-target specs:
    **a pull request may not merge on `-Changed` results alone.**
-2. **The full suite and the mutation specs of every changed target file run once per pull request**,
-   on its final head, and
-   on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
-   on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
-   the merged tree is green. Why once and not never: first, `-Changed` is blind to every change
-   that is not on a mutant's own line (rule 1), and only the full specs see those. Second, a spec
+2. **The full suite and the changed-target mutation specs run once per pull request**, on its
+   final head, and on the **merge result** with current `main` (`git merge-tree`, or a throwaway
+   merge commit) - not on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
+   the merged tree is green. Why the specs run at all, and not only `-Changed`: first, `-Changed` is blind to every change
+   that is not on a mutant's own line (rule 1), and only whole specs see those. Second, a spec
    on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
@@ -316,7 +315,7 @@ its branch can break main when main moved under it").
    **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
    It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
    request's gate held that slot for over an hour and a half, and about ten runs from other
-   lanes queued behind it. The changed-file specs and `-Changed` cover the edited targets;
+   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets;
    the nightly sweep covers the two blind spots above, an edited helper and a spec broken on
    `main`, within a day. Until the nightly run is live, the sweep is run by hand once a night.
    A pull request body names the specs it ran and says the full sweep is left to the nightly run.
@@ -339,8 +338,8 @@ its branch can break main when main moved under it").
 6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
    A few times a day the ready pull requests are merged together:
    - build the combined tree: `main` plus every ready pull request, in order;
-   - run the touched suites, the full suite once, and the changed-file mutation specs once for the pull
-     requests in the batch, on that tree;
+   - run the touched suites, the full suite once, and the changed-target mutation specs once for
+     the pull requests in the batch, on that tree;
    - merge in order, with merge commits only (rule 4).
 
    The combined tree is the true merge result, so this run is the once-per-pull-request run of
