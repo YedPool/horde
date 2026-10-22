@@ -67,5 +67,22 @@
         @{ Name = "incomplete-night-not-said"
            Find = '        if ($r.incomplete) {'
            Replace = '        if ($false) {' }
-    )
+        @{ Name = "guards-process-exit-2-not-could-not-run"
+           Find = 'if ($ProcessExit -ne 0 -and $ProcessExit -ne 1) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "guards-json-exit-ignored"
+           Find = '    if ($e -eq 1) { return [pscustomobject]@{ code = 1; state = "RED"; text = $text } }'
+           Replace = '    if ($e -eq 1) { return [pscustomobject]@{ code = 0; state = "green"; text = $text } }' }
+        @{ Name = "guards-json-exit-2-read-as-red"
+           Find = '    if ($e -eq 2) { return [pscustomobject]@{ code = 2;'
+           Replace = '    if ($e -eq 2) { return [pscustomobject]@{ code = 1;' }
+        @{ Name = "guards-missing-json-taken-as-green"
+           Find = '-not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = "no -Json last line to read" } }'
+           Replace = '-not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 0; state = "green"; text = "no -Json last line to read" } }' }
+        @{ Name = "guards-unknown-exit-value-taken-as-green"
+           Find = '    return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is " + $e'
+           Replace = '    return [pscustomobject]@{ code = 0; state = "green"; text = ("the -Json exit field is " + $e' }
+        @{ Name = "guards-text-exit-field-accepted"
+           Find = 'if ($e -isnot [int] -and $e -isnot [long]) {'
+           Replace = 'if ($false) {' }    )
 }

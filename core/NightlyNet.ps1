@@ -151,6 +151,29 @@ function Find-HordeNightlyCulprit {
     return [pscustomobject]@{ state = "found"; sha = $m[$hi]; runs = $runs; between = @($(if ($lo -ge 0) { $m[$lo] } else { "" }), $m[$hi]) }
 }
 
+function Get-HordeNightlyGuardsAnswer {
+    # What `horde merge -RunOwed -Repo X -Json` said (F's shape, PR 375): the PROCESS exits 0 (green or nothing
+    # owed) or 1 (red or could not run); 2 means a bad command line, which is also what a horde without the verb
+    # gives. The real split is the exit field of the -Json LAST line: 0 green, 1 red, 2 could not run. So:
+    # a process exit of 2 (or any other than 0 or 1), a missing last line, a line that is not a JSON object, or an
+    # exit field that is not 0, 1 or 2 is COULD NOT RUN, never green. { code (0, 1 or 2); state; text }.
+    param([int]$ProcessExit, [string[]]$Lines)
+    $non = @(@($Lines) | Where-Object { "" + $_ -ne "" -and ("" + $_).Trim() -ne "" })
+    $last = ""; if ($non.Count -gt 0) { $last = ("" + $non[$non.Count - 1]).Trim() }
+    $text = ""
+    if ($last -ne "") { $text = $last; if ($text.Length -gt 700) { $text = $text.Substring(0, 700) } }
+    if ($ProcessExit -ne 0 -and $ProcessExit -ne 1) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("process exit " + $ProcessExit + " (a horde without the verb answers 2)") } }
+    $o = $null
+    if ($last -ne "") { try { $o = $last | ConvertFrom-Json } catch { $o = $null } }
+    if ($null -eq $o -or $o -isnot [pscustomobject] -or -not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = "no -Json last line to read" } }
+    $e = $o.exit
+    if ($e -isnot [int] -and $e -isnot [long]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is not a number: " + $text) } }
+    if ($e -eq 0) { return [pscustomobject]@{ code = 0; state = "green"; text = $text } }
+    if ($e -eq 1) { return [pscustomobject]@{ code = 1; state = "RED"; text = $text } }
+    if ($e -eq 2) { return [pscustomobject]@{ code = 2; state = "could not run"; text = $text } }
+    return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is " + $e + ": " + $text) }
+}
+
 function Format-HordeNightlySha {
     # The first 8 characters of a sha, or all of a shorter one.
     param($Sha)

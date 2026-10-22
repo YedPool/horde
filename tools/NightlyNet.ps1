@@ -20,7 +20,7 @@
 #
 # EACH REPO, in three phases over all repos (phase 1 may use the night up to 06:30 minus -BisectReserveMinutes):
 #   1. own clone at origin/<branch>; the day's merges (first-parent, since the last run's tip, labelled from
-#      HORDE_HOME\merge\guards-owed.jsonl when present); the guards (horde: `horde merge -RunOwed`, which this
+#      HORDE_HOME\merge\guards-owed.jsonl when present); the guards (horde: `horde merge -RunOwed -Json`, which this
 #      file calls and never reimplements; a horde without the verb answers "could not run", never green) and the
 #      full suite, every unit a verdict; compared with last night's (state.json): NEWLY RED = red now, green then.
 #   2. for each newly red unit, a bisect over the day's merges only (first-parent), running only that unit
@@ -249,7 +249,7 @@ function Invoke-NightlyPhaseOne {
     # The guards and the full suite of one repo, until -Cutoff. Fills verdicts, guards, unrun, incomplete.
     param($Ctx, [datetime]$Cutoff)
     $tag = ($Ctx.repo -replace '/', '_')
-    # THE GUARDS (horde): `horde merge -RunOwed` through the gate, exit 0 green, 1 red, 2 could not run.
+    # THE GUARDS (horde): `horde merge -RunOwed -Json` through the gate (tools/nightly/guards-wrap.ps1 reads its -Json last line, F's shape of PR 375):
     if ($Ctx.kind -ceq "horde") {
         if (-not (Test-HordeNightlyMayStartRun -Now (Get-Date) -Cutoff $Cutoff -RunSeconds $RunSeconds)) { $Ctx.guards = [pscustomobject]@{ state = "not run"; text = "the night ran out before the guards could start" } }
         else {

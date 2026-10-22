@@ -105,8 +105,32 @@ $r = Run-Bisect -N 16 -Break 7 -Max 2
 Check ($r.state -ceq "capped") "the run cap stops it, saying so"
 
 Write-Host ""
-Write-Host "--- the report ---" -ForegroundColor Cyan
-$merge = $mg[1]
+Write-Host "--- the guards answer: the -Json last line decides, a process exit of 2 is could-not-run ---" -ForegroundColor Cyan
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @("some guard output", '{"exit":0,"red":[]}')
+Check ($a.code -eq 0 -and $a.state -ceq "green") "process 0, json exit 0: green"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"exit":0}', "")
+Check ($a.code -eq 0) "trailing blank lines are skipped when finding the last line"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"red":["test-host-names"],"first":"22222222"}')
+Check ($a.code -eq 1 -and $a.state -ceq "RED" -and $a.text -like "*test-host-names*") "process 1, json exit 1: red, with the line kept as text"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":2,"why":"no clone"}')
+Check ($a.code -eq 2 -and $a.state -ceq "could not run") "process 1 and json exit 2: could not run (not red)"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 2 -Lines @('{"exit":0}')
+Check ($a.code -eq 2 -and $a.state -ceq "could not run") "a process exit of 2 (a horde without the verb) is could not run, even beside a green-looking line"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @()
+Check ($a.code -eq 2) "no output at all: could not run, never green"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @("all fine")
+Check ($a.code -eq 2) "a last line that is not JSON: could not run"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"result":"ok"}')
+Check ($a.code -eq 2) "JSON with no exit field: could not run"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"exit":"0"}')
+Check ($a.code -eq 2) "an exit field that is text, not a number: could not run"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"exit":7}')
+Check ($a.code -eq 2) "an exit field outside 0 to 2: could not run"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 3 -Lines @('{"exit":0}')
+Check ($a.code -eq 2) "any process exit but 0 or 1: could not run"
+
+Write-Host ""
+Write-Host "--- the report ---" -ForegroundColor Cyan$merge = $mg[1]
 $rows = @(
     [pscustomobject]@{ repo = "Y/h"; tip = "abcdef0123456789"; lastTip = "0123456789abcdef"; merges = $mg
         guards = [pscustomobject]@{ state = "RED"; text = "test-host-names red; first merge: 22222222" }
