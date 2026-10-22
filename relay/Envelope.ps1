@@ -340,6 +340,14 @@ function New-HordeRelaySender {
     return [pscustomobject]@{ keyId = (Get-HordeRelayKeyId -Public $Public); public = $Public; proof = $Proof; rpId = $RpId; origins = @($Origins); requireUserVerification = $RequireUserVerification }
 }
 
+function Test-HordeRelayEnvelopeParts {
+    # Do the decoded parts of a read envelope match its texts? $true or $false.
+    param([Parameter(Mandatory = $true)]$Envelope)
+    $env = $Envelope
+    $rebuiltRecipients = ConvertTo-HordeRelayRecipientsText -Recipients @($env.recipients | ForEach-Object { [pscustomobject]@{ kid = $_.kid; encText = (ConvertTo-HordeRelayBase64Url -Bytes $_.enc); keyText = (ConvertTo-HordeRelayBase64Url -Bytes $_.key) } })
+    return ((ConvertTo-HordeRelayHeaderText -Header $env.header) -ceq $env.headerText -and $rebuiltRecipients -ceq $env.recipientsText -and (ConvertTo-HordeRelayBase64Url -Bytes $env.ct) -ceq $env.ctText)
+}
+
 function Test-HordeRelayEnvelope {
     # Verify a read envelope's signature against the trusted senders (a hashtable of key id to
     # New-HordeRelaySender). { ok; reason; value } where value is { envelope; header; proof; signCount;
@@ -350,8 +358,7 @@ function Test-HordeRelayEnvelope {
     # The parts that are used must be the parts that are signed: the signature covers the texts, while
     # decryption and the replay key use the decoded header, recipients and ciphertext. Rebuilt and
     # compared, so an envelope object whose parts were swapped after Read is refused.
-    $rebuiltRecipients = ConvertTo-HordeRelayRecipientsText -Recipients @($env.recipients | ForEach-Object { [pscustomobject]@{ kid = $_.kid; encText = (ConvertTo-HordeRelayBase64Url -Bytes $_.enc); keyText = (ConvertTo-HordeRelayBase64Url -Bytes $_.key) } })
-    if ((ConvertTo-HordeRelayHeaderText -Header $h) -cne $env.headerText -or $rebuiltRecipients -cne $env.recipientsText -or (ConvertTo-HordeRelayBase64Url -Bytes $env.ct) -cne $env.ctText) {
+    if (-not (Test-HordeRelayEnvelopeParts -Envelope $env)) {
         return (New-HordeRelayEnvelopeAnswer -Reason "the envelope's parts do not match its signed text")
     }
     if (-not $Senders.ContainsKey($h.from)) { return (New-HordeRelayEnvelopeAnswer -Reason ("the sender " + $h.from + " is not one this machine trusts")) }
@@ -395,9 +402,19 @@ function Unprotect-HordeRelayEnvelope {
     # refuses, before a single byte is decrypted.
     param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders,
         [Parameter(Mandatory = $true)][hashtable]$RecipientKeys, [Parameter(Mandatory = $true)][AllowNull()]$Replay,
-        [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind)
-    $verified = Test-HordeRelayEnvelope -Envelope $Envelope -Senders $Senders
-    if (-not $verified.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $verified.reason) }
+        [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind, [switch]$Reread)
+    # -Reread: a record this machine opened and verified once, read again for its words alone (channels/chat,
+    # Taken.ps1: the receipt of a line already accepted). The sender is NOT judged again - a session
+    # since ended, idle or pruned must not take away the receipt of a line already accepted - but the
+    # parts must still match their texts, the journal's verdict is still checked, and the body still
+    # opens only if the ciphertext and the header are untouched (AES-GCM over the header). It hands the
+    # bytes to nothing that acts on them.
+    if ($Reread) {
+        if (-not (Test-HordeRelayEnvelopeParts -Envelope $Envelope)) { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope's parts do not match its signed text") }
+    } else {
+        $verified = Test-HordeRelayEnvelope -Envelope $Envelope -Senders $Senders
+        if (-not $verified.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $verified.reason) }
+    }
     $env = $Envelope
     $h = $env.header
     if ($h.channel -cne $Channel) { return (New-HordeRelayEnvelopeAnswer -Reason ("the envelope is for the channel " + $h.channel + ", not " + $Channel)) }

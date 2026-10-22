@@ -629,6 +629,25 @@ function Get-HordeRelayJournalUnfinished {
     return (New-HordeKnown -Value @($out.ToArray()) -ObservedAt ([datetime]::UtcNow))
 }
 
+function Get-HordeRelayJournalReceivedRecord {
+    # ONE received record by its sender, channel and seq, DONE OR NOT - the shape Get-HordeRelayJournalUnfinished
+    # lists (from, channel, kind, seq, key, text, evidence, verdict), for a channel that must open a record
+    # it has already finished (channels/chat: the words of a line it is still waiting to see taken). Known
+    # record; unknown when the journal cannot say or the record is damaged or not there. Reads only.
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][long]$Seq, [string]$HordeHome = "")
+    $why = Test-HordeRelayJournalStreamName -From $From -Channel $Channel
+    if ($why -cne "") { return (New-HordeUnknown -Reason $why) }
+    $ctx = Get-HordeRelayJournalContext -HordeHome $HordeHome
+    if (-not $ctx.ok) { return (New-HordeUnknown -Reason $ctx.reason) }
+    $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "in" -From $From -Channel $Channel
+    $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "in" -From $From -Channel $Channel -Seq $Seq
+    if (-not $r.ok) { return (New-HordeUnknown -Reason $r.reason) }
+    $replay = [ordered]@{ key = $r.meta.key; fresh = $true; why = ""; gapBefore = [long]0; direction = "in"; resumed = $true }
+    $verdict = New-HordeKnown -Value ([pscustomobject]$replay) -ObservedAt ([datetime]::UtcNow)
+    $digest = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $r.whole))
+    return (New-HordeKnown -Value ([pscustomobject]@{ from = $From; channel = $Channel; kind = $r.meta.kind; seq = $Seq; key = $r.meta.key; text = $r.envelope; evidence = $digest; verdict = $verdict }) -ObservedAt ([datetime]::UtcNow))
+}
+
 function Test-HordeRelayJournalSent {
     # Did this journal record, as SENT, the envelope with replay key -Key (from/channel/seq/nonce)? Known
     # { sent; kind; text } - sent $true only for a whole record of that very envelope, with its kind and

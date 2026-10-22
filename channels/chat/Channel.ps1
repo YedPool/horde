@@ -112,12 +112,17 @@
 #     the rest - the machine's clock is never put in its place, and a record with no such time gives a
 #     receipt with no sentAt, which the phone shows with no time. Codes only: the phone shows its own fixed sentence for each (relay/js/
 #     protocol.js, CHAT_WORDS), never a word of the relay's or the messenger's.
-#       accepted  queued (the messenger took it), delivered (handed over, or seen by the receiver)
+#       accepted  queued (the messenger took it; the Thrall has NOT yet), delivered (handed over, or seen by
+#                 the receiver - the Thrall's own hook confirmed it, Taken.ps1)
 #       held      thrall-unknown, no-messenger, not-now, too-many (it comes again), not-delivered,
 #                 expired (final)
 #       refused   wrong-machine, wrong-horde, empty, too-long, no-thrall, session-ended (final)
 #     A held line that comes again says so once per run, not on every turn.
-#   done     the messenger answered: delivered, or known not delivered (held for good);
+#   done     the messenger answered: handed over or seen by the Thrall's own side (delivered), known not
+#            delivered (held for good), or IN THE THRALL'S MAILBOX, NOT YET TAKEN: then the record is
+#            done only because the line is now owned by the awaiting list (Taken.ps1, T-0281), which
+#            makes it delivered when the Thrall's own hook confirms it and raises an alarm on the
+#            phone when it has not within takenAlarmSeconds - "queued" is never the end of the road;
 #   refused  for good, with the code above;
 #   retry    the Thrall, the messenger or this machine could not say now: the record comes again.
 #
@@ -136,6 +141,7 @@ foreach ($chatAdapterFile in @(Get-HordeConversationAdapterFiles)) {
     if (@(Get-HordeConversationAdapterNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatAdapterFile))) { . $chatAdapterFile }
 }
 . (Join-Path $PSScriptRoot "Photo.ps1")
+. (Join-Path $PSScriptRoot "Taken.ps1")
 . (Join-Path $PSScriptRoot "Pointer.ps1")
 foreach ($chatMessengerFile in @(Get-HordeMessengerFiles)) {
     if (@(Get-HordeMessengerNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatMessengerFile))) { . $chatMessengerFile }
@@ -156,6 +162,10 @@ $script:HordeChatChannelSettings = New-HordeModuleSettings -Module "relay-chat" 
     # 21,000: three bytes a character at the most, and the header, stay inside the messenger port's 64 KiB.
     @{ name = "lineChars"; kind = "whole"; default = 16000; min = 1; max = 21000; what = "The longest line the founder may send to the Thrall, in characters." },
     @{ name = "ttlSeconds"; kind = "whole"; default = 86400; min = 60; max = 604800; what = "How long a line may wait in the Thrall's mailbox, in seconds." },
+    # TAKEN (channels/chat/Taken.ps1): a line is delivered only when the Thrall's own side has taken it.
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600; what = "How long a line the messenger accepted may wait to be taken by the Thrall's own side before the founder's phone is told it was not delivered, in seconds." },
+    @{ name = "takenCheckSeconds"; kind = "whole"; default = 10; min = 1; max = 300; what = "How often a line waiting to be taken is asked about before the alarm, in seconds." },
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 60; min = 5; max = 3600; what = "How often a line already alarmed is asked about, until it is taken or ttlSeconds passes, in seconds." },
     @{ name = "clearTries"; kind = "whole"; default = 60; min = 1; max = 100000; what = "How many turns in a row a session cleared from under the cursor is asked for again, while it cannot be read, before its unread tail is left." },
     @{ name = "linesPerMinute"; kind = "whole"; default = 20; min = 1; max = 600; what = "The most of the founder's lines posted to the Thrall in any 60 seconds; one past it waits." },
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the founder's lines are from: F, unless the person who sends them wears another." },
@@ -231,7 +241,7 @@ function Read-HordeChatChannelState {
     # yet, unknown when the file cannot be read or does not hold together - never a guess.
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     $path = Get-HordeChatChannelStatePath -HordeHome $HordeHome
-    $empty = [pscustomobject]@{ cursor = $null; session = ""; phones = @(); pending = @(); lines = @(); rewind = $null }
+    $empty = [pscustomobject]@{ cursor = $null; session = ""; phones = @(); pending = @(); lines = @(); rewind = $null; awaiting = @() }
     if (-not [System.IO.File]::Exists($path)) { return (New-HordeKnown -Value $empty) }
     try { $bytes = [System.IO.File]::ReadAllBytes($path); Assert-HordeAsciiBytes -Bytes $bytes -What ("the chat state " + $path); $text = [System.Text.Encoding]::ASCII.GetString($bytes) }
     catch { return (New-HordeUnknown -Reason ("the chat state " + $path + " cannot be read: " + $_.Exception.Message)) }
@@ -240,15 +250,21 @@ function Read-HordeChatChannelState {
     try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
     if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
     $names = @($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
-    if (($names -join ",") -cne "cursor,lines,pending,phones,rewind,session,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }
+    # awaiting (Taken.ps1) came after the first states: a state without it is read as an empty list.
+    if (($names -join ",") -cne "cursor,lines,pending,phones,rewind,session,v" -and ($names -join ",") -cne "awaiting,cursor,lines,pending,phones,rewind,session,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }
     if (-not ($s.v -is [int] -or $s.v -is [long]) -or $s.v -ne 1) { return (New-HordeUnknown -Reason ($why + ": it is not version 1")) }
     if ($s.session -isnot [string]) { return (New-HordeUnknown -Reason ($why + ": its session is not text")) }
     foreach ($p in @($s.phones)) { if ($p -isnot [string] -or $p -cnotmatch '\A[0-9a-f]{32}\z') { return (New-HordeUnknown -Reason ($why + ": a phone key is not a key id")) } }
     foreach ($k in @($s.pending)) { if ($k -isnot [string] -or $k.Length -gt 160) { return (New-HordeUnknown -Reason ($why + ": a pending envelope is not a replay key")) } }
     foreach ($l in @($s.lines)) { if ($l -isnot [string] -or $l -cnotmatch $script:HordeChatChannelLineMarkPattern) { return (New-HordeUnknown -Reason ($why + ": a posted line is not an id, a length and a hash")) } }
+    $awaiting = @()
+    if ($names -ccontains "awaiting") {
+        foreach ($a in @($s.awaiting)) { if ($a -isnot [string] -or $a -cnotmatch $script:HordeChatTakenMarkPattern) { return (New-HordeUnknown -Reason ($why + ": a line awaiting the Thrall is not a mark")) } }
+        $awaiting = @($s.awaiting)
+    }
     if ($null -ne $s.cursor -and $s.cursor -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": its cursor is not an object")) }
     if ($null -ne $s.rewind -and $s.rewind -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": its rewind is not a cursor")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ cursor = $s.cursor; session = $s.session; phones = @($s.phones); pending = @($s.pending); lines = @($s.lines); rewind = $s.rewind }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ cursor = $s.cursor; session = $s.session; phones = @($s.phones); pending = @($s.pending); lines = @($s.lines); rewind = $s.rewind; awaiting = $awaiting }))
 }
 
 function ConvertTo-HordeChatChannelCursorText {
@@ -278,7 +294,8 @@ function Write-HordeChatChannelState {
     $phones = (@($State.phones) | ForEach-Object { '"' + $_ + '"' }) -join ","
     $pending = (@($State.pending) | ForEach-Object { ConvertTo-HordeChatChannelJsonString $_ }) -join ","
     $lines = (@($State.lines) | ForEach-Object { '"' + $_ + '"' }) -join ","
-    $text = '{"v":1,"cursor":' + $cursor + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($State.session)") + ',"phones":[' + $phones + '],"pending":[' + $pending + '],"lines":[' + $lines + '],"rewind":' + $rewind + '}'
+    $awaiting = (@($State.awaiting) | ForEach-Object { '"' + $_ + '"' }) -join ","
+    $text = '{"v":1,"cursor":' + $cursor + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($State.session)") + ',"phones":[' + $phones + '],"pending":[' + $pending + '],"lines":[' + $lines + '],"awaiting":[' + $awaiting + '],"rewind":' + $rewind + '}'
     $tmp = [System.IO.Path]::Combine($dir, ("state-" + [guid]::NewGuid().ToString("N") + ".tmp"))
     $fs = New-Object System.IO.FileStream -ArgumentList $tmp, ([System.IO.FileMode]::CreateNew), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::None)
     try { $b = [System.Text.Encoding]::ASCII.GetBytes($text); $fs.Write($b, 0, $b.Length); $fs.Flush($true) } finally { $fs.Dispose() }
@@ -291,14 +308,14 @@ function Get-HordeChatChannelStateMark {
     $c = $State.cursor
     $cur = $(if ($null -eq $c) { "-" } else { "$($c.vendor)|$($c.session)|$($c.position)" })
     $rw = $(if ($null -eq $State.rewind) { "-" } else { "$($State.rewind.session)|$($State.rewind.position)" })
-    return ($cur + "#" + $State.session + "#" + (@($State.phones) -join ",") + "#" + (@($State.pending) -join ",") + "#" + (@($State.lines) -join ",") + "#" + $rw)
+    return ($cur + "#" + $State.session + "#" + (@($State.phones) -join ",") + "#" + (@($State.pending) -join ",") + "#" + (@($State.lines) -join ",") + "#" + (@($State.awaiting) -join ",") + "#" + $rw)
 }
 
 function Get-HordeChatChannelMemory {
     # The channel's memory in this run's context, its durable state read on first use: { ok; reason; mine }.
     param($Context)
     if (-not $Context.state.ContainsKey("chat")) {
-        $Context.state["chat"] = @{ loaded = $false; durable = $null; lastSentAt = [datetime]::MinValue; said = @{}; heldSaid = @{}; posted = (New-Object System.Collections.ArrayList) }
+        $Context.state["chat"] = @{ loaded = $false; durable = $null; lastSentAt = [datetime]::MinValue; said = @{}; heldSaid = @{}; posted = (New-Object System.Collections.ArrayList); takenChecked = @{} }
     }
     $mine = $Context.state["chat"]
     if (-not $mine.loaded) {
@@ -527,11 +544,15 @@ function Invoke-HordeChatChannelTick {
     if (-not $m.ok) { return $t }
     $set = Get-HordeChatChannelSettings -Context $Context
     if ($set.state -cne "known") { return $t }
+    # THE LINES WAITING TO BE TAKEN (Taken.ps1): asked about, delivered or alarmed.
+    $taken = [pscustomobject]@{ lines = @(); failed = $false }
+    try { $taken = Invoke-HordeChatTakenTick -Context $Context -Mine $m.mine -Settings $set.value }
+    catch { $taken = [pscustomobject]@{ lines = @("lines awaiting the Thrall failed: " + $_.Exception.Message); failed = $true } }
     $photo = @()
     try { $photo = @(Invoke-HordeChatPhotoTick -Context $Context -Mine $m.mine -Settings $set.value) }
     catch { $photo = @("photos failed: " + $_.Exception.Message) }
-    if ($photo.Count -eq 0) { return $t }
-    return [pscustomobject]@{ lines = @(@($t.lines) + $photo); failed = [bool]$t.failed }
+    if ($photo.Count -eq 0 -and @($taken.lines).Count -eq 0) { return $t }
+    return [pscustomobject]@{ lines = @(@($t.lines) + @($taken.lines) + $photo); failed = ([bool]$t.failed -or [bool]$taken.failed) }
 }
 
 function Invoke-HordeChatChannelTurnsTick {
@@ -684,6 +705,9 @@ function Test-HordeChatChannelGlance {
     param($Context)
     if (-not $Context.state.ContainsKey("chat")) { return $false }
     $mine = $Context.state["chat"]
+    # A LINE WAITING TO BE TAKEN THAT IS DUE TO BE ASKED ABOUT is a yes (Taken.ps1): the Tick asks, there
+    # and then, and the alarm is not held back until the watch ends. Local only: a mark and a clock.
+    if ($mine.loaded -and (Test-HordeChatTakenDue -Mine $mine)) { return $true }
     if (-not $mine.loaded -or -not $mine.ContainsKey("source") -or $null -eq $mine["source"]) { return $false }
     $d = $mine.durable
     if ($null -eq $d.cursor -or @($d.pending).Count -gt 0) { return $false }
@@ -827,7 +851,38 @@ function Invoke-HordeChatChannelAccept {
     $wake = Format-HordeMessengerWake -Answer $posted
     if ($wake -cne "") { $wake = "; " + $wake }
     switch ("$($posted.value.stage)") {
-        "accepted" { return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake) $line.session) }
+        "accepted" {
+            # IN THE MAILBOX, NOT YET TAKEN (channels/chat/Taken.ps1): the line is owned by the awaiting list
+            # from here, written BEFORE the record is marked done, and is delivered only when the Thrall's
+            # own side says so. A list that cannot be written holds the record: it comes again, and the
+            # same post (the same id) is kept once by the messenger.
+            $wp = $posted.value.PSObject.Properties["woken"]
+            $entry = [pscustomobject]@{ messageId = $line.messageId; messengerId = $message.messageId; postedMs = (Get-HordeChatTakenNowMs); from = "$($Item.from)"; seq = [long]$Item.seq; alarmed = $false; woken = ($null -ne $wp -and $wp.Value -eq $true) }
+            $awaitedBefore = @($mine.durable.awaiting)
+            $already = Get-HordeChatTakenEntry -State $mine.durable -MessageId $line.messageId
+            $overflow = @(Get-HordeChatTakenOverflow -State $mine.durable)
+            if ($null -ne $already -and $already.alarmed) {
+                # ALREADY AWAITED AND ALARMED (a restart, a re-signed duplicate): its alarm stands, and a
+                # queued receipt now would cover it on the phone (the newest receipt wins) and no alarm
+                # would come again. Nothing is sent; the line stays awaited with its own clock.
+                return [pscustomobject]@{ outcome = "done"; reason = ("line " + $line.messageId + ": already awaited and alarmed - no receipt sent over the alarm") }
+            }
+            $gaveUp = @()
+            if (Add-HordeChatTaken -State $mine.durable -Entry $entry) {
+                $mine.takenChecked[$line.messageId] = (Get-HordeChatTakenNowMs)
+                try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable }
+                catch {
+                    # Not on disk, so not in memory either: the record comes again and adds it again.
+                    $mine.durable.awaiting = $awaitedBefore
+                    return (& $answer "retry" "held" "not-now" ("the chat state could not be written, so the line is not yet awaited: " + $_.Exception.Message) $line.session)
+                }
+                # PAST THE LIST'S SIZE the oldest left it (Add-HordeChatTaken): never in silence.
+                $gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })
+            }
+            $queued = & $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting the Thrall's own side (TAKEN)") $line.session
+            if ($gaveUp.Count -gt 0) { $queued.reason = $queued.reason + " | " + ($gaveUp -join " | ") }
+            return $queued
+        }
         "held" { return (& $answer "done" "held" "not-delivered" ("messenger " + $messenger.value.name + " holds it, not delivered") $line.session) }
         "expired" { return (& $answer "done" "held" "expired" ("messenger " + $messenger.value.name + " gave it up undelivered") $line.session) }
         default { return (& $answer "done" "accepted" "delivered" ("messenger " + $messenger.value.name + " handed it to the Thrall (" + $posted.value.stage + ")") $line.session) }
