@@ -5,6 +5,7 @@
 @{
     Target = "channels\chat\Channel.ps1"
     Suite  = "test\test-relay-chat-taken.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         # Done before taken: the accepted post is answered as delivered at once.
         @{ Name = "done-before-taken"
@@ -40,5 +41,12 @@
         @{ Name = "overflow-line-dropped-silently"
            Find = '$gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })'
            Replace = '$gaveUp = @()' }
+        # S-d: the evicted line is told BEFORE the state write that drops it, never after.
+        @{ Name = "giveup-after-the-state-write"
+           Find = '            if ($null -eq $already) {'
+           Replace = '            if ($false) {' }
+        @{ Name = "giveup-sent-after-the-state-write"
+           Find = '            if (Add-HordeChatTaken -State $mine.durable -Entry $entry) {'
+           Replace = '            if ($(Add-HordeChatTaken -State $mine.durable -Entry $entry) -and $(try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable } catch { }; $true) -and $(if ($null -eq $already) { $gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" }) }; $true)) {' }
     )
 }

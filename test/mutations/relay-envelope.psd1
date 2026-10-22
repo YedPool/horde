@@ -100,5 +100,15 @@
         @{ Name = "header-left-out-of-the-sender-aad"
            Find = '$aad = Get-HordeRelayAsciiBytes -Text ((Get-HordeRelayEnvelopeDomain -Part "aad") + $headerText)'
            Replace = '$aad = Get-HordeRelayAsciiBytes -Text (Get-HordeRelayEnvelopeDomain -Part "aad")' }
+        # T-0340 (S-b): -Reread skips the sender and nothing else.
+        @{ Name = "reread-skips-the-parts-check"
+           Find = 'if (-not (Test-HordeRelayEnvelopeParts -Envelope $Envelope)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "default-path-acts-as-reread"
+           Find = '    if ($Reread) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "reread-judges-the-sender-again"
+           Find = '    if ($Reread) {'
+           Replace = '    if ($false) {' }
     )
 }

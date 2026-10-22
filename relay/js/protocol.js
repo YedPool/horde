@@ -1060,9 +1060,10 @@ export function chatTimeline({ turns = [], receipts = [], sent = [], photos = []
   for (const r of receipts) {
     const had = lines.get(r.messageId);
     if (had && had.seq > r.seq) continue;
-    // The receipt's words are the words posted: what the line shows, whatever the phone kept.
+    // The receipt's words are the words posted: what the line shows, whatever the phone kept. A receipt that carries
+    // none (the machine could not read the line's record back, channels/chat/Taken.ps1) keeps the words held.
     const said = r.sentAt || (had ? had.said : 0);
-    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text !== "" ? r.text : (had ? had.text : ""), at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
   }
   const items = [];
   for (const [id, g] of byId) {

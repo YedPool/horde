@@ -5,6 +5,7 @@
 @{
     Target = "channels\chat\Taken.ps1"
     Suite  = "test\test-relay-chat-taken.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         # A status that cannot be read is never a confirmation.
         @{ Name = "unreadable-status-counted-as-taken"
@@ -70,12 +71,35 @@
         @{ Name = "receipt-judges-the-session-again"
            Find = '-Record $rec.value -Reread'
            Replace = '-Record $rec.value' }
+        # S-c: a record that can never be opened is still told to the phone (no words), keeps its alarmed
+        # mark until a TAKEN or ttl, and never leaves in silence.
         @{ Name = "unopenable-line-dropped-silently"
-           Find = '[void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") and the phone could NOT be told: its record cannot be opened again - " + $w.reason)'
-           Replace = '[void]$lines.Add("chat: line " + $e.messageId + " is left (" + $act + "): its record cannot be opened again - " + $w.reason)' }
+           Find = '        $rw = Get-HordeChatTakenReceiptWords -Words $w'
+           Replace = '        if ($w.state -cne "ok") { $changed = $true; continue }
+        $rw = Get-HordeChatTakenReceiptWords -Words $w' }
+        @{ Name = "unopenable-line-not-alarmed-on-the-phone"
+           Find = '        $rw = Get-HordeChatTakenReceiptWords -Words $w'
+           Replace = '        if ($w.state -cne "ok" -and $act -ceq "alarm") { [void]$keep.Add($mark); continue }
+        $rw = Get-HordeChatTakenReceiptWords -Words $w' }
         @{ Name = "unreadable-record-kept-for-ever"
-           Find = 'if ($w.state -ceq "retry" -and $age -gt [double]$Settings.ttlSeconds) {'
+           Find = 'if ($w.state -ceq "retry" -and $act -cne "alarm" -and $age -le [double]$Settings.ttlSeconds) {'
+           Replace = 'if ($w.state -ceq "retry" -and $act -cne "alarm") {' }
+        @{ Name = "unreadable-record-dropped-at-once"
+           Find = 'if ($w.state -ceq "retry" -and $act -cne "alarm" -and $age -le [double]$Settings.ttlSeconds) {'
            Replace = 'if ($false) {' }
+        @{ Name = "unreadable-record-never-alarms-the-phone"
+           Find = 'if ($w.state -ceq "retry" -and $act -cne "alarm" -and $age -le [double]$Settings.ttlSeconds) {'
+           Replace = 'if ($w.state -ceq "retry" -and $age -le [double]$Settings.ttlSeconds) {' }
+        @{ Name = "wordless-receipt-invents-words"
+           Find = 'return [pscustomobject]@{ session = ""; text = ""; sentAt = [long]0;'
+           Replace = 'return [pscustomobject]@{ session = ""; text = "a line"; sentAt = [long]0;' }
+        @{ Name = "wordless-receipt-silent-in-the-log"
+           Find = '            if ($act -cne "alarm") { [void]$lines.Add("ALARM: chat line " + $e.messageId + " left the list as " + $act + " " + $rw.note) }'
+           Replace = '' }
+        # S-d: the give-up says what it knows.
+        @{ Name = "giveup-claims-the-line-is-gone"
+           Find = 'it is no longer watched, but it may still be in the Thrall''s mailbox and be taken; the phone is told it was not delivered'
+           Replace = 'the phone is told it was not delivered' }
         @{ Name = "another-line-s-words-echoed"
            Find = 'if ($r.value.messageId -cne $Entry.messageId) {'
            Replace = 'if ($false) {' }
@@ -95,8 +119,8 @@
            Find = '-MessageId $Entry.messageId -Status "held" -Code "not-delivered"'
            Replace = '-MessageId $Entry.messageId -Status "accepted" -Code "delivered"' }
         @{ Name = "overflow-alarm-line-lost"
-           Find = 'return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered"'
-           Replace = 'return ("chat: line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered"' }
+           Find = 'return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched'
+           Replace = 'return ("chat: line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched' }
         # The Glance says yes when a line is due.
         @{ Name = "glance-never-due"
            Find = '        if ($now - $last -ge $every) { return $true }'

@@ -701,6 +701,11 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   check(edited.indexOf("other words") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headNow, "other words under a line id already sent are refused before anything is signed", edited);
   const tl = P.chatTimeline({ sent: [{ messageId: "f".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "f".repeat(32), status: "accepted", code: "delivered", text: "posted words", session: "s", seq: 3, ts: 2 }] });
   check(tl.length === 1 && tl[0].text === "posted words", "a line shows the words its receipt says were posted, not what the phone kept", JSON.stringify(tl));
+  // A receipt with no words (the machine could not read the line's record back, T-0340) keeps the words held.
+  const tlw = P.chatTimeline({ sent: [{ messageId: "e".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "e".repeat(32), status: "held", code: "not-now", text: "", session: "", seq: 3, ts: 2 }] });
+  check(tlw.length === 1 && tlw[0].text === "typed here" && tlw[0].code === "not-now", "a receipt with no words keeps the line's own words and shows its status", JSON.stringify(tlw));
+  const tlw2 = P.chatTimeline({ receipts: [{ messageId: "d".repeat(32), status: "accepted", code: "queued", text: "posted words", session: "s", seq: 3, ts: 2 }, { messageId: "d".repeat(32), status: "held", code: "not-now", text: "", session: "", seq: 4, ts: 3 }] });
+  check(tlw2.length === 1 && tlw2[0].text === "posted words" && tlw2[0].code === "not-now", "and so does a wordless receipt after one that carried them (a phone that kept nothing)", JSON.stringify(tlw2));
   // Through the bridge: the page's id for the words is the line's id, so a resend is the same line.
   const brp = createBridge(a.phone, { loadKinds: async () => ({}) });
   await brp.request("pick", { id: a.paired.id });
