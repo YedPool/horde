@@ -49,11 +49,23 @@
            Find = '$file = Join-Path (Get-HordeWezfleetMessengerOutgoing) ('
            Replace = '$file = Join-Path ([System.IO.Path]::GetTempPath()) (' }
         @{ Name = "folder-acl-not-set"
-           Find = '[System.IO.Directory]::SetAccessControl($dir, $sec)'
+           Find = 'Set-HordeWezfleetMessengerFolderAcl -Path $dir -Acl $sec'
            Replace = '' }
         @{ Name = "folder-acl-inherits"
            Find = '$sec.SetAccessRuleProtection($true, $false)'
            Replace = '$sec.SetAccessRuleProtection($false, $true)' }
+        @{ Name = "user-only-check-accepts-extra-rules"
+           Find = 'if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { return $false }'
+           Replace = 'if (-not $acl.AreAccessRulesProtected -or $rules.Count -lt 1) { return $false }' }
+        @{ Name = "user-only-check-ignores-inheritance"
+           Find = 'if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { return $false }'
+           Replace = 'if ($rules.Count -ne 1) { return $false }' }
+        @{ Name = "user-only-check-skipped"
+           Find = '$acl = Get-HordeWezfleetMessengerFolderAcl -Path $Path'
+           Replace = 'return $true; $acl = Get-HordeWezfleetMessengerFolderAcl -Path $Path' }
+        @{ Name = "user-only-check-any-identity"
+           Find = 'return ($r.IdentityReference.Value -ceq $me.Value -and'
+           Replace = 'return ($true -and' }
         @{ Name = "sweep-removes-nothing"
            Find = 'foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force)) { Remove-Item -LiteralPath $f.FullName -Force; $n++ }'
            Replace = '' }
