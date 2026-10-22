@@ -49,8 +49,8 @@
            Find = '$file = Join-Path (Get-HordeWezfleetMessengerOutgoing) ('
            Replace = '$file = Join-Path ([System.IO.Path]::GetTempPath()) (' }
         @{ Name = "folder-acl-not-set"
-           Find = 'Set-HordeWezfleetMessengerFolderAcl -Path $dir -Acl $sec'
-           Replace = '' }
+           Find = '-Path $dir -Acl $sec'
+           Replace = '-Path $dir -Acl (New-Object System.Security.AccessControl.DirectorySecurity)' }
         @{ Name = "folder-acl-inherits"
            Find = '$sec.SetAccessRuleProtection($true, $false)'
            Replace = '$sec.SetAccessRuleProtection($false, $true)' }
@@ -61,8 +61,8 @@
            Find = 'if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { return $false }'
            Replace = 'if ($rules.Count -ne 1) { return $false }' }
         @{ Name = "user-only-check-skipped"
-           Find = '$acl = Get-HordeWezfleetMessengerFolderAcl -Path $Path'
-           Replace = 'return $true; $acl = Get-HordeWezfleetMessengerFolderAcl -Path $Path' }
+           Find = '$rules = @($acl.GetAccessRules('
+           Replace = 'return $true; $rules = @($acl.GetAccessRules(' }
         @{ Name = "user-only-check-any-identity"
            Find = 'return ($r.IdentityReference.Value -ceq $me.Value -and'
            Replace = 'return ($true -and' }
