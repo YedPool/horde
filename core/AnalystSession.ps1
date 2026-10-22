@@ -281,18 +281,17 @@ function Get-HordeAnalystLateSessions {
     # PURE. The live sessions that may be a start's own, as an answer: known [session ids] (maybe none), or
     # unknown with why (T-0341). A session counts when its process is VERIFIED running (core/Identity.ps1),
     # it is not in -Exclude (the session that was replaced), it started no earlier than a minute before
-    # -Since (the start), and its working directory is the analyst folder or the folder above it (the spawn
+    # -Since (the start), and its working directory is the analyst folder or it calls itself the fleet analyst (the spawn
     # starts the session in the analyst's own folder). An unknown is never an answer of "none": a listing that
     # is not whole, or a record whose process could not be checked, makes the whole answer unknown.
     param($Identity, [Parameter(Mandatory = $true)][datetime]$Since, [string[]]$Exclude = @(), [Parameter(Mandatory = $true)][string]$Folder)
     if ($null -eq $Identity) { return (New-HordeUnknown -Reason "the running sessions could not be read") }
     $whole = $Identity.verifiedLive
     if ($null -eq $whole -or $whole.state -cne "known") { return (New-HordeUnknown -Reason ("the listing of running sessions is not whole" + $(if ($null -ne $whole -and $whole.state -ceq "unknown") { ": " + $whole.reason } else { "" }))) }
-    $dirs = New-Object System.Collections.ArrayList
-    $own = $Folder.TrimEnd('\', '/')
-    [void]$dirs.Add($own)
-    $above = [System.IO.Path]::GetDirectoryName($own)
-    if ($null -ne $above -and $above -ne "") { [void]$dirs.Add($above.TrimEnd('\', '/')) }
+    # THE ANALYST'S OWN FOLDER ONLY, exactly (case and separators aside). The folder above it is the warchief's
+    # own home: counting a session there would let any warchief session started after a failed start block every
+    # retry and be told about itself (review, 2026-10-22).
+    $dirs = @(($Folder -replace '/', '\').TrimEnd('\'))
     $found = New-Object System.Collections.ArrayList
     foreach ($rec in @($Identity.records.Values)) {
         $check = "" + $rec.processCheck
@@ -303,9 +302,13 @@ function Get-HordeAnalystLateSessions {
         if ($null -eq $ps -or $ps.state -cne "known") { return (New-HordeUnknown -Reason ("the start time of session " + $rec.sessionId + " is not known")) }
         $began = [DateTime]::FromFileTimeUtc([long]$ps.value)
         if ($began -lt $Since.ToUniversalTime().AddMinutes(-1)) { continue }
+        # A session that names itself the fleet analyst is one wherever it was started (measured 2026-10-22: the
+        # resumed analyst's control file says name "analyst - M fleet analyst", the title the spawn gives it).
+        $nm = $rec.fields["name"]
+        if ($null -ne $nm -and $nm.state -ceq "known" -and ("" + $nm.value) -like "*M fleet analyst*") { [void]$found.Add("" + $rec.sessionId); continue }
         $cwd = $rec.fields["cwd"]
         if ($null -eq $cwd -or $cwd.state -cne "known") { return (New-HordeUnknown -Reason ("the folder of session " + $rec.sessionId + " is not known")) }
-        $where = ("" + $cwd.value).TrimEnd('\', '/')
+        $where = (("" + $cwd.value) -replace '/', '\').TrimEnd('\')
         foreach ($d in $dirs) { if ($where -ieq $d) { [void]$found.Add("" + $rec.sessionId); break } }
     }
     return (New-HordeKnown -Value ([string[]]@($found.ToArray())))

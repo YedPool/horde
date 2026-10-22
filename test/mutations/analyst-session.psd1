@@ -60,5 +60,11 @@
         @{ Name = "listing-not-whole-taken-for-none"
            Find = 'if ($null -eq $whole -or $whole.state -cne "known") { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "folder-above-the-analyst-counted"
+           Find = '$dirs = @(($Folder -replace ''/'', ''\'').TrimEnd(''\''))'
+           Replace = '$dirs = @(($Folder -replace ''/'', ''\'').TrimEnd(''\''), [System.IO.Path]::GetDirectoryName($Folder.TrimEnd(''\'')))' }
+        @{ Name = "session-named-fleet-analyst-not-counted"
+           Find = '-like "*M fleet analyst*"'
+           Replace = '-like "*no such name*"' }
     )
 }

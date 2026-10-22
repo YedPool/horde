@@ -45,7 +45,7 @@ function New-Listing {
     foreach ($id in $Live) { $records[$id] = [pscustomobject]@{ sessionId = $id; processCheck = "verified"; fields = @{ transcriptPath = $(if ($Transcript -ne "") { New-HordeKnown -Value $Transcript } else { New-HordeUnknown -Reason "none" }) } } }
     foreach ($id in $Gone) { $records[$id] = [pscustomobject]@{ sessionId = $id; processCheck = "gone"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none") } } }
     # -Late: live sessions with a start time and a working folder, { id; started; cwd }: what a slow first spawn looks like.
-    foreach ($l in $Late) { $records["" + $l.id] = [pscustomobject]@{ sessionId = ("" + $l.id); processCheck = "verified"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none"); procStart = (New-HordeKnown -Value ([long]$l.started.ToUniversalTime().ToFileTimeUtc())); cwd = (New-HordeKnown -Value ("" + $l.cwd)) } } }
+    foreach ($l in $Late) { $records["" + $l.id] = [pscustomobject]@{ sessionId = ("" + $l.id); processCheck = "verified"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none"); procStart = (New-HordeKnown -Value ([long]$l.started.ToUniversalTime().ToFileTimeUtc())); cwd = (New-HordeKnown -Value ("" + $l.cwd)); name = $(if ($l.ContainsKey("name")) { New-HordeKnown -Value ("" + $l.name) } else { New-HordeUnknown -Reason "none" }) } } }
     return [pscustomobject]@{ records = $records; duplicates = @(); verifiedLive = $(if ($Whole) { New-HordeKnown -Value @($Live) } else { New-HordeUnknown -Reason "the process table could not be read" }) }
 }
 
@@ -617,6 +617,18 @@ try {
     $lc2.now = $t0.AddMinutes(17); $null = Pass $lc2
     Check ($lc2.spawns.Count -eq 2) "CONTROL: a live session started since, in another folder, is not the analyst's: the retry goes ahead"
 
+    $lc3 = New-StartedRig "late-folder-above"
+    $lc3.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = (Split-Path -Parent $lc3.folder) })
+    $lc3.now = $t0.AddMinutes(17); $null = Pass $lc3
+    Check ($lc3.spawns.Count -eq 2 -and @($lc3.tells | Where-Object { $_.key -ceq "start-late-session" }).Count -eq 0) "CONTROL: a session started since in the folder ABOVE the analyst's (the warchief's own home) is not the analyst: it does not block the retry, and nobody is told about it"
+    $lc4 = New-StartedRig "late-same-folder-spelled-differently"
+    $lc4.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = ($lc4.folder.ToUpper().Replace("\", "/") + "/") })
+    $lc4.now = $t0.AddMinutes(17); $null = Pass $lc4
+    Check ($lc4.spawns.Count -eq 1) "the analyst's own folder is matched exactly but case and separators aside"
+    $lc5 = New-StartedRig "late-by-name"
+    $lc5.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = (Join-Path $work "elsewhere"); name = "analyst - M fleet analyst" })
+    $lc5.now = $t0.AddMinutes(17); $null = Pass $lc5
+    Check ($lc5.spawns.Count -eq 1) "a session that calls itself the fleet analyst counts wherever it was started"
     # Over-cap: the replaced session is still alive by design, and a late session may be the fresh one.
     $ovs = New-HordeAnalystState
     $ovs.phase = "starting"; $ovs.startedAt = $t0; $ovs.startReason = "over-cap"; $ovs.previousSessionId = $sidA; $ovs.startAttempts = 1
