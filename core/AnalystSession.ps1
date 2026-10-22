@@ -298,7 +298,8 @@ function Get-HordeAnalystSessionDecision {
         [Parameter(Mandatory = $true)]$Policy,
         [bool]$RoundDue = $false,
         [bool]$CanStart = $false,
-        $SpawnLogged = $null
+        $SpawnLogged = $null,
+        $PreviousAlive = $null
     )
     $out = { param($Action, $Why, $Tell, $Sid, $Reason, $Retry = $false) return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason; retry = $Retry } }
     $utcNow = $Now.ToUniversalTime()
@@ -311,6 +312,19 @@ function Get-HordeAnalystSessionDecision {
             if ($fresh -and $Handover.value.sessionId -cne ("" + $State.previousSessionId) -and $Handover.value.writtenAt -ge $since.AddMinutes(-1)) {
                 return (& $out "adopt" "the fresh session has written its handover" "" $Handover.value.sessionId "")
             }
+            # THE SESSION THAT WAS REPLACED MAY BE RUNNING AGAIN (T-0341, measured 2026-10-22): the analyst
+            # c916b970 was resumed by hand at 12:48 on 2026-10-20, under its OLD id and a new pid, 50 minutes
+            # after the supervisor wrote "starting". The rule above never takes the replaced id (a stale
+            # handover of the dead session would be adopted), so a live resumed analyst sat unsupervised beside a
+            # phase that waited for a different one. A replaced session proven running is THE analyst: adopt it,
+            # and start nothing, so two analysts never run at once. Whether it runs cannot be told (unknown): no
+            # retry either, an unknown is never a start.
+            $replacedGone = ("" + $State.startReason -ceq "gone")
+            $prevKnown = ($replacedGone -and $null -ne $PreviousAlive -and $PreviousAlive.state -ceq "known")
+            if ($prevKnown -and $PreviousAlive.value -eq $true) {
+                return (& $out "adopt" "the session that was replaced is running again, so it is the analyst and no second one is started" "" ("" + $State.previousSessionId) "")
+            }
+            $prevUnsure = ($replacedGone -and $null -ne $PreviousAlive -and $PreviousAlive.state -cne "known")
             # A START THAT BRINGS NO SESSION IS FAILED, NOT AWAITED FOREVER (T-0341). Failed when the bound has
             # passed, or sooner when the spawn script left no spawn.log entry for it (-SpawnLogged $false; $null
             # is "not asked", never a failure). Then retried, a bound apart, up to startMaxAttempts starts in all;
@@ -318,7 +332,7 @@ function Get-HordeAnalystSessionDecision {
             $failedWhy = ""
             if ($SpawnLogged -eq $false -and $utcNow -ge $since.AddSeconds($script:HordeAnalystSpawnLogGraceSeconds)) { $failedWhy = "the spawn script left no entry in spawn.log for the start " + [int]($utcNow - $since).TotalMinutes + " minutes ago, so it never ran to its start" }
             elseif ($utcNow -ge $since.AddMinutes([int]$Policy.startBoundMinutes)) { $failedWhy = "no session has appeared in the " + [int]$Policy.startBoundMinutes + " minutes allowed since the start" }
-            if ($failedWhy -ne "" -and $CanStart -and [Math]::Max([long]1, [long]$State.startAttempts) -lt [long]$Policy.startMaxAttempts) {
+            if ($failedWhy -ne "" -and $CanStart -and -not $prevUnsure -and [Math]::Max([long]1, [long]$State.startAttempts) -lt [long]$Policy.startMaxAttempts) {
                 $again = $(if ("" + $State.startReason -ceq "over-cap") { "over-cap" } else { "gone" })
                 return (& $out "start" ($failedWhy + "; starting another") "start-retry" "" $again $true)
             }

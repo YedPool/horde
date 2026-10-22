@@ -23,5 +23,14 @@
         @{ Name = "attempts-not-written"
            Find = 'startReason = "" + $State.startReason; startAttempts = [long]$State.startAttempts'
            Replace = 'startReason = "" + $State.startReason' }
+        @{ Name = "replaced-session-running-again-not-adopted"
+           Find = 'if ($prevKnown -and $PreviousAlive.value -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unknown-replaced-session-still-retries"
+           Find = '$CanStart -and -not $prevUnsure -and'
+           Replace = '$CanStart -and' }
+        @{ Name = "over-cap-replaced-session-readopted"
+           Find = '$replacedGone = ("" + $State.startReason -ceq "gone")'
+           Replace = '$replacedGone = $true' }
     )
 }

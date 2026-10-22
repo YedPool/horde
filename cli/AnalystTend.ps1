@@ -192,7 +192,16 @@ function Invoke-HordeAnalystPass {
         try { $logAt = Invoke-HordeAnalystTool -Tools $Tools -Name "SpawnLog" -With @($sp.handover) } catch { $asked = $false }
         if ($asked -and $null -eq $logAt) { $spawnLogged = $false } elseif ($asked -and $logAt -is [datetime]) { $spawnLogged = ($logAt.ToUniversalTime() -ge $s.startedAt.AddMinutes(-1)) }
     }
-    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart -SpawnLogged $spawnLogged
+    # Is the session this start replaced running again (resumed by hand under its old id)? $null when there is
+    # nothing to ask. The liveness is the same proven reading a running phase uses.
+    $previousAlive = $null
+    if ($s.phase -ceq "starting" -and "" + $s.previousSessionId -ne "") {
+        $identPrev = $null
+        try { $identPrev = Invoke-HordeAnalystTool -Tools $Tools -Name "Identity" } catch { $identPrev = $null }
+        if ($null -eq $identPrev) { $previousAlive = New-HordeUnknown -Reason "the running sessions could not be read" }
+        else { $previousAlive = (Get-HordeAnalystLiveness -SessionId ("" + $s.previousSessionId) -Identity $identPrev).alive }
+    }
+    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart -SpawnLogged $spawnLogged -PreviousAlive $previousAlive
     switch -CaseSensitive ($d.action) {
         "adopt" {
             & $say ("adopted session " + $d.sessionId + ": " + $d.why)
@@ -203,7 +212,8 @@ function Invoke-HordeAnalystPass {
             Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "start-retry", "no-answer", "no-answer-founder")
             # It was awake when it wrote the handover: a session that has just said who it is is not
             # sent a heartbeat for having been silent before the supervisor knew it.
-            if ($null -eq $s.lastWakeAt -or $handover.value.writtenAt -gt $s.lastWakeAt) { $s.lastWakeAt = $handover.value.writtenAt }
+            # (A replaced session found running again may have no handover to read.)
+            if ($handover.state -ceq "known" -and $handover.value.sessionId -ceq $d.sessionId -and ($null -eq $s.lastWakeAt -or $handover.value.writtenAt -gt $s.lastWakeAt)) { $s.lastWakeAt = $handover.value.writtenAt }
             $round = Get-HordeAnalystRoundDecision -Now $now -LastRoundAt $s.lastRoundAt -LastWakeAt $s.lastWakeAt -Findings $findings -Mail $mailItems -Policy $v
             $due = ($round.action -cne "none")
         }

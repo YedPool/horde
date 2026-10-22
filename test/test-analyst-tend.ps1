@@ -569,6 +569,31 @@ try {
     Check ($lo.spawns.Count -eq 0) "a phase starting from an older supervisor counts as the first start: with one allowed, it is not retried"
 
     Write-Host ""
+    Write-Host ""
+    Write-Host "--- T-0341: a replaced session that is running again (resumed under its old id) is the analyst, not a reason to start another ---" -ForegroundColor Cyan
+    $pr = New-StartedRig "resumed"
+    $pr.listing = New-Listing -Live @($sidA)
+    $pr.now = $t0.AddMinutes(4); $p4 = Pass $pr
+    Check ((State $pr).phase -ceq "running" -and (State $pr).sessionId -ceq $sidA -and $pr.spawns.Count -eq 1 -and (@($p4.lines) -join " ") -like "*adopted session*") "the replaced session proven running again is adopted: no second analyst, no second spawn"
+    $pr2 = New-StartedRig "resumed-late"
+    $pr2.listing = New-Listing -Live @($sidA)
+    $pr2.now = $t0.AddMinutes(40); $null = Pass $pr2
+    Check ($pr2.spawns.Count -eq 1 -and (State $pr2).sessionId -ceq $sidA) "and past the bound it is adopted, never retried over"
+    $pu = New-StartedRig "resumed-unknown"
+    $pu.listing = New-Listing -Whole $false
+    $pu.now = $t0.AddMinutes(40); $null = Pass $pu
+    Check ($pu.spawns.Count -eq 1 -and (State $pu).phase -ceq "starting") "whether the replaced session runs cannot be told: past the bound nothing is started (an unknown is never a start)"
+    $pg = New-StartedRig "resumed-gone"
+    $pg.now = $t0.AddMinutes(40); $null = Pass $pg
+    Check ($pg.spawns.Count -eq 2) "CONTROL: the replaced session proven gone does not hold up the retry"
+    $dead = New-Rig "live-dead-terminal" $spawnSetting
+    Write-Handover -Folder $dead.folder -Sid $sidA -At $t0
+    $dead.listing = New-Listing -Live @($sidA) -Transcript (Calls $dead "2026-10-14T12:00:00Z,10,60000,1000`n")
+    $dead.tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) throw "no spawn may be attempted for a live session" }
+    $dead.now = $t0.AddMinutes(1); $null = Pass $dead
+    $dead.now = $t0.AddHours(5); $null = Pass $dead
+    Check ((State $dead).phase -ceq "running" -and (State $dead).sessionId -ceq $sidA) "a running session is judged by its process, whatever its recorded terminal: alive means kept, never replaced"
+
     Write-Host "--- T-0341: a start with no spawn.log entry is failed with its reason ---" -ForegroundColor Cyan
     $nl = New-StartedRig "nolog"
     $nl.tools["SpawnLog"] = { param($Handover) return $null }
