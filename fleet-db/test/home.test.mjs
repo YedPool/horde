@@ -1,6 +1,7 @@
 // core/home.mjs - the one home rule for node: HORDE_HOME, else the pointer file, else REFUSED (no default).
 // Every test names USERPROFILE as a folder it made under the temp folder, so the real pointer is never read
 // (CONTRIBUTING 9).
+import './own-profile.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
