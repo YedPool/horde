@@ -82,7 +82,8 @@ try {
     Check (@($live.lists).Count -eq 1 -and $live.lists[0].count -eq 2 -and $live.lists[0].items[0].questionNumber -eq 7 -and $live.lists[0].items[1].text -ceq "Pick a colour") "it reads back in order, question 7 by its number"
     $snap1 = $live.lists[0].snapshot
     $b = Publish-List $one
-    Check ($b.lines.Count -eq 1 -and $b.lines[0] -ceq ("unchanged (snapshot " + $snap1 + ")")) ("the same list again is unchanged, naming the same snapshot (" + (@($b.lines) -join "|") + $b.threw + ")")
+    # Since fleet.db migration 5 an equal publish also records a confirm, and the line says when.
+    Check ($b.lines.Count -eq 1 -and $b.lines[0] -cmatch ('\Aunchanged, confirmed \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z \(snapshot ' + $snap1 + '\)\z')) ("the same list again is unchanged, confirmed, naming the same snapshot (" + (@($b.lines) -join "|") + $b.threw + ")")
     Start-Sleep -Milliseconds 20
     $two = '{"items":[{"questionNumber":9,"text":"Merge it?"}]}'
     $c = Publish-List $two

@@ -1,0 +1,61 @@
+# The repository's repo-wide guards on every pull request and on main: every guard listed in
+# test\guards.txt, each in Windows PowerShell 5.1 AND in PowerShell 7 (CONTRIBUTING 15 rule 9: they read the
+# whole repository, so any pull request can break them - on 2026-10-14 PRs 278, 279 and 288 each merged
+# green on their own suites and left main red on both; on 2026-10-21 four merges skipped guards and one
+# turned main red).
+#
+# THE LIST IS test\guards.txt AND NOTHING IN THIS FILE: adding a guard is one line there. This workflow
+# only calls tools\CiGuards.ps1, which reads the list through core/GuardList.ps1, as `horde merge` does
+# (cli/Merge.ps1), so the command and CI cannot drift apart. Before T-0247 four guards were named here
+# and two in the command.
+#
+# IT NOTIFIES, IT NEVER BLOCKS (the fleet's standing rule: CI notifies, never blocks). Nothing makes this
+# check required: the repository has no branch protection and no ruleset (its plan refuses branch
+# protection, 403), so GitHub merges a pull request whatever this job says. A red guard turns this job red
+# - the PR shows a red check and its author is told - and that is all it does. horde merge runs the same
+# list itself, on the merge result, before it merges.
+#
+# WHAT IS CHECKED: on a pull request, actions/checkout checks out refs/pull/<n>/merge - the PR merged with
+# the current base, the tree that would exist after the merge, not the branch alone (CONTRIBUTING 15
+# rule 2). fetch-depth 0 brings origin/main, which test-host-names compares the port lists with; without
+# it that comparison prints [SKIP].
+#
+# ONE JOB, ONE STEP, because Windows minutes are billed double on a private repository. The runner runs
+# every guard even when an earlier one is red, so one run reports them all, and exits 1 if any is not
+# green. A newer push to the same PR cancels the PR's run in progress; a run on main is never cancelled,
+# so every merge to main gets its own verdict.
+#
+# GREEN IS EXIT 0 AND THE CLOSING BANNER (CONTRIBUTING 15 rule 7: a suite with no closing banner was NOT
+# RUN). The runner keeps each guard's output in a log and reads the last "==== ... ====" line of it.
+
+name: guards
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guards-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guards:
+    name: repo-wide guards
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      # actions/checkout v4.2.2, pinned by commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          # The guards need no token: nothing here pushes, so none is left in the checkout's git config.
+          persist-credentials: false
+
+      - name: guards (test/guards.txt, in 5.1 and 7)
+        shell: powershell
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools\CiGuards.ps1 -LogFolder (Join-Path $env:RUNNER_TEMP "guards"); exit $LASTEXITCODE

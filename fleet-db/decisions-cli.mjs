@@ -9,7 +9,7 @@
 // question number -> question id step, which needs fleet.db's question table.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dbPathFor, openStore } from './store.mjs';
+import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { publishDecisions } from './write.mjs';
 
 export const VERBS = ['publish', 'published'];
@@ -81,12 +81,12 @@ export function publishFromInput(db, input, now = Date.now()) {
 
 // The live lists, from the views, with the question number beside each question id.
 export function readPublished(db, letter = null) {
-  const lives = db.prepare(`SELECT l.id, l.orc_id, l.published_at, l.item_count, o.letter, o.rank FROM decisions_live l
+  const lives = db.prepare(`SELECT l.id, l.orc_id, l.published_at, l.confirmed_at, l.item_count, o.letter, o.rank FROM decisions_live l
     JOIN orc o ON o.id = l.orc_id ORDER BY o.rank DESC, o.letter`).all();
   const lines = db.prepare(`SELECT i.position, q.number AS question_number, i.text, i.recommendation, i.importance, i.blocks
     FROM decisions_live_item i LEFT JOIN question q ON q.id = i.question_id WHERE i.snapshot_id = ? ORDER BY i.position`);
   return lives.filter((l) => letter === null || l.letter === letter).map((l) => ({
-    orc: l.letter, snapshot: l.id, publishedAt: new Date(l.published_at).toISOString(), count: l.item_count,
+    orc: l.letter, snapshot: l.id, publishedAt: new Date(l.published_at).toISOString(), confirmedAt: new Date(l.confirmed_at).toISOString(), count: l.item_count,
     items: lines.all(l.id).map((r) => ({ position: r.position, questionNumber: r.question_number, text: r.text, recommendation: r.recommendation, importance: r.importance, blocks: r.blocks })),
   }));
 }
@@ -107,7 +107,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
   }
   let file;
   try {
-    file = dbPathFor(env.HORDE_HOME);
+    file = dbPathFor(homeFromEnv(env));
   } catch (e) {
     err('fleet.db: ' + e.message);
     return 2;
@@ -119,7 +119,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
       const input = JSON.parse(fs.readFileSync(argv[1], 'utf8'));
       db = openStore(file);
       const r = publishFromInput(db, input);
-      out(r.unchanged ? 'unchanged (snapshot ' + r.id + ')' : 'published ' + plural(r.count) + ' (snapshot ' + r.id + ')');
+      out(r.unchanged ? 'unchanged, confirmed ' + new Date(r.confirmedAt).toISOString() + ' (snapshot ' + r.id + ')' : 'published ' + plural(r.count) + ' (snapshot ' + r.id + ')');
       return 0;
     }
     let letter = null;
@@ -135,7 +135,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     if (asJson) { out(ascii(JSON.stringify({ lists }))); return 0; }
     if (lists.length === 0) { out(letter === null ? 'no decisions list has been published' : 'Orc ' + letter + ' has not published a decisions list'); return 0; }
     for (const l of lists) {
-      out(l.orc + ': ' + plural(l.count) + ', published ' + l.publishedAt + ' (snapshot ' + l.snapshot + ')');
+      out(l.orc + ': ' + plural(l.count) + ', published ' + l.publishedAt + ', confirmed ' + l.confirmedAt + ' (snapshot ' + l.snapshot + ')');
       for (const it of l.items) {
         const extra = [it.questionNumber === null ? '' : 'question ' + it.questionNumber, it.importance === null ? '' : 'importance ' + it.importance, it.blocks === null ? '' : 'blocks ' + it.blocks].filter((s) => s !== '');
         out('  ' + it.position + '. ' + it.text + (extra.length ? ' [' + extra.join(', ') + ']' : ''));

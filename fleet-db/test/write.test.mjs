@@ -2,6 +2,7 @@
 // verbs (cli.mjs), each attacked: a row the rule exists to stop is written and must be refused, and the
 // row the rule must still allow is written too. Databases of their own under the temp folder; nothing
 // real is read or written.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ import { openStore, inWrite } from '../store.mjs';
 import { MIGRATIONS, SCHEMA_VERSION } from '../schema.mjs';
 import { ulid, sha256 } from '../ids.mjs';
 import { makeMinter, appendHistory, publishDecisions, decisionsHash, HASHED_HISTORY } from '../write.mjs';
-import { main } from '../cli.mjs';
+import { main, findProblems } from '../cli.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
 let seq = 0;
@@ -309,6 +310,148 @@ test('the id follows the event time, not the time of writing', () => {
   assert.equal(a.id.slice(0, 10), ulid(Date.UTC(2026, 0, 1), Buffer.alloc(10)).slice(0, 10));
 });
 
+// --- migration 5: decisions_confirm (T-0299) ---------------------------------------------------------
+
+const confirms = (db, orc) => db.prepare('SELECT snapshot_id, confirmed_at, session_id FROM decisions_confirm WHERE orc_id = ? ORDER BY confirmed_at').all(orc).map((x) => ({ ...x }));
+const insertConfirm = (db, orc, snap, at, session = null) =>
+  db.prepare('INSERT INTO decisions_confirm (id, orc_id, snapshot_id, session_id, confirmed_at) VALUES (?, ?, ?, ?, ?)').run(id(), orc, snap, session, at);
+
+test('a new list writes its snapshot and a confirm at the same time', () => {
+  const w = world();
+  const r = publishDecisions(w.db, { orcId: w.f, sessionId: w.sf, publishedAt: T0, items: list(w) });
+  assert.equal(r.confirmedAt, T0);
+  assert.deepEqual(confirms(w.db, w.f), [{ snapshot_id: r.id, confirmed_at: T0, session_id: w.sf }]);
+  assert.equal(w.db.prepare('SELECT confirmed_at FROM decisions_live WHERE orc_id = ?').get(w.f).confirmed_at, T0);
+});
+
+test('an equal list writes a new confirm for the live snapshot and no new snapshot', () => {
+  const w = world();
+  const a = publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  const b = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 5000, items: list(w) });
+  const c = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 9000, items: list(w) });
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 1);
+  assert.deepEqual([b.unchanged, b.confirmedAt, c.confirmedAt], [true, T0 + 5000, T0 + 9000]);
+  assert.deepEqual(confirms(w.db, w.f).map((x) => [x.snapshot_id, x.confirmed_at]), [[a.id, T0], [a.id, T0 + 5000], [a.id, T0 + 9000]]);
+  const live = w.db.prepare('SELECT published_at, confirmed_at FROM decisions_live WHERE orc_id = ?').get(w.f);
+  assert.deepEqual([live.published_at, live.confirmed_at], [T0, T0 + 9000]);
+});
+
+test('an equal list at an earlier time than the live one is unchanged and confirms at the live published_at', () => {
+  const w = world();
+  const a = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 1000, items: list(w) });
+  const b = publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  assert.deepEqual(b, { id: a.id, unchanged: true, confirmedAt: T0 + 1000 });
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 1);
+  assert.equal(confirms(w.db, w.f).length, 1, 'the new-list confirm is already at that time');
+  // A list from before migration 5 has no confirm: the earlier equal publish adds one, at the list's published_at.
+  w.db.exec('DROP TRIGGER decisions_confirm_no_delete');
+  w.db.exec('DELETE FROM decisions_confirm');
+  const c = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 - 5, items: list(w) });
+  assert.equal(c.confirmedAt, T0 + 1000);
+  assert.deepEqual(confirms(w.db, w.f).map((x) => x.confirmed_at), [T0 + 1000]);
+});
+
+test('an equal list in the same millisecond as the last confirm adds nothing', () => {
+  const w = world();
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  assert.equal(publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) }).confirmedAt, T0);
+  assert.equal(confirms(w.db, w.f).length, 1);
+});
+
+test('a refused publish writes no confirm', () => {
+  const w = world();
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 10, items: list(w) });
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: [{ text: 'old' }] }), /already has a list/);
+  assert.throws(() => publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 20, items: [{ text: 'ok' }, { text: '' }] }), /CHECK/);
+  assert.equal(confirms(w.db, w.f).length, 1);
+  assert.equal(w.db.prepare('SELECT confirmed_at FROM decisions_live WHERE orc_id = ?').get(w.f).confirmed_at, T0 + 10);
+});
+
+test('a new list after confirms has its own confirmed_at, not an old one', () => {
+  const w = world();
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 100, items: list(w) });
+  const n = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 200, items: [{ text: 'new' }] });
+  assert.equal(n.confirmedAt, T0 + 200);
+  assert.equal(confirms(w.db, w.f).length, 3);
+});
+
+test('confirmed_at is never before published_at, even with no confirm', () => {
+  const w = world();
+  const s = snapshot(w.db, { orc_id: w.f, published_at: T0 + 50 });
+  const live = w.db.prepare('SELECT published_at, confirmed_at FROM decisions_live WHERE orc_id = ?').get(w.f);
+  assert.deepEqual([live.published_at, live.confirmed_at], [T0 + 50, T0 + 50]);
+  assert.throws(() => insertConfirm(w.db, w.f, s.id, T0 + 49), /before the list was published/);
+  insertConfirm(w.db, w.f, s.id, T0 + 50);
+});
+
+test('a confirm of another Orc snapshot, or of an older snapshot, is refused', () => {
+  const w = world();
+  const fs1 = snapshot(w.db, { orc_id: w.f, published_at: T0 + 1 });
+  const ks = snapshot(w.db, { orc_id: w.k, published_at: T0 + 2 });
+  assert.throws(() => insertConfirm(w.db, w.f, ks.id, T0 + 5), /not the live list of this Orc/);
+  const fs2 = snapshot(w.db, { orc_id: w.f, published_at: T0 + 3 });
+  assert.throws(() => insertConfirm(w.db, w.f, fs1.id, T0 + 5), /not the live list of this Orc/);
+  insertConfirm(w.db, w.f, fs2.id, T0 + 5);
+});
+
+test('a confirm names a real session or none, a snapshot that exists, and a time of 0 or more', () => {
+  const w = world();
+  const s = snapshot(w.db, { orc_id: w.f, published_at: T0 + 1 });
+  assert.throws(() => insertConfirm(w.db, w.f, s.id, T0 + 2, uuid(99)), /FOREIGN KEY/);
+  assert.throws(() => insertConfirm(w.db, w.f, id(), T0 + 2), /not the live list|FOREIGN KEY/);
+  assert.throws(() => insertConfirm(w.db, w.f, s.id, -1), /CHECK|before the list/);
+});
+
+test('confirms are append-only, REPLACE included', () => {
+  const w = world();
+  publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
+  const c = w.db.prepare('SELECT * FROM decisions_confirm').get();
+  assert.throws(() => w.db.prepare('UPDATE decisions_confirm SET confirmed_at = 1 WHERE id = ?').run(c.id), /append-only/);
+  assert.throws(() => w.db.prepare('DELETE FROM decisions_confirm WHERE id = ?').run(c.id), /append-only/);
+  assert.throws(() => w.db.prepare('INSERT OR REPLACE INTO decisions_confirm (id, orc_id, snapshot_id, confirmed_at) VALUES (?, ?, ?, ?)').run(c.id, c.orc_id, c.snapshot_id, c.confirmed_at), /append-only|UNIQUE|constraint/);
+  assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_confirm').get().n, 1);
+});
+
+test('migration 5 on a schema 4 file: old snapshots read confirmed_at = published_at, old view columns stay', () => {
+  const file = path.join(tempDir(), 'fleet.db');
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON');
+  for (let i = 0; i < 4; i++) raw.exec(MIGRATIONS[i]);
+  raw.exec('PRAGMA user_version = 4');
+  const node = id();
+  const orc = id();
+  raw.prepare('INSERT INTO node (id, name, is_authority, created_at) VALUES (?, ?, 1, ?)').run(node, 'pc-1', T0);
+  raw.prepare('INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(orc, 'F', 'x', 'X', 'orc', T0);
+  const snap = id();
+  raw.prepare('INSERT INTO decisions_snapshot (id, orc_id, published_at, item_count, sha256) VALUES (?, ?, ?, 1, ?)').run(snap, orc, T0 + 7, decisionsHash([{ text: 'line' }]));
+  raw.prepare("INSERT INTO decisions_snapshot_item (snapshot_id, position, text) VALUES (?, 1, 'line')").run(snap);
+  raw.close();
+  const db = openStore(file);
+  handles.push(db);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+  const live = { ...db.prepare('SELECT * FROM decisions_live').get() };
+  assert.deepEqual(Object.keys(live), ['id', 'orc_id', 'published_at', 'by_session_id', 'item_count', 'sha256', 'confirmed_at']);
+  assert.deepEqual([live.id, live.published_at, live.confirmed_at], [snap, T0 + 7, T0 + 7]);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM decisions_live_item').get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM decisions_confirm').get().n, 0);
+  publishDecisions(db, { orcId: orc, publishedAt: T0 + 100, items: [{ text: 'line' }] });
+  assert.equal(db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 1);
+  assert.equal(db.prepare('SELECT confirmed_at FROM decisions_live').get().confirmed_at, T0 + 100);
+});
+
+test('horde db check names a confirm of the wrong Orc or an early one (triggers dropped)', () => {
+  const w = world();
+  const s = snapshot(w.db, { orc_id: w.f, published_at: T0 + 10, sha256: decisionsHash([]) });
+  assert.deepEqual(findProblems(w.db), []);
+  w.db.exec('DROP TRIGGER decisions_confirm_own_live; DROP TRIGGER decisions_confirm_not_early');
+  insertConfirm(w.db, w.k, s.id, T0 + 20);
+  insertConfirm(w.db, w.f, s.id, T0 + 5);
+  const p = findProblems(w.db);
+  assert.equal(p.length, 2);
+  assert.match(p[0], /^decisions confirm [0-9A-Z]{26} is not of its own Orc/);
+});
+
 // --- publishDecisions --------------------------------------------------------------------------------
 
 const list = (w) => [{ text: 'Merge the relay?', question_id: w.q, recommendation: 'yes', importance: 'high' }, { text: 'Name the lot' }];
@@ -328,7 +471,7 @@ test('publishing the live list again writes nothing and says unchanged', () => {
   const a = publishDecisions(w.db, { orcId: w.f, publishedAt: T0, items: list(w) });
   const again = list(w).map((x) => ({ ...x, blocks: null })); // a missing field and a null one are the same list
   const b = publishDecisions(w.db, { orcId: w.f, publishedAt: T0 + 1, items: again });
-  assert.deepEqual(b, { id: a.id, unchanged: true });
+  assert.deepEqual(b, { id: a.id, unchanged: true, confirmedAt: T0 + 1 });
   assert.equal(w.db.prepare('SELECT count(*) AS n FROM decisions_snapshot').get().n, 1);
 });
 

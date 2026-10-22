@@ -807,7 +807,7 @@ One concern per pull request, in order. Each pull request has:
 - its tests written first;
 - its mutation spec under the owning folder's `test/mutations/`;
 - the CONTRIBUTING 15 levels: the touched suites plus `Mutate.ps1 -Changed` each review round, then
-  the full suite and the full specs once, on the merge result.
+  the full suite and the changed-target specs once, on the merge result (every spec nightly).
 
 Anything that terminates a process, sends a key or closes a pane is tested only on processes and
 panes the test created, in the isolated host instance (CONTRIBUTING 3), with the guarded killer of

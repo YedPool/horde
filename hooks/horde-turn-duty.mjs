@@ -37,8 +37,11 @@
 //     want of a row. Follow-up: an `orcs` field in decisions-cli.mjs `published --json` (F's code).
 //
 // THE HORDE HOME. No session has HORDE_HOME, and the verb refuses without it, so the hook resolves it: env
-// HORDE_TURN_DUTY_HORDE_HOME, else HORDE_HOME, else <config dir>\config.json { "hordeHome": "<absolute path>" }
-// (written by the installer; the home moves when fleet.db moves). It is passed to horde as HORDE_HOME and printed in
+// HORDE_TURN_DUTY_HORDE_HOME, else the fleet's one rule (core/home.mjs: HORDE_HOME, else the pointer file
+// %USERPROFILE%\.horde-home.json, which a running session sees at its next stop), else <config dir>\config.json
+// { "hordeHome": "<absolute path>" } (written by the installer; K's last fallback). A pointer that is there but
+// bad is logged by name and the check passes: it is never skipped for config.json, which could name another
+// folder. The home is passed to horde as HORDE_HOME and printed in
 // the block text as a runnable PowerShell command. No home found: log, record the check, pass.
 //
 // RETIRED seats (registry rows with retired true) are skipped like a Warg.
@@ -46,9 +49,9 @@
 // keeps for it. An Orc is role "orchestrator" with its lane letter as label. Any other role (a Warg) is left alone.
 //
 // ENVIRONMENT (the tests set these; production sets none):
-//   HORDE_TURN_DUTY_STATE_DIR   state folder           (default %USERPROFILE%\.horde\turn-duty)
-//   HORDE_TURN_DUTY_CONFIG_DIR  folder of config.json  (default %USERPROFILE%\.horde\turn-duty)
-//   HORDE_TURN_DUTY_HORDE_HOME  the Horde home, ahead of HORDE_HOME and config.json
+//   HORDE_TURN_DUTY_STATE_DIR   state folder           (default <resolved home>\turn-duty, else %USERPROFILE%\.horde\turn-duty)
+//   HORDE_TURN_DUTY_CONFIG_DIR  folder of config.json  (default <resolved home>\turn-duty, else %USERPROFILE%\.horde\turn-duty)
+//   HORDE_TURN_DUTY_HORDE_HOME  the Horde home, ahead of HORDE_HOME, the pointer file and config.json
 //   HORDE_TURN_DUTY_REGISTRY    registry sessions dir  (default %USERPROFILE%\Documents\Code\.wezfleet\registry\sessions)
 //   HORDE_TURN_DUTY_HORDE       the horde command      (default "horde", found on PATH)
 //   HORDE_TURN_DUTY_LOG         log file, full path    (default ...\.wezfleet\accuracy\turn-duty-hook.log)
@@ -61,6 +64,7 @@ import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, exi
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { resolveHordeHome } from "../core/home.mjs";
 
 const THROTTLE_MS = 30 * 60 * 1000;
 const FRESH_MS = 30 * 60 * 1000;
@@ -83,10 +87,21 @@ const ORC_LETTER = /^[A-Z][A-Z0-9]{0,3}$/;
 
 const LOG_FILE =
   process.env.HORDE_TURN_DUTY_LOG || join(homedir(), "Documents", "Code", ".wezfleet", "accuracy", "turn-duty-hook.log");
-const STATE_DIR = process.env.HORDE_TURN_DUTY_STATE_DIR || join(homedir(), ".horde", "turn-duty");
+// The state and config folders follow the resolved home (HORDE_TURN_DUTY_HORDE_HOME, else core/home.mjs), so one
+// step moves them with everything else; with no home they stay where they were. THE THROTTLE STATE RESETS when the
+// home changes, and when the pointer is bad or cleared and the folder falls back to the profile one: the first stop
+// after that checks again at once (a nudge a little early, never a lost one).
+const CORE_HOME = resolveHordeHome(process.env);
+const DUTY_ROOT = (() => {
+  const own = usableHome(process.env.HORDE_TURN_DUTY_HORDE_HOME);
+  if (own) return join(own, "turn-duty");
+  if (CORE_HOME.ok) return join(CORE_HOME.home, "turn-duty");
+  return join(homedir(), ".horde", "turn-duty");
+})();
+const STATE_DIR = process.env.HORDE_TURN_DUTY_STATE_DIR || DUTY_ROOT;
 const REGISTRY_DIR =
   process.env.HORDE_TURN_DUTY_REGISTRY || join(homedir(), "Documents", "Code", ".wezfleet", "registry", "sessions");
-const CONFIG_DIR = process.env.HORDE_TURN_DUTY_CONFIG_DIR || join(homedir(), ".horde", "turn-duty");
+const CONFIG_DIR = process.env.HORDE_TURN_DUTY_CONFIG_DIR || DUTY_ROOT;
 const HORDE = process.env.HORDE_TURN_DUTY_HORDE || "horde";
 const TIMEOUT_MS = Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) > 0 ? Number(process.env.HORDE_TURN_DUTY_TIMEOUT_MS) : 8000;
 
@@ -193,10 +208,12 @@ function usableHome(v) {
 }
 
 function resolveHome() {
-  for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {
-    const h = usableHome(v);
-    if (h) return h;
-  }
+  const own = usableHome(process.env.HORDE_TURN_DUTY_HORDE_HOME);
+  if (own) return own;
+  if (CORE_HOME.ok) return usableHome(CORE_HOME.home);
+  // A bad HORDE_HOME or pointer is refused, not skipped for config.json (which could name another folder); the
+  // caller logs the reason with the pass.
+  if (CORE_HOME.kind === "refused") return null;
   const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));
   return usableHome(cfg && typeof cfg === "object" ? cfg.hordeHome : undefined);
 }
@@ -306,7 +323,7 @@ async function main() {
 
   const home = resolveHome();
   if (home === null) {
-    logLine("no Horde home found (HORDE_TURN_DUTY_HORDE_HOME, HORDE_HOME, config.json hordeHome); passing");
+    logLine((CORE_HOME.kind === "refused" ? CORE_HOME.message + " " : "") + "no Horde home found (HORDE_TURN_DUTY_HORDE_HOME, HORDE_HOME, pointer file, config.json hordeHome); passing");
     writeState(sid, { ...state, lastCheckedAt: now });
     return 0;
   }

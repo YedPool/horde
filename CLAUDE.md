@@ -40,7 +40,9 @@ git worktree add -b <branch> ../horde-worktrees/<name> origin/main
 ```
 
 - One logical change per commit. One concern per pull request.
-- Merge with `gh pr merge --merge`. Never squash.
+- Merge with `horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane>`: it runs
+  every repo-wide guard (test\guards.txt) on the merge result in both shells, merges with `gh pr merge --merge`, records the ledger event
+  and tells the warchief and the analyst. Never squash.
 - Never switch branches in a checkout where a suite is running.
 
 ## Before replacing old code, write its knowledge ledger (CONTRIBUTING 5)
@@ -60,22 +62,25 @@ reason.
 - Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
   `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
   and to a guard added above a mutant. Never merge on it alone.
-- `test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are in every PR's targeted set:
+- Every guard in `test\guards.txt` (one line per guard; `horde merge` and CI both read it) is in every PR's targeted set:
   run them on the final head, in a clean tree, before every merge, by any Orc. They read the whole
   repository, so any PR can break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
 - `surfaces\pwa\test\test-pwa-browser.ps1` is in the targeted set of every PR that touches
   `surfaces/pwa`, `decisions/page` or `test/lib/Browser.ps1`: it is the whole phone app in a real
   browser, and a page or launcher change can break a part its own suites never load (2026-10-15:
   PR 288's launcher lost the service worker, and four page merges went in on their own suites).
-- Once per PR, on the final head merged with current `main`: the full suite and the full mutation
-  specs. "Mergeable" is not "green".
+- Once per PR, on the final head merged with current `main`: the full suite, the changed-target
+  mutation specs (every spec whose Target, Suite or spec file the PR changes), and
+  `tools\Mutate.ps1 -Changed`. The full mutation sweep (every spec) runs nightly, not per PR.
+  "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.
 - A suite over 2 minutes on fixtures is a defect: file an issue to profile it.
 - Heavy runs go to the remote test box through the remote gate. A real terminal, a local pipe,
   integrity levels, an interactive logon or the real stores: locally, one run at a time, through
   the local gate.
 - Ready PRs are merged in batches: on main plus every ready PR, run the touched suites, the full
-  suite and the full mutation specs once; merge in order; drop a red one and rerun the rest.
+  suite and the changed-target mutation specs once; merge in order; drop a red one and rerun the
+  rest.
 - No checks, or no closing banner, means NOT RUN. Gates and runners get a failure-case matrix
   before rollout.
 

@@ -3,6 +3,7 @@
 // temp folder (CRLF lines, mixed Z and +00:00, lines out of time order, a line with no by, lane folder names,
 // free-text waits, comma lanes, Thrall and fleet-wide, a task suffix, corrections, a BOM, a US-locale time, a
 // parent session the registry lacks, an invalid card). Nothing real is read: the real files are never named.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -948,4 +949,47 @@ test('horde db import --dry-run on an older schema is refused and the file is no
   const after = new DatabaseSync(file);
   assert.equal(after.prepare('PRAGMA user_version').get().user_version, 2);
   after.close();
+});
+
+// --- the three nits of the review of part 1 ------------------------------------------------------------
+
+test('a wait on lane:C1 (a sub-session label) resolves to the Orc of its lead letter, and lane:ZZ still names none', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  const ledger = path.join(dir, 'l.jsonl');
+  fs.writeFileSync(ledger, jl([
+    { ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'a', source: 'orc', lane: 'C', prio: 1, by: 'C' },
+    { ts: '2026-10-05T18:00:00Z', task: 'T-0001', event: 'waiting', by: 'C', on: 'lane:C1' },
+    { ts: '2026-10-05T19:00:00Z', task: 'T-0001', event: 'waiting', by: 'C', on: 'lane:ZZ9' },
+  ]));
+  const r = importFleet(db, { ledger, cards: cardsOf() });
+  const c = one(db, "SELECT id FROM orc WHERE letter = 'C'").id;
+  const waits = rows(db, "SELECT on_text, on_kind, on_orc_id FROM task_event WHERE kind = 'waiting' ORDER BY at");
+  assert.deepEqual(waits.map((w) => [w.on_text, w.on_kind, w.on_orc_id]), [['lane:C1', 'orc', c], ['lane:ZZ9', 'orc', null]]);
+  assert.equal(unlinked(r, 'ledger', 'on lane:ZZ9 names no Orc row').count, 1);
+  assert.equal(unlinked(r, 'ledger', 'on lane:C1 names no Orc row'), undefined);
+});
+
+test('pr: a ledger line the importer drops does not date a PR; with no accepted line and no mergedAt the time is the import, never 1970', () => {
+  const { db } = fresh();
+  const dir = tempDir();
+  const ledger = path.join(dir, 'l.jsonl');
+  fs.writeFileSync(ledger, jl([
+    { ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'a', source: 'orc', lane: 'C', prio: 1, by: 'C' },
+    // dropped: an unknown event kind, a handed with no target, a priority with no priority
+    { ts: '2026-09-01T00:00:00Z', task: 'T-0001', event: 'bogus', by: 'C', pr: 'yedpool/horde#8' },
+    { ts: '2026-09-02T00:00:00Z', task: 'T-0001', event: 'handed', by: 'C', pr: 'yedpool/horde#8' },
+    { ts: '2026-09-03T00:00:00Z', task: 'T-0001', event: 'priority', by: 'C', pr: 'yedpool/horde#8' },
+    { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'progress', by: 'C', pr: 'yedpool/horde#8' },
+    { ts: '2026-09-04T00:00:00Z', task: 'T-0001', event: 'bogus', by: 'C', pr: 'yedpool/horde#9' },
+  ]));
+  const cache = path.join(dir, 'c.json');
+  fs.writeFileSync(cache, JSON.stringify({ 'yedpool/horde#8': { mergedAt: null, state: 'OPEN' }, 'yedpool/horde#9': { mergedAt: null, state: 'OPEN' } }));
+  const before = Date.now();
+  const r = importFleet(db, { ledger, prCache: cache, cards: cardsOf() });
+  const p8 = one(db, 'SELECT checked_at FROM pr WHERE number = 8');
+  assert.equal(p8.checked_at, ms('2026-10-06T17:00:00Z'), 'the first line that was imported');
+  const p9 = one(db, 'SELECT checked_at FROM pr WHERE number = 9');
+  assert.ok(p9.checked_at >= before && p9.checked_at <= Date.now(), 'the time of the import, not 1970 (' + p9.checked_at + ')');
+  assert.equal(unlinked(r, 'pr-cache', 'checked is not a time').count, 2);
 });

@@ -30,6 +30,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Home.ps1")
 . (Join-Path $PSScriptRoot "Transcript.ps1")
 
@@ -45,10 +46,8 @@ function Read-HordeMetricsGate {
     # unknown when the file is unreadable or not a gate - which the writer treats as a refusal.
     param([string]$Path = (Join-Path (Get-HordeMetricsDir) "gate.json"))
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no gate file at " + $Path + "; metrics are off")) }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $g = $null
-    try { $g = $ser.DeserializeObject((Read-HordeSharedText -Path $Path)) } catch { return (New-HordeUnknown -Reason ("the gate file " + $Path + " cannot be read") -ErrorRecord $_) }
+    try { $g = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $Path)) } catch { return (New-HordeUnknown -Reason ("the gate file " + $Path + " cannot be read") -ErrorRecord $_) }
     if ($g -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ("the gate file " + $Path + " is not a JSON object")) }
     if ($g["schemaVersion"] -ne 1) { return (New-HordeUnknown -Reason ("the gate file's schemaVersion is not 1")) }
     $level = $g["level"]
@@ -96,14 +95,12 @@ function Get-HordeAgentStores {
     $agents = Join-Path $Root "agents"
     $out = New-Object System.Collections.ArrayList
     if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return (New-HordeKnown -Value @()) }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     foreach ($d in @(Get-ChildItem -LiteralPath $agents -Directory | Sort-Object Name)) {
         $file = Join-Path $d.FullName "stores.json"
         $where = "agents/" + $d.Name + "/stores.json"
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return (New-HordeUnknown -Reason ($where + " does not exist, so where that engine keeps its files is not known")) }
         $s = $null
-        try { $s = $ser.DeserializeObject((Read-HordeSharedText -Path $file)) } catch { return (New-HordeUnknown -Reason ($where + " cannot be read") -ErrorRecord $_) }
+        try { $s = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $file)) } catch { return (New-HordeUnknown -Reason ($where + " cannot be read") -ErrorRecord $_) }
         if ($s -isnot [System.Collections.IDictionary] -or $s["schemaVersion"] -ne 1 -or $s["roots"] -isnot [System.Collections.IEnumerable] -or @($s["roots"]).Count -eq 0) { return (New-HordeUnknown -Reason ($where + " is not a stores file with at least one root")) }
         $roots = New-Object System.Collections.ArrayList
         $labelled = New-Object System.Collections.ArrayList

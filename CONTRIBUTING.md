@@ -301,16 +301,28 @@ its branch can break main when main moved under it").
    edited config, schema or data file that is not itself a target; a guard inserted above a mutant
    whose own line did not change; and a suite edited to catch less. The review of its pull request
    (#63) probed the first three, and each time the affected mutants were skipped and the run
-   exited 0. It proves only the mutants on touched lines and never stands in for the full specs:
-   **a pull request may not merge on `-Changed` results alone.**
-2. **The full suite and the full mutation specs run once per pull request**, on its final head, and
-   on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
-   on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
-   the merged tree is green. Why once and not never: first, `-Changed` is blind to every change
-   that is not on a mutant's own line (rule 1), and only the full specs see those. Second, a spec
-   on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
+   exited 0. It proves only the mutants on touched lines and never stands in for the
+   changed-target specs: **a pull request may not merge on `-Changed` results alone.**
+2. **The full suite and the changed-target mutation specs run once per pull request**, on its
+   final head, and on the **merge result** with current `main` (`git merge-tree`, or a throwaway
+   merge commit) - not on the branch alone. The changed-target specs are every spec whose
+   `Target`, `Suite` or spec file the pull request changes, so a suite edited to catch less reruns
+   its specs. "Mergeable" on GitHub means the text merges; it says nothing about whether the merged
+   tree is green. Why whole specs run at all, and not only `-Changed`: first, `-Changed` is blind
+   to every change that is not on a mutant's own line (rule 1): whole specs see those on their own
+   targets, and the nightly sweep sees the rest. Second, a spec on `main` can break without anyone
+   running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
+
+   **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
+   It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
+   request's gate held that slot for over an hour and a half, and about ten runs from other
+   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets and
+   suites; the nightly sweep covers what they cannot see, an edited helper or config that is no
+   spec's target, and a spec broken on `main`, within a day. Until the nightly run is live, the
+   sweep is run by hand once a night.
+   A pull request body names the specs it ran and says the full sweep is left to the nightly run.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
@@ -330,8 +342,8 @@ its branch can break main when main moved under it").
 6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
    A few times a day the ready pull requests are merged together:
    - build the combined tree: `main` plus every ready pull request, in order;
-   - run the touched suites, the full suite once, and the full mutation specs once for the pull
-     requests in the batch, on that tree;
+   - run the touched suites, the full suite once, and the changed-target mutation specs once for
+     the pull requests in the batch, on that tree;
    - merge in order, with merge commits only (rule 4).
 
    The combined tree is the true merge result, so this run is the once-per-pull-request run of
@@ -352,10 +364,21 @@ its branch can break main when main moved under it").
    through it, so a gate that is wrong is wrong everywhere at once: the remote gate's first pruning
    rule, keep the newest 10 runs, deleted other agents' finished runs from the shared folder
    (2026-10-01).
-9. **`test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are part of EVERY pull request's
-   targeted set**, and run on the final head, in a clean tree, before every merge, by any Orc. They
+9. **Every repo-wide guard listed in `test\guards.txt` (`test-host-names`, `test-mutation-specs`,
+   `test-function-names`, `test-json-parse-allowlist`, `test-param-shadow`, `test-core-load`,
+   `test-exec-scan`, `test-start-sites`) is part of EVERY pull request's targeted set**, in both Windows
+   PowerShell 5.1 and PowerShell 7, and run on the final head, in a clean tree, before every merge, by any Orc. They
    are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
    278, 279 and 288 each merged green on their own suites and left `main` red on both.
+10. **Merges go through `horde merge`**, which does what rule 9 and rule 4 ask in one command, so no
+   step rests on memory: it refuses a PR that is not open, is a draft, conflicts or misses a required
+   review; runs every guard of rule 9 (the list is `test\guards.txt`) on the merge result, in Windows PowerShell 5.1 and PowerShell 7, with current `main` (rule 2), in a scratch
+   checkout of its own, and refuses if either is red; checks again if `main` moved meanwhile; merges
+   with `gh pr merge --merge`; and records the task ledger's merged event and tells the warchief and
+   the analyst, saying loudly what to run by hand if any of those fails after the merge. Before it, on
+   2026-10-14 three merges skipped the guards and left `main` red, and on 2026-10-06 three merges were
+   told to nobody (fleet audit of 2026-10-16, findings 2, 4 and 10). The repository's CI runs the
+   same guards on every pull request and on `main`; it notifies and never blocks.
 
 ## 16. Horde never depends on a Microsoft Store package
 
