@@ -564,7 +564,7 @@ function New-HordeMergeTools {
 # A TEST'S HOME TELLS NOBODY: a Horde home under the temp folder is a suite's, and is refused before any
 # messenger or session record is looked for. The caller loads the port, the messengers, core/SessionSeat.ps1
 # and core/Device.ps1 in its own scope.
-$script:HordeMergeTellNeeds = @("body.untyped", "idempotent.post")
+$script:HordeMergeTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeMergeTellStages = @("accepted", "handed-over", "seen")
 $script:HordeMergeTellFrom = "horde-merge"
 $script:HordeMergeTellTtlSeconds = 604800

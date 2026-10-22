@@ -23,7 +23,7 @@ $script:HordeMeterTellRole = "warchief"
 $script:HordeMeterFromSession = "horde-meter"
 # How long the message may wait in a mailbox: the link's most, 7 days (messengers/Port.ps1).
 $script:HordeMeterTtlSeconds = 604800
-$script:HordeMeterTellNeeds = @("body.untyped", "idempotent.post")
+$script:HordeMeterTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeMeterTakenStages = @("accepted", "handed-over", "seen")
 # A tell is one or two sentences; far over this is a mistake, not a message.
 $script:HordeMeterTellMaxChars = 1500
