@@ -25,10 +25,11 @@ $HordeCommand = @{
         # THE HOME MUST BE NAMED, not defaulted (fleet-db/cli.mjs): one database for the whole fleet, and a
         # second one made under a default folder would be read by nothing. Checked before Node, so the
         # message is about the home and not about a child process.
-        if ("$env:HORDE_HOME".Trim() -eq "") { throw "horde db needs HORDE_HOME set to the Horde home: fleet.db is the fleet's one database and is never made in a default folder" }
         $root = Get-HordeRoot
         . (Join-Path $root "core\Home.ps1")
-        $hordeHome = Get-HordeHome
+        $resolved = Resolve-HordeHome
+        if ($resolved.source -eq "default") { throw "horde db needs HORDE_HOME set to the Horde home (or a home pointer: horde home set -Path <folder>): fleet.db is the fleet's one database and is never made in a default folder" }
+        $hordeHome = $resolved.path
 
         # Node is checked first, in one sentence, as the fleet meter does (cli/commands/meter.ps1).
         $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1

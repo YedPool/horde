@@ -185,6 +185,97 @@ Check ($v.state -ceq "unknown" -and $v.reason -like "*4242*") ("a live session w
 $v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Ignore @($LIVE)
 Check ($v.state -ceq "stopped") "CONTROL: unless it is one the wake started itself"
 
+Section "a process started to resume a session: it is never stopped (T-0320)"
+# M resumed two lot members by hand; no control file named either, so the control files alone read both
+# stopped and a wake would have started a second copy. The process command lines are the second witness.
+$HAND = "eeeeeeee-5555-4555-8555-555555555555"
+$HAND2 = "ffffffff-6666-4666-8666-666666666666"
+$NOTMINE = "99999999-7777-4777-8777-777777777777"
+function Proc { param([int]$ProcId, [string]$Name, [string]$Line) return [pscustomobject]@{ pid = $ProcId; name = $Name; commandLine = $Line } }
+function Table-Of { param([object[]]$Rows) $h = @{}; foreach ($r in @($Rows)) { $h[[int]$r.pid] = $r }; $answer = New-HordeKnown -Value $h; return { $answer }.GetNewClosure() }
+function Snap-With { param([object[]]$Rows) return (New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart) -Resumed (Read-ClaudeCodeFleetResumeArgv -Table (Table-Of $Rows))) }
+Usual-World
+$exe = '"C:\Users\x\AppData\Roaming\npm\claude.exe"'
+$snap = Snap-With @((Proc 28356 "claude.exe" ($exe + " --resume " + $HAND + " --dangerously-skip-permissions")))
+Check ("" + $snap.error -eq "" -and "" + $snap.resumedError -eq "") "CONTROL: the listing reads with no error"
+$v = Verdict $snap $HAND "C:\work\hand"
+Check ($v.state -ceq "running" -and $v.pid -ceq "28356" -and $v.reason -like "*a process was started to resume it: pid 28356*") ("a session a process was started to resume, with no control file, is running (" + $v.state + "/" + $v.kind + ": " + $v.reason + ")")
+$v = Verdict $snap $NOTMINE "C:\work\hand"
+Check ($v.state -ceq "stopped") ("CONTROL: a session nothing resumed and no control file names is still stopped (" + $v.state + ")")
+$v = Verdict $snap $LIVE "C:\work\live"
+Check ($v.state -ceq "running" -and $v.kind -ceq "live") "CONTROL: a control file still works as before"
+$v = Verdict $snap $DEAD "C:\work\dead"
+Check ($v.state -ceq "stopped") "CONTROL: a dead control file with no resuming process is still stopped"
+# a dead control file does not outvote a process that resumed the id
+$snapD = Snap-With @((Proc 77 "claude.exe" ($exe + " --resume " + $DEAD)))
+Check ((Verdict $snapD $DEAD "C:\work\dead").state -ceq "running") "a session whose control file is dead but whose id a process resumes is running"
+# the other argv forms and the id's case
+foreach ($form in @(@("--resume=" + $HAND), @("-r", $HAND), @("--resume", $HAND.ToUpperInvariant()), @("--resume=" + $HAND.ToUpperInvariant()), @("--model", "x", "-r", $HAND), @("--session-id", $HAND), @("--session-id=" + $HAND), @("--session-id=" + $HAND.ToUpperInvariant()))) {
+    $line = $exe + " " + ($form -join " ")
+    $v = Verdict (Snap-With @((Proc 31 "claude.exe" $line))) $HAND "C:\work\hand"
+    Check ($v.state -ceq "running" -and $v.pid -ceq "31") ("the form '" + ($form -join " ") + "' resumes the session (" + $v.state + ")")
+}
+# argv that merely contains the id elsewhere does not count
+$elsewhere = @(
+    @("a path", ($exe + ' --add-dir "C:\work\' + $HAND + '"')),
+    @("a prompt text after --resume of another id", ($exe + " --resume " + $NOTMINE + ' "please look at ' + $HAND + '"')),
+    @("a prompt that says --resume", ($exe + ' "claude --resume ' + $HAND + '"')),
+    @("another flag's value", ($exe + " --name " + $HAND)),
+    @("a continue flag (it names no id)", ($exe + " --continue " + $HAND)),
+    @("the id as a bare argument", ($exe + " " + $HAND)),
+    @("--resume with no id then the id as a prompt", ($exe + " --resume --print " + $HAND)),
+    @("a longer word", ($exe + " --resumed " + $HAND)),
+    @("an id glued to text", ($exe + " --resume " + $HAND + "x")))
+foreach ($e in $elsewhere) {
+    $v = Verdict (Snap-With @((Proc 41 "claude.exe" $e[1]))) $HAND "C:\work\hand"
+    Check ($v.state -ceq "stopped") ("an id in " + $e[0] + " is not a resume (" + $v.state + ")")
+}
+$v = Verdict (Snap-With @((Proc 41 "claude.exe" ($exe + " --resume " + $NOTMINE + ' "see ' + $HAND + '"')))) $NOTMINE "C:\work\hand"
+Check ($v.state -ceq "running") "CONTROL: the id that does follow --resume in that same line is running"
+# only the harness's own process image counts
+$v = Verdict (Snap-With @((Proc 51 "pwsh.exe" ("pwsh -c claude --resume " + $HAND)))) $HAND "C:\work\hand"
+Check ($v.state -ceq "stopped") "a command line of another program that mentions --resume does not count"
+$v = Verdict (Snap-With @((Proc 52 "CLAUDE.EXE" ($exe + " --resume " + $HAND)))) $HAND "C:\work\hand"
+Check ($v.state -ceq "running") "the process image is matched without regard to case"
+# two processes
+$snap2 = Snap-With @((Proc 61 "claude.exe" ($exe + " --resume " + $HAND)), (Proc 62 "claude.exe" ($exe + " --resume " + $HAND2)), (Proc 63 "node.exe" "node x"))
+Check ((Verdict $snap2 $HAND "C:\work\hand").pid -ceq "61" -and (Verdict $snap2 $HAND2 "C:\work\hand").pid -ceq "62") "two resuming processes each keep their own session"
+Check ((Verdict $snap2 $NOTMINE "C:\work\hand").state -ceq "stopped") "CONTROL: a third id is still stopped"
+# --session-id STARTS a session with that id; a process running under it is a reason not to start another
+# (erring toward running is the safe side), so unlike every other flag's value it counts.
+# a harness process with no readable command line (another user's, elevated) may be the very resume: the
+# listing is partly unreadable, so a session with no control file is unknown, never stopped
+foreach ($blank in @($null, "", "   ", "`t `r`n")) {
+    $snapB = Snap-With @((Proc 64 "claude.exe" $blank))
+    $v = Verdict $snapB $HAND "C:\work\hand"
+    Check ($v.state -ceq "unknown" -and $v.kind -ceq "reading" -and $v.reason -like "*harness process 64*" -and $v.reason -like "*resume it by hand if it is not*") ("a harness process with no readable command line makes a session with no control file unknown (" + $v.state + "/" + $v.kind + ")")
+}
+Check ((Verdict $snapB $LIVE "C:\work\live").state -ceq "running") "CONTROL: a live control file needs no command line"
+$snapB2 = Snap-With @((Proc 64 "claude.exe" $null), (Proc 65 "claude.exe" ($exe + " --resume " + $HAND)))
+Check ((Verdict $snapB2 $HAND "C:\work\hand").state -ceq "running") "an id found in a readable row is still running, whatever the blind row"
+Check ((Verdict $snapB2 $NOTMINE "C:\work\hand").state -ceq "unknown") "and one found nowhere is unknown while a row is blind"
+Check ((Verdict (Snap-With @((Proc 66 "pwsh.exe" $null))) $HAND "C:\work\hand").state -ceq "stopped") "CONTROL: a blind row of another program does not matter"
+# listing unreadable: unknown, never stopped, for a session with no control file
+$bad = New-HordeUnknown -Reason "CIM refused"
+$snapU = New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart) -Resumed (Read-ClaudeCodeFleetResumeArgv -Table { $bad })
+$v = Verdict $snapU $HAND "C:\work\hand"
+Check ($v.state -ceq "unknown" -and $v.kind -ceq "reading" -and $v.reason -like "*CIM refused*") ("an unreadable process listing leaves a session with no control file unknown (" + $v.state + "/" + $v.kind + ")")
+$v = Verdict $snapU $DEAD "C:\work\dead"
+Check ($v.state -ceq "unknown") "an unreadable process listing leaves a dead control file unknown too"
+$v = Verdict $snapU $LIVE "C:\work\live"
+Check ($v.state -ceq "running" -and $v.kind -ceq "live") "CONTROL: a live control file needs no listing"
+$snapT = New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart) -Resumed (Read-ClaudeCodeFleetResumeArgv -Table { throw "boom" })
+Check ((Verdict $snapT $HAND "C:\work\hand").state -ceq "unknown") "a listing that throws is unknown, never stopped"
+# a snapshot built without the listing (control-file tests) behaves as before
+Check ((Verdict (Read-Snapshot) $HAND "C:\work\hand").state -ceq "stopped") "CONTROL: a snapshot taken without the listing is the control files alone"
+# the command line splitter
+$parts = @(Split-ClaudeCodeFleetCommandLine -Line 'a "b c" d\"e "f\\" g')
+Check ($parts.Count -eq 5 -and $parts[1] -ceq "b c" -and $parts[2] -ceq 'd"e' -and $parts[3] -ceq 'f\' -and $parts[4] -ceq "g") ("the splitter reads quotes and backslashes as Windows does (" + ($parts -join "|") + ")")
+Check (@(Split-ClaudeCodeFleetCommandLine -Line "").Count -eq 0 -and @(Split-ClaudeCodeFleetCommandLine -Line $null).Count -eq 0) "an empty command line has no arguments"
+# the real listing reads this very box without error
+$real = Read-ClaudeCodeFleetResumeArgv
+Check ("" + $real.error -eq "") ("CONTROL: the real process listing reads (" + $real.error + ")")
+
 Section "the real process lookup"
 $mine = Get-ClaudeCodeFleetProcessStart -ProcessId $PID
 Check ($mine -ceq ("" + (Get-Process -Id $PID).StartTime.ToFileTimeUtc())) ("this process's own start time is read as FILETIME ticks (" + $mine + ")")
@@ -224,6 +315,7 @@ Check (-not $scrub.ContainsKey("CLAUDE_CONFIG_DIR") -and -not $scrub.ContainsKey
 Section "the adapter registers itself"
 $a = Resolve-HordeFleetAdapter -Kind "agent"
 Check ($a.state -ceq "known" -and $a.value.name -ceq "claude-code") "loading the file registers the fleet agent adapter"
+Check ($a.value.snapshot.ToString() -like "*Read-ClaudeCodeFleetResumeArgv*") "and its snapshot reads the process command lines, not the control files alone"
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
 Complete-HordeSuite -Success "hibernation's liveness rule answers every case of the restore guard's spec the way the guard does"

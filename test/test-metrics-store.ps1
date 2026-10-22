@@ -143,8 +143,7 @@ try {
     Check ($text -like '*"at":  "2026-10-01T12:34:56.789Z"*') "times are written as UTC ISO 8601 text, not PowerShell's Date() form"
     Check ($text -like '*"startedAt":  "2026-10-01T12:34:56.789Z"*' -and $text -like '*"state":  "known"*') "a time inside an answer's value is converted too, and the state is written"
     Check ($text -like '*"state":  "unknown"*' -and $text -like '*"reason":  "why"*') "an unknown keeps its reason"
-    Add-Type -AssemblyName System.Web.Extensions
-    $back = (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject($text)
+    $back = ConvertFrom-HordeJsonObject -Text ($text)
     Check (@($back["list"]).Count -eq 2) "a list stays a list"
     $rec.schemaVersion = 2
     $null = Write-HordeMetricsRecord -Record $rec -Adapter "harness-a" -Name "session-1"

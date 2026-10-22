@@ -4,6 +4,7 @@
 // closing, a message at the millisecond of its close, a gap, a duplicate id, a file named for no sequence, a
 // schemaVersion 2, a requestHash that is not the record's, signing material that must not reach any column.
 // Nothing real is read: the real store is never named.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';

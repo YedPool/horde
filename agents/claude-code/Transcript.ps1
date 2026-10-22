@@ -49,7 +49,7 @@
 # dropped in memory. Every lookup of a key not named here is a review finding.
 #
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
-# core/ReadShared.ps1 and core/Transcript.ps1.
+# core/ReadShared.ps1, core/JsonText.ps1 and core/Transcript.ps1.
 
 $script:ClaudeCodeWorkerTools = @("Agent", "Task")
 
@@ -58,9 +58,6 @@ function Test-ClaudeCodeTranscript {
     # carry a sessionId and a top-level type, and none a payload (the shape of other harnesses' files).
     param([string]$Path)
     if ([System.IO.Path]::GetExtension($Path) -ine ".jsonl" -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $stream = Open-HordeSharedStream -Path $Path
     try {
         $reader = New-Object System.IO.StreamReader($stream)
@@ -69,7 +66,7 @@ function Test-ClaudeCodeTranscript {
             while ($seen -lt 20 -and $null -ne ($text = $reader.ReadLine())) {
                 if ($text.Trim() -eq "") { continue }
                 $v = $null
-                try { $v = $ser.DeserializeObject($text) } catch { continue }
+                try { $v = ConvertFrom-HordeJsonObject -Text ($text) } catch { continue }
                 if ($v -isnot [System.Collections.IDictionary]) { continue }
                 $seen++
                 if ($v.ContainsKey("payload")) { return $false }
@@ -223,14 +220,12 @@ function Read-ClaudeCodeSubagentLinks {
     $byTool = @{}
     $unreadable = 0
     if (Test-Path -LiteralPath $sub -PathType Container) {
-        Add-Type -AssemblyName System.Web.Extensions
-        $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
         foreach ($f in @(Get-ChildItem -LiteralPath $sub -File)) {
             if ($f.Name -match '\Aagent-(.+)\.jsonl\z') { [void]$agents.Add($Matches[1]); continue }
             if ($f.Name -match '\Aagent-(.+)\.meta\.json\z') {
                 $id = $Matches[1]
                 try {
-                    $meta = $ser.DeserializeObject((Read-HordeSharedText -Path $f.FullName))
+                    $meta = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $f.FullName))
                     if ($meta -is [System.Collections.IDictionary] -and $meta["toolUseId"] -is [string]) { $byTool[$meta["toolUseId"]] = $id }
                 } catch { $unreadable++ }
             }

@@ -100,8 +100,8 @@
            Find = '    if ($unreadable) { return "unreadable" }'
            Replace = '' }
         @{ Name = "case-twin-keys-dropped"
-           Find = '        try { $doc = $ser.DeserializeObject($row) } catch { $doc = $null }'
-           Replace = '        try { $doc = $ser.DeserializeObject($row.ToLowerInvariant()) } catch { $doc = $null }' }
+           Find = '        try { $doc = ConvertFrom-HordeJsonObject -Text ($row) } catch { $doc = $null }'
+           Replace = '        try { $doc = ConvertFrom-HordeJsonObject -Text ($row.ToLowerInvariant()) } catch { $doc = $null }' }
         @{ Name = "turn-end-of-any-session"
            Find = '-and $d["sessionId"] -ceq $SessionId -and $d["isSidechain"] -ne $true) { return (New-HordeKnown -Value $true) }'
            Replace = ') { return (New-HordeKnown -Value $true) }' }

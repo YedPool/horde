@@ -31,6 +31,11 @@ $marker = Join-Path $work "marker.txt"
 $log = Join-Path $work "hook.log"
 $homeMarker = Join-Path $work "home-marker.txt"
 $configDir = Join-Path $work "config"
+$profileDir = Join-Path $work "profile"
+$pointerFile = Join-Path $profileDir ".horde-home.json"
+$ptrHome1 = Join-Path $work "pointer-home-one"
+$ptrHome2 = Join-Path $work "pointer-home-two"
+New-Item -ItemType Directory -Path $profileDir, $ptrHome1, $ptrHome2 -Force | Out-Null
 New-Item -ItemType Directory -Path $registry -Force | Out-Null
 
 $home1 = "C:\fleet-home\one"
@@ -116,6 +121,7 @@ function Invoke-Hook {
     $psi.EnvironmentVariables["TD_HOME_MARKER"] = $homeMarker
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_CONFIG_DIR"] = $configDir
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_HORDE_HOME"] = $home1
+    $psi.EnvironmentVariables["USERPROFILE"] = $profileDir
     if ($psi.EnvironmentVariables.ContainsKey("HORDE_HOME")) { [void]$psi.EnvironmentVariables.Remove("HORDE_HOME") }
     $psi.EnvironmentVariables["TD_MODE"] = "never"
     $psi.EnvironmentVariables["TD_TASK"] = "never"
@@ -307,6 +313,64 @@ Reset-Marks
 $s = New-OrcSession
 $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_HOME = "" }
 Check ((Home-Seen) -ceq $home3) "an empty HORDE_HOME is no home: the config file is used"
+
+Write-Host ""
+Write-Host "--- the home pointer file (T-0299): one rule for every resolver ---" -ForegroundColor Cyan
+function Put-Pointer { param([string]$Json) [System.IO.File]::WriteAllText($pointerFile, $Json, $utf8) }
+function Clear-Pointer { if (Test-Path -LiteralPath $pointerFile) { Remove-Item -LiteralPath $pointerFile -Force } }
+function Pointer-Json { param([string]$Dir) return ('{"v":1,"hordeHome":"' + $Dir.Replace("\", "\\") + '"}') }
+$noStateDir = @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_TURN_DUTY_STATE_DIR = $null; HORDE_TURN_DUTY_CONFIG_DIR = $null }
+Clear-Config
+Reset-Marks
+Put-Pointer (Pointer-Json $ptrHome1)
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ($null -ne (Get-Block $r) -and (Home-Seen) -ceq $ptrHome1) "HORDE_HOME unset: the pointer file names the home horde is run with"
+Check ([System.IO.File]::Exists((Join-Path $ptrHome1 ("turn-duty\" + $s + ".json")))) "   and the state folder follows it: <home>\turn-duty\<session>.json"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s ($noStateDir + @{ HORDE_HOME = $ptrHome2 })
+Check ((Home-Seen) -ceq $ptrHome2 -and [System.IO.File]::Exists((Join-Path $ptrHome2 ("turn-duty\" + $s + ".json")))) "HORDE_HOME beats the pointer, for the home and for the state folder"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $ptrHome2; HORDE_TURN_DUTY_STATE_DIR = $null; HORDE_TURN_DUTY_CONFIG_DIR = $null }
+Check ((Home-Seen) -ceq $ptrHome2) "HORDE_TURN_DUTY_HORDE_HOME beats the pointer (K's override stays first)"
+Check ([System.IO.File]::Exists((Join-Path $ptrHome2 ("turn-duty\" + $s + ".json")))) "   and the state folder follows it too"
+Reset-Marks
+Put-Pointer (Pointer-Json $ptrHome2)
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Home-Seen) -ceq $ptrHome2) "the pointer is read on every stop: changed, the next stop follows it"
+Reset-Marks
+Put-Config ('{"hordeHome": "' + $home3.Replace("\", "\\") + '"}')
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Home-Seen) -ceq $ptrHome2) "the pointer beats config.json hordeHome"
+Clear-Config
+Clear-Pointer
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1) "no pointer and no home: pass, one log line (the old behavior)"
+Check ([System.IO.File]::Exists((Join-Path $profileDir (".horde\turn-duty\" + $s + ".json")))) "   and the state folder is the old one, under the user profile"
+foreach ($bad in @(
+        @{ n = "v 2"; j = ('{"v":2,"hordeHome":"' + $ptrHome1.Replace("\", "\\") + '"}') }
+        @{ n = "no hordeHome"; j = '{"v":1}' }
+        @{ n = "a relative hordeHome"; j = '{"v":1,"hordeHome":"some\\folder"}' }
+        @{ n = "a folder that is not there"; j = (Pointer-Json (Join-Path $work "no-such-folder")) }
+        @{ n = "not JSON"; j = '{"v":1,' }
+        @{ n = "non-ASCII"; j = ('{"v":1,"hordeHome":"' + $ptrHome1.Replace("\", "\\") + [char]0x00E9 + '"}') }
+    )) {
+    Reset-Marks
+    Put-Pointer $bad.j
+    Put-Config ('{"hordeHome": "' + $home3.Replace("\", "\\") + '"}')
+    $s = New-OrcSession
+    $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_TURN_DUTY_STATE_DIR = $null }
+    $logText = $(if ([System.IO.File]::Exists($log)) { Text $log } else { "" })
+    Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1 -and $logText.Contains($pointerFile)) ("a bad pointer (" + $bad.n + ") is refused by name in the log, not skipped for config.json: pass, nothing spawned")
+}
+Clear-Pointer
+Clear-Config
 Clear-Config
 foreach ($c in @(
         @{ n = "no home anywhere"; cfg = $null }

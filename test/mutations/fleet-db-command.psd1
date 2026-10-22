@@ -6,7 +6,7 @@
     Suite  = "test\e2e\e2e-db.ps1"
     Mutations = @(
         @{ Name = "home-defaulted"
-           Find = 'if ("$env:HORDE_HOME".Trim() -eq "") { throw'
+           Find = 'if ($resolved.source -eq "default") { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "node-not-checked"
            Find = 'if ($null -eq $node) { throw'

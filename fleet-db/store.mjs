@@ -14,8 +14,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS, SCHEMA_VERSION } from './schema.mjs';
+import { resolveHordeHome } from '../core/home.mjs';
 
 export const DB_FILE = 'fleet.db';
+
+// The Horde home from the environment: HORDE_HOME, else the pointer file (core/home.mjs, the one rule for every
+// resolver). Throws with the reason when neither names a usable home; there is no default folder.
+export function homeFromEnv(env = process.env) {
+  const r = resolveHordeHome(env);
+  if (!r.ok) throw new Error(r.message);
+  return r.home;
+}
 
 // The file for a Horde home. A relative or empty home is refused, never resolved against the current
 // folder: the same command run from two folders would write two databases (core/Home.ps1's rule).

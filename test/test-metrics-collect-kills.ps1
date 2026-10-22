@@ -21,12 +21,9 @@ foreach ($f in @("Tristate", "ReadShared", "Home", "Transcript", "MetricsStore")
 
 $work = Join-Path $env:TEMP ("horde-kills-" + [guid]::NewGuid().ToString("N"))
 $saved = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
-Add-Type -AssemblyName System.Web.Extensions
-$ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-$ser.MaxJsonLength = [int]::MaxValue
 $storeVars = @()
 foreach ($sj in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | ForEach-Object { Join-Path $_.FullName "stores.json" } | Where-Object { Test-Path -LiteralPath $_ })) {
-    foreach ($r in @($ser.DeserializeObject([System.IO.File]::ReadAllText($sj))["roots"])) { if ($r["env"] -is [string]) { $storeVars += $r["env"] } }
+    foreach ($r in @((ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($sj)))["roots"])) { if ($r["env"] -is [string]) { $storeVars += $r["env"] } }
 }
 foreach ($v in $storeVars) { $saved[$v] = [Environment]::GetEnvironmentVariable($v); [Environment]::SetEnvironmentVariable($v, $null) }
 
@@ -40,7 +37,7 @@ function Read-IndexLocked {
         $p = Join-Path $m "collect-index.json"
         if (-not (Test-Path -LiteralPath $p)) { return [pscustomobject]@{ status = "missing"; committed = 0 } }
         $d = $null
-        try { $d = $ser.DeserializeObject([System.IO.File]::ReadAllText($p)) } catch { return [pscustomobject]@{ status = "unreadable"; committed = -1 } }
+        try { $d = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($p)) } catch { return [pscustomobject]@{ status = "unreadable"; committed = -1 } }
         return [pscustomobject]@{ status = "ok"; committed = @($d["entries"].Values | Where-Object { "$($_["record"])" -ne "" }).Count }
     } finally { $lk.Dispose() }
 }

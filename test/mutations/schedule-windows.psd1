@@ -24,8 +24,17 @@
            Find = '    if (-not (Test-HordeTaskMarked $t)) { throw ("the task '''
            Replace = '    if ($false) { throw ("the task ''' }
         @{ Name = "other-home-taken-over"
-           Find = 'if ($oldHome -cne $Job.hordeHome) { throw'
+           Find = 'if ($oldHolds -and -not $takeOver) { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "take-over-switch-ignored"
+           Find = 'if ($oldHolds -and -not $takeOver) { throw'
+           Replace = 'if ($oldHolds) { throw' }
+        @{ Name = "marker-home-fleet-db-not-required"
+           Find = ' -and (Test-Path -LiteralPath (Join-Path $oldHome "fleet.db") -PathType Leaf))'
+           Replace = ')' }
+        @{ Name = "same-home-refused"
+           Find = '$differs = ($oldHome -ne "" -and (ConvertTo-HordeTaskHomeKey $oldHome) -cne (ConvertTo-HordeTaskHomeKey $Job.hordeHome))'
+           Replace = '$differs = ($oldHome -ne "")' }
         @{ Name = "author-not-set"
            Find = '    $task.Author = $script:HordeTaskAuthor'
            Replace = '' }

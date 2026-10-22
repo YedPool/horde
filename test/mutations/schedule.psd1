@@ -4,9 +4,9 @@
     Target = "core\Schedule.ps1"
     Suite  = "test\test-metrics-schedule.ps1"
     Mutations = @(
-        @{ Name = "home-not-carried"
-           Find = '-Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $home2 }'
-           Replace = '-Arguments @("metrics", "collect") -Environment @{}' }
+        @{ Name = "home-baked-in"
+           Find = '-Arguments @("metrics", "collect") -HordeHome $home2'
+           Replace = '-Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2' }
         @{ Name = "marker-not-written"
            Find = '$text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome'
            Replace = '$text = $Description + "`nhorde-home: " + $HordeHome' }

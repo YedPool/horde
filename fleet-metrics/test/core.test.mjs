@@ -74,6 +74,25 @@ test('a relative HORDE_HOME is refused too', () => {
   assert.equal(resolveHome({ HORDE_HOME: path.resolve('x') }).ok, true);
 });
 
+test('HORDE_HOME unset: the home pointer names the home; a bad pointer is exit 2 naming the file', () => {
+  const r = rig();
+  const profile = path.join(r.dir, 'profile');
+  fs.mkdirSync(profile);
+  fs.mkdirSync(r.home);
+  const pointer = path.join(profile, '.horde-home.json');
+  fs.writeFileSync(pointer, JSON.stringify({ v: 1, hordeHome: r.home }));
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, USERPROFILE: profile };
+  const run = () => spawnSync(process.execPath, [CLI, 'collect', '--agents', r.agents, '--projects', r.projects], { env, encoding: 'utf8' });
+  const ok = run();
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.ok(fs.existsSync(path.join(r.home, 'metrics', 'fleet.sqlite')), 'the database is in the pointer home');
+  fs.writeFileSync(pointer, '{"v":2,"hordeHome":"x"}');
+  const bad = run();
+  assert.equal(bad.status, 2);
+  assert.ok(bad.stderr.includes(pointer), bad.stderr);
+  r.done();
+});
+
 test('the schema is versioned, strict, WAL, and every metric row carries its source', () => {
   const r = rig();
   const s = openStore(r.home);
