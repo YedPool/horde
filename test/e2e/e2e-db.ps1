@@ -286,6 +286,12 @@ $w1 = Invoke-Work @("start", "-Kind", "agent", "-ParentSession", $parentId, "-Ag
 Check ($w1.code -eq 0 -and $w1.out -cmatch '(?m)^started agent [0-9A-Z]{26}\r?$' -and $w1.out -like "*warning: task T-0299 is not in fleet.db yet*") ("an agent starts; a task the ledger lacks is a warning, not a refusal (" + $w1.code + ")")
 $w2 = Invoke-Work @("start", "-Kind", "agent", "-ParentSession", $parentId, "-AgentId", $agentName, "-WorkType", "research")
 Check ($w2.code -eq 0 -and $w2.out -cmatch '(?m)^already started agent [0-9A-Z]{26}\r?$') "the same start again says already started and exits 0"
+# The flip unsets HORDE_HOME: a hook then finds the home by the pointer alone, in a profile of its own.
+$pointerProfile = Join-Path $script:work "profile-pointer"
+New-Item -ItemType Directory -Force -Path $pointerProfile | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $pointerProfile ".horde-home.json"), ('{"v":1,"hordeHome":' + (ConvertTo-Json $workHome) + '}'))
+$wp = Invoke-Work @("list") @{ HORDE_HOME = ""; USERPROFILE = $pointerProfile }
+Check ($wp.code -eq 0 -and $wp.out -like "*$agentName*") ("with HORDE_HOME unset, work finds the home by the pointer (" + $wp.code + ")")
 $w3 = Invoke-Work @("start", "-Kind", "warg", "-ParentSession", $parentId, "-Session", $wargId, "-WorkType", "build")
 Check ($w3.code -eq 0 -and $w3.out -cmatch '(?m)^started warg [0-9A-Z]{26}\r?$') "a warg starts by its own session"
 $wl = Invoke-Work @("list", "-Running")

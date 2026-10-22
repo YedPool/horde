@@ -55,8 +55,8 @@
            Find = 'for (const w of r.warnings) out(ascii(w));'
            Replace = '' }
         @{ Name = "start-repeat-not-said"
-           Find = '(r.action === ''started'' ? ''started '' : ''already started '')'
-           Replace = '''started ''' }
+           Find = '''already started; task filled '' : ''already started '')'
+           Replace = '''already started; task filled '' : ''started '')' }
         @{ Name = "end-repeat-not-said"
            Find = '(r.action === ''ended'' ? ''ended '' : ''already ended '')'
            Replace = '''ended ''' }

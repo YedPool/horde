@@ -835,7 +835,7 @@ export const MIGRATIONS = [
   `,
 
   // 6: work_unit (T-0299, founder ruling 2026-10-21): an AGENT (an Agent-tool subagent inside a session, no
-  // window of its own) and a WARG (its own claude session in its own pane) recorded as what they are.
+  // window of its own) and a WARG (its own agent session in its own pane) recorded as what they are.
   `
   -- One row per unit of delegated work. The spawning session is the parent either way. An agent is named
   -- by the harness's subagent id, exactly as given (the id in its transcript's file name: the fleet meter

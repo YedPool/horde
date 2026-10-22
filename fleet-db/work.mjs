@@ -1,7 +1,7 @@
 // Work units (migration 6): the one write path for the work_unit table, and its reader.
 //
 // AN AGENT is an Agent-tool subagent inside a session: no window of its own, named by the harness's
-// subagent id. A WARG is its own claude session in its own pane. Both have a parent: the session that
+// subagent id. A WARG is its own agent session in its own pane. Both have a parent: the session that
 // spawned them. C's hooks call start at SubagentStart / wezspawn and end at SubagentStop / session end;
 // the fleet meter reads the table read-only by ATTACH and keeps every token figure in its own database.
 //

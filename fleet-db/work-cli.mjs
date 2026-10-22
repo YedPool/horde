@@ -7,10 +7,10 @@
 // EXIT CODES: 0 done (an idempotent repeat is 0 and says "already started" / "already ended"),
 //             1 refused or failed (one line, the reason), 2 no home, 3 "fleet.db busy" (the lock was not
 //             free within HORDE_WORK_BUSY_MS, default 3000: a hook never hangs on a locked database).
-// THE HOME comes from HORDE_HOME, as every fleet.db command (store.mjs dbPathFor).
+// THE HOME comes from HORDE_HOME, else the home pointer, as every fleet.db command (store.mjs homeFromEnv).
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dbPathFor, openStore } from './store.mjs';
+import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { startWork, endWork, listWork, refuse } from './work.mjs';
 import { parseTime } from './import.mjs';
 
@@ -79,7 +79,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
   }
   let file;
   try {
-    file = dbPathFor(env.HORDE_HOME);
+    file = dbPathFor(homeFromEnv(env));
   } catch (e) {
     err('fleet.db: ' + ascii(e.message));
     return 2;

@@ -60,8 +60,8 @@
            Find = '} else if (w.parent_session_id !== null && w.parent_session_id !== parent) {'
            Replace = '} else if (false) {' }
         @{ Name = "unknown-task-not-warned"
-           Find = 'warnings.push(''warning: task '''
-           Replace = 'void (''warning: task '''
+           Find = 'else warnings.push(''warning: task '' + taskKey'
+           Replace = 'else void (''warning: task '' + taskKey'
         }
         @{ Name = "unknown-task-refused"
            Find = 'if (t) taskId = t.id;'
