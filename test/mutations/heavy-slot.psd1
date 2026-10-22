@@ -44,6 +44,15 @@
         @{ Name = "cmd-characters-passed-on"
            Find = 'if ($script:argsRefused -eq "" -and $a -match ''["&|<>^%]'')'
            Replace = 'if ($false)' }
+        @{ Name = "control-characters-passed-on"
+           Find = 'if ($script:argsRefused -eq "" -and $a -match ''[\x00-\x1F]'')'
+           Replace = 'if ($false)' }
+        @{ Name = "missing-argsfile-called-bad-json"
+           Find = '" cannot be read: " + $_.Exception.Message'
+           Replace = '" is not a JSON array of strings"' }
+        @{ Name = "argsfile-not-an-array-taken"
+           Find = 'if ($script:argsRefused -eq "" -and -not $raw.TrimStart().StartsWith("[")) {'
+           Replace = 'if ($false) {' }
         @{ Name = "argsfile-non-string-taken"
            Find = 'if (@($items | Where-Object { $_ -isnot [string] }).Count -gt 0)'
            Replace = 'if ($false)' }

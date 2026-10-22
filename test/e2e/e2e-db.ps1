@@ -15,6 +15,10 @@
 #     session record with a byte order mark) into a fleet.db of its own: it names the rows added per table
 #     and the lines it could not link, a second import adds nothing, a dry run writes nothing, a flag
 #     meant for import is refused on another verb, and a file that is not there is refused;
+#   - import -Lots reads a hibernations folder (lane K's one-file-per-table lots): the lot, members, wake and
+#     the sessions fleet.db never saw come in, a legacy record is named and left, a second import adds nothing,
+#     a member that woke since is moved forward, -Lots on another verb is refused, a file of the wrong table is
+#     reported;
 #   - a mistyped verb is refused, and a machine without Node fails at once in one sentence.
 # NOTHING REAL IS READ OR WRITTEN: the home and the user profile every child sees are folders this
 # scenario made and removes. The real homes (HORDE_HOME if set, and the profile's .horde) are checked
@@ -65,7 +69,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 3, created\)') ("init creates the file at schema 3 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 5, created\)') ("init creates the file at schema 5 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -73,7 +77,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 3, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 5, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
@@ -147,6 +151,124 @@ $missing = Invoke-Db @("import", "-Ledger", (Join-Path $src "nope.jsonl")) $impE
 Check ($missing.code -ne 0 -and $missing.out -like "*ENOENT*") ("a source file that is not there is refused (" + $missing.code + ")")
 $none = Invoke-Db @("import") $impEnv
 Check ($none.code -ne 0 -and $none.out -like "*at least one source*") "import with no source is refused"
+
+Write-Host ""
+Write-Host "=== import: the decisions store, then a publish naming its question ===" -ForegroundColor Cyan
+# The fixture records are hashed by the store's own function (decisions/Rules.ps1), so a requestHash the
+# importer calls different would mean the importer's recomputation is not the store's.
+. (Join-Path $root "decisions\Rules.ps1")
+$decDir = Join-Path $src "store\decisions"
+New-Item -ItemType Directory -Path $decDir -Force | Out-Null
+function Save-DecisionRecord {
+    param([int]$Sequence, [string]$Kind, [string]$Operation, [string]$Actor, [int]$Number, $Body, $Data, [string]$At)
+    $hash = Get-HordeDecisionHash -Value ([ordered]@{ operation = $Operation; actor = $Actor; number = $Number; body = $Body })
+    $record = [ordered]@{ schemaVersion = 1; sequence = $Sequence; id = ("{0:x32}" -f $Sequence); kind = $Kind; at = $At; actor = $Actor; requestHash = $hash; data = $Data }
+    Save-Text (Join-Path $decDir ("{0:d10}.json" -f $Sequence)) (ConvertTo-Json -InputObject $record -Compress -Depth 12)
+}
+$question31 = [ordered]@{ title = "Does the fixture question import?"; kind = "yes-no"; options = @(); parts = @(); whatItIs = "A question made for this scenario."; yesMeans = "It imported."; recommendation = "yes."; group = "Fixture"; groupNote = ""; askedBy = "Orc C"; waiting = @(); files = @(); references = @(); needsSecret = $false }
+Save-DecisionRecord -Sequence 1 -Kind "question-added" -Operation "add" -Actor "warchief" -Number 0 -Body ([ordered]@{ question = $question31 }) -Data ([ordered]@{ number = 31; question = $question31 }) -At "2026-10-07T16:26:16.9667002Z"
+$said = [ordered]@{ speaker = "founder"; route = "window"; text = "yes"; wordingVersion = 1 }
+Save-DecisionRecord -Sequence 2 -Kind "message-said" -Operation "say" -Actor "founder" -Number 31 -Body $said -Data ([ordered]@{ number = 31; speaker = "founder"; route = "window"; text = "yes"; wordingVersion = 1 }) -At "2026-10-07T16:27:00.1000000Z"
+$decArgs = @("import", "-Decisions", $decDir)
+$decDry = Invoke-Db ($decArgs + "-DryRun") $impEnv
+Check ($decDry.code -eq 0 -and $decDry.out -cmatch '(?m)^question: 1 added, 0 already there\r?$' -and $decDry.out -cmatch '(?m)^answer: 1 added, 0 already there\r?$') ("a dry run says what the store would add (" + $decDry.code + ")")
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^question: 0 rows\r?$') "and wrote nothing"
+$dec1 = Invoke-Db $decArgs $impEnv
+Check ($dec1.code -eq 0 -and $dec1.out -cmatch '(?m)^question: 1 added, 0 already there\r?$' -and $dec1.out -cmatch '(?m)^answer: 1 added, 0 already there\r?$' -and $dec1.out -cmatch '(?m)^answer_extra: 1 added, 0 already there\r?$') ("the store imports: a question and its answer (" + $dec1.code + ")")
+Check ($dec1.out -notlike "*requestHash*") "and no record's requestHash differs from the one the importer recomputes (the store's own hash made them)"
+Check ($dec1.out -like "*decisions: question names no task*: 1*") "and the question that names no task is reported"
+$dec2 = Invoke-Db $decArgs $impEnv
+Check ($dec2.code -eq 0 -and $dec2.out -cmatch '(?m)^question: 0 added, 1 already there\r?$' -and $dec2.out -cmatch '(?m)^answer: 0 added, 1 already there\r?$') "a second import adds nothing"
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is still sound"
+$decWrongVerb = Invoke-Db @("check", "-Decisions", $decDir) $impEnv
+Check ($decWrongVerb.code -ne 0 -and $decWrongVerb.out -like "*-Decisions belongs to db import, not db check*") "-Decisions on another verb is refused"
+# A gap in the sequence refuses the store, whole.
+$gapDir = Join-Path $src "store-gap"
+New-Item -ItemType Directory -Path $gapDir | Out-Null
+Copy-Item -LiteralPath (Join-Path $decDir "0000000002.json") -Destination (Join-Path $gapDir "0000000002.json")
+$gap = Invoke-Db @("import", "-Decisions", $gapDir) $impEnv
+Check ($gap.code -eq 0 -and $gap.out -like "*decisions: source refused, nothing imported from it: a gap in the sequence: record 1 is not there*") "a store with a hole in its sequence is refused, whole, in words"
+# Publish: the node side of `horde decisions publish`, as the command calls it (the command itself proves the
+# calling session from the fleet's records, which this scenario has not got). The list names question 31.
+function Invoke-NodeCli {
+    param([string[]]$NodeArgs, [string]$HomeDir)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $node.Source
+    $psi.Arguments = ($NodeArgs | ForEach-Object { '"' + $_ + '"' }) -join " "
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $HomeDir
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $out = $p.StandardOutput.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ code = $p.ExitCode; out = ($out + "`n" + $errTask.Result) }
+    } finally { $p.Dispose() }
+}
+$decCli = Join-Path $root "fleet-db\decisions-cli.mjs"
+$pubOk = Join-Path $script:work "publish-31.json"
+Save-Text $pubOk '{"who":{"letter":"C"},"sessionId":"none","items":[{"questionNumber":31,"text":"Does the fixture question import?","recommendation":"yes"}]}'
+$pubBad = Join-Path $script:work "publish-99.json"
+Save-Text $pubBad '{"who":{"letter":"C"},"sessionId":"none","items":[{"questionNumber":99,"text":"A question that was never imported"}]}'
+$pBad = Invoke-NodeCli @($decCli, "publish", $pubBad) $impHome
+Check ($pBad.code -ne 0 -and $pBad.out -like "*item 1 names question 99, which is not in the decisions store*") ("CONTROL: a list naming a question that was never imported is refused (" + $pBad.code + ")")
+$pOk = Invoke-NodeCli @($decCli, "publish", $pubOk) $impHome
+Check ($pOk.code -eq 0 -and $pOk.out -cmatch 'published 1 item \(snapshot ') ("a list naming the imported question 31 is published (" + $pOk.code + ": " + $pOk.out.Trim() + ")")
+$listed = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
+Check ($listed.code -eq 0 -and $listed.out -like "*Does the fixture question import?*" -and $listed.out -like "*question 31*") ("and horde decisions published shows the line with its question number (" + $listed.code + ")")
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is sound with the list in it"
+# The same list again records a confirm (T-0299): unchanged, no new snapshot, and a later confirmed time.
+$pj1 = Invoke-NodeCli @($decCli, "published", "--json") $impHome
+Start-Sleep -Milliseconds 1100
+$pAgain = Invoke-NodeCli @($decCli, "publish", $pubOk) $impHome
+Check ($pAgain.code -eq 0 -and $pAgain.out -cmatch 'unchanged, confirmed \d{4}-\d\d-\d\dT[\d:.]+Z \(snapshot ') ("the same list published twice says unchanged and names the confirm time (" + $pAgain.code + ": " + $pAgain.out.Trim() + ")")
+$pj2 = Invoke-NodeCli @($decCli, "published", "--json") $impHome
+$l1 = (($pj1.out.Trim() -split "`n")[0] | ConvertFrom-Json).lists[0]
+$l2 = (($pj2.out.Trim() -split "`n")[0] | ConvertFrom-Json).lists[0]
+Check ($l1.snapshot -eq $l2.snapshot -and $l1.publishedAt -eq $l2.publishedAt) "and the list is the same snapshot, published at the same time"
+Check ([datetime]$l2.confirmedAt -gt [datetime]$l1.confirmedAt -and [datetime]$l1.confirmedAt -ge [datetime]$l1.publishedAt) ("and published --json shows a later confirmedAt (" + $l1.confirmedAt + " then " + $l2.confirmedAt + ")")
+$listed2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "published") -Env $impEnv
+$c2 = [regex]::Match($pj2.out, 'confirmedAt\W+([0-9TZ:.-]+)').Groups[1].Value
+Check ($listed2.code -eq 0 -and $c2 -ne "" -and $listed2.out -like ("*confirmed " + $c2 + "*")) "and horde decisions published prints the confirm time"
+
+Write-Host ""
+Write-Host "=== import: the parking lots (lane K's one-file-per-table form) ===" -ForegroundColor Cyan
+$lotsDir = Join-Path $src "hibernations"
+$lotId = "01K8T0N2E0S6V7W8X9Y0Z1A2B3"
+$wakeId = "01K8T1Q2E0S6V7W8X9Y0Z1A2B3"
+$lotSession1 = "33333333-0000-4000-8000-000000000001"
+$lotSession2 = "33333333-0000-4000-8000-000000000002"
+$lotDir = Join-Path $lotsDir "20261019-202000"
+New-Item -ItemType Directory -Path (Join-Path $lotDir ("wakes\" + $wakeId)), (Join-Path $lotsDir "20260101-000000") -Force | Out-Null
+Save-Text (Join-Path $lotsDir "20260101-000000\record.json") '{"id":"20260101-000000"}'
+function Save-LotMembers { param([string]$State)
+    Save-Text (Join-Path $lotDir "parking_lot_member.json") ('{"v":1,"table":"parking_lot_member","rows":[{"lot_id":"' + $lotId + '","session_id":"' + $lotSession1 + '","orc_id":"C","tier":2,"state":"' + $State + '"},{"lot_id":"' + $lotId + '","session_id":"' + $lotSession2 + '","state":"parked","note":"lanes/c/PARKED-C1.md"}]}')
+}
+Save-LotMembers "parked"
+Save-Text (Join-Path $lotDir "parking_lot.json") ('{"v":1,"table":"parking_lot","rows":[{"id":"' + $lotId + '","created_at":"2026-10-19T20:20:00Z","created_by_orc_id":"C","reason":"free memory","selection_kind":"orcs","keep_visible":1}]}')
+Save-Text (Join-Path $lotDir ("wakes\" + $wakeId + "\wake_member.json")) ('{"v":1,"table":"wake_member","rows":[{"wake_id":"' + $wakeId + '","session_id":"' + $lotSession1 + '","outcome":"woken"}]}')
+Save-Text (Join-Path $lotDir ("wakes\" + $wakeId + "\wake.json")) ('{"v":1,"table":"wake","rows":[{"id":"' + $wakeId + '","lot_id":"' + $lotId + '","requested_at":"2026-10-19T21:00:00Z"}]}')
+$lotArgs = @("import", "-Lots", $lotsDir)
+$lotDry = Invoke-Db ($lotArgs + "-DryRun") $impEnv
+Check ($lotDry.code -eq 0 -and $lotDry.out -cmatch '(?m)^parking_lot: 1 added, 0 already there\r?$' -and $lotDry.out -cmatch '(?m)^parking_lot_member: 2 added, 0 already there, 0 moved forward\r?$') ("a dry run says what the lots would add (" + $lotDry.code + ")")
+Check ((Invoke-Db @("status") $impEnv).out -cmatch '(?m)^parking_lot: 0 rows\r?$') "and wrote nothing"
+$lot1 = Invoke-Db $lotArgs $impEnv
+Check ($lot1.code -eq 0 -and $lot1.out -cmatch '(?m)^parking_lot: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^parking_lot_member: 2 added, 0 already there, 0 moved forward\r?$' -and $lot1.out -cmatch '(?m)^wake: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^wake_member: 1 added, 0 already there\r?$' -and $lot1.out -cmatch '(?m)^session: 2 added, 0 already there\r?$') ("the lot, its members, its wake and the two sessions fleet.db had never seen come in (" + $lot1.code + ")")
+Check ($lot1.out -like "*lots: legacy record, run K's lot backfill first (not imported): 1 (e.g. 20260101-000000)*") "and the legacy record is named, not imported"
+$lot2 = Invoke-Db $lotArgs $impEnv
+Check ($lot2.code -eq 0 -and $lot2.out -cmatch '(?m)^parking_lot: 0 added, 1 already there\r?$' -and $lot2.out -cmatch '(?m)^parking_lot_member: 0 added, 2 already there, 0 moved forward\r?$' -and $lot2.out -cmatch '(?m)^wake: 0 added, 1 already there\r?$' -and $lot2.out -cmatch '(?m)^wake_member: 0 added, 1 already there\r?$') "a second import adds nothing"
+Save-LotMembers "woken"
+$lot3 = Invoke-Db $lotArgs $impEnv
+Check ($lot3.code -eq 0 -and $lot3.out -cmatch '(?m)^parking_lot_member: 0 added, 2 already there, 1 moved forward\r?$') "a member that woke since is moved forward, not added again"
+Check ((Invoke-Db @("check") $impEnv).code -eq 0) "and check says the file is still sound"
+$lotWrongVerb = Invoke-Db @("status", "-Lots", $lotsDir) $impEnv
+Check ($lotWrongVerb.code -ne 0 -and $lotWrongVerb.out -like "*-Lots belongs to db import, not db status*") "-Lots on another verb is refused"
+Save-Text (Join-Path $lotDir "parking_lot_member.json") '{"v":1,"table":"wake","rows":[]}'
+$lotBad = Invoke-Db $lotArgs $impEnv
+Check ($lotBad.code -eq 0 -and $lotBad.out -like "*lots: a file is missing or is not version 1 of its table (nothing imported from this lot): 1*") "a member file of the wrong table is reported, in words"
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan

@@ -31,6 +31,11 @@ $marker = Join-Path $work "marker.txt"
 $log = Join-Path $work "hook.log"
 $homeMarker = Join-Path $work "home-marker.txt"
 $configDir = Join-Path $work "config"
+$profileDir = Join-Path $work "profile"
+$pointerFile = Join-Path $profileDir ".horde-home.json"
+$ptrHome1 = Join-Path $work "pointer-home-one"
+$ptrHome2 = Join-Path $work "pointer-home-two"
+New-Item -ItemType Directory -Path $profileDir, $ptrHome1, $ptrHome2 -Force | Out-Null
 New-Item -ItemType Directory -Path $registry -Force | Out-Null
 
 $home1 = "C:\fleet-home\one"
@@ -46,9 +51,19 @@ if (process.env.TD_MARKER) appendFileSync(process.env.TD_MARKER, a.join(" ") + "
 if (process.env.TD_HOME_MARKER) appendFileSync(process.env.TD_HOME_MARKER, String(process.env.HORDE_HOME) + "\n");
 const mode = (a[0] === "decisions" ? process.env.TD_MODE : process.env.TD_TASK) || "never";
 const orc = a[a.indexOf("-Orc") + 1];
-const list = (who, minutes) => JSON.stringify({ lists: [{ orc: who, snapshot: "s1", publishedAt: new Date(Date.now() - minutes * 60000).toISOString(), count: 0, items: [] }] });
+// TD_SNAP is the snapshot id (default s1); TD_CONFIRMED is minutes ago for confirmedAt, or "bad" for a malformed one.
+const list = (who, minutes) => {
+  const e = { orc: who, publishedAt: new Date(Date.now() - minutes * 60000).toISOString(), count: 0, items: [] };
+  if (process.env.TD_SNAP !== "none") e.snapshot = process.env.TD_SNAP || "s1"; // "none": a list with no snapshot id
+  const c = process.env.TD_CONFIRMED;
+  if (c === "bad") e.confirmedAt = "not a time";
+  else if (c && c.startsWith("raw:")) e.confirmedAt = c.slice(4);
+  else if (c) e.confirmedAt = new Date(Date.now() - Number(c) * 60000).toISOString();
+  return JSON.stringify({ lists: [e] });
+};
 if (mode === "never") { console.log('{"lists":[]}'); }
 else if (mode.startsWith("age:")) { console.log(list(orc, Number(mode.slice(4)))); }
+else if (mode.startsWith("rawpub:")) { const o = JSON.parse(list(orc, 0)); o.lists[0].publishedAt = mode.slice(7); console.log(JSON.stringify(o)); }
 else if (mode === "otherorc") { console.log(list("ZZ", 1)); }
 else if (mode === "badjson") { console.log("this is not json"); }
 else if (mode === "dbmissing") { console.error("horde decisions published: refused: fleet.db does not exist yet at X; run horde db init"); process.exitCode = 1; }
@@ -76,6 +91,14 @@ function Put-Session {
     [System.IO.File]::WriteAllText((Join-Path $registry ($Sid + ".json")), (ConvertTo-Json -InputObject $rec), $utf8)
 }
 function Put-State { param([string]$Sid, [int]$CheckedMinutesAgo) New-Item -ItemType Directory -Path $stateDir -Force | Out-Null; $ms = [long]([datetimeoffset]::UtcNow.AddMinutes(-$CheckedMinutesAgo).ToUnixTimeMilliseconds()); [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $ms + ',"lastBlockedAt":0}'), $utf8) }
+function Put-BlockedState {
+    # A state whose last check was 31 minutes ago (throttle over) and whose last block was $BlockedMinutesAgo, for $Snapshot.
+    param([string]$Sid, [int]$BlockedMinutesAgo, [string]$Snapshot)
+    New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    $c = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
+    $b = [long]([datetimeoffset]::UtcNow.AddMinutes(-$BlockedMinutesAgo).ToUnixTimeMilliseconds())
+    [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $c + ',"lastBlockedAt":' + $b + ',"lastDecisionsBlockedAt":' + $b + ',"lastBlockedSnapshot":"' + $Snapshot + '"}'), $utf8)
+}
 function Get-StateObj { param([string]$Sid) $p = State-Path $Sid; if (-not [System.IO.File]::Exists($p)) { return $null }; return (Text $p | ConvertFrom-Json) }
 
 function Invoke-Hook {
@@ -98,10 +121,12 @@ function Invoke-Hook {
     $psi.EnvironmentVariables["TD_HOME_MARKER"] = $homeMarker
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_CONFIG_DIR"] = $configDir
     $psi.EnvironmentVariables["HORDE_TURN_DUTY_HORDE_HOME"] = $home1
+    $psi.EnvironmentVariables["USERPROFILE"] = $profileDir
     if ($psi.EnvironmentVariables.ContainsKey("HORDE_HOME")) { [void]$psi.EnvironmentVariables.Remove("HORDE_HOME") }
     $psi.EnvironmentVariables["TD_MODE"] = "never"
     $psi.EnvironmentVariables["TD_TASK"] = "never"
-    foreach ($k in @("HORDE_TURN_DUTY_TEST_TASKLIST")) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } }
+    $psi.EnvironmentVariables["TD_SNAP"] = "s1"
+    foreach ($k in @("HORDE_TURN_DUTY_TEST_TASKLIST", "TD_CONFIRMED")) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } }
     foreach ($k in $Env.Keys) { if ($null -eq $Env[$k]) { if ($psi.EnvironmentVariables.ContainsKey($k)) { [void]$psi.EnvironmentVariables.Remove($k) } } else { $psi.EnvironmentVariables[$k] = $Env[$k] } }
     $p = [System.Diagnostics.Process]::Start($psi)
     try {
@@ -147,6 +172,16 @@ Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 5
 $r = Stop-Hook $s
 Check ((Test-Pass $r) -and -not (Ran)) "checked 5 minutes ago: exit 0, silent, nothing spawned (the throttle)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s -600
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Ran)) "a lastCheckedAt in the FUTURE (clock rollback) does not throttle: the check runs and blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+[System.IO.File]::WriteAllText((State-Path $s), '{"lastCheckedAt":9999999999999,"lastBlockedAt":0}', $utf8)
+$r = Stop-Hook $s
+Check ($null -ne (Get-Block $r) -and (Ran)) "a corrupt lastCheckedAt of 9999999999999 does not silence the hook"
 Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-State $s 31
 $r = Stop-Hook $s
@@ -278,6 +313,64 @@ Reset-Marks
 $s = New-OrcSession
 $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_HOME = "" }
 Check ((Home-Seen) -ceq $home3) "an empty HORDE_HOME is no home: the config file is used"
+
+Write-Host ""
+Write-Host "--- the home pointer file (T-0299): one rule for every resolver ---" -ForegroundColor Cyan
+function Put-Pointer { param([string]$Json) [System.IO.File]::WriteAllText($pointerFile, $Json, $utf8) }
+function Clear-Pointer { if (Test-Path -LiteralPath $pointerFile) { Remove-Item -LiteralPath $pointerFile -Force } }
+function Pointer-Json { param([string]$Dir) return ('{"v":1,"hordeHome":"' + $Dir.Replace("\", "\\") + '"}') }
+$noStateDir = @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_TURN_DUTY_STATE_DIR = $null; HORDE_TURN_DUTY_CONFIG_DIR = $null }
+Clear-Config
+Reset-Marks
+Put-Pointer (Pointer-Json $ptrHome1)
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ($null -ne (Get-Block $r) -and (Home-Seen) -ceq $ptrHome1) "HORDE_HOME unset: the pointer file names the home horde is run with"
+Check ([System.IO.File]::Exists((Join-Path $ptrHome1 ("turn-duty\" + $s + ".json")))) "   and the state folder follows it: <home>\turn-duty\<session>.json"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s ($noStateDir + @{ HORDE_HOME = $ptrHome2 })
+Check ((Home-Seen) -ceq $ptrHome2 -and [System.IO.File]::Exists((Join-Path $ptrHome2 ("turn-duty\" + $s + ".json")))) "HORDE_HOME beats the pointer, for the home and for the state folder"
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $ptrHome2; HORDE_TURN_DUTY_STATE_DIR = $null; HORDE_TURN_DUTY_CONFIG_DIR = $null }
+Check ((Home-Seen) -ceq $ptrHome2) "HORDE_TURN_DUTY_HORDE_HOME beats the pointer (K's override stays first)"
+Check ([System.IO.File]::Exists((Join-Path $ptrHome2 ("turn-duty\" + $s + ".json")))) "   and the state folder follows it too"
+Reset-Marks
+Put-Pointer (Pointer-Json $ptrHome2)
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Home-Seen) -ceq $ptrHome2) "the pointer is read on every stop: changed, the next stop follows it"
+Reset-Marks
+Put-Config ('{"hordeHome": "' + $home3.Replace("\", "\\") + '"}')
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Home-Seen) -ceq $ptrHome2) "the pointer beats config.json hordeHome"
+Clear-Config
+Clear-Pointer
+Reset-Marks
+$s = New-OrcSession
+$r = Stop-Hook $s $noStateDir
+Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1) "no pointer and no home: pass, one log line (the old behavior)"
+Check ([System.IO.File]::Exists((Join-Path $profileDir (".horde\turn-duty\" + $s + ".json")))) "   and the state folder is the old one, under the user profile"
+foreach ($bad in @(
+        @{ n = "v 2"; j = ('{"v":2,"hordeHome":"' + $ptrHome1.Replace("\", "\\") + '"}') }
+        @{ n = "no hordeHome"; j = '{"v":1}' }
+        @{ n = "a relative hordeHome"; j = '{"v":1,"hordeHome":"some\\folder"}' }
+        @{ n = "a folder that is not there"; j = (Pointer-Json (Join-Path $work "no-such-folder")) }
+        @{ n = "not JSON"; j = '{"v":1,' }
+        @{ n = "non-ASCII"; j = ('{"v":1,"hordeHome":"' + $ptrHome1.Replace("\", "\\") + [char]0x00E9 + '"}') }
+    )) {
+    Reset-Marks
+    Put-Pointer $bad.j
+    Put-Config ('{"hordeHome": "' + $home3.Replace("\", "\\") + '"}')
+    $s = New-OrcSession
+    $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = $null; HORDE_TURN_DUTY_STATE_DIR = $null }
+    $logText = $(if ([System.IO.File]::Exists($log)) { Text $log } else { "" })
+    Check ((Test-Pass $r) -and -not (Ran) -and (Log-Lines) -eq 1 -and $logText.Contains($pointerFile)) ("a bad pointer (" + $bad.n + ") is refused by name in the log, not skipped for config.json: pass, nothing spawned")
+}
+Clear-Pointer
+Clear-Config
 Clear-Config
 foreach ($c in @(
         @{ n = "no home anywhere"; cfg = $null }
@@ -314,6 +407,117 @@ $curly = [string][char]0x2019
 $r = Stop-Hook $s @{ HORDE_TURN_DUTY_HORDE_HOME = ("C:\fleet" + $curly + "s home") }
 $b = Get-Block $r
 Check ($null -ne $b -and $b.reason.Contains("HORDE_HOME='C:\fleet" + $curly + $curly + "s home'")) "a curly apostrophe, which PowerShell also reads as a quote, is doubled too"
+Write-Host ""
+Write-Host "--- an unchanged list is asked about once; a confirmed list is fresh ---" -ForegroundColor Cyan
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:45"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastBlockedSnapshot -ceq "snapA") "a block records the snapshot id it saw (lastBlockedSnapshot)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and (Ran)) "the SAME snapshot, blocked 40 minutes ago: pass, no block"
+Check ($null -ne $st -and $st.lastCheckedAt -gt ([datetimeoffset]::UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()) -and $st.lastBlockedSnapshot -ceq "snapA") "   the check is recorded and the snapshot is kept"
+Check ($null -ne $st -and $st.lastDecisionsBlockedAt -lt ([datetimeoffset]::UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds())) "   and lastDecisionsBlockedAt is NOT moved by a pass (the 4 hours run from the real block)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 230 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:400"; TD_SNAP = "snapA" }
+Check (Test-Pass $r) "the same snapshot blocked 230 minutes ago (inside 4 hours): still a pass"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 250 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:400"; TD_SNAP = "snapA" }
+Check ($null -ne (Get-Block $r)) "the same snapshot blocked 250 minutes ago (past 4 hours): one block again"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapB" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastBlockedSnapshot -ceq "snapB") "a NEW snapshot with an old publishedAt: blocked, and the new snapshot is remembered"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "never" }
+Check ($null -ne (Get-Block $r)) "no list at all after a block: still blocked (no snapshot to match)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 ""
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "none" }
+Check ($null -ne (Get-Block $r)) "a list with no snapshot id never matches an empty remembered one"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_CONFIRMED = "5" }
+Check ((Test-Pass $r) -and (Ran)) "confirmedAt 5 minutes ago beats a publishedAt 200 minutes old: pass"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_CONFIRMED = "200" }
+Check (Test-Pass $r) "a recent publishedAt is not made stale by an older confirmedAt (the newer wins)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_CONFIRMED = "90" }
+Check ($null -ne (Get-Block $r)) "confirmedAt 90 minutes ago and publishedAt 200: blocked"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_CONFIRMED = "bad" }
+Check ($null -ne (Get-Block $r)) "a malformed confirmedAt is ignored: publishedAt decides"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_CONFIRMED = "bad" }
+Check (Test-Pass $r) "   and a malformed confirmedAt does not spoil a fresh publishedAt"
+
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastDecisionsBlockedAt -gt 0) "a decisions block records lastDecisionsBlockedAt"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+$ms31 = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
+[System.IO.File]::WriteAllText((State-Path $s), ('{"lastCheckedAt":' + $ms31 + ',"lastBlockedAt":' + [long]([datetimeoffset]::UtcNow.AddMinutes(-40).ToUnixTimeMilliseconds()) + ',"lastBlockedSnapshot":"snapA"}'), $utf8)
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+Check ($null -ne (Get-Block $r)) "an old state file with no lastDecisionsBlockedAt reads as never blocked: blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s -600 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA" }
+Check ($null -ne (Get-Block $r)) "a block time in the FUTURE never counts as recent: blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:200"; TD_SNAP = "snapA"; TD_TASK = "age:200"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
+$st = Get-StateObj $s
+Check ($null -ne (Get-Block $r) -and $st.lastDecisionsBlockedAt -lt ([datetimeoffset]::UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds()) -and $st.lastBlockedSnapshot -ceq "snapA") "a task-list-only block does not move the decisions quiet window or snapshot"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-BlockedState $s 40 "snapA"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_SNAP = "snapA" }
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and $st.lastBlockedSnapshot -ceq "") "a list that passes as fresh clears the remembered snapshot"
+Write-Host ""
+Write-Host "--- times that cannot be trusted are ignored ---" -ForegroundColor Cyan
+foreach ($c in @(
+        @{ n = "a publishedAt 100 days in the future"; env = @{ TD_MODE = "age:-144000" } }
+        @{ n = "a publishedAt of year 9999"; env = @{ TD_MODE = "rawpub:9999-01-01T00:00:00Z" } }
+        @{ n = "a confirmedAt 100 days in the future beside an old publishedAt"; env = @{ TD_MODE = "age:200"; TD_CONFIRMED = "-144000" } }
+        @{ n = "a publishedAt that is only a year (2026)"; env = @{ TD_MODE = "rawpub:2026" } }
+        @{ n = "a publishedAt that is a bare number (1)"; env = @{ TD_MODE = "rawpub:1" } }
+        @{ n = "a publishedAt in a loose date form (Oct 30 2099)"; env = @{ TD_MODE = "rawpub:Oct 30 2099" } }
+        @{ n = "a confirmedAt in a loose date form beside an old publishedAt"; env = @{ TD_MODE = "age:200"; TD_CONFIRMED = ("raw:" + (Get-Date).ToUniversalTime().ToString("r", [cultureinfo]::InvariantCulture)) } }
+    )) {
+    Reset-Marks
+    $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+    $r = Stop-Hook $s $c.env
+    Check ($null -ne (Get-Block $r)) ("ignored, no usable time is stale (never a kill switch): blocks: " + $c.n)
+}
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:5"; TD_CONFIRMED = "raw:2026-13-45T99:99:99Z" }
+Check (Test-Pass $r) "an ISO-shaped but impossible confirmedAt is ignored, a fresh publishedAt still passes"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:-1" }
+Check (Test-Pass $r) "a publishedAt 1 minute ahead (clock skew within 2 minutes) still counts"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "age:-5" }
+Check ($null -ne (Get-Block $r)) "a publishedAt 5 minutes ahead is ignored: no usable time, stale, blocks"
+
 Write-Host ""
 Write-Host "--- the state is written BEFORE the block ---" -ForegroundColor Cyan
 Reset-Marks

@@ -15,7 +15,7 @@
 # WHAT COUNTS. A command named ConvertFrom-Json in the file's PARSE (a CommandAst), with or without its
 # module prefix - not a mention in a comment or a string. A file that does not parse is a finding, so it
 # can never pass by being unreadable.
-# NOT COUNTED: a direct .NET JSON call ([System.Text.Json...], JavaScriptSerializer) is not a command, so this lint does not see it.
+# NOT COUNTED: a direct .NET JSON call ([System.Text.Json...]) is not a command, so this lint does not see it. The one exception is the old .NET serializer class, scanned apart (Get-HordeSerializerUse, T-0323) with no allowlist.
 #
 # WHAT IS SCANNED: the shipped files (tools/FunctionNames.ps1, Get-HordeShippedScriptFiles), which
 # leaves out every folder named test. That exclusion is deliberate: a suite reads the answers of the
@@ -39,6 +39,27 @@ function Get-HordeRawJsonParseCounts {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $rootFull $rel), [ref]$tokens, [ref]$errors)
         if (@($errors).Count -gt 0) { $counts[$rel] = -1; continue }
         $n = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] -and ("" + $x.GetCommandName()) -match '(\A|\\)ConvertFrom-Json\z' }, $true)).Count
+        if ($n -gt 0) { $counts[$rel] = $n }
+    }
+    return $counts
+}
+
+function Get-HordeSerializerUse {
+    # path (forward slashes) -> number of code tokens naming .NET's JavaScriptSerializer, for every shipped
+    # file but the seam. T-0323: that class throws on every call under PowerShell 7 on .NET 10, and its
+    # callers' catch-and-skip hid it; core/JsonText.ps1's ConvertFrom-HordeJsonObject is the one reader. No
+    # allowlist: the count must be zero. A comment is not code, and the name is split below so this file
+    # does not trip its own scan.
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $name = "JavaScript" + "Serializer"
+    $counts = @{}
+    foreach ($rel in @(Get-HordeShippedScriptFiles -Root $rootFull)) {
+        if ($rel -ieq $script:HordeJsonSeamFile) { continue }
+        $tokens = $null; $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $rootFull $rel), [ref]$tokens, [ref]$errors)
+        if (@($errors).Count -gt 0) { continue }
+        $n = @($tokens | Where-Object { $_.Kind -ne [System.Management.Automation.Language.TokenKind]::Comment -and $_.Text.Contains($name) }).Count
         if ($n -gt 0) { $counts[$rel] = $n }
     }
     return $counts
@@ -68,5 +89,7 @@ function Test-HordeRawJsonParse {
         if ($n -lt 0) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = "does not parse, so its calls cannot be counted" }); continue }
         [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("calls ConvertFrom-Json " + $n + " time(s): parse with ConvertFrom-HordeJson (core/JsonText.ps1)") })
     }
+    $ser = Get-HordeSerializerUse -Root $rootFull
+    foreach ($rel in @($ser.Keys | Sort-Object)) { [void]$out.Add([pscustomobject]@{ path = $rel; problem = ("names the .NET serializer " + $ser[$rel] + " time(s), which throws under PowerShell 7: parse with ConvertFrom-HordeJsonObject (core/JsonText.ps1)") }) }
     return $out.ToArray()
 }

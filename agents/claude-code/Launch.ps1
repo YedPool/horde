@@ -180,16 +180,13 @@ function Get-ClaudeCodeRows {
     # not a JSON object. whole is false only for the last row when the text does not end in a line end
     # (the harness may be mid-write; it is read again on the next look).
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $parts = $Text -split "`n"
     $out = New-Object System.Collections.ArrayList
     for ($i = 0; $i -lt $parts.Count; $i++) {
         $row = $parts[$i].TrimEnd("`r")
         if ($row.Trim() -eq "") { continue }
         $doc = $null
-        try { $doc = $ser.DeserializeObject($row) } catch { $doc = $null }
+        try { $doc = ConvertFrom-HordeJsonObject -Text ($row) } catch { $doc = $null }
         if ($doc -isnot [System.Collections.IDictionary]) { $doc = $null }
         [void]$out.Add([pscustomobject]@{ doc = $doc; whole = ($i -lt $parts.Count - 1); text = $row })
     }

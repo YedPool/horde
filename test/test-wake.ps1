@@ -1428,16 +1428,22 @@ Check ((Read-HordeWakeLedger -Mode "live" -HordeHome $legacyHome).state -ceq "ab
 Write-HordeWakeHeartbeat -Mode "live" -At (At 1) -ProcessId 1 -Pass 1 -HordeHome $legacyHome
 $null = Write-HordeWakeJournal -Mode "live" -Entries @(New-HordeWakeEntry -At (At 1) -Kind "nudge" -Id (Sid 1) -Outcome "woken") -HordeHome $legacyHome
 Save-HordeWakeLedger -Mode "live" -Ledger @{} -HordeHome $legacyHome
-$legacyNames = (@(Get-ChildItem -LiteralPath (Join-Path $legacyHome "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",")
-Check ($legacyNames -ceq "heartbeat.json,heartbeat-live.json,journal.jsonl,journal-live.jsonl,ledger.json,ledger-live.json" -and ([System.IO.File]::ReadAllText((Join-Path $legacyHome "wake\heartbeat.json")) -like "*900*")) ("a live run writes files named for it, and the old ones are left as they were, not written over and not deleted (" + $legacyNames + ")")
+# ORDINAL, so the order is the same under every PowerShell: Sort-Object follows the culture, and PowerShell 7
+# puts "heartbeat-live.json" before "heartbeat.json" where Windows PowerShell 5.1 does not (measured 2026-10-21).
+[string[]]$legacyList = @(Get-ChildItem -LiteralPath (Join-Path $legacyHome "wake") | ForEach-Object { $_.Name })
+[System.Array]::Sort($legacyList, [System.StringComparer]::Ordinal)
+$legacyNames = ($legacyList -join ",")
+Check ($legacyNames -ceq "heartbeat-live.json,heartbeat.json,journal-live.jsonl,journal.jsonl,ledger-live.json,ledger.json" -and ([System.IO.File]::ReadAllText((Join-Path $legacyHome "wake\heartbeat.json")) -like "*900*")) ("a live run writes files named for it, and the old ones are left as they were, not written over and not deleted (" + $legacyNames + ")")
 Check ((Write-HordeWakeJournal -Mode "live" -Entries @()) -eq 0 -and -not (Test-Path -LiteralPath $wakeDir)) "journaling nothing writes nothing"
 $entries = @(1..12 | ForEach-Object { New-HordeWakeEntry -At (At $_) -Kind "would-nudge" -Id (Sid $_) -Outcome "would-nudge" -Reason "unread mail, idle, empty box" })
 $entries += New-HordeWakeEntry -At (At 13) -Kind "would-post" -Id (Sid 2) -Outcome "would-post" -Reason "restore x" -MessageId "0d000000-0000-4000-8000-000000000001"
 Check ((Write-HordeWakeJournal -Mode "live" -Entries $entries) -eq 13) "thirteen entries are thirteen journal lines"
 $tail = @(Read-HordeWakeJournalTail -Mode "live" -Count 10)
+# THE TIME IS READ FROM THE LINE ITSELF: PowerShell 7's ConvertFrom-Json turns an ISO time into a DateTime,
+# and the check is of the text the journal wrote.
 $last = $tail[9] | ConvertFrom-Json
 $firstOfTail = $tail[0] | ConvertFrom-Json
-Check ($tail.Count -eq 10 -and $firstOfTail.id -ceq (Sid 4) -and $last.kind -ceq "would-post" -and $last.messageId -ceq "0d000000-0000-4000-8000-000000000001" -and $last.at -ceq "2026-10-12T08:00:13.0000000Z") "the tail is the last ten, each a line of JSON with its time in UTC, and a mail's line carries its messageId"
+Check ($tail.Count -eq 10 -and $firstOfTail.id -ceq (Sid 4) -and $last.kind -ceq "would-post" -and $last.messageId -ceq "0d000000-0000-4000-8000-000000000001" -and ([regex]::Match($tail[9], '"at":"([^"]*)"')).Groups[1].Value -ceq "2026-10-12T08:00:13.0000000Z") "the tail is the last ten, each a line of JSON with its time in UTC, and a mail's line carries its messageId"
 Check ($null -eq $firstOfTail.PSObject.Properties["messageId"]) "a nudge's line carries none"
 $null = Write-HordeWakeJournal -Mode "live" -Entries @($entries[0])
 Check (@(Read-HordeWakeJournalTail -Mode "live" -Count 100).Count -eq 14) "the journal is appended to, never replaced"

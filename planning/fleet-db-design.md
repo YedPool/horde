@@ -156,6 +156,26 @@ session resolved at delivery: fixes E5), `device` (mirror of AWS TestDevices, ne
   cannot be moved under its own subtask. updated_at is stamped on every UPDATE of an object, heartbeat
   columns included; if that ever costs, the trigger narrows to UPDATE OF the columns that matter.
 
+## Confirm record (migration 5; T-0299, M's ruling)
+
+- A publish with a list equal to the live one writes no snapshot (`decisions_snapshot_not_same`), so the
+  turn-duty Stop hook could not tell an Orc whose list is unchanged from one that never looked at it.
+  `decisions_confirm` (id, orc_id, snapshot_id, session_id, confirmed_at) is the record: append-only,
+  one row per accepted publish, written in the same transaction as the publish. A new list gets its
+  snapshot and a confirm at the same millisecond; an equal list gets a confirm for the live snapshot and
+  nothing else. A refused publish writes nothing.
+- Triggers: a confirm must be of its Orc's live snapshot at insert time, and never earlier than that
+  snapshot's `published_at`. `horde db check` also flags a confirm whose snapshot belongs to another Orc or
+  that is earlier than its snapshot (reachable only with the triggers off). Unique on (snapshot_id,
+  confirmed_at): a second publish in the same millisecond adds nothing.
+- `decisions_live` (recreated, every old column kept) gains `confirmed_at`: the latest confirm of the live
+  snapshot, else `published_at`, so `confirmed_at >= published_at` always; snapshots made before migration
+  5 read `confirmed_at = published_at`.
+- FOR THE HOOK (lane K): the field is `confirmedAt` (ISO UTC) in each list of `horde decisions published
+  --json`, beside `publishedAt`. The turn-duty check should use the later of the two (confirmedAt is never
+  before publishedAt). `published` text prints `published <ISO>, confirmed <ISO>`; `publish` of an equal
+  list prints `unchanged, confirmed <ISO> (snapshot ...)`.
+
 ## Status cards become a generated view (plan for phase 3; M, 2026-10-19)
 
 The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatusBytes` in
@@ -177,8 +197,8 @@ The status card (`status.txt`, read by one reader, `ConvertFrom-HordeFleetStatus
 (`-Ledger`, `-PrCache`, `-Changelog`, `-Cards`, `-ThrallCard`, `-Registry`, `-DryRun`; no path is ever defaulted
 to the real files). Each source is optional. All files are read first; then one `inWrite` transaction
 runs node, orcs, sessions, PR cache, ledger, changelog and orc_status in that order, so a failure
-leaves the database as it was and a dry run rolls the same work back. Decisions and the parking lots
-are the next part.
+leaves the database as it was and a dry run rolls the same work back. The decisions store is part 2a (below); the parking lots
+are part 2b (below).
 
 Idempotent: state rows (node, orc, session, task, pr) are found by their label and kept as they are
 (never renamed, never refreshed); history rows go through `appendHistory` with `backfill = 1`, so the
@@ -204,9 +224,253 @@ is reported as needing a person. Live seats are decided first, freshest session 
 written, so a parent inserted early for its child never takes the seat; a session that loses it is kept with rank
 unknown. A time that does not parse is replaced and each replacement is reported. Two cards naming one Orc: only
 the newer is imported. Text cut to its column is reported per field. PR repo names are lower-cased, and a PR
-with no checked time takes its first ledger line's time. `--dry-run` refuses a file that needs migrating.
+with no checked time takes the time of the first ledger line imported (see part 2a, three nits). `--dry-run` refuses a file that needs migrating.
 
 Reported, never dropped in silence: `report.unlinked` lists, by source and reason, with a count and up to five
 examples, every row that could not be linked or read (for example `ledger: by C13 names no Orc row (kept as
 by_text): 12`). A `handed` line with no known target and a ledger line without a usable ts/task/event are the
 only lines not imported (the schema requires a target for a handing); each is in the report.
+
+## Importer (phase 1c part 2a: decisions store)
+
+Why now: `horde decisions publish` links a list line to its question by number (`fleet-db/decisions-cli.mjs`
+looks the number up in `question`), and that table was empty, so every list naming a question was refused.
+This part fills `question` and its answers from the founder's real store. `horde db import -Decisions
+<HORDE_HOME>\store\decisions` (`--decisions` on the node side; refused on any other verb).
+
+**Reading.** The folder holds one record per file, `0000000001.json` upwards. All files are read and checked as
+a whole before anything is written, and one fault refuses the SOURCE (nothing from it is imported; the other
+sources go on, and the report says why in one line): a gap in the sequence, two records with one id, a file
+whose name is not its record's sequence or not ten digits, a record that is not a JSON object, an id that is not
+32 lower-case hex characters, a `schemaVersion` other than 1. A file that is not `.json` (a half-written
+`.tmp`) is ignored and named. Times are the 7-digit-fraction `Z` form, read to UTC milliseconds.
+
+**Mapping.**
+
+| Record | Becomes |
+|---|---|
+| `question-added` | one `question` row per number (the founder-visible Q number): `title`, `kind`, `body` = whatItIs, `yes_means`, `recommendation`, `group_name`, `group_note`, `importance` and `blocks` (only when the record states them), `needs_passkey`, `asked_at`, `decisions_seq`, `backfill` 1; the lists (options, parts, waiting, files, references) and needsSecret are one canonical JSON text, `detail_json`. `followsUp` is `follows_up_id` (the earlier question). `askedBy` is `asked_by_orc_id` where it names one (`Orc C`, `M (Thrall)`, `Thrall`), else `asked_by_text` and a report line. `task_id` is empty (E10: the store never named a task) and every question says so in the report. |
+| `message-said` | one `answer` row (speaker, route, text, part, wording_version, asks, signed_by, replaces_answer_id) and one `answer_extra` row (evidence_present, act, recorded_by). |
+| `answer-routed` | one `answer_route` row (seat orc/warchief/analyst -> orc/thrall/analyst, session only when it is a `session` row, resolved only with that session) and one `answer_route_extra` row (purpose, label, notice, analyst, note, and the `resolved` the store said). |
+| `question-closed`, `-reopened`, `-ranked`, `-updated`, `-acked`, `answer-change-replied` | one `question_event` row each (closed, reopened, ranked, updated, acked, change-reply), `data_json` the record's data without the number, plus `actor`. |
+| `messages-read` | one `decisions_read` row (reader, up_to_seq). |
+| any other kind, a record about a question never added, a route to a message not in the journal, a time that does not read | not imported, counted in the report by reason. |
+
+**Signing material.** `evidence` and `signedBy` of a phone answer are never stored. `answer_extra.evidence_present`
+says evidence was there; `answer.signed_by` holds the sha256 of the key id (so `answer_now.authorizes` still sees a
+signed answer) and not the key id. A test scans every text column of every table, and the report, for the
+fixture's values.
+
+**requestHash.** Each record's hash is recomputed as the store makes it (`decisions/Operations.ps1`: sha256 of the
+canonical text of `{operation, actor, number, body}`; the body is the data without the number, without `evidence`
+and `signedBy` of a say, without the `closedBySeat` a close gets after hashing; an add hashes number 0 because its
+request has none; a marking has no number and hashes `{upTo}`; strings are hashed as the characters themselves in
+UTF-8, not the ASCII-escaped form `ids.mjs` uses). A record whose recomputed hash differs is imported as it
+stands and reported by record. Known answers made by PowerShell's `Get-HordeDecisionHash` are in the test, and the
+end-to-end scenario hashes its fixture with the store's own function. The source's hash is not stored (no column:
+the row's own sha256 is of the row).
+
+**The fold.** The journal is folded in order, as `decisions/Rules.ps1` folds it, to work out what the store never
+writes: a question is open until its `question-closed` (open again after a reopen); a `question-updated` that
+changes a wording field (title, options, parts, whatItIs, yesMeans) raises the question's wording version. Per
+message that gives `arrivedAfterClosing` (the question was not open when it arrived), `saidToEarlierWording` (a
+wording version below the question's) and his change of his own answer (`replaces_answer_id`: his answer that
+counts - it asks, has no act, arrived while open, and is not chat words under a passkey question - replaces his
+latest earlier answer that counts to the same part). After the write, every message is compared with
+`answer_now`: arrival and authorization. Every difference is a line in the report. The differences that can arise
+by construction: a message in the same millisecond as the close that follows it (the schema counts the close as
+before); an unsigned phone answer under a passkey question (the schema calls it unauthorized, the rules do not). A message said
+to an earlier wording has no flag in the schema: it is counted in the report and kept as an answer.
+
+**Parts.** A parts question is answered part by part, one `message-said` per part. The schema keeps a part as one
+capital letter and the store writes lower case (`a`), so the letter is stored upper case and the count of those is
+in the report. A part the question's parts (as last worded) do not list is reported unless the message was said to
+an earlier wording.
+
+**Migration 4** (never edits 1-3): `question` gains `asked_by_text`, `yes_means`, `recommendation`, `group_name`,
+`group_note`, `importance`, `blocks`, `detail_json`; new write-once, append-only tables `answer_extra`,
+`answer_route_extra` and `decisions_read`. The extras are beside `answer` and `answer_route`, not columns of them,
+because those are hashed history: the hash is of every column, so a new column would change how a row written
+before it recomputes (the phase 3 diff). `question` is state, not history, so it takes plain columns. Current
+importance, blocks and group are derived from the ranked and updated events; the question row keeps what was
+first asked.
+
+**Acknowledgements close.** `Step-HordeDecisionAcked` closes an open question when the Orc that asked has the
+answer. Migration 4 therefore recreates `question_now` and `answer_now` so that an `acked` event closes a
+question as a `closed` event does (a later `reopened` still opens it); no closed event is made up. The store
+writes an ack only when the rules applied it, so the fold closes on every ack (an ack on a closed question is
+reported). Messages after an ack are therefore `open_at_arrival` 0, as the rules say.
+
+**A question imported before migration 4** (a version-3 database already holding it) gets the new columns that are
+NULL filled from the journal, one `UPDATE ... WHERE column IS NULL` per column; a value that is there is never
+overwritten. **Unknown keys**: every record's top-level, `data` and `data.question` keys are compared with the
+known set, and an extra key is reported by kind and key with a count (`unknown key data.mood in message-said
+records`); it is not stored.
+
+**Idempotent and atomic** like part 1: the step runs inside the same transaction (a dry run rolls it back; a
+refused row, such as a lone surrogate in a message, undoes every row before it); questions are found by number and
+kept; history goes through `appendHistory` (the hash includes `decisions_seq`, so each record is one row) or
+`ON CONFLICT DO NOTHING` on its unique `decisions_seq`/`answer_id`/`route_id`; a second import adds 0 rows to every
+table, and `findProblems` is empty after.
+
+**Three nits of the review of part 1.** (1) A wait on `lane:C1` resolves the label to its lead Orc, as a bare `C1`
+already did. (2) A PR with no checked time is dated from the first ledger line that was imported (a line the
+importer drops - unknown event, a handing with no target, a priority with no value - dates nothing). (3) With no
+imported line and no merge time, the PR's `checked_at` is the time of the import, not 1970: the column is NOT NULL
+and the entity registry reads it as the time the object came to be, so NULL would need a table rebuild; the time we
+first saw it is true to what `checked_at` means for a row nobody checked, and the report says so for each such PR.
+
+## Importer (phase 1c part 2b: parking lots)
+
+Why now: the parking lots (T-0216, lane K) are the last file-kept source before the one-home move. K wrote them as
+one JSON file per table so that a row moves into fleet.db as it is. `horde db import -Lots
+<HORDE_HOME>\fleet\hibernations` (`--lots` on the node side; refused on any other verb).
+
+**Reading.** For each `<hid>` folder: `parking_lot.json`, `parking_lot_member.json` and, for every
+`wakes\<id>\`, `wake.json` and `wake_member.json`, each `{"v":1,"table":<name>,"rows":[...]}`. All files are read
+before the transaction. A file that is not JSON, is not version 1, names another table, holds a row that is not an
+object, is missing, or a `parking_lot.json`/`wake.json` that does not hold exactly one row, refuses its WHOLE lot:
+nothing of it is imported (not even a stub session) and the report names the folder and the file. A wake folder
+with no `wake.json` is an unfinished write (K writes the members first): it is reported and skipped, the lot goes
+on. A folder with `record.json` and no `parking_lot.json` is a legacy record: it is NOT imported and is reported as
+"legacy record, run K's lot backfill first" with its folder name (K's ULIDs for legacy records are made from the
+park's time and a seed in `fleet/Lots.ps1`; the importer does not reimplement them). A folder with neither is
+ignored and named.
+
+**Mapping.** Rows go in as they are: K's ULIDs are kept, a column left out is NULL (`keep_visible` of a lot written
+before the flag is 0), times (`created_at`, `requested_at`, which must be UTC seconds `...Z`) become UTC
+milliseconds. A column the table does not have is reported by table and name and not stored. Sessions are the
+harness's uuids: a lot, member, wake or `new_session_id` session that is not in `session` gets a stub row first
+(rank unknown, first and last seen = the time of the lot or wake that names it), as part 1 does for a parent; the
+report counts them. An Orc named in `created_by_orc_id` or a member's `orc_id` is mapped as part 1 maps one: the
+`orc` table's own id, else a letter, a lane folder, or a sub-session label (`F3` gives F); a name that maps to no
+row leaves the column empty and is reported. No migration: schema version 2 already holds `keep_visible`, and every
+column K's files carry has a column (migration 6 is not needed).
+
+**One savepoint per lot.** A row the schema refuses (a bad ULID, a state outside parked, woken and dropped, a tier
+of 3, a lot id that is not the lot's, a session in a lot twice, a time that is not UTC seconds, a wake outcome
+outside the five) rolls that lot back whole, to its savepoint, and is reported with the reason and the folder: a lot
+is there whole or not at all, and the other lots go on. The counts of a rolled-back lot are not added to the
+report. The whole step is inside the run's one transaction: a failure later undoes every lot, and a dry run rolls
+them back.
+
+**Idempotent.** `parking_lot`, `wake` and `wake_member` are created once, found by their key
+(`ON CONFLICT DO NOTHING`): a lot already there is never rewritten, even if the file's reason has changed.
+`parking_lot_member` is a state table. A re-import adds a member the lot did not yet hold, and moves an existing
+member's state forward, never back. K's member rows carry NO time, so "newer" cannot be read from the row; it is
+read from the lifecycle: parked is the start, woken and dropped (it never slept, so it left the park) are the ends.
+A file may take a parked member to woken or dropped; it may not take a woken or dropped member back to parked, and
+woken and dropped do not replace each other (a re-park is a new lot, never a member going back). A file that is not
+further along than the database is kept as the database has it and reported ("member state in the file is not
+further along ..."). `parking_lot_member` therefore reports a third number, rows moved forward. A second import of
+unchanged files adds 0 to every table and moves 0, and `findProblems` is empty after.
+
+**What is kept and what is refused (review rounds 1 and 2).** A tier outside the integers 1 and 2 refuses its lot (the
+driver would otherwise throw outside the savepoint). A wake member must be a member of the lot and appear once per wake. A
+lot with zero members IS imported and reported ("lot holds no member"): `findProblems` does not flag it and K never writes
+one, so it is a sign of a damaged folder, not a reason to lose the lot row. A lot, wake, wake member or member already in
+fleet.db with other content (members: another orc_id, tier or note) is kept as it is and the difference reported; a wake id
+that already exists under another lot is not a difference but a clash, and refuses the whole lot. A lot's report lines
+(mismatches, stubs, unknown columns) are collected in a report of its own and added to the run's only if the lot commits.
+
+## One home (pointer file) (T-0299; M's ruling of 2026-10-21)
+
+Where Horde's home is (fleet.db, metrics, turn-duty, notices, wake, lots) used to be worked out in several places, each its own
+way: `core/Home.ps1` (HORDE_HOME, else `%USERPROFILE%\.horde`), `fleet-db/store.mjs` and `fleet-metrics/home.mjs` (HORDE_HOME or
+refuse), `hooks/horde-turn-duty.mjs` (its own variables, config.json, and a state folder fixed under `%USERPROFILE%\.horde`). The
+real home is a different folder from `%USERPROFILE%\.horde`, so some writers used one and some the other, and an environment
+variable set at user level reaches only processes started afterwards, so running sessions, hooks and scheduled tasks would have
+kept the old folder for days. The home now resolves the same way everywhere, from one source, so one step flips the whole fleet.
+
+**The pointer file.** `%USERPROFILE%\.horde-home.json`, outside any home, exactly `{"v":1,"hordeHome":"<absolute path>"}`, ASCII.
+It is a file and it is read on every call, so a running process sees a change at its next call.
+
+**The order, the same in every resolver** (`core/Home.ps1`, and for node the one module `core/home.mjs`, which
+`fleet-db/store.mjs`, `fleet-metrics/home.mjs` and the turn-duty hook import):
+
+1. `HORDE_HOME`, if set (absolute, else refused, as before; the tests rely on it);
+2. the pointer file, if there is one;
+3. PowerShell only: `%USERPROFILE%\.horde`, as before. The node resolvers have no third step and refuse when neither (1) nor (2)
+   names a home: a silent fallback would split the data.
+
+**A bad pointer is refused, never skipped**, with a message that names the file: unreadable, not JSON, not ASCII (a byte-order mark
+included), `v` not 1, no `hordeHome`, a relative `hordeHome`, or a folder that does not exist. Skipping it would send this program
+to another folder than the ones that read the pointer, and nothing would say so. (The hook cannot refuse a stop; it logs the
+refusal by name and passes, and does not fall through to config.json.)
+
+**The turn-duty hook** keeps `HORDE_TURN_DUTY_HORDE_HOME` first and `config.json` `hordeHome` as the last fallback (K's), with
+the rule above between them. Its state and config folders default to `<resolved home>\turn-duty` when a home resolves, else the old
+`%USERPROFILE%\.horde\turn-duty`; the `HORDE_TURN_DUTY_STATE_DIR` and `_CONFIG_DIR` overrides stay.
+
+**The verb.** `horde home` prints the home and which source gave it (HORDE_HOME, pointer, default). `horde home set -Path <abs>`
+writes the pointer atomically (a temp file in the profile folder, then a rename over the pointer: a reader sees the old pointer or
+the new one) and prints the old and the new home; it refuses a relative path, a folder that does not exist, a folder without
+`fleet.db`, and a path the ASCII pointer cannot hold. `horde home clear` removes the pointer and prints what the home is now.
+`horde db` and `horde decisions publish` still refuse to make fleet.db in a default folder: they need the source to be HORDE_HOME
+or the pointer.
+
+**Flip and rollback.** Flip: copy or move the data so the new home holds `fleet.db`, then `horde home set -Path <new home>`. Every
+resolver follows at its next call; nothing is restarted. Rollback: `horde home set -Path <old home>`, or `horde home clear` to go
+back to the default. There is no migration of data and `node.json` handling (`core/Device.ps1`) is unchanged. A machine whose
+environment already sets HORDE_HOME keeps using it: the variable wins, so unset it (or set it to the same folder) for the pointer
+to take effect in those processes.
+
+**What bakes a home, and what was done about it (round-1 review).** HORDE_HOME outranks the pointer, so anything that
+writes HORDE_HOME into a long-lived thing keeps the old folder after `horde home set`. Each writer, by what it outlives:
+
+- *Scheduled tasks, all registered to run as the user who registers them* (logon type S4U or Interactive, so the user's
+  profile and pointer are visible to them): the metrics collect job (`core/Schedule.ps1`), the supervisor's two jobs
+  (`cli/ServicesTend.ps1`, which `cli/Setup.ps1`'s elevated command also registers) and the meter's two tasks
+  (`fleet-metrics/register-schedule.ps1`) NO LONGER BAKE THE HOME. Each run resolves it like any command: HORDE_HOME, then
+  the pointer, then the default. The job's description still records the home it was registered under (the marker), which is
+  data for status, not what the run uses (the scheduler no longer refuses to replace a task over it).
+  **A task that runs as a different account (SYSTEM, another profile) cannot see this user's pointer** and would need a home
+  baked in or its own pointer; none of Horde's tasks is registered that way today, and the elevated command of
+  `cli/Setup.ps1` (a prompt that may be another admin account) still passes the resolved home to that one short-lived
+  command: if the prompt is another account, that account's profile must hold the pointer for the job it registers.
+- *Short-lived children the command starts and waits for* (`cli/Setup.ps1` `Invoke-HordeSetupHorde`, `cli/ServicesAct.ps1`
+  `Invoke-HordeServiceHordeCommand`, `cli/commands/db.ps1`, `meter.ps1`, `decisions/Publish.ps1`) keep receiving the home the
+  command resolved at that moment; nothing of theirs outlives the command.
+- *Long-lived services* (`cli/ServicesAct.ps1` start of a horde-kind service; the home is the definition's `hordeHome`,
+  `core/Services.ps1`) take the home WHEN THEY START, and **`horde services stop` runs the stop command with the
+  definition's `hordeHome`** (`cli/ServicesAct.ps1`). So the ORDER MATTERS: a service must be stopped while its definition
+  still names the home it runs on. Editing the definition first sends the stop to the new home while the process runs on
+  the old one (a relay running twice, or a stop that does nothing). `horde home set` therefore REFUSES while a
+  horde-kind service of the current home has a fresh heartbeat (it names the service and the order), rather than guess:
+  the heartbeat is the supervisor's own test for "running", and a refusal costs one stop, where a wrong set costs a double
+  relay. The check reads the CURRENT home's definitions only; a definition already edited to the new home before the stop
+  is not seen, which is why the order below is the rule.
+- *Sessions through the SSH listener* (`transports/ssh/Listen.ps1`) get `SetEnv HORDE_HOME=<home>` from the sshd config
+  that `horde listen` wrote, so an SSH session keeps the old home until `horde listen` is run again; `horde home` does
+  not read that config (documented only).
+
+**The flip, in full.** (1) Put `fleet.db` in the new home. (2) Stop each horde-kind service while its definition still
+names the old home: `horde services stop <name>`. `horde services stop` leaves the heartbeat file, and "running" is a heartbeat younger than its stale time (the larger of 30 s and three ticks), so **wait for it to go stale before step 4**: `home set` and `home clear` refuse until then and say "stopped just now? its heartbeat clears in about N s" with N the wait. (3) Change the definitions' `hordeHome` (in the new home's
+`settings\service-definitions.json`). (4) `horde home set -Path <new home>`: this process and every new or running reader
+follow at their next call; it refuses if a service still runs. `horde home clear` moves the home back to the default just as `set` moves it, and has the same guard (target: the home it would leave). (5) Unset HORDE_HOME wherever it is set (`horde home`
+warns while it is, in this process). (6) `horde services start <name>` for each service. (7) Re-run `horde listen` so the
+SSH sessions get the new home. (8) Re-register each task that BAKES a home (those registered before this change; a task
+only changes when re-registered): `horde metrics schedule remove` then `install`, `horde services unschedule` then
+`schedule` (the supervisor's start-up job needs an elevated prompt; `horde setup` prints the line), and
+`register-schedule.ps1` for the meter. A task registered since this change bakes none and needs nothing: it resolves the
+home at each run, so it is correct even though its marker still names the home it was registered under (its marker is
+informational: the scheduler no longer refuses to replace a Horde task whose marker names another home, because a task no longer
+bakes a home in, so the one elevated re-register after the flip replaces the old task and writes the new marker). **The metrics task of lane L needs the
+founder's elevated run; L files that.** (9) `horde home` lists every task under `\Horde\` that BAKES a home other than
+the effective one (read only; if the scheduler refuses the query non-elevated it says so in one line and the verb goes
+on); it should say none bakes in another home.
+
+**What the service guard cannot see (it fails open, so these are the person's to check).** A service with no `alive` block has no heartbeat to read, so it is never counted. A definitions file that cannot be read (missing, refused, not UTF-8) gives no services. A heartbeat that cannot be read gives no running service. A pointer that is bad makes the current home unresolvable, so the guard is skipped and `set` is the way to mend it. In each case the guard says nothing rather than refuse on a guess.
+
+**The user profile a task sees.** The tasks that no longer bake the home find the pointer through the user's profile
+folder. A scheduled task run as S4U may have no loaded profile, hence possibly no USERPROFILE in its environment, so when
+USERPROFILE is empty `core/Home.ps1` asks the system (`[Environment]::GetFolderPath('UserProfile')`) and `core/home.mjs`
+asks `os.homedir()`, before refusing. ASSUMPTION: the system's answer for the account a task runs as is the profile folder
+that holds that account's pointer (true for a task that runs as the user who registered it, which is all of Horde's).
+
+**The rooted test.** Both languages refuse a HORDE_HOME that is not a drive path or a UNC path: `\x` and `C:x` (which .NET's
+IsPathRooted accepts) are refused by `core/Home.ps1` through `Test-HordeHomeRooted`, as `core/home.mjs` refuses them.
+
+**The hook's throttle state.** The turn-duty hook keeps its state under `<resolved home>\turn-duty`. When the home changes, or
+the pointer is bad or cleared and the folder falls back to the profile's, the state is not carried over: the throttle resets
+and the first stop after that checks again at once (a nudge a little early, never a lost one).

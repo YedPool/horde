@@ -48,6 +48,66 @@ function ConvertFrom-HordeJson {
     else { $Text | ConvertFrom-Json -ErrorAction Stop }
 }
 
+# THE DICTIONARY PARSE (T-0323): ConvertFrom-HordeJsonObject is the parse for a reader that wants plain .NET
+# values and not PowerShell objects - a transcript line, a stores.json, a price table. It was
+# System.Web.Script.Serialization.JavaScriptSerializer at every site (chosen 2026-10-01 for speed and
+# dictionaries, see core/Transcript.ps1), and that class cannot run under PowerShell 7 on .NET 10: every call
+# throws "Could not load type System.Web.UI.WebResourceAttribute", and the callers' catch-and-skip read each
+# row as unparseable. The shape it returns is the shape JavaScriptSerializer gave, under both:
+#   - an object is a Dictionary[string, object] (case-sensitive keys; a repeated key keeps the last);
+#   - an array is an object[]; a string, bool or $null is itself;
+#   - a whole number is Int32, or Int64 when it does not fit; any other number is a Decimal.
+#   - text that is not JSON throws, as does nesting past 100 levels.
+# 5.1 keeps JavaScriptSerializer unchanged; 7 reads with System.Text.Json through a small compiled type.
+$script:HordeJsonObjectSerializer = $null
+if ($script:HordeJsonMakesDates -and -not ("HordeJsonObjectReader" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Text.Json;
+public static class HordeJsonObjectReader {
+    public static object Read(string text) {
+        var options = new JsonDocumentOptions { MaxDepth = 100 };
+        using (JsonDocument doc = JsonDocument.Parse(text, options)) { return Convert(doc.RootElement); }
+    }
+    private static object Convert(JsonElement e) {
+        switch (e.ValueKind) {
+            case JsonValueKind.Object:
+                var d = new Dictionary<string, object>();
+                foreach (JsonProperty p in e.EnumerateObject()) { d[p.Name] = Convert(p.Value); }
+                return d;
+            case JsonValueKind.Array:
+                var list = new List<object>();
+                foreach (JsonElement x in e.EnumerateArray()) { list.Add(Convert(x)); }
+                return list.ToArray();
+            case JsonValueKind.String: return e.GetString();
+            case JsonValueKind.True: return true;
+            case JsonValueKind.False: return false;
+            case JsonValueKind.Number:
+                int i; long l; decimal m;
+                if (e.TryGetInt32(out i)) { return i; }
+                if (e.TryGetInt64(out l)) { return l; }
+                if (e.TryGetDecimal(out m)) { return m; }
+                return e.GetDouble();
+            default: return null;
+        }
+    }
+}
+'@
+}
+
+function ConvertFrom-HordeJsonObject {
+    # -Text parsed as JSON into dictionaries, object[] and plain values (above). Throws on text that is not JSON.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    if ($script:HordeJsonMakesDates) { return , [HordeJsonObjectReader]::Read($Text) }
+    if ($null -eq $script:HordeJsonObjectSerializer) {
+        Add-Type -AssemblyName System.Web.Extensions
+        $script:HordeJsonObjectSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $script:HordeJsonObjectSerializer.MaxJsonLength = [int]::MaxValue
+    }
+    return , $script:HordeJsonObjectSerializer.DeserializeObject($Text)
+}
+
 function ConvertTo-HordeJsonDateText {
     # -Value with every [datetime] or [datetimeoffset] in it, at any depth, turned back into round-trip
     # ("o") text: in place for objects and lists, and returned. For PowerShell 7.0 to 7.4 (above).

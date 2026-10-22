@@ -718,6 +718,117 @@ export const MIGRATIONS = [
   SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
   FROM tree JOIN live l ON l.id = tree.id;
   `,
+
+  // 4: what the decisions store holds that migrations 1-3 had no place for (phase 1c part 2a, the importer).
+  // question: the words of a question beyond its title (body is its whatItIs), the asker as written when
+  // it names no Orc, the group, and the two ranking words as first asked; the lists (options, parts,
+  // waiting, files, references) stay one canonical JSON text, since nothing queries inside them.
+  // The side tables are write-once rows beside the hashed history tables, as answer_route_taken is, so
+  // answer and answer_route keep their columns and their hashes.
+  `
+  ALTER TABLE question ADD COLUMN asked_by_text TEXT CHECK (length(asked_by_text) <= 4000);
+  ALTER TABLE question ADD COLUMN yes_means TEXT;
+  ALTER TABLE question ADD COLUMN recommendation TEXT;
+  ALTER TABLE question ADD COLUMN group_name TEXT CHECK (length(group_name) <= 400);
+  ALTER TABLE question ADD COLUMN group_note TEXT;
+  ALTER TABLE question ADD COLUMN importance TEXT CHECK (length(importance) <= 40);
+  ALTER TABLE question ADD COLUMN blocks TEXT CHECK (length(blocks) <= 40);
+  ALTER TABLE question ADD COLUMN detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json));
+
+  -- What an answer carries besides its columns. The evidence and the passkey id are signing material:
+  -- only that evidence was there is kept (answer.signed_by holds a sha256 of the key id, never the id).
+  CREATE TABLE answer_extra (
+    answer_id TEXT PRIMARY KEY REFERENCES answer (id),
+    evidence_present INTEGER NOT NULL ${flag('evidence_present')},
+    act TEXT CHECK (length(act) <= 200),
+    recorded_by TEXT NOT NULL CHECK (length(recorded_by) BETWEEN 1 AND 40)
+  ) STRICT;
+  ${appendOnly('answer_extra')}
+
+  -- What a route carries besides its columns. source_resolved is what the decisions store said; the route's
+  -- own resolved is 1 only when its session is a row here (the CHECK on answer_route).
+  CREATE TABLE answer_route_extra (
+    route_id TEXT PRIMARY KEY REFERENCES answer_route (id),
+    purpose TEXT NOT NULL CHECK (length(purpose) BETWEEN 1 AND 40),
+    label TEXT CHECK (length(label) <= 40),
+    notice TEXT CHECK (length(notice) <= 80),
+    analyst TEXT CHECK (length(analyst) <= 4000),
+    note TEXT CHECK (length(note) <= 4000),
+    source_resolved INTEGER NOT NULL ${flag('source_resolved')}
+  ) STRICT;
+  ${appendOnly('answer_route_extra')}
+
+  -- A reader has read the decisions store up to a record (messages-read). Keyed by the record's own
+  -- sequence, so the same record imported twice is one row.
+  CREATE TABLE decisions_read (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    reader TEXT NOT NULL CHECK (length(reader) BETWEEN 1 AND 40),
+    up_to_seq INTEGER NOT NULL CHECK (up_to_seq >= 1),
+    at INTEGER NOT NULL,
+    decisions_seq INTEGER NOT NULL UNIQUE
+  ) STRICT;
+  ${appendOnly('decisions_read')}
+
+  -- An acknowledgement closes the question it names (decisions/Rules.ps1 Step-HordeDecisionAcked: the Orc that
+  -- asked has the answer). So 'acked' counts with 'closed' in both views; no closed event is made up for it.
+  DROP VIEW answer_now;
+  DROP VIEW question_now;
+  CREATE VIEW question_now AS
+  SELECT qn.id, qn.number, qn.task_id, qn.asked_by_orc_id, qn.title, qn.asked_at,
+    CASE (SELECT e.kind FROM question_event e WHERE e.question_id = qn.id
+       AND e.kind IN ('closed', 'reopened', 'acked') ORDER BY e.at DESC, e.id DESC LIMIT 1)
+      WHEN 'closed' THEN 'closed' WHEN 'acked' THEN 'closed' ELSE 'open' END AS state
+  FROM question qn;
+  CREATE VIEW answer_now AS
+  SELECT a.id, a.question_id, a.at, a.part, a.signed_by, a.replaces_answer_id,
+    CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0 ELSE 1 END AS open_at_arrival,
+    CASE WHEN (SELECT e.kind FROM question_event e WHERE e.question_id = a.question_id
+       AND e.kind IN ('closed', 'reopened', 'acked') AND e.at <= a.at ORDER BY e.at DESC, e.id DESC LIMIT 1) IN ('closed', 'acked') THEN 0
+      WHEN a.signed_by IS NULL AND qn.needs_passkey = 1 THEN 0 ELSE 1 END AS authorizes
+  FROM answer a JOIN question qn ON qn.id = a.question_id;
+  `,
+
+  // 5: decisions_confirm (T-0299): an Orc that publishes a list equal to its live one still leaves a record.
+  `
+  -- A confirm: the Orc published its list again and it was still the same (or it was just published).
+  -- decisions publish with a list equal to the live one writes no snapshot (decisions_snapshot_not_same),
+  -- so this is the only record that the Orc looked at its list again. Append-only, like the snapshots.
+  CREATE TABLE decisions_confirm (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    orc_id TEXT NOT NULL REFERENCES orc (id),
+    snapshot_id TEXT NOT NULL REFERENCES decisions_snapshot (id),
+    session_id TEXT REFERENCES session (id),
+    confirmed_at INTEGER NOT NULL CHECK (confirmed_at >= 0),
+    UNIQUE (snapshot_id, confirmed_at)
+  ) STRICT;
+  CREATE INDEX decisions_confirm_orc_time ON decisions_confirm (orc_id, confirmed_at);
+
+  -- A confirm is of the Orc's own live list, at insert time, and never before that list was published.
+  CREATE TRIGGER decisions_confirm_own_live BEFORE INSERT ON decisions_confirm
+  WHEN NEW.snapshot_id IS NOT (SELECT l.id FROM decisions_live l WHERE l.orc_id = NEW.orc_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_confirm: not the live list of this Orc'); END;
+  CREATE TRIGGER decisions_confirm_not_early BEFORE INSERT ON decisions_confirm
+  WHEN NEW.confirmed_at < (SELECT s.published_at FROM decisions_snapshot s WHERE s.id = NEW.snapshot_id)
+  BEGIN SELECT RAISE(ABORT, 'decisions_confirm: before the list was published'); END;
+  ${appendOnly('decisions_confirm')}
+
+  -- decisions_live gains confirmed_at: the latest confirm of the live list, else its published_at, so
+  -- confirmed_at >= published_at always. Every old column stays.
+  DROP VIEW decisions_live_item;
+  DROP VIEW decisions_live;
+  CREATE VIEW decisions_live AS
+  SELECT id, orc_id, published_at, by_session_id, item_count, sha256,
+    max(published_at, COALESCE((SELECT max(c.confirmed_at) FROM decisions_confirm c WHERE c.snapshot_id = t.id), 0)) AS confirmed_at
+  FROM (
+    SELECT x.*, row_number() OVER (PARTITION BY x.orc_id ORDER BY x.published_at DESC, x.id DESC) AS rn
+    FROM decisions_snapshot x) t
+  WHERE rn = 1;
+  CREATE VIEW decisions_live_item AS
+  SELECT l.orc_id, l.published_at, i.snapshot_id, i.position, i.question_id, i.text, i.recommendation,
+    i.importance, i.blocks
+  FROM decisions_live l JOIN decisions_snapshot_item i ON i.snapshot_id = l.id;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

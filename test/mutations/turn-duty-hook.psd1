@@ -10,8 +10,11 @@
            Find = 'if (input.stop_hook_active) return 0;'
            Replace = 'if (false) return 0;' }
         @{ Name = "throttle-removed"
-           Find = 'if (now - state.lastCheckedAt < THROTTLE_MS) return 0;'
+           Find = 'if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;'
            Replace = 'if (false) return 0;' }
+        @{ Name = "future-last-checked-throttles"
+           Find = 'if (now - state.lastCheckedAt >= 0 && now - state.lastCheckedAt < THROTTLE_MS) return 0;'
+           Replace = 'if (now - state.lastCheckedAt < THROTTLE_MS) return 0;' }
         @{ Name = "throttle-window-changed"
            Find = 'const THROTTLE_MS = 30 * 60 * 1000;'
            Replace = 'const THROTTLE_MS = 300 * 60 * 1000;' }
@@ -64,8 +67,8 @@
            Find = '{ windowsHide: true, env: { ...process.env, HORDE_HOME: home }, stdio'
            Replace = '{ windowsHide: true, stdio' }
         @{ Name = "home-env-precedence-swapped"
-           Find = 'for (const v of [process.env.HORDE_TURN_DUTY_HORDE_HOME, process.env.HORDE_HOME]) {'
-           Replace = 'for (const v of [process.env.HORDE_HOME, process.env.HORDE_TURN_DUTY_HORDE_HOME]) {' }
+           Find = 'if (own) return own;'
+           Replace = 'if (own && !CORE_HOME.ok) return own;' }
         @{ Name = "home-config-ignored"
            Find = 'const cfg = readJsonFile(join(CONFIG_DIR, "config.json"));'
            Replace = 'const cfg = null;' }
@@ -93,8 +96,95 @@
         @{ Name = "tell-n-line-dropped"
            Find = '    "if publish refuses because fleet.db has no row for your Orc, tell N",'
            Replace = '' }
+        @{ Name = "snapshot-quiet-removed"
+           Find = 'now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;'
+           Replace = 'false;' }
+        @{ Name = "snapshot-quiet-forever"
+           Find = 'now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;'
+           Replace = 'true;' }
+        @{ Name = "snapshot-quiet-window-shortened"
+           Find = 'const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;'
+           Replace = 'const SNAPSHOT_QUIET_MS = 20 * 60 * 1000;' }
+        @{ Name = "snapshot-quiet-window-lengthened"
+           Find = 'const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;'
+           Replace = 'const SNAPSHOT_QUIET_MS = 24 * 60 * 60 * 1000;' }
+        @{ Name = "any-snapshot-matches"
+           Find = 'r.snapshot === state.lastBlockedSnapshot &&'
+           Replace = '' }
+        @{ Name = "empty-snapshot-matches"
+           Find = 'r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot'
+           Replace = 'r.snapshot === state.lastBlockedSnapshot' }
+        @{ Name = "blocked-snapshot-not-recorded"
+           Find = 'blockedSnapshot = r.snapshot || ""; decisionsBlockedAt = now;'
+           Replace = 'decisionsBlockedAt = now;' }
+        @{ Name = "snapshot-not-read-from-state"
+           Find = 'lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }'
+           Replace = 'lastBlockedSnapshot: "" }' }
+        @{ Name = "snapshot-list-field-ignored"
+           Find = 'const snapshot = typeof mine[0].snapshot === "string" ? mine[0].snapshot : "";'
+           Replace = 'const snapshot = "";' }
+        @{ Name = "confirmed-at-ignored"
+           Find = 'return confirmed === null ? published : Math.max(published, confirmed);'
+           Replace = 'return published;' }
+        @{ Name = "confirmed-at-wins-even-if-older"
+           Find = 'return confirmed === null ? published : Math.max(published, confirmed);'
+           Replace = 'return confirmed === null ? published : confirmed;' }
+        @{ Name = "malformed-confirmed-at-trusted"
+           Find = 'return Number.isFinite(t) && t <= now + FUTURE_SLACK_MS ? t : null;'
+           Replace = 'return Number.isNaN(t) || t <= now + FUTURE_SLACK_MS ? t : null;' }
+        @{ Name = "published-at-ignored"
+           Find = 'if (published === null) return confirmed;'
+           Replace = 'return confirmed;' }
+        @{ Name = "confirmed-field-names-emptied"
+           Find = 'const CONFIRMED_FIELDS = ["confirmedAt", "checkedAt", "lastConfirmedAt"];'
+           Replace = 'const CONFIRMED_FIELDS = [];' }
+        @{ Name = "future-time-believed"
+           Find = 'Number.isFinite(t) && t <= now + FUTURE_SLACK_MS ? t : null;'
+           Replace = 'Number.isFinite(t) ? t : null;' }
+        @{ Name = "future-slack-widened"
+           Find = 'const FUTURE_SLACK_MS = 2 * 60 * 1000;'
+           Replace = 'const FUTURE_SLACK_MS = 20 * 60 * 1000;' }
+        @{ Name = "future-slack-removed"
+           Find = 'const FUTURE_SLACK_MS = 2 * 60 * 1000;'
+           Replace = 'const FUTURE_SLACK_MS = 0;' }
+        @{ Name = "loose-date-forms-accepted"
+           Find = 'typeof v !== "string" || !ISO_UTC.test(v)'
+           Replace = 'typeof v !== "string"' }
+        @{ Name = "no-usable-time-is-fresh"
+           Find = 'if (at === null) return { state: "due", why: "no usable publish time", snapshot };'
+           Replace = 'if (at === null) return { state: "ok", why: "", snapshot };' }
+        @{ Name = "future-block-time-counts"
+           Find = 'now >= state.lastDecisionsBlockedAt && '
+           Replace = '' }
+        @{ Name = "quiet-window-read-from-any-block"
+           Find = 'now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;'
+           Replace = 'now - state.lastBlockedAt < SNAPSHOT_QUIET_MS;' }
+        @{ Name = "decisions-block-time-not-recorded"
+           Find = 'blockedSnapshot = r.snapshot || ""; decisionsBlockedAt = now; }'
+           Replace = 'blockedSnapshot = r.snapshot || ""; }' }
+        @{ Name = "decisions-block-time-not-read-from-state"
+           Find = 'lastDecisionsBlockedAt: num(s.lastDecisionsBlockedAt),'
+           Replace = 'lastDecisionsBlockedAt: 0,' }
+        @{ Name = "snapshot-kept-when-list-fresh"
+           Find = 'if (r.state === "ok" && active[i].snapshotQuiet) blockedSnapshot = "";'
+           Replace = 'if (false) blockedSnapshot = "";' }
         @{ Name = "bom-not-stripped"
            Find = 'if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // PS 5.1 redirected stdin carries a BOM'
            Replace = '' }
+        @{ Name = "pointer-home-ignored"
+           Find = 'if (CORE_HOME.ok) return usableHome(CORE_HOME.home);'
+           Replace = '' }
+        @{ Name = "bad-pointer-falls-through-to-config"
+           Find = 'if (CORE_HOME.kind === "refused") return null;'
+           Replace = '' }
+        @{ Name = "state-dir-ignores-the-resolved-home"
+           Find = 'if (CORE_HOME.ok) return join(CORE_HOME.home, "turn-duty");'
+           Replace = '' }
+        @{ Name = "state-dir-ignores-the-turn-duty-home"
+           Find = 'if (own) return join(own, "turn-duty");'
+           Replace = '' }
+        @{ Name = "state-dir-default-moved"
+           Find = 'return join(homedir(), ".horde", "turn-duty");'
+           Replace = 'return join(homedir(), ".horde2", "turn-duty");' }
     )
 }

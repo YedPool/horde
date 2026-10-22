@@ -128,8 +128,10 @@ function Get-HordeSetupRunnerEntry {
 function Get-HordeSetupElevatedCommand {
     # The one line a person runs to schedule the supervisor from an elevated prompt: { line; runs }.
     # What it runs is handed over as -EncodedCommand, so no path, quote or space in it can be read twice
-    # by two shells; runs is the same, in plain words, to show beside it. It sets HORDE_HOME, because an
-    # elevated window does not inherit this window's environment.
+    # by two shells; runs is the same, in plain words, to show beside it. It sets HORDE_HOME for that one
+    # short-lived command, because an elevated window does not inherit this window's environment (T-0299: the
+    # command registers the supervisor job, which does NOT bake the home in and resolves it at each run; if the
+    # elevated prompt is another account, that account's profile must hold the pointer for the job to follow it).
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome)
     $q = { param([string]$s) "'" + $s.Replace("'", "''") + "'" }
     $runs = '$env:HORDE_HOME = ' + (& $q $HordeHome) + '; & ' + (& $q (Join-Path $Root "horde.ps1")) + ' services schedule'

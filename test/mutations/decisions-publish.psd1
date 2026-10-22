@@ -55,7 +55,7 @@
            Find = 'if ($letter -cnotmatch ''\A[A-Z][A-Z0-9]{0,3}\z'') { throw "-Orc is'
            Replace = 'if ($false) { throw "-Orc is' }
         @{ Name = "home-defaulted"
-           Find = 'if ("$env:HORDE_HOME".Trim() -eq "") { throw "horde decisions publish needs HORDE_HOME'
+           Find = 'if ($resolved.source -eq "default") { throw "horde decisions publish needs HORDE_HOME'
            Replace = 'if ($false) { throw "horde decisions publish needs HORDE_HOME' }
     )
 }

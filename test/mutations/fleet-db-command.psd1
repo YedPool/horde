@@ -6,7 +6,7 @@
     Suite  = "test\e2e\e2e-db.ps1"
     Mutations = @(
         @{ Name = "home-defaulted"
-           Find = 'if ("$env:HORDE_HOME".Trim() -eq "") { throw'
+           Find = 'if ($resolved.source -eq "default") { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "node-not-checked"
            Find = 'if ($null -eq $node) { throw'
@@ -18,8 +18,20 @@
            Find = 'if ($DryRun) { $nodeArgs += "--dry-run" }'
            Replace = 'if ($false) { $nodeArgs += "--dry-run" }' }
         @{ Name = "import-registry-not-passed"
-           Find = '"--registry" = $Registry }'
-           Replace = '"--registry" = $null }' }
+           Find = '"--registry" = $Registry;'
+           Replace = '"--registry" = $null;' }
+        @{ Name = "import-decisions-not-passed"
+           Find = '"--decisions" = $Decisions;'
+           Replace = '"--decisions" = $null;' }
+        @{ Name = "decisions-flag-accepted-on-other-verbs"
+           Find = '"Registry", "Decisions", "Lots", "DryRun")'
+           Replace = '"Registry", "Lots", "DryRun")' }
+        @{ Name = "import-lots-not-passed"
+           Find = '"--lots" = $Lots }'
+           Replace = '"--lots" = $null }' }
+        @{ Name = "lots-flag-accepted-on-other-verbs"
+           Find = '"Registry", "Decisions", "Lots", "DryRun")'
+           Replace = '"Registry", "Decisions", "DryRun")' }
         @{ Name = "import-thrall-card-not-passed"
            Find = '"--thrall-card" = $ThrallCard;'
            Replace = '"--thrall-card" = $null;' }

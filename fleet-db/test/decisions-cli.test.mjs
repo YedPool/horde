@@ -143,6 +143,18 @@ test('a list older than the live one is refused in words', () => {
   assert.throws(() => publishFromInput(w.db, input({ letter: 'F' }, [lineB]), T0), /already has a list published at or after/);
 });
 
+test('published --json: confirmedAt beside publishedAt, every old field unchanged, later after an equal publish', () => {
+  const w = world();
+  publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0);
+  assert.deepEqual(Object.keys(readPublished(w.db)[0]), ['orc', 'snapshot', 'publishedAt', 'confirmedAt', 'count', 'items']);
+  assert.equal(readPublished(w.db)[0].confirmedAt, new Date(T0).toISOString());
+  publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0 + 60000);
+  const l = readPublished(w.db)[0];
+  assert.equal(l.publishedAt, new Date(T0).toISOString());
+  assert.equal(l.confirmedAt, new Date(T0 + 60000).toISOString());
+  assert.deepEqual(Object.keys(l.items[0]), ['position', 'questionNumber', 'text', 'recommendation', 'importance', 'blocks']);
+});
+
 test('the live lists read back from the views, with question numbers, one Orc or all', () => {
   const w = world();
   publishFromInput(w.db, input({ letter: 'F' }, [lineA, lineB]), T0);
@@ -167,13 +179,20 @@ test('main: publish prints one line, publishes again as unchanged, and published
   const a = run(['publish', inFile]);
   assert.equal(a.code, 0);
   assert.match(a.out[0], /^published 1 item \(snapshot [0-9A-Z]{26}\)$/);
+  const before = Date.now();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); // the second publish is a later millisecond
   const b = run(['publish', inFile]);
-  assert.match(b.out[0], /^unchanged \(snapshot [0-9A-Z]{26}\)$/);
+  assert.match(b.out[0], /^unchanged, confirmed \d{4}-\d\d-\d\dT[\d:.]+Z \(snapshot [0-9A-Z]{26}\)$/);
   const c = run(['published', '--orc', 'F', '--json']);
   assert.equal(c.code, 0);
+  const jl = JSON.parse(c.out[0]).lists[0];
+  assert.ok(Date.parse(jl.confirmedAt) > Date.parse(jl.publishedAt), 'confirmed is later than published after an equal publish');
+  assert.ok(Date.parse(jl.confirmedAt) >= before + 15);
+  assert.equal(b.out[0].split(' ')[2], jl.confirmedAt, 'the unchanged line names the confirm time');
   assert.equal(JSON.parse(c.out[0]).lists[0].items[0].questionNumber, 7);
   const d = run(['published']);
-  assert.match(d.out[0], /^F: 1 item, published /);
+  assert.match(d.out[0], /^F: 1 item, published \S+, confirmed \S+ \(snapshot /);
+  assert.ok(d.out[0].includes('published ' + jl.publishedAt + ', confirmed ' + jl.confirmedAt + ' '));
   fs.writeFileSync(inFile, JSON.stringify(input({ letter: 'F' }, [{ questionNumber: 4242, text: 'x' }])));
   const e = run(['publish', inFile]);
   assert.equal(e.code, 1);
