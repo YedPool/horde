@@ -29,6 +29,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "Home.ps1")
 
 $script:HordeRateKeys = @("input", "cacheRead", "cacheWrite", "cacheWrite5m", "cacheWrite1h", "output")
@@ -54,10 +55,8 @@ function ConvertFrom-HordePriceTableText {
     # -Source names where the table came from; every model entry is stamped with it, the table's
     # version and its perTokens, so a cost can always say which file and version priced it.
     param([Parameter(Mandatory = $true)][string]$Text, [string]$What = "the price table", [string]$Source = "a given table")
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $t = $null
-    try { $t = $ser.DeserializeObject($Text) } catch { return (New-HordeUnknown -Reason ($What + " is not JSON") -ErrorRecord $_) }
+    try { $t = ConvertFrom-HordeJsonObject -Text ($Text) } catch { return (New-HordeUnknown -Reason ($What + " is not JSON") -ErrorRecord $_) }
     if ($t -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($What + " is not a JSON object")) }
     $p = @()
     if ($t["schemaVersion"] -ne 1) { $p += "schemaVersion must be 1, not '" + $t["schemaVersion"] + "'" }

@@ -34,16 +34,13 @@
 # never looked at - and every other field of every line is dropped in memory.
 #
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
-# core/ReadShared.ps1 and core/Transcript.ps1.
+# core/ReadShared.ps1, core/JsonText.ps1 and core/Transcript.ps1.
 
 function Test-CodexTranscript {
     # Is this a rollout? A .jsonl whose first parseable line has timestamp, type and payload, and whose
     # first line is a session_meta (the measurement: line 0 is always session_meta).
     param([string]$Path)
     if ([System.IO.Path]::GetExtension($Path) -ine ".jsonl" -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $stream = Open-HordeSharedStream -Path $Path
     try {
         $reader = New-Object System.IO.StreamReader($stream)
@@ -51,7 +48,7 @@ function Test-CodexTranscript {
             while ($null -ne ($text = $reader.ReadLine())) {
                 if ($text.Trim() -eq "") { continue }
                 $v = $null
-                try { $v = $ser.DeserializeObject($text) } catch { return $false }
+                try { $v = ConvertFrom-HordeJsonObject -Text ($text) } catch { return $false }
                 if ($v -isnot [System.Collections.IDictionary]) { return $false }
                 return ($v.ContainsKey("payload") -and $v.ContainsKey("timestamp") -and $v["type"] -eq "session_meta")
             }
