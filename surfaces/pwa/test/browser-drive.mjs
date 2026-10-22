@@ -150,7 +150,7 @@ const listed = "(document.getElementById('lists').innerText + ' ' + Array.from(d
 // Everything the lists hold, shown or folded away.
 const everything = "document.getElementById('lists').textContent";
 // What a locked page still holds of the lists: their boxes, and the words standing in any field.
-const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
+const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, published: document.querySelectorAll('#lists .published-lists').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
 const shown = (id) => "(document.getElementById('" + id + "') && !document.getElementById('" + id + "').hidden)";
 const notice = "document.getElementById('notice').textContent";
 function headOf(mailbox) {
@@ -405,6 +405,23 @@ const commands = {
   async waitText(c) {
     if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
     const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // EACH ORC'S PUBLISHED LIST (published-lists.js): the words the published-lists box of the horde shown holds, waited for
+  // until c.text is in them. { found, text, listed }: listed is what the question list shows beside them.
+  async waitPublished(c) {
+    const box = "(document.querySelector('#lists .published-lists:not([hidden])') || { innerText: '' }).innerText";
+    const found = await until(box + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
+    return { found: !!found, text: await evaluate(box), listed: await evaluate(listed) };
+  },
+  // THE DECISIONS PAGE'S CARD of one lane (decision-cards.js), waited for by its name ("Orc G"): { found, slot, pressed }.
+  // With c.click it is tapped, and pressed says whether the page then marks it chosen.
+  async publishedCard(c) {
+    const card = "(Array.from(document.querySelectorAll('#lists .decision-cards .dq-card')).find((b) => { const n = b.querySelector('.card-name'); return n && n.textContent === " + JSON.stringify(String(c.name)) + "; }) || null)";
+    const found = await until(card + " !== null", c.timeoutMs || 30000);
+    if (found && c.click === true) await evaluate(card + ".click()");
+    const slot = found ? await evaluate("(" + card + ".querySelector('.card-badge') || { textContent: '' }).textContent") : "";
+    const pressed = found ? await evaluate(card + ".getAttribute('aria-pressed')") : "";
+    return { found: !!found, slot, pressed };
+  },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);

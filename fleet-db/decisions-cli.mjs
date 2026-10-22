@@ -79,15 +79,17 @@ export function publishFromInput(db, input, now = Date.now()) {
   }
 }
 
-// The live lists, from the views, with the question number beside each question id.
+// The live lists of Orcs still standing (a retired Orc's last list is not live: the phone would show it for good), from the views, with the question number beside each question id.
 export function readPublished(db, letter = null) {
   const lives = db.prepare(`SELECT l.id, l.orc_id, l.published_at, l.confirmed_at, l.item_count, o.letter, o.rank FROM decisions_live l
-    JOIN orc o ON o.id = l.orc_id ORDER BY o.rank DESC, o.letter`).all();
+    JOIN orc o ON o.id = l.orc_id WHERE o.retired_at IS NULL ORDER BY o.rank DESC, o.letter`).all();
   const lines = db.prepare(`SELECT i.position, q.number AS question_number, i.text, i.recommendation, i.importance, i.blocks
     FROM decisions_live_item i LEFT JOIN question q ON q.id = i.question_id WHERE i.snapshot_id = ? ORDER BY i.position`);
   return lives.filter((l) => letter === null || l.letter === letter).map((l) => ({
     orc: l.letter, snapshot: l.id, publishedAt: new Date(l.published_at).toISOString(), confirmedAt: new Date(l.confirmed_at).toISOString(), count: l.item_count,
     items: lines.all(l.id).map((r) => ({ position: r.position, questionNumber: r.question_number, text: r.text, recommendation: r.recommendation, importance: r.importance, blocks: r.blocks })),
+    // The Orc's rank (thrall or orc), last so every earlier field keeps its place: the phone names the Thrall's lane by it.
+    rank: l.rank,
   }));
 }
 

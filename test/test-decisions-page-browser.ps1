@@ -103,7 +103,7 @@ function Invoke-DecisionsBrowserDriver {
 
 Invoke-DecisionsBrowserDriver -Driver "browser-order.mjs" -Title "the order line, tapped" -Least 24
 Invoke-DecisionsBrowserDriver -Driver "browser-fold.mjs" -Title "Collapse all and Expand all, tapped" -Least 19
-Invoke-DecisionsBrowserDriver -Driver "browser-cards.mjs" -Title "the cards, tapped" -Least 21
+Invoke-DecisionsBrowserDriver -Driver "browser-cards.mjs" -Title "the cards, tapped" -Least 23
 Invoke-DecisionsBrowserDriver -Driver "browser-details.mjs" -Title "one tap shows a question whole; the answer box, tapped and typed in" -Least 35
 
 # The folder goes, with every profile in it.

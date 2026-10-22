@@ -17,5 +17,8 @@
         @{ Name = "unchanged-names-no-time"
            Find = "new Date(r.confirmedAt).toISOString()"
            Replace = "new Date(0).toISOString()" }
+        @{ Name = "retired-orc-keeps-its-list"
+           Find = 'WHERE o.retired_at IS NULL ORDER BY'
+           Replace = 'ORDER BY' }
     )
 }

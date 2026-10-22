@@ -217,14 +217,48 @@
 #     The phone shows the new level once the snapshot holds it, and a refusal in its own words.
 # done, refused and retry as for an answer.
 #
+# EACH ORC'S PUBLISHED LIST GOES TO THE PHONE BESIDE ITS QUESTIONS (T-0328; the founder opened the Thrall's
+# questions on his phone and saw one, while the Thrall's published list of four was shown nowhere). The lists
+# an Orc publishes with `horde decisions publish` live in fleet.db (fleet-db/decisions-cli.mjs; the views
+# decisions_live and decisions_live_item). Every snapshot carries them as a member of every page,
+# "published", in the frame and the hash, so a change of a list is a new snapshot and is sealed for the phones
+# exactly as the questions are: the relay sees no text. Each list is
+#   { lane: "thrall" or the Orc's letter, orc, publishedAt (ISO time), count, more, items }
+# and each item { text, recommendation, importance, blocks, question } - question the number of the store
+# question it links, or null. WHAT IS NOT THERE IS SAID, NEVER LEFT TO LOOK EMPTY: no member at all means
+# this machine has no fleet.db or could not read it (the phone says the machine has no lists to send), a list
+# with no items is an Orc that published an empty list, and an Orc with no list in the member never published.
+#   - FLEET.DB IS READ, NEVER WRITTEN, by the node side's `published --json` (a read-only open of the views),
+#     and only when the file has changed since the last read (its size and time, and its write-ahead file's:
+#     the fleet writes it all day and a read is a process start). A read that fails keeps the lists last read
+#     and says why once; a first read that fails sends no member.
+#   - NO SECRET LEAVES THE MACHINE: an item that trips Find-HordeDecisionSecrets (publish refuses them; a row
+#     imported or written another way might hold one) is sent as its number and the words that it is shown at
+#     the machine only.
+#   - THE SIZE IS HELD: 20 items to a list; over 16 KB in all, the last item of the longest list goes first,
+#     and each list says how many it left out in "more". The 16 KB is the text AS SENT, after the \uXXXX
+#     escaping of what is not ASCII (a quote or a dash costs six bytes), which is what every page carries.
+#   - AN UNCHANGED REPUBLISH SENDS NOTHING NEW (review of PR 365, M2): the sealed member carries publishedAt only,
+#     never the time an Orc last confirmed a list. The member is one text for all the Orcs and is hashed whole, so
+#     any time that moves on a confirm (rounded or not) would reseal and resend every page for every Orc's confirm.
+#     The phone shows "Published <time>". An Orc re-publishing an unchanged list changes nothing in the text.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Operations.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Notify.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Route.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Publish.ps1")
 
 $script:HordeDecisionsChannelFolder = $PSScriptRoot
+# THE PUBLISHED LISTS' LIMITS (the header, EACH ORC'S PUBLISHED LIST): at most 20 items of a list and 16 KB
+# of all the lists together travel in a snapshot, whose every page carries them; what is left out is said by
+# number ("more"). For a test only: the reader that stands in for the node side (a script block taking the
+# horde home and answering { code; out; err }); $null, as everywhere but in a suite, means the real one.
+$script:HordeDecisionsChannelPublishedItems = 20
+$script:HordeDecisionsChannelPublishedBytes = 16384
+$script:HordeDecisionsChannelPublishedReader = $null
 $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snapshot", "number", "wordingVersion", "text")
 # THE ANSWER'S VERSIONS, each with the one member it adds to those above (header, IN). The highest is
 # what a snapshot tells the phone this machine reads. Keyed by the version AS TEXT: an ordered table
@@ -900,12 +934,113 @@ function Get-HordeDecisionsChannelReceipts {
     return [pscustomobject]@{ text = ("[" + (@($parts) -join ",") + "]"); problem = $problem }
 }
 
+function Get-HordeDecisionsChannelFleetPrint {
+    # What says fleet.db may have changed (the header, EACH ORC'S PUBLISHED LIST): the size and last write of
+    # the file and of its write-ahead file, where the newest writes are until a checkpoint. "none" with no
+    # file. Nothing is opened.
+    param([string]$HordeHome)
+    $file = Join-Path $HordeHome "fleet.db"
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return "none" }
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($f in @($file, ($file + "-wal"))) {
+        try {
+            $i = New-Object System.IO.FileInfo -ArgumentList $f
+            if ($i.Exists) { [void]$parts.Add("" + $i.Length + ":" + $i.LastWriteTimeUtc.Ticks) } else { [void]$parts.Add("-") }
+        } catch { [void]$parts.Add("?") }
+    }
+    return (@($parts) -join "|")
+}
+
+function ConvertTo-HordeDecisionsChannelPublished {
+    # The lists `published --json` read, as the member's JSON text (the header): an array, "[]" for none.
+    # -Lists the parsed "lists" array. Pure: nothing is read or written here.
+    param([AllowEmptyCollection()]$Lists, [int]$MostItems = $script:HordeDecisionsChannelPublishedItems, [int]$MostBytes = $script:HordeDecisionsChannelPublishedBytes)
+    $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $made = New-Object System.Collections.ArrayList
+    foreach ($l in @($Lists)) {
+        if ($null -eq $l) { continue }
+        $all = @($l.items)
+        $items = New-Object System.Collections.ArrayList
+        foreach ($it in ($all | Select-Object -First $MostItems)) {
+            $question = $null
+            if ($null -ne $it.questionNumber) { $question = [long]$it.questionNumber }
+            if (@(Find-HordeDecisionSecrets -Value $it).Count -gt 0) {
+                $line = [ordered]@{ text = "(not sent: it looks like a secret, so it is shown at the machine only)"; recommendation = $null; importance = $null; blocks = $null; question = $question }
+            } else {
+                $line = [ordered]@{ text = "$($it.text)"; recommendation = $(if ($null -eq $it.recommendation) { $null } else { "$($it.recommendation)" }); importance = $(if ($null -eq $it.importance) { $null } else { "$($it.importance)" }); blocks = $(if ($null -eq $it.blocks) { $null } else { "$($it.blocks)" }); question = $question }
+            }
+            [void]$items.Add((ConvertTo-Json -InputObject $line -Compress))
+        }
+        $lane = $(if ("$($l.rank)" -ceq "thrall") { "thrall" } else { "$($l.orc)" })
+        [void]$made.Add([pscustomobject]@{ lane = $lane; orc = "$($l.orc)"; publishedAt = "$($l.publishedAt)"; count = [int]$l.count; items = $items; more = [int]([Math]::Max(0, $all.Count - $items.Count)) })
+    }
+    $render = {
+        $texts = New-Object System.Collections.ArrayList
+        foreach ($m in $made) {
+            $head = ConvertTo-Json -InputObject ([ordered]@{ lane = $m.lane; orc = $m.orc; publishedAt = $m.publishedAt; count = $m.count; more = $m.more }) -Compress
+            [void]$texts.Add($head.Substring(0, $head.Length - 1) + ',"items":[' + (@($m.items) -join ",") + ']}')
+        }
+        # ESCAPED HERE, so the size is measured on what is sent: a character that is not ASCII costs six bytes.
+        return [regex]::Replace(("[" + (@($texts) -join ",") + "]"), '[^\x20-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") })
+    }
+    $text = & $render
+    while ($utf8.GetByteCount($text) -gt $MostBytes) {
+        $longest = $null
+        foreach ($m in $made) { if ($m.items.Count -gt 0 -and ($null -eq $longest -or $m.items.Count -gt $longest.items.Count)) { $longest = $m } }
+        if ($null -eq $longest) { break }
+        $longest.items.RemoveAt($longest.items.Count - 1)
+        $longest.more = $longest.more + 1
+        $text = & $render
+    }
+    return $text
+}
+
+function Get-HordeDecisionsChannelPublished {
+    # The published lists as the member's JSON text, or "" for no member (the header, EACH ORC'S PUBLISHED
+    # LIST): { text; problem }. Read from fleet.db only when it changed since the last read, kept in -Mine; a
+    # read that fails answers the lists last read, with the reason in problem (once per reason).
+    param($Context, $Mine)
+    # The run's memory is read under strict mode: a key not there is an error, so each is made here, once.
+    foreach ($key in @("pubPrint", "pubText", "pubProblem", "published")) { if (-not $Mine.ContainsKey($key)) { $Mine[$key] = "" } }
+    $homeDir = $Context.hordeHome
+    $print = ""
+    try {
+        if ("$homeDir" -ceq "") { $homeDir = Get-HordeHome }
+        $print = Get-HordeDecisionsChannelFleetPrint -HordeHome $homeDir
+    } catch {
+        # A home pointer that is bad is a read that failed, said once like the others (review of PR 365, S4).
+        $problem = "the published lists could not be read: " + "$($_.Exception.Message)"
+        $said = "$problem"
+        if ($problem -ceq "$($Mine.pubProblem)") { $said = "" }
+        $Mine.pubProblem = $problem
+        return [pscustomobject]@{ text = "$($Mine.pubText)"; problem = "$said" }
+    }
+    if ($print -ceq "none") { $Mine.pubPrint = $print; $Mine.pubText = ""; $Mine.pubProblem = ""; return [pscustomobject]@{ text = ""; problem = "" } }
+    if ($print -ceq "$($Mine.pubPrint)") { return [pscustomobject]@{ text = "$($Mine.pubText)"; problem = "" } }
+    $Mine.pubPrint = $print
+    $problem = ""
+    try {
+        if ($null -ne $script:HordeDecisionsChannelPublishedReader) { $r = & $script:HordeDecisionsChannelPublishedReader $homeDir }
+        else { $r = Invoke-HordeDecisionNode -NodeArgs @("published", "--json") -FleetHome $homeDir }
+        if ([int]$r.code -ne 0) { $problem = "the published lists could not be read: " + "$($r.err)" }
+        else {
+            $parsed = ConvertFrom-HordeJson "$($r.out)"
+            if ($null -eq $parsed -or $null -eq $parsed.PSObject.Properties["lists"]) { $problem = "the published lists could not be read: the answer is not a list of lists" }
+            else { $Mine.pubText = (ConvertTo-HordeDecisionsChannelPublished -Lists @($parsed.lists)); $Mine.pubProblem = ""; return [pscustomobject]@{ text = "$($Mine.pubText)"; problem = "" } }
+        }
+    } catch { $problem = "the published lists could not be read: " + $_.Exception.Message }
+    # Kept: the lists last read stand, and the reason is said once.
+    $said = $(if ($problem -ceq "$($Mine.pubProblem)") { "" } else { $problem })
+    $Mine.pubProblem = $problem
+    return [pscustomobject]@{ text = "$($Mine.pubText)"; problem = $said }
+}
+
 function New-HordeDecisionsChannelPages {
     # The snapshot as page bodies (OUT, in the header): { hash; bodies; shown; withheld }. -Budget is the
     # largest body one page may have. -OnePage: the one page sent first into a full mailbox (the header,
     # A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST) - the questions that fit one page, and every
     # other one withheld by number.
-    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)]$List, [Parameter(Mandatory = $true)][long]$Budget, [switch]$OnePage, [string]$Receipts = "[]")
+    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)]$List, [Parameter(Mandatory = $true)][long]$Budget, [switch]$OnePage, [string]$Receipts = "[]", [string]$Published = "")
     $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
     $shown = New-Object System.Collections.ArrayList
     $withheld = New-Object System.Collections.ArrayList
@@ -922,7 +1057,7 @@ function New-HordeDecisionsChannelPages {
     # "ranks": 1, this machine takes a change of rank from the phone (the header, A CHANGE OF RANK FROM
     # THE PHONE): a phone sends one only to a machine whose snapshot says so, and so never to an earlier
     # machine, whose gate refuses the kind.
-    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + ',"answers":' + $script:HordeDecisionsChannelAnswerHighest + ',"ranks":1,"receipts":' + $Receipts + '}'
+    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + ',"answers":' + $script:HordeDecisionsChannelAnswerHighest + ',"ranks":1,"receipts":' + $Receipts + $(if ($Published -cne "") { ',"published":' + $Published } else { "" }) + '}'
     # The frame of a page with no question: everything but the questions, the withheld ones counted at
     # their largest (every question withheld, each with the longest reason), and the page numbers at
     # nine digits. A question fits a page when its bytes and the frame are within the budget.
@@ -1096,17 +1231,20 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
     foreach ($trouble in @($receipts.problem, $ledger.problem)) { if ("$trouble" -cne "" -and "$trouble" -cne "$($mine.receiptsProblem)") { [void]$said.Add("the receipts of the founder's answers are short: " + $trouble); $mine.receiptsProblem = "$trouble" } }
     if ("$($receipts.problem)$($ledger.problem)" -ceq "") { $mine.receiptsProblem = "" }
-    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint -and $receipts.text -ceq "$($mine.receipts)") { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
+    # THE PUBLISHED LISTS, asked every look as cheaply as the receipts (the header, EACH ORC'S PUBLISHED LIST): a list published or confirmed changes them and no record name.
+    $published = Get-HordeDecisionsChannelPublished -Context $Context -Mine $mine
+    if ("$($published.problem)" -cne "") { [void]$said.Add($published.problem) }
+    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint -and $receipts.text -ceq "$($mine.receipts)" -and $published.text -ceq "$($mine.published)") { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
     $list = Invoke-HordeDecision -Operation "list" -Request @{ state = "open"; messages = $true } -Root $Context.decisionsRoot
     if ($list.state -cne "known" -or $list.value.outcome -cne "done") { return [pscustomobject]@{ lines = @("no snapshot: the decisions list could not be read (" + $(if ($list.state -ceq "known") { $list.value.reason } else { $list.reason }) + ")"); failed = $true } }
     $budget = Get-HordeRelayChannelBodyBudget -Context $Context -Recipients $keys.Count
-    $pages = New-HordeDecisionsChannelPages -Horde $Context.horde -Machine $Context.signKeyId -List $list.value -Budget $budget -OnePage:$onePage -Receipts $receipts.text
+    $pages = New-HordeDecisionsChannelPages -Horde $Context.horde -Machine $Context.signKeyId -List $list.value -Budget $budget -OnePage:$onePage -Receipts $receipts.text -Published $published.text
     # THE SAME SNAPSHOT FOR THE SAME PHONES is not sent again; the same snapshot for ANOTHER SET OF
     # PHONES is. What was sent is remembered as its hash and the keys it was sealed to: until
     # 2026-10-13 it was the hash alone, so a phone paired while the list stood still was sent nothing
     # until some record changed - and nothing already in the mailbox was sealed to it.
     $sentAs = $pages.hash + "|" + (@($keys | ForEach-Object { $_.agreeKeyId }) -join ",")
-    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; $mine.receipts = $receipts.text; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
+    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; $mine.receipts = $receipts.text; $mine.published = $published.text; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $recipients = @($keys | ForEach-Object { , ([byte[]]$_.public) })
     $keysSent = New-Object System.Collections.ArrayList
@@ -1129,6 +1267,7 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     $mine.sent = $sentAs
     $mine.fingerprint = $print
     $mine.receipts = $receipts.text
+    $mine.published = $published.text
     # THE ONE PAGE IS RECORDED: it is not what the list is, so the fingerprint is one no look can match,
     # and the look after it sends the whole snapshot. And it is sent once a run (the header).
     if ($onePage) { $mine.fingerprint = "one page"; $mine.onePageNext = $false; $mine.onePageSent = $true }

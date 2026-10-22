@@ -9,6 +9,15 @@
         @{ Name = "the-mark-is-a-sign-alone"
            Find = '    mark.textContent = " " + STOP_SIGN + " " + BLOCKS_WORDS;'
            Replace = '    mark.textContent = " " + STOP_SIGN;' }
+        @{ Name = "a-published-orc-has-no-card"
+           Find = '    names.add(l.lane);'
+           Replace = '' }
+        @{ Name = "the-published-count-is-left-off-the-card"
+           Find = 'published: pub.get(lane) || 0, chosen: chosen === lane'
+           Replace = 'published: 0, chosen: chosen === lane' }
+        @{ Name = "the-published-words-are-left-out-of-the-slot"
+           Find = 'pub.textContent = " - " + v.published + " published";'
+           Replace = 'pub.textContent = "";' }
         @{ Name = "all-questions-counts-one-lane"
            Find = '  for (const v of by.values()) { open += v.open; blocksAll = blocksAll || v.blocksAll; }'
            Replace = '  for (const v of by.values()) { open = v.open; blocksAll = blocksAll || v.blocksAll; }' }

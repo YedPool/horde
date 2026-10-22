@@ -9,11 +9,15 @@
 // its name alone (lane-card.js, orName). A PURE RENDER: it knows nothing of the list - what is counted,
 // and what a tap does, are handed in.
 //
-//   decisionCardsView(lanes, counts, chosen) -> [{ lane, title, open, blocksAll, chosen }]
+//   decisionCardsView(lanes, counts, chosen, published) -> [{ lane, title, open, blocksAll, published, chosen }]
 //     lanes    THE LANES DOCUMENT (lane-card.js), or null when none has come
 //     counts   decisions/page/list.js doc.lanes(): [{ lane, open, blocksAll }] for the lanes with a
 //              question he has still to answer
 //     chosen   the lane chosen, "" for all (doc.lane())
+//     published  the published lists (published-lists.js readPublishedLists), or null: EVERY ORC THAT PUBLISHED HAS
+//              A CARD, even with no question to answer and no status card (review of PR 365, M1: the founder
+//              could not choose such an Orc to see its list). The card says "0 open" and, with items, how many it
+//              published ("5 published"); `published` on the view is that number.
 //   The "All questions" card first (lane ALL), then the Thrall's, then every other lane by name: each lane
 //   of the lanes document - with 0 when it asks nothing - and each lane that asks and has no card there.
 //   renderDecisionCards(doc, lanes, counts, { chosen, onChoose, nowMs }) -> the cards, as <button>s
@@ -33,7 +37,7 @@ const BLOCKS_WORDS = "blocks all work";
 
 const titleOf = (lane) => (lane === THRALL_LANE ? "Thrall" : "Orc " + lane);
 
-export function decisionCardsView(lanes, counts, chosen = "") {
+export function decisionCardsView(lanes, counts, chosen = "", published = null) {
   const by = new Map();
   for (const c of Array.isArray(counts) ? counts : []) {
     if (c && typeof c.lane === "string" && c.lane) by.set(c.lane, { open: Number(c.open) || 0, blocksAll: c.blocksAll === true });
@@ -41,14 +45,20 @@ export function decisionCardsView(lanes, counts, chosen = "") {
   const names = new Set(by.keys());
   if (lanes && Array.isArray(lanes.thrall) && lanes.thrall.length) names.add(THRALL_LANE);
   for (const c of lanes && Array.isArray(lanes.cards) ? lanes.cards : []) if (c && typeof c.lane === "string" && c.lane) names.add(c.lane);
+  const pub = new Map();
+  for (const l of Array.isArray(published) ? published : []) {
+    if (!l || typeof l.lane !== "string" || !l.lane) continue;
+    names.add(l.lane);
+    pub.set(l.lane, Number(l.count) > 0 ? Number(l.count) : 0);
+  }
   const order = Array.from(names).sort((a, b) => (a === b ? 0 : a === THRALL_LANE ? -1 : b === THRALL_LANE ? 1 : a < b ? -1 : 1));
   let open = 0;
   let blocksAll = false;
   for (const v of by.values()) { open += v.open; blocksAll = blocksAll || v.blocksAll; }
-  const out = [{ lane: ALL, title: ALL_TITLE, open, blocksAll, chosen: !chosen }];
+  const out = [{ lane: ALL, title: ALL_TITLE, open, blocksAll, published: 0, chosen: !chosen }];
   for (const lane of order) {
     const v = by.get(lane) || { open: 0, blocksAll: false };
-    out.push({ lane, title: titleOf(lane), open: v.open, blocksAll: v.blocksAll, chosen: chosen === lane });
+    out.push({ lane, title: titleOf(lane), open: v.open, blocksAll: v.blocksAll, published: pub.get(lane) || 0, chosen: chosen === lane });
   }
   return out;
 }
@@ -57,6 +67,12 @@ function slot(doc, v) {
   const box = doc.createElement("span");
   box.className = "dq-count";
   box.textContent = v.open + " open";
+  if (v.published > 0) {
+    const pub = doc.createElement("span");
+    pub.className = "dq-published";
+    pub.textContent = " - " + v.published + " published";
+    box.appendChild(pub);
+  }
   if (v.blocksAll) {
     const mark = doc.createElement("span");
     mark.className = "dq-blocks";
@@ -66,9 +82,9 @@ function slot(doc, v) {
   return box;
 }
 
-export function renderDecisionCards(doc, lanes, counts, { chosen = "", onChoose = null, nowMs = Date.now() } = {}) {
+export function renderDecisionCards(doc, lanes, counts, { chosen = "", onChoose = null, nowMs = Date.now(), published = null } = {}) {
   const out = [];
-  for (const v of decisionCardsView(lanes, counts, chosen)) {
+  for (const v of decisionCardsView(lanes, counts, chosen, published)) {
     const pick = v.lane === ALL ? "" : v.lane;
     // All questions is never a lane of the lanes document: it is always the card with its name alone.
     const card = renderLaneCard(doc, v.lane === ALL ? null : lanes, v.lane, { badge: slot(doc, v), orName: v.title, nowMs, onOpen: typeof onChoose === "function" ? () => onChoose(pick) : null });

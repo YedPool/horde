@@ -60,10 +60,10 @@
            Find = '        if (@(Find-HordeDecisionSecrets -Value $q).Count -gt 0) {'
            Replace = '        if ($false) {' }
         @{ Name = "list-read-on-every-look"
-           Find = '    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint -and $receipts.text -ceq "$($mine.receipts)") { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
+           Find = '    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint -and $receipts.text -ceq "$($mine.receipts)" -and $published.text -ceq "$($mine.published)") { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
            Replace = '' }
         @{ Name = "same-snapshot-sent-again"
-           Find = '    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; $mine.receipts = $receipts.text; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
+           Find = '    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; $mine.receipts = $receipts.text; $mine.published = $published.text; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
            Replace = '' }
         @{ Name = "snapshot-of-every-question"
            Find = '-Operation "list" -Request @{ state = "open"; messages = $true }'
