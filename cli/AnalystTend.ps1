@@ -58,7 +58,8 @@ $script:HordeAnalystTellSentences = [ordered]@{
     "started-over-cap"       = "The supervisor started a fresh fleet analyst in your window, because the last one's context was over its cap. The old session gets no more rounds; close it when you choose."
     "spawn-failed"           = "The supervisor's spawn script did not report that a fresh fleet analyst started. It waits for a handover all the same; nothing more is started until one is written or you start one. The status of the analyst supervisor says more."
     "start-silent"           = "A fresh fleet analyst was started and has not written its handover file in the time allowed. Look at its tab; nothing more is started until it does or you start one."
-    "start-too-soon-gone"    = "The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
+    "start-retry"            = "A fresh fleet analyst was started and no session appeared in the time allowed, so the supervisor started another. After a few tries it stops and tells you. The status of the analyst supervisor says more."
+    "start-too-soon-gone"    ="The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
     "start-too-soon-over-cap" = "The fleet analyst went over its context cap within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
     "no-answer"              = "The fleet analyst has not acked a round in the time allowed. The status of the analyst supervisor says more."
     "refused"                = "The analyst's supervisor cannot read one of its own files, so it acts on nothing until a person mends it. The status of the analyst supervisor says more."
@@ -76,6 +77,8 @@ function New-HordeAnalystTools {
         Tell     = $null
         Notify   = $null
         Spawn    = $null
+        # When the spawn script last wrote spawn.log (beside the handover file): a time, or $null for none.
+        SpawnLog = { param($Handover) return (Get-HordeAnalystSpawnLogNewest -Handover $Handover) }
     }
 }
 
@@ -181,15 +184,23 @@ function Invoke-HordeAnalystPass {
 
     # 3. The session.
     $canStart = ("" + $v.spawnScript -ne "" -and $null -ne $Tools["Spawn"])
-    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart
+    # Did the spawn script log anything for the start in progress? $null when nobody asked (no tool, or no
+    # start in progress), so a suite or a home without the tool is never failed for a log it cannot read.
+    $spawnLogged = $null
+    if ($s.phase -ceq "starting" -and $s.startedAt -is [datetime] -and $null -ne $Tools["SpawnLog"]) {
+        $logAt = $null; $asked = $true
+        try { $logAt = Invoke-HordeAnalystTool -Tools $Tools -Name "SpawnLog" -With @($sp.handover) } catch { $asked = $false }
+        if ($asked -and $null -eq $logAt) { $spawnLogged = $false } elseif ($asked -and $logAt -is [datetime]) { $spawnLogged = ($logAt.ToUniversalTime() -ge $s.startedAt.AddMinutes(-1)) }
+    }
+    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart -SpawnLogged $spawnLogged
     switch -CaseSensitive ($d.action) {
         "adopt" {
             & $say ("adopted session " + $d.sessionId + ": " + $d.why)
-            $s.sessionId = $d.sessionId; $s.phase = "running"; $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
+            $s.sessionId = $d.sessionId; $s.phase = "running"; $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null; $s.startAttempts = [long]0
             # A NEW SESSION STARTS A NEW RUN (review of PR 306): the last one's untold-until-ack "no-answer"
             # would silence a fresh session that writes its handover and never acks. Its old rounds stay
             # marked alerted, so clearing here tells nothing about them again.
-            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "no-answer", "no-answer-founder")
+            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "start-retry", "no-answer", "no-answer-founder")
             # It was awake when it wrote the handover: a session that has just said who it is is not
             # sent a heartbeat for having been silent before the supervisor knew it.
             if ($null -eq $s.lastWakeAt -or $handover.value.writtenAt -gt $s.lastWakeAt) { $s.lastWakeAt = $handover.value.writtenAt }
@@ -200,15 +211,21 @@ function Invoke-HordeAnalystPass {
             # STARTING IS WRITTEN BEFORE THE SPAWN RUNS (review of PR 306): a pass killed while the spawn
             # script runs - a service restarted for an update, up to $script:HordeAnalystSpawnSeconds -
             # leaves the script going, and the next pass must find "starting", not "running and gone".
-            $s.previousSessionId = $s.sessionId; $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
+            # A RETRY (T-0341) keeps the session it replaced: the sessionId is already empty, and overwriting
+            # previousSessionId with it would let the old session's handover be taken for the new one's.
+            if ($d.retry -ne $true) { $s.previousSessionId = $s.sessionId }
+            $s.startAttempts = $(if ($d.retry -eq $true) { [Math]::Max([long]1, [long]$s.startAttempts) + 1 } else { [long]1 })
+            $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
             $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
-            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
+            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent", "start-retry")
+            if ($d.retry -eq $true) { & $say ("the last start failed: " + $d.why) }
             Write-HordeAnalystState -Path $sp.state -State $s
             $r = $null
             try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Spawn" -With @(("" + $v.spawnScript), $sp.handover, $d.reason, $v) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
             if ($null -ne $r -and $r.ok -eq $true) {
                 & $say ("started a fresh analyst session: " + $d.why)
-                & $say (Send-HordeAnalystTell -State $s -Key ("started-" + $d.reason) -Tools $Tools -Values $v)
+                # A retry is told as a retry (d.tell), not also as a start.
+                if ($d.retry -ne $true) { & $say (Send-HordeAnalystTell -State $s -Key ("started-" + $d.reason) -Tools $Tools -Values $v) }
             } else {
                 # A SPAWN THAT FAILED OR TIMED OUT MAY STILL HAVE STARTED ONE: its child can go on after the
                 # timeout, and a non-zero exit can follow a tab that opened. So it stays "starting" and
@@ -330,26 +347,95 @@ function Get-HordeAnalystSpawnArguments {
     return ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + $Script + "`" -ParentSessionId " + $Seat.sessionId + " -ParentPane " + $Seat.pane + " -ParentInstance " + $Seat.instance + " -Handover `"" + $Handover + "`" -Reason " + $Reason)
 }
 
-function Start-HordeAnalystSession {
-    # THE REAL SPAWN (header): run the person's spawn script with the warchief's seat, the handover file
-    # and why; { ok; detail }. The script is given at most $script:HordeAnalystSpawnSeconds to return.
-    param([Parameter(Mandatory = $true)][string]$Script, [Parameter(Mandatory = $true)][string]$Handover, [Parameter(Mandatory = $true)][string]$Reason)
-    if (-not [System.IO.File]::Exists($Script)) { return [pscustomobject]@{ ok = $false; detail = "the spawn script is not there" } }
-    $seat = Get-HordeRoleSeat -Role $script:HordeAnalystTellRole
-    if ($seat.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("the warchief's window cannot be found: " + $(if ($seat.state -ceq "absent") { $seat.note } else { $seat.reason })) } }
-    $line = $null
-    try { $line = Get-HordeAnalystSpawnArguments -Script $Script -Seat $seat.value -Handover $Handover -Reason $Reason } catch { return [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+function Get-HordeAnalystSpawnLogNewest {
+    # When the spawn script last wrote spawn.log, the file beside the handover file (the spawn script
+    # appends "<yyyyMMddTHHmmssZ> <what>" to it, one line per step): a UTC time, or $null for no file, no
+    # line, or a last line that does not open with a stamp. Only the end of the file is read.
+    param([Parameter(Mandatory = $true)][string]$Handover)
+    $log = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($Handover), "spawn.log")
+    $stream = $null
+    try {
+        $stream = New-Object System.IO.FileStream($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $take = [int][Math]::Min([long]4096, $stream.Length)
+        [void]$stream.Seek(-$take, [System.IO.SeekOrigin]::End)
+        $buf = New-Object byte[] $take
+        $got = $stream.Read($buf, 0, $take)
+        $last = @([System.Text.Encoding]::ASCII.GetString($buf, 0, $got).Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Select-Object -Last 1)
+        if ($last.Count -eq 0) { return $null }
+        $m = [regex]::Match($last[0], '\A([0-9]{8}T[0-9]{6}Z) ')
+        if (-not $m.Success) { return $null }
+        return [datetime]::ParseExact($m.Groups[1].Value, "yyyyMMdd'T'HHmmss'Z'", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+    } catch { return $null } finally { if ($null -ne $stream) { $stream.Dispose() } }
+}
+
+function Resolve-HordeAnalystTerminal {
+    # THE TERMINAL A SPAWN TARGETS, as an answer: known { instance; replaced } or unknown with why.
+    # -Recorded is the terminal the warchief's record names; a record outlives its terminal (2026-10-19 the
+    # last launch went to a terminal that was gone by 2026-10-20), so it is never used as it stands. Each
+    # terminal adapter's Own block (core/HostAct.ps1) names the one terminal of this user that is running,
+    # or says why it cannot; its socket's file name is the instance the spawn script is given. The recorded
+    # one is kept only when it is that terminal; a different live one replaces it; none (or several, which the
+    # adapter refuses to choose between) is a failure with the adapter's own reason. -Actors are
+    # Get-HordeHostActors' rows; a suite hands in its own.
+    param([AllowEmptyString()][string]$Recorded, [object[]]$Actors = @())
+    $why = New-Object System.Collections.ArrayList
+    foreach ($actor in @($Actors)) {
+        $own = $null
+        try { $own = & $actor.own } catch { $own = New-HordeUnknown -Reason $_.Exception.Message }
+        if ($null -ne $own -and $own.state -ceq "known" -and "" + $own.value.socket -ne "") {
+            $live = Split-Path -Leaf ("" + $own.value.socket)
+            return (New-HordeKnown -Value ([pscustomobject]@{ instance = $live; replaced = ($live -cne $Recorded) }))
+        }
+        [void]$why.Add($(if ($null -ne $own -and $own.state -ceq "unknown") { "" + $own.reason } else { "its terminal could not be named" }))
+    }
+    if ($why.Count -eq 0) { [void]$why.Add("no terminal adapter is loaded") }
+    return (New-HordeUnknown -Reason (($why -join "; ") + " (the recorded terminal '" + $Recorded + "' is not used unchecked)"))
+}
+
+function Invoke-HordeAnalystSpawnProcess {
+    # THE REAL RUN of the spawn script's command line: { exitCode; timedOut }. At most -Seconds to return.
+    param([Parameter(Mandatory = $true)][string]$Line, [Parameter(Mandatory = $true)][int]$Seconds)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    $psi.Arguments = $line
+    $psi.Arguments = $Line
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
     try {
-        if (-not $p.WaitForExit($script:HordeAnalystSpawnSeconds * 1000)) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script did not return in " + $script:HordeAnalystSpawnSeconds + " s") } }
-        if ($p.ExitCode -ne 0) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script exited " + $p.ExitCode) } }
-        return [pscustomobject]@{ ok = $true; detail = "" }
+        if (-not $p.WaitForExit($Seconds * 1000)) { return [pscustomobject]@{ exitCode = -1; timedOut = $true } }
+        return [pscustomobject]@{ exitCode = [int]$p.ExitCode; timedOut = $false }
     } finally { $p.Dispose() }
+}
+
+function Start-HordeAnalystSession {
+    # THE REAL SPAWN (header): run the person's spawn script with the warchief's seat, the handover file
+    # and why; { ok; detail }. The script is given at most $script:HordeAnalystSpawnSeconds to return.
+    # T-0341: the terminal in the seat is checked (-ResolveTerminal, Resolve-HordeAnalystTerminal) and the
+    # live one is passed, and a script that returns without writing a spawn.log line beside the handover
+    # file did not run to its start, whatever its exit code says. -FindSeat and -RunScript are for a suite.
+    param([Parameter(Mandatory = $true)][string]$Script, [Parameter(Mandatory = $true)][string]$Handover, [Parameter(Mandatory = $true)][string]$Reason,
+          [Parameter(Mandatory = $true)][scriptblock]$ResolveTerminal, [scriptblock]$FindSeat = $null, [scriptblock]$RunScript = $null)
+    if (-not [System.IO.File]::Exists($Script)) { return [pscustomobject]@{ ok = $false; detail = "the spawn script is not there" } }
+    $seat = $null
+    if ($null -ne $FindSeat) { $seat = & $FindSeat } else { $seat = Get-HordeRoleSeat -Role $script:HordeAnalystTellRole }
+    if ($seat.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("the warchief's window cannot be found: " + $(if ($seat.state -ceq "absent") { $seat.note } else { $seat.reason })) } }
+    $terminal = & $ResolveTerminal ("" + $seat.value.instance)
+    if ($terminal.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("no live terminal to start it in: " + $terminal.reason) } }
+    $target = [pscustomobject]@{ sessionId = $seat.value.sessionId; pane = $seat.value.pane; instance = $terminal.value.instance }
+    $line = $null
+    try { $line = Get-HordeAnalystSpawnArguments -Script $Script -Seat $target -Handover $Handover -Reason $Reason } catch { return [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+    $logPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($Handover), "spawn.log")
+    $before = [long]0
+    try { if ([System.IO.File]::Exists($logPath)) { $before = (New-Object System.IO.FileInfo($logPath)).Length } } catch { $before = [long]0 }
+    $ran = $null
+    if ($null -ne $RunScript) { $ran = & $RunScript $line $script:HordeAnalystSpawnSeconds } else { $ran = Invoke-HordeAnalystSpawnProcess -Line $line -Seconds $script:HordeAnalystSpawnSeconds }
+    $after = [long]0
+    try { if ([System.IO.File]::Exists($logPath)) { $after = (New-Object System.IO.FileInfo($logPath)).Length } } catch { $after = [long]0 }
+    $how = $(if ($ran.timedOut -eq $true) { "it did not return in " + $script:HordeAnalystSpawnSeconds + " s" } elseif ($ran.exitCode -ne 0) { "it exited " + $ran.exitCode } else { "it exited 0" })
+    if ($after -le $before) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script wrote no entry to spawn.log (" + $logPath + "), so it did not run to its start (" + $how + ")") } }
+    if ($ran.timedOut -eq $true) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script did not return in " + $script:HordeAnalystSpawnSeconds + " s") } }
+    if ($ran.exitCode -ne 0) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script exited " + $ran.exitCode) } }
+    return [pscustomobject]@{ ok = $true; detail = "" }
 }
 
 function Send-HordeAnalystPost {

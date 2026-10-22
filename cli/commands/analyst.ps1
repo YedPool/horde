@@ -45,7 +45,11 @@ $HordeCommand = @{
             $tools["Post"] = { param($SessionId, $MessageId, $Body, $Values) return (Send-HordeAnalystMessage -SessionId $SessionId -MessageId $MessageId -Body $Body -Values $Values -HordeHome $hordeHome) }
             $tools["Tell"] = { param($Key, $Body, $Values) return (Send-HordeAnalystWarchief -Key $Key -Body $Body -Values $Values -HordeHome $hordeHome) }
             $tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) }
-            $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason) }
+            # The terminal adapters' acting blocks, loaded here at the command's scope so each keeps its helpers
+            # (core/HostAct.ps1): the spawn asks them which terminal is live (Resolve-HordeAnalystTerminal).
+            . (Join-Path $root "core\HostAct.ps1")
+            foreach ($f in @(Get-HordeHostActorFiles -Root $root)) { . $f }
+            $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason -ResolveTerminal { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @(Get-HordeHostActors)) }) }
         }
         # THE RELAY WATCH (core/RelayWatch.ps1): the warchief is told through the fleet's mail - the same
         # teller as above, which does not travel through the relay - and one notice is tried beside it.

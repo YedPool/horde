@@ -26,5 +26,18 @@
         @{ Name = "alerted-round-alerted-again"
            Find = 'if ($null -eq $r -or $r.alerted -eq $true -or $Acked -ccontains ("" + $r.id)) { continue }'
            Replace = 'if ($null -eq $r -or $Acked -ccontains ("" + $r.id)) { continue }' }
+        # T-0341: the bound and the number of starts are settings with a floor.
+        @{ Name = "start-bound-default-changed"
+           Find = 'default = 15; min = 2; max = 240'
+           Replace = 'default = 20; min = 2; max = 240' }
+        @{ Name = "start-bound-floor-removed"
+           Find = 'default = 15; min = 2; max = 240'
+           Replace = 'default = 15; min = 0; max = 240' }
+        @{ Name = "start-attempts-default-changed"
+           Find = 'default = 3; min = 1; max = 10'
+           Replace = 'default = 4; min = 1; max = 10' }
+        @{ Name = "start-attempts-floor-removed"
+           Find = 'default = 3; min = 1; max = 10'
+           Replace = 'default = 3; min = 0; max = 10' }
     )
 }

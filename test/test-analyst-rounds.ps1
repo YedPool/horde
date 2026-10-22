@@ -26,6 +26,10 @@ try {
     Check ($d.values.heartbeatHours -eq 6) "the heartbeat is after 6 hours with no wake, not 2 (the warchief, 2026-10-14)"
     Check ($d.values.wakeNowMarkers -ceq "URGENT,QUESTION") "URGENT and QUESTION wake it at once by default"
     Check ($d.values.nowGapMinutes -eq 5) "at-once rounds are at least 5 minutes apart by default"
+    Check ($d.values.startBoundMinutes -eq 15 -and $d.values.startMaxAttempts -eq 3) "a start that brings no session is failed after 15 minutes, and 3 starts are made in all (T-0341)"
+    $rb = Get-HordeAnalystSettings -HordeHome (Home-With "bound-low" '{ "schemaVersion": 1, "settings": { "startBoundMinutes": 1 } }')
+    $rm = Get-HordeAnalystSettings -HordeHome (Home-With "attempts-zero" '{ "schemaVersion": 1, "settings": { "startMaxAttempts": 0 } }')
+    Check ($rb.state -ceq "refused" -and $rm.state -ceq "refused") "a bound under 2 minutes and 0 starts are refused: a bound of nothing would respawn every pass"
     $c = Get-HordeAnalystSettings -HordeHome (Home-With "changed" '{ "schemaVersion": 1, "settings": { "heartbeatHours": 2, "wakeNowMarkers": "URGENT,STOP-NOW" } }')
     Check ($c.state -ceq "read" -and $c.values.heartbeatHours -eq 2 -and $c.values.wakeNowMarkers -ceq "URGENT,STOP-NOW") "a person's file sets the heartbeat and the markers"
     $r = Get-HordeAnalystSettings -HordeHome (Home-With "refused" '{ "schemaVersion": 1, "settings": { "heartbeatHours": 0 } }')

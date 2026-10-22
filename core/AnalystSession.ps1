@@ -41,9 +41,12 @@
 # the context the last call read is input + cache read + cache write of that call. Only the newest call
 # is kept while the file streams past, so a 100 MB transcript costs no more memory than a small one.
 #
-# NEVER A START LOOP. A start waits for the new session's handover (startWaitMinutes); while it waits,
-# nothing else is started, and if it never comes the warchief is told once and the supervisor goes on
-# waiting - a person decides. Two starts are at least restartMinMinutes apart.
+# NEVER A START LOOP, AND NEVER A WAIT WITHOUT END. A start waits for the new session's handover; while it
+# waits, nothing else is started. One that brings no session in startBoundMinutes (or leaves no spawn.log
+# entry) is failed and retried, a bound apart, at most startMaxAttempts starts in all (T-0341: the first
+# version waited forever and sat in "starting" for two days); after that the warchief is told once
+# (startWaitMinutes) and the supervisor goes on waiting - a person decides. Two starts after a session
+# was running are at least restartMinMinutes apart.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
@@ -63,6 +66,10 @@ $script:HordeAnalystPhases = @("none", "running", "starting")
 $script:HordeAnalystRoundsKept = 64
 $script:HordeAnalystStateMostBytes = 65536
 $script:HordeAnalystSessionActions = @("keep", "adopt", "start", "wait", "tell")
+# How long a start may show no spawn.log entry before that alone fails it: the spawn script is given 180 s
+# (cli/AnalystTend.ps1, HordeAnalystSpawnSeconds) and writes its first line within seconds, so 240 s is that
+# plus a minute of slack.
+$script:HordeAnalystSpawnLogGraceSeconds = 240
 
 function Get-HordeAnalystSessionPaths {
     # The two files of this contract under -Folder.
@@ -141,7 +148,7 @@ function Read-HordeAnalystHandover {
 function New-HordeAnalystState {
     # The supervisor's state as a fresh supervisor holds it: no session known.
     return [pscustomobject]@{
-        v = 1; sessionId = ""; phase = "none"; previousSessionId = ""; startedAt = $null; startReason = ""
+        v = 1; sessionId = ""; phase = "none"; previousSessionId = ""; startedAt = $null; startReason = ""; startAttempts = [long]0
         lastRoundAt = $null; lastWakeAt = $null; findingsOffset = [long]0; lastAckId = ""
         rounds = @(); told = @()
         contextTokens = [long]-1; contextAt = $null; transcriptLength = [long]-1
@@ -173,6 +180,8 @@ function Read-HordeAnalystState {
         if ($script:HordeAnalystPhases -cnotcontains $s.phase) { throw "its phase is not one of none, running, starting" }
         $s.previousSessionId = "" + $doc.previousSessionId
         $s.startReason = "" + $doc.startReason
+        # Absent in a file an older supervisor wrote (the live one of 2026-10-20): no start counted yet.
+        $s.startAttempts = $(if ($null -ne $doc.PSObject.Properties["startAttempts"]) { [long]$doc.startAttempts } else { [long]0 })
         $s.lastAckId = $(if ($null -ne $doc.PSObject.Properties["lastAckId"]) { "" + $doc.lastAckId } else { "" })
         $s.startedAt = ConvertFrom-HordeAnalystTime -Text $doc.startedAt
         $s.lastRoundAt = ConvertFrom-HordeAnalystTime -Text $doc.lastRoundAt
@@ -202,7 +211,7 @@ function Write-HordeAnalystState {
     if ($rounds.Count -gt $script:HordeAnalystRoundsKept) { $rounds = @($rounds | Select-Object -Last $script:HordeAnalystRoundsKept) }
     $doc = [ordered]@{
         v = 1; sessionId = "" + $State.sessionId; phase = "" + $State.phase; previousSessionId = "" + $State.previousSessionId
-        startedAt = (ConvertTo-HordeAnalystTimeText $State.startedAt); startReason = "" + $State.startReason
+        startedAt = (ConvertTo-HordeAnalystTimeText $State.startedAt); startReason = "" + $State.startReason; startAttempts = [long]$State.startAttempts
         lastRoundAt = (ConvertTo-HordeAnalystTimeText $State.lastRoundAt); lastWakeAt = (ConvertTo-HordeAnalystTimeText $State.lastWakeAt)
         findingsOffset = [long]$State.findingsOffset; lastAckId = "" + $State.lastAckId
         rounds = @($rounds | ForEach-Object { [ordered]@{ id = $_.id; kind = $_.kind; at = (ConvertTo-HordeAnalystTimeText $_.at); sessionId = $_.sessionId; alerted = [bool]$_.alerted; woken = "" + $_.woken } })
@@ -288,9 +297,10 @@ function Get-HordeAnalystSessionDecision {
         [Parameter(Mandatory = $true)][datetime]$Now,
         [Parameter(Mandatory = $true)]$Policy,
         [bool]$RoundDue = $false,
-        [bool]$CanStart = $false
+        [bool]$CanStart = $false,
+        $SpawnLogged = $null
     )
-    $out = { param($Action, $Why, $Tell, $Sid, $Reason) return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason } }
+    $out = { param($Action, $Why, $Tell, $Sid, $Reason, $Retry = $false) return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason; retry = $Retry } }
     $utcNow = $Now.ToUniversalTime()
     $fresh = ($Handover.state -ceq "known")
     switch -CaseSensitive ("" + $State.phase) {
@@ -300,6 +310,17 @@ function Get-HordeAnalystSessionDecision {
             # one replaced, is the new one.
             if ($fresh -and $Handover.value.sessionId -cne ("" + $State.previousSessionId) -and $Handover.value.writtenAt -ge $since.AddMinutes(-1)) {
                 return (& $out "adopt" "the fresh session has written its handover" "" $Handover.value.sessionId "")
+            }
+            # A START THAT BRINGS NO SESSION IS FAILED, NOT AWAITED FOREVER (T-0341). Failed when the bound has
+            # passed, or sooner when the spawn script left no spawn.log entry for it (-SpawnLogged $false; $null
+            # is "not asked", never a failure). Then retried, a bound apart, up to startMaxAttempts starts in all;
+            # the one start a state written before this field made counts as the first.
+            $failedWhy = ""
+            if ($SpawnLogged -eq $false -and $utcNow -ge $since.AddSeconds($script:HordeAnalystSpawnLogGraceSeconds)) { $failedWhy = "the spawn script left no entry in spawn.log for the start " + [int]($utcNow - $since).TotalMinutes + " minutes ago, so it never ran to its start" }
+            elseif ($utcNow -ge $since.AddMinutes([int]$Policy.startBoundMinutes)) { $failedWhy = "no session has appeared in the " + [int]$Policy.startBoundMinutes + " minutes allowed since the start" }
+            if ($failedWhy -ne "" -and $CanStart -and [Math]::Max([long]1, [long]$State.startAttempts) -lt [long]$Policy.startMaxAttempts) {
+                $again = $(if ("" + $State.startReason -ceq "over-cap") { "over-cap" } else { "gone" })
+                return (& $out "start" ($failedWhy + "; starting another") "start-retry" "" $again $true)
             }
             if ($utcNow -ge $since.AddMinutes([int]$Policy.startWaitMinutes)) { return (& $out "wait" ("a fresh session was started " + [int]($utcNow - $since).TotalMinutes + " minutes ago and has not written its handover") "start-silent" "" "") }
             return (& $out "wait" "a fresh session was started and has not written its handover yet" "" "" "")

@@ -51,5 +51,36 @@
         @{ Name = "no-answer-cleared-without-new-ack"
            Find = 'if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) {'
            Replace = 'if ($newestAcked.Count -eq 1) {' }
+        # T-0341: a start that brings no session is retried, bounded; a spawn must reach a live terminal and log.
+        @{ Name = "retry-overwrites-previous-session"
+           Find = 'if ($d.retry -ne $true) { $s.previousSessionId = $s.sessionId }'
+           Replace = '$s.previousSessionId = $s.sessionId' }
+        @{ Name = "retry-attempts-not-counted"
+           Find = '[Math]::Max([long]1, [long]$s.startAttempts) + 1 } else'
+           Replace = '1 } else' }
+        @{ Name = "retry-told-also-as-start"
+           Find = 'if ($d.retry -ne $true) { & $say (Send-HordeAnalystTell -State $s -Key ("started-"'
+           Replace = 'if ($true) { & $say (Send-HordeAnalystTell -State $s -Key ("started-"' }
+        @{ Name = "adoption-keeps-attempts"
+           Find = '$s.contextAt = $null; $s.startAttempts = [long]0'
+           Replace = '$s.contextAt = $null' }
+        @{ Name = "retry-told-once-only"
+           Find = '"spawn-failed", "start-silent", "start-retry")'
+           Replace = '"spawn-failed", "start-silent")' }
+        @{ Name = "no-spawn-log-is-not-asked"
+           Find = 'if ($asked -and $null -eq $logAt) { $spawnLogged = $false }'
+           Replace = 'if ($asked -and $null -eq $logAt) { $spawnLogged = $null }' }
+        @{ Name = "old-spawn-log-entry-accepted"
+           Find = '-ge $s.startedAt.AddMinutes(-1))'
+           Replace = '-ge $s.startedAt.AddDays(-9))' }
+        @{ Name = "stale-recorded-terminal-kept"
+           Find = '$live = Split-Path -Leaf ("" + $own.value.socket)'
+           Replace = '$live = $Recorded' }
+        @{ Name = "no-live-terminal-still-spawns"
+           Find = 'if ($terminal.state -cne "known") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "silent-spawn-script-is-a-start"
+           Find = 'if ($after -le $before) { return'
+           Replace = 'if ($false) { return' }
     )
 }

@@ -87,6 +87,8 @@ function Mail { param($Rig, [string]$Text) return (Write-HordeAnalystMail -Folde
 function Ack { param($Rig, [string]$Id) [System.IO.File]::AppendAllText((Join-Path $Rig.folder "acks.txt"), ("round " + $Id + " done`n"), $utf8) }
 function Calls { param($Rig, [string]$Lines) $p = Join-Path $Rig.folder "t.calls"; [System.IO.File]::WriteAllText($p, $Lines, $utf8); return $p }
 $spawnSetting = '"spawnScript": "' + ((Join-Path $work "spawn-analyst.ps1").Replace("\", "\\")) + '"'
+# The rule before T-0341, one setting away: a single start, never retried. The tests below that pin "never a second session" run on it; the T-0341 section pins the retries.
+$spawnOnce = $spawnSetting + ', "startMaxAttempts": 1'
 
 try {
     Write-Host ""
@@ -265,7 +267,7 @@ try {
     $g.now = $t0.AddMinutes(6)
     $null = Pass $g
     Check ((State $g).sessionId -ceq $sidB -and (State $g).phase -ceq "running" -and $g.posts.Count -eq 1 -and $g.posts[0].to -ceq $sidB) "the fresh session is adopted when it writes its handover, and the waiting finding goes to it"
-    $s2 = New-Rig "silent" $spawnSetting
+    $s2 = New-Rig "silent" $spawnOnce
     Write-Handover -Folder $s2.folder -Sid $sidA -At $t0
     $s2.listing = New-Listing -Live @($sidA) -Transcript (Calls $s2 "2026-10-14T12:00:00Z,10,60000,1000`n")
     $s2.now = $t0.AddMinutes(1); $null = Pass $s2
@@ -309,7 +311,7 @@ try {
     $n.now = $t0.AddMinutes(2); $null = Pass $n
     $n.now = $t0.AddMinutes(3); $null = Pass $n
     Check ($n.spawns.Count -eq 0 -and @($n.tells | Where-Object { $_.key -ceq "no-spawn-gone" }).Count -eq 1) "gone with no spawn script: the warchief is told once, nothing started"
-    $fs = New-Rig "spawnfail" $spawnSetting
+    $fs = New-Rig "spawnfail" $spawnOnce
     Write-Handover -Folder $fs.folder -Sid $sidA -At $t0
     $fs.listing = New-Listing -Live @($sidA)
     $fs.now = $t0.AddMinutes(1); $null = Pass $fs
@@ -330,7 +332,7 @@ try {
     Write-Host "--- review of PR 306: never a second session ---" -ForegroundColor Cyan
     # A pass killed while its spawn runs: the spawn tool looks at the state file on disk at the moment it
     # is called, then the pass dies (the tool throws, as a killed process would never return).
-    $k = New-Rig "killed" $spawnSetting
+    $k = New-Rig "killed" $spawnOnce
     Write-Handover -Folder $k.folder -Sid $sidA -At $t0
     $k.listing = New-Listing -Live @($sidA)
     $k.now = $t0.AddMinutes(1); $null = Pass $k
@@ -343,7 +345,7 @@ try {
     $k.now = $t0.AddMinutes(40); $null = Pass $k
     Check ($k.spawns.Count -eq 1) "so a pass after one killed mid-spawn starts nothing more"
     # The over-cap swap whose spawn times out: the old session is still alive; no third session, ever.
-    $oc = New-Rig "cap-timeout" $spawnSetting
+    $oc = New-Rig "cap-timeout" $spawnOnce
     Write-Handover -Folder $oc.folder -Sid $sidA -At $t0
     $oc.listing = New-Listing -Live @($sidA) -Transcript (Calls $oc "2026-10-14T12:00:00Z,10,130000,1000`n")
     $oc.now = $t0.AddMinutes(1); $null = Pass $oc; $null = Pass $oc
@@ -508,6 +510,116 @@ try {
     $pf.postOk = $true
     $pf.now = $t0.AddMinutes(3); $null = Pass $pf
     Check ($pf.posts[-1].body -like "*AT ONCE*" -and $pf.posts[-1].body -like "*1 new finding(s)*" -and (State $pf).findingsOffset -gt 0) "and the next pass carries both"
+
+    Write-Host ""
+    Write-Host "--- T-0341: a start that brings no session is failed after a bound, retried a bounded number of times, and told ---" -ForegroundColor Cyan
+    # A rig that ends in the starting phase: running, then gone, then the spawn double answers.
+    function New-StartedRig {
+        param([string]$Name, [string]$Extra = "")
+        $x = New-Rig $Name ($spawnSetting + $Extra)
+        Write-Handover -Folder $x.folder -Sid $sidA -At $t0
+        $x.listing = New-Listing -Live @($sidA)
+        $x.now = $t0.AddMinutes(1); $null = Pass $x
+        $x.listing = New-Listing -Gone @($sidA)
+        $x.now = $t0.AddMinutes(2); $null = Pass $x
+        return $x
+    }
+    $bd = New-StartedRig "bound"
+    Check ($bd.spawns.Count -eq 1 -and (State $bd).phase -ceq "starting") "setup: one start made, the phase is starting"
+    $bd.now = $t0.AddMinutes(16); $null = Pass $bd
+    Check ($bd.spawns.Count -eq 1 -and @($bd.tells | Where-Object { $_.key -ceq "start-retry" }).Count -eq 0) "CONTROL: 14 minutes into a start is inside the 15 minute bound: left alone, no retry, no notice"
+    $bd.now = $t0.AddMinutes(17); $null = Pass $bd
+    Check ($bd.spawns.Count -eq 2 -and $bd.spawns[1].reason -ceq "gone" -and @($bd.tells | Where-Object { $_.key -ceq "start-retry" }).Count -eq 1 -and (State $bd).startAttempts -eq 2 -and (State $bd).startedAt -eq $t0.AddMinutes(17)) "15 minutes in with no session: the start is failed and retried with the same reason, the warchief is told, the clock restarts"
+    $bd.now = $t0.AddMinutes(18); $null = Pass $bd
+    $bd.now = $t0.AddMinutes(19); $null = Pass $bd
+    Check ($bd.spawns.Count -eq 2) "and the next passes do not respawn: a retry waits out its own bound"
+    Check ((State $bd).previousSessionId -ceq $sidA -and @($bd.tells | Where-Object { $_.key -ceq "started-gone" }).Count -eq 1) "a retry keeps the session it replaced, and is told as a retry, not also as a start"
+    $bd.now = $t0.AddMinutes(32); $null = Pass $bd
+    Check ($bd.spawns.Count -eq 3 -and (State $bd).startAttempts -eq 3 -and @($bd.tells | Where-Object { $_.key -ceq "start-retry" }).Count -eq 2) "a second retry is made after another bound, and told again"
+    foreach ($m in @(33, 40, 47, 48, 60, 90, 200, 600)) { $bd.now = $t0.AddMinutes($m); $null = Pass $bd }
+    Check ($bd.spawns.Count -eq 3) "RETRY EXHAUSTION: after 3 starts in all, no fourth is ever made, however long it waits"
+    Check (@($bd.tells | Where-Object { $_.key -ceq "start-silent" }).Count -eq 1 -and (State $bd).phase -ceq "starting") "and the warchief is told once that it gave up, and the phase stays starting for a person"
+    Write-Handover -Folder $bd.folder -Sid $sidB -At $t0.AddMinutes(601)
+    $bd.listing = New-Listing -Live @($sidB)
+    $bd.now = $t0.AddMinutes(602); $null = Pass $bd
+    Check ((State $bd).phase -ceq "running" -and (State $bd).startAttempts -eq 0) "a session that does write its handover is adopted and the attempts start over"
+
+    $ob = New-StartedRig "bound-one" ', "startMaxAttempts": 1'
+    $ob.now = $t0.AddMinutes(60); $null = Pass $ob
+    Check ($ob.spawns.Count -eq 1 -and @($ob.tells | Where-Object { $_.key -ceq "start-retry" }).Count -eq 0) "startMaxAttempts 1: past the bound nothing is retried (the old never-start-again rule is one setting away)"
+    $sb = New-StartedRig "bound-setting" ', "startBoundMinutes": 5'
+    $sb.now = $t0.AddMinutes(6); $null = Pass $sb
+    Check ($sb.spawns.Count -eq 1) "the bound is a setting: 4 minutes in with a 5 minute bound is inside it"
+    $sb.now = $t0.AddMinutes(8); $null = Pass $sb
+    Check ($sb.spawns.Count -eq 2) "and 6 minutes in is past it"
+
+    # The state the live fleet is in: starting, no session, written by an older supervisor with no attempts.
+    $lv = New-Rig "legacy" $spawnSetting
+    $ls = New-HordeAnalystState
+    $ls.phase = "starting"; $ls.startedAt = $t0; $ls.startReason = "gone"; $ls.previousSessionId = $sidA
+    Write-HordeAnalystState -Path (Join-Path $lv.folder "supervisor.json") -State $ls
+    $lv.now = $t0.AddMinutes(10); $null = Pass $lv
+    Check ($lv.spawns.Count -eq 0) "CONTROL: a stuck starting phase inside the bound is left alone"
+    $lv.now = $t0.AddHours(26); $null = Pass $lv
+    Check ($lv.spawns.Count -eq 1 -and @($lv.tells | Where-Object { $_.key -ceq "start-retry" }).Count -eq 1 -and (State $lv).startAttempts -eq 2) "a phase starting for a day with no session (the 2026-10-20 state) is retried on the next pass, and counts the start already made"
+
+    $lo = New-Rig "legacy-once" ($spawnSetting + ', "startMaxAttempts": 1')
+    Write-HordeAnalystState -Path (Join-Path $lo.folder "supervisor.json") -State $ls
+    $lo.now = $t0.AddHours(26); $null = Pass $lo
+    Check ($lo.spawns.Count -eq 0) "a phase starting from an older supervisor counts as the first start: with one allowed, it is not retried"
+
+    Write-Host ""
+    Write-Host "--- T-0341: a start with no spawn.log entry is failed with its reason ---" -ForegroundColor Cyan
+    $nl = New-StartedRig "nolog"
+    $nl.tools["SpawnLog"] = { param($Handover) return $null }
+    $nl.now = $t0.AddMinutes(5); $null = Pass $nl
+    Check ($nl.spawns.Count -eq 1) "CONTROL: 3 minutes in, the spawn script may still be running: no verdict yet"
+    $nl.now = $t0.AddMinutes(7); $p7 = Pass $nl
+    Check ($nl.spawns.Count -eq 2 -and (@($p7.lines) -join " ") -like "*spawn.log*") "5 minutes in with no spawn.log entry: failed at once, not after the 15 minute bound, and the journal says why"
+    $lg = New-StartedRig "withlog"
+    $logAt = $t0.AddMinutes(2)
+    $lg.tools["SpawnLog"] = { param($Handover) return $logAt }.GetNewClosure()
+    $lg.now = $t0.AddMinutes(7); $null = Pass $lg
+    Check ($lg.spawns.Count -eq 1) "CONTROL: an entry written at the start keeps it waiting for its bound"
+    $ol = New-StartedRig "oldlog"
+    $oldAt = $t0.AddDays(-1)
+    $ol.tools["SpawnLog"] = { param($Handover) return $oldAt }.GetNewClosure()
+    $ol.now = $t0.AddMinutes(7); $null = Pass $ol
+    Check ($ol.spawns.Count -eq 2) "an entry from the day before is not an entry for this start"
+
+    Write-Host ""
+    Write-Host "--- T-0341: the spawn targets a live terminal, never a stale recorded one ---" -ForegroundColor Cyan
+    $liveActor = [pscustomobject]@{ name = "double"; own = { return (New-HordeKnown -Value ([pscustomobject]@{ socket = "C:\socks\gui-sock-18404" })) } }
+    $deadActor = [pscustomobject]@{ name = "double"; own = { return (New-HordeUnknown -Reason "no terminal of this user is running with a socket") } }
+    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @($liveActor)
+    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "gui-sock-18404" -and $rs.value.replaced -eq $true) "a recorded terminal that is not the live one is replaced by the live one"
+    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-18404" -Actors @($liveActor)
+    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "gui-sock-18404" -and $rs.value.replaced -eq $false) "CONTROL: a recorded terminal that is the live one is kept"
+    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @($deadActor)
+    Check ($rs.state -ceq "unknown" -and $rs.reason -like "*no terminal of this user is running*" -and $rs.reason -like "*gui-sock-43224*") "no live terminal: unknown, with the host's reason and the stale name, never the recorded one"
+    Check ((Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @()).state -ceq "unknown") "no terminal adapter loaded: unknown"
+
+    $spawnDir = Join-Path $work "spawn-direct"
+    [void][System.IO.Directory]::CreateDirectory($spawnDir)
+    $fakeScript = Join-Path $spawnDir "spawn-analyst.ps1"
+    [System.IO.File]::WriteAllText($fakeScript, "# never run: the suite hands in the runner", $utf8)
+    $fakeHandover = Join-Path $spawnDir "handover.json"
+    $fakeLog = Join-Path $spawnDir "spawn.log"
+    $staleSeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = $warchief; pane = "10"; instance = "gui-sock-43224" })) }
+    $script:ran = New-Object System.Collections.ArrayList
+    $logging = { param($Line, $Seconds) [void]$script:ran.Add($Line); [System.IO.File]::AppendAllText($fakeLog, "20261022T000000Z launch`n", $utf8); return [pscustomobject]@{ exitCode = 0; timedOut = $false } }
+    $silent = { param($Line, $Seconds) [void]$script:ran.Add($Line); return [pscustomobject]@{ exitCode = 0; timedOut = $false } }
+    $resolveLive = { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @($liveActor)) }
+    $resolveDead = { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @($deadActor)) }
+    $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat $staleSeat -ResolveTerminal $resolveLive -RunScript $logging
+    Check ($a.ok -eq $true -and $script:ran.Count -eq 1 -and $script:ran[0] -like "*-ParentInstance gui-sock-18404 *" -and $script:ran[0] -notlike "*43224*") "a stale recorded socket is not passed to the spawn script: the live one is"
+    $script:ran.Clear()
+    $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat $staleSeat -ResolveTerminal $resolveDead -RunScript $logging
+    Check ($a.ok -eq $false -and $a.detail -like "*no live terminal*" -and $a.detail -like "*no terminal of this user is running*" -and $script:ran.Count -eq 0) "no live terminal: the spawn is not run, and the failure says so"
+    $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat $staleSeat -ResolveTerminal $resolveLive -RunScript $silent
+    Check ($a.ok -eq $false -and $a.detail -like "*spawn.log*" -and $script:ran.Count -eq 1) "a spawn script that exits 0 and writes no spawn.log entry is a failed start, with that reason"
+    $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat { return (New-HordeUnknown -Reason "two sessions say they are the warchief") } -ResolveTerminal $resolveLive -RunScript $logging
+    Check ($a.ok -eq $false -and $a.detail -like "*two sessions say they are the warchief*") "a warchief seat that cannot be told is a failed start with the reason"
 
     Write-Host ""
     Write-Host "--- the spawn script's command line ---" -ForegroundColor Cyan

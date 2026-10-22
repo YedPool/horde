@@ -84,6 +84,17 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
        what = "Past this many tokens of context, the next round goes to a fresh session started from the handover file." },
     @{ name = "startWaitMinutes"; kind = "whole"; default = 20; min = 2; max = 240
        what = "How long, in minutes, a fresh session has to write its handover file before the warchief is told." },
+    # T-0341 (2026-10-22): the supervisor sat in the starting phase from 2026-10-20 15:58 with no session and
+    # no spawn.log entry, waiting for a handover that could not come. A start that brings no session in
+    # startBoundMinutes is FAILED and retried, at most startMaxAttempts starts in all, then a person is told.
+    # 15 minutes: a healthy start writes its handover as its first act, about a minute after the tab opens
+    # (spawn script waits up to 3 minutes); 15 is five times that and short of startWaitMinutes' 20.
+    # 3 starts: one retry can cure a stale terminal or a slow box, two a flaky one; more is a broken spawn,
+    # which a person must mend, and 3 spaced a bound apart is at most 3 spawns in 45 minutes, never one a minute.
+    @{ name = "startBoundMinutes"; kind = "whole"; default = 15; min = 2; max = 240
+       what = "How long, in minutes, a start may bring no session before it counts as failed and is retried." },
+    @{ name = "startMaxAttempts"; kind = "whole"; default = 3; min = 1; max = 10
+       what = "The most starts, the first included, made for one gone or over-cap session before the warchief is left to start one." },
     @{ name = "restartMinMinutes"; kind = "whole"; default = 30; min = 5; max = 1440
        what = "The least time, in minutes, between two starts of a fresh session." },
     # EMPTY BY DEFAULT: nothing is started until a person has named the script that starts it.
