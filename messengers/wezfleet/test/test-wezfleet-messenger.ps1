@@ -710,5 +710,65 @@ With-Fake {
     Check ((Clear-HordeWezfleetMessengerOutgoing) -eq 0) "and a sweep with nothing to do removes nothing"
 }
 
+# THE ACCESS-LIST CHECK ON BOTH SHELLS (T-0338). The folder's list used to be read with the static
+# [System.IO.Directory]::GetAccessControl, which PowerShell 7 does not have, so a tell posted from a pwsh 7
+# process threw before sending. The check is Test-HordeWezfleetMessengerUserOnly itself, called here in
+# whichever shell runs this suite (this suite is in the targeted set on 5.1 and on 7), and it must refuse
+# every folder that is not this user's alone - protected, one rule, this user's, allow, full control.
+# The cases are set up with the messenger's own two helpers, not Set-Acl, which asks for the SACL privilege a normal user lacks.
+With-Fake {
+    param($st)
+    $out = Join-Path $st.home "messengers\wezfleet\outgoing"
+    [void](New-Item -ItemType Directory -Force -Path $out)
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $out)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder that inherits a wider access list")
+    $got = Get-HordeWezfleetMessengerOutgoing
+    Check ($got -ieq $out -and (Test-HordeWezfleetMessengerUserOnly -Path $out) -and (Test-UserOnly $out)) ("[" + $PSVersionTable.PSEdition + "] the folder is made this user's alone, and the check, read the other way, agrees")
+    # A second rule, even an allow for the Users group, is a folder others can open: refused, then put right.
+    $a = Get-HordeWezfleetMessengerFolderAcl -Path $out
+    $a.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545")), [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, [System.Security.AccessControl.InheritanceFlags]::ContainerInherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-HordeWezfleetMessengerFolderAcl -Path $out -Acl $a
+    Check (-not (Test-UserOnly $out)) "CONTROL: the folder now admits a second rule, by the other reader"
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $out)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder with a second rule on it")
+    $null = Get-HordeWezfleetMessengerOutgoing
+    Check ((Test-HordeWezfleetMessengerUserOnly -Path $out) -and (Test-UserOnly $out)) ("[" + $PSVersionTable.PSEdition + "] and the folder is put right, not left wide")
+    # Unprotected (inheriting) is refused even though this user's own rule is still on it: protection is part of the check.
+    $a = Get-HordeWezfleetMessengerFolderAcl -Path $out
+    $a.SetAccessRuleProtection($false, $true)
+    Set-HordeWezfleetMessengerFolderAcl -Path $out -Acl $a
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $out)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder whose list is not protected from inheritance")
+    # This user's own second rule is a second rule too (the check reads exactly one): it lists first, so a check that read only the first rule would pass it.
+    $a = New-Object System.Security.AccessControl.DirectorySecurity
+    $a.SetAccessRuleProtection($true, $false)
+    $a.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::FullControl, ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit), [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    $a.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, [System.Security.AccessControl.InheritanceFlags]::None, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-HordeWezfleetMessengerFolderAcl -Path $out -Acl $a
+    Check (@((Get-Acl -LiteralPath $out).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])).Count -eq 2) "CONTROL: the folder now holds two rules, both this user's"
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $out)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder with a second rule even when it is this user's own")
+    # One protected rule, full control, allow - but for someone else: refused.
+    $other = New-Object System.Security.AccessControl.DirectorySecurity
+    $other.SetAccessRuleProtection($true, $false)
+    $other.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-11")), [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.InheritanceFlags]::ContainerInherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-HordeWezfleetMessengerFolderAcl -Path $out -Acl $other
+    $oneRule = @((Get-Acl -LiteralPath $out).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    Check ($oneRule.Count -eq 1 -and $oneRule[0].IdentityReference.Value -ceq "S-1-5-11") "CONTROL: the folder holds one protected full-control rule, for Authenticated Users"
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $out)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder whose one rule is someone else's")
+    # One rule, this user's, full control - but inherited, not protected: refused. A parent with that one inheritable rule gives its child exactly that.
+    $parent = Join-Path $st.home "acl-parent"
+    [void](New-Item -ItemType Directory -Force -Path $parent)
+    $mine = New-Object System.Security.AccessControl.DirectorySecurity
+    $mine.SetAccessRuleProtection($true, $false)
+    $mine.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::FullControl, ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit), [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-HordeWezfleetMessengerFolderAcl -Path $parent -Acl $mine
+    $child = Join-Path $parent "child"
+    [void](New-Item -ItemType Directory -Force -Path $child)
+    $kid = Get-Acl -LiteralPath $child
+    Check ((-not $kid.AreAccessRulesProtected) -and @($kid.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])).Count -eq 1) "CONTROL: the child inherits exactly one rule and is not protected"
+    Check (-not (Test-HordeWezfleetMessengerUserOnly -Path $child)) ("[" + $PSVersionTable.PSEdition + "] the check REFUSES a folder whose single user-only rule is inherited, not protected")
+    # A list that cannot be read is an error, never a pass.
+    $threw = $false
+    try { $null = Test-HordeWezfleetMessengerUserOnly -Path (Join-Path $st.home "no\such\folder") } catch { $threw = $true }
+    Check $threw ("[" + $PSVersionTable.PSEdition + "] a folder whose list cannot be read is an error, not a pass")
+}
+
 Exit-HordeTestPinnedHome -State $pinned
 Complete-HordeSuite -Success "the wezfleet messenger starts only the fixed PowerShell on a real local wezfleet checkout, hands the body only through a file only this user can open, and reads nothing it was not told"

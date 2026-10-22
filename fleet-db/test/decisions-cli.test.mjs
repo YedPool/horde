@@ -147,13 +147,33 @@ test('a list older than the live one is refused in words', () => {
 test('published --json: confirmedAt beside publishedAt, every old field unchanged, later after an equal publish', () => {
   const w = world();
   publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0);
-  assert.deepEqual(Object.keys(readPublished(w.db)[0]), ['orc', 'snapshot', 'publishedAt', 'confirmedAt', 'count', 'items']);
+  assert.deepEqual(Object.keys(readPublished(w.db)[0]), ['orc', 'snapshot', 'publishedAt', 'confirmedAt', 'count', 'items', 'rank']);
+  assert.equal(readPublished(w.db)[0].rank, 'orc');
   assert.equal(readPublished(w.db)[0].confirmedAt, new Date(T0).toISOString());
   publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0 + 60000);
   const l = readPublished(w.db)[0];
   assert.equal(l.publishedAt, new Date(T0).toISOString());
   assert.equal(l.confirmedAt, new Date(T0 + 60000).toISOString());
   assert.deepEqual(Object.keys(l.items[0]), ['position', 'questionNumber', 'text', 'recommendation', 'importance', 'blocks']);
+});
+
+test('published carries each Orc rank, so the phone tells the Thrall from an Orc (T-0328)', () => {
+  const w = world();
+  publishFromInput(w.db, input({ thrall: true }, [lineB]), T0);
+  publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0 + 1);
+  const all = readPublished(w.db);
+  assert.deepEqual(all.map((l) => [l.orc, l.rank]).sort(), [['F', 'orc'], ['M', 'thrall']]);
+  assert.deepEqual(readPublished(w.db, 'M').map((l) => l.rank), ['thrall']);
+  assert.ok(JSON.parse(JSON.stringify(all)).every((l) => l.rank === 'thrall' || l.rank === 'orc'));
+});
+
+test('a retired Orc has no live list, so the phone is not sent a card for it (T-0328, round 3)', () => {
+  const w = world();
+  publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0);
+  publishFromInput(w.db, input({ letter: 'K' }, [lineB]), T0 + 1);
+  w.db.prepare("UPDATE orc SET retired_at = 1, retired_reason = 'hand' WHERE letter = 'K'").run();
+  assert.deepEqual(readPublished(w.db).map((l) => l.orc), ['F']);
+  assert.deepEqual(readPublished(w.db, 'K'), []);
 });
 
 test('the live lists read back from the views, with question numbers, one Orc or all', () => {

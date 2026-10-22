@@ -109,6 +109,7 @@ import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, ST
 import { shrinkInBrowser } from "./photo.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderDecisionCards } from "./decision-cards.js";
+import { publishedView, mergePublished, renderPublishedLists } from "./published-lists.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
@@ -215,6 +216,12 @@ function docOf(id) {
   cards.setAttribute("role", "group");
   cards.setAttribute("aria-label", "Questions by lane");
   $("lists").appendChild(cards);
+  // EACH ORC'S PUBLISHED LIST (published-lists.js): the lane chosen's list, between the cards and the questions.
+  const pub = document.createElement("div");
+  pub.className = "published-lists";
+  pub.setAttribute("role", "group");
+  pub.setAttribute("aria-label", "Published lists");
+  $("lists").appendChild(pub);
   const box = document.createElement("div");
   box.className = "horde-list";
   $("lists").appendChild(box);
@@ -222,7 +229,7 @@ function docOf(id) {
   const doc = window.HordeDecisionsDocument.mount(box, {
     topInset: () => $("bar").getBoundingClientRect().bottom,
     // Every draw - a list that arrives, a lane chosen, an answer saved - draws the cards' numbers again.
-    onDraw: () => drawDecisionCards(id),
+    onDraw: () => { drawDecisionCards(id); drawPublishedLists(id); },
     onChange: showCounts,
     storage,
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
@@ -234,7 +241,7 @@ function docOf(id) {
     // minutes for the PC, and an update meanwhile loses only the button's pending mark, never his words.
     rank: (number, which, level, rankId) => bridge.request("rank", { number, which, level, id: rankId })
   });
-  docs[id] = { box, cards, doc, kinds: false, storage };
+  docs[id] = { box, cards, pub, doc, kinds: false, storage, value: null };
   return docs[id];
 }
 // The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
@@ -243,7 +250,19 @@ function drawDecisionCards(id) {
   const d = docs[id];
   if (!d) return;
   while (d.cards.firstChild) d.cards.removeChild(d.cards.firstChild);
-  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane) })) d.cards.appendChild(card);
+  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane), published: d.value && d.value.published })) d.cards.appendChild(card);
+}
+// The document's own lane of a question (who asked it): the published lists count a question as drawn only where the document draws it.
+const laneOfQuestion = (q) => window.HordeDecisionsDocument.lanes.laneOf(q);
+// The published lists of the lane chosen (published-lists.js), drawn from what the snapshot on screen carried.
+// The lane is the document's: a card tapped redraws the document, which comes back here.
+function drawPublishedLists(id) {
+  const d = docs[id];
+  if (!d) return;
+  while (d.pub.firstChild) d.pub.removeChild(d.pub.firstChild);
+  const v = d.value;
+  if (!v) return;
+  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime })) d.pub.appendChild(node);
 }
 function showCounts() {
   const d = current && docs[current];
@@ -275,7 +294,7 @@ async function pick(id) {
   drawTabs();
   const h = hordes.find((x) => x.id === id);
   if (!h) { show(hordes.length ? "lockedView" : "emptyView"); return; }
-  for (const k of Object.keys(docs)) { docs[k].box.hidden = k !== id; docs[k].cards.hidden = k !== id; }
+  for (const k of Object.keys(docs)) { docs[k].box.hidden = k !== id; docs[k].cards.hidden = k !== id; docs[k].pub.hidden = k !== id; }
   const rec = await bridge.request("pick", { id });
   render(h, rec);
 }
@@ -296,6 +315,7 @@ function render(h, rec) {
   const d = docOf(h.id);
   d.box.hidden = false;
   d.cards.hidden = false;
+  d.pub.hidden = false;
   show(PANES[pane].view);
   // The decisions page's cards are the Progress tab's (decision-cards.js): its lanes document, asked for once here
   // too; cards-changed brings every later one.
@@ -318,7 +338,12 @@ function render(h, rec) {
   $("notShown").hidden = !notShown;
   $("notShown").textContent = notShown;
   if (!d.kinds) { d.kinds = true; bridge.request("kinds").then((k) => d.doc.setKinds(k)); }
-  const did = d.doc.setList(rec);
+  // THE PUBLISHED LISTS beside the questions: a question an item links carries the item's recommendation, and the
+  // item is drawn once, as that question (published-lists.js). A read that failed keeps the lists drawn, as it keeps the questions; the draw is the document's (onDraw).
+  const known = rec && rec.state === "known" && rec.value;
+  if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
+  const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
+  const did = d.doc.setList(shown);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
   // next - the old snapshot, kept - cleared those words at once, so a 401 left old content with no sign.
   say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");
@@ -1203,7 +1228,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

@@ -238,12 +238,55 @@ try {
     Check ($p2.ok -and $p2.value -eq 1) ("and that announcement was one passkey prompt (" + $(if ($p2.ok) { $p2.value } else { $p2.reason }) + ")")
     $box = Invoke-Browser @{ cmd = "announceBox" }
     Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet") -and $box.value.buttons -eq 0) ("until the machine answers, the horde's own view says so, and offers no button (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
+    # EACH ORC'S PUBLISHED LIST (T-0328): fleet.db in the machine's home holds the Thrall's list of three - one
+    # linking question 1, the question the store holds - and Orc F's empty one; Orc G never published. The run
+    # below reads them from the file (read only) and seals them into the snapshot with the question.
+    $seedJs = Join-Path $root "test\fixtures\phone-published-seed.mjs"
+    $pubFile = Join-Path $work "thrall-items.json"
+    [System.IO.File]::WriteAllText($pubFile, '[{"text":"Sales queue: forward the contract page?","recommendation":"yes, today","importance":"high","blocks":"part"},{"questionNumber":1,"text":"Closing sound: play it?","recommendation":"play it, short","importance":"normal","blocks":"none"},{"text":"Notifications on fleet.db?","importance":"low"}]', $utf8)
+    $emptyFile = Join-Path $work "f-items.json"
+    [System.IO.File]::WriteAllText($emptyFile, '[]', $utf8)
+    & $node.Source $seedJs seed $hh
+    $seeded = ($LASTEXITCODE -eq 0)
+    if ($seeded) { & $node.Source $seedJs publish $hh thrall $pubFile; $seeded = ($LASTEXITCODE -eq 0) }
+    if ($seeded) { & $node.Source $seedJs publish $hh F $emptyFile; $seeded = ($LASTEXITCODE -eq 0) }
+    Check $seeded "CONTROL: fleet.db in the machine's home holds the Thrall's published list of three (one linking question 1) and Orc F's empty one"
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the app's key and sends the snapshot (exit " + $run.code + ")")
     $seen = Invoke-Browser @{ cmd = "waitText"; text = $title }
     Check ($seen.ok -and $seen.value.found) "the question appears in the app, drawn by list.js, without a reload"
     $box = Invoke-Browser @{ cmd = "announceBox" }
     Check ($box.ok -and -not $box.value.shown) "and once it has, the offer to announce goes"
+    # The founder's gap: the questions were on his phone and the Orcs' published lists were not.
+    $pl = Invoke-Browser @{ cmd = "waitPublished"; text = "Sales queue: forward the contract page?" }
+    $plText = $(if ($pl.ok) { $pl.value.text } else { "" })
+    Check ($pl.ok -and $pl.value.found -and $plText.Contains("Thrall: published list") -and $plText.Contains("Recommended: yes, today") -and $plText.Contains("importance high - blocks part of the work") -and $plText.Contains("Notifications on fleet.db?")) ("EACH ORC'S PUBLISHED LIST is on the phone beside the questions: the Thrall's items with their recommendation, importance and blocking (" + ($plText -replace "\s+", " ") + ")")
+    Check (($plText -match 'Published \S') -and -not $plText.Contains("checked")) "and its published time, and no 'checked' time (none is sent: review of PR 365, M2)"
+    Check ($plText.Contains("Orc F published an empty list: nothing waits on you from here.")) "AN ORC WITH AN EMPTY LIST: the phone says so in plain words"
+    Check (-not $plText.Contains("Orc G") -and -not $plText.Contains("Closing sound: play it?")) "an Orc that never published is not drawn as a list, and the item that links question 1 is not drawn twice"
+    Check ($pl.ok -and $pl.value.listed.Contains($title) -and $pl.value.listed.Contains("play it, short")) "and that question, shown once, carries the published item's recommendation"
+    [System.IO.File]::WriteAllText($pubFile, '[{"text":"Sales queue: forward the contract page, v3?","recommendation":"yes, today","importance":"high","blocks":"part"},{"questionNumber":1,"text":"Closing sound: play it?","recommendation":"play it, short","importance":"normal","blocks":"none"}]', $utf8)
+    & $node.Source $seedJs publish $hh thrall $pubFile
+    $run = Invoke-Run -Turns 1
+    $pl2 = Invoke-Browser @{ cmd = "waitPublished"; text = "contract page, v3?" }
+    Check ($run.code -eq 0 -and $pl2.ok -and $pl2.value.found -and -not $pl2.value.text.Contains("Notifications on fleet.db?")) ("a list published again reaches the phone without a reload, and the item it dropped is gone (exit " + $run.code + ")")
+    # M1 (review of PR 365): an Orc that published and asks nothing, with no status card, is still a card the founder
+    # can choose. Orc G has no question and no card in a lanes document: it publishes one item and nothing else.
+    # THE PUBLISHED LISTS ALONE CHANGE here (no question changes after the first draw): the card must appear without a reload.
+    # (The record the document compares holds the published member, so it redraws the cards itself; a second redraw in
+    # app.js was tried as a mutant, survived, and was removed as dead code.)
+    $gFile = Join-Path $work "g-items.json"
+    [System.IO.File]::WriteAllText($gFile, '[{"text":"Orc G only item: rotate the keys?","recommendation":"next week","importance":"low"}]', $utf8)
+    & $node.Source $seedJs publish $hh G $gFile
+    $gSeeded = ($LASTEXITCODE -eq 0)
+    $run = Invoke-Run -Turns 1
+    $gc = Invoke-Browser @{ cmd = "publishedCard"; name = "Orc G" }
+    Check ($gSeeded -and $run.code -eq 0 -and $gc.ok -and $gc.value.found -and $gc.value.slot -ceq "0 open - 1 published") ("A PUBLISHED-ONLY ORC HAS A CARD: Orc G publishes one item, asks nothing and has no status card, and its card says '0 open - 1 published' (exit " + $run.code + "; " + $(if ($gc.ok) { "found " + $gc.value.found + ", '" + $gc.value.slot + "'" } else { $gc.reason }) + ")")
+    $gt = Invoke-Browser @{ cmd = "publishedCard"; name = "Orc G"; click = $true }
+    $gp = Invoke-Browser @{ cmd = "waitPublished"; text = "Orc G only item: rotate the keys?" }
+    $gpText = $(if ($gp.ok) { $gp.value.text } else { "" })
+    Check ($gt.ok -and $gt.value.pressed -ceq "true" -and $gp.ok -and $gp.value.found -and $gpText.Contains("Recommended: next week") -and -not $gpText.Contains("Thrall: published list")) ("choosing that card shows Orc G's list, and only its own (" + ($gpText -replace "\s+", " ") + ")")
+    $null = Invoke-Browser @{ cmd = "publishedCard"; name = "All questions"; click = $true }
     $shot1 = Save-Shot "phone-list"
 
     Write-Host ""
@@ -318,7 +361,7 @@ try {
     $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
     $lk = Invoke-Browser @{ cmd = "lock" }
-    Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
+    Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.published -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list - and its Orcs' published lists - and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), " + $lk.value.published + " published box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
 
     Write-Host ""
@@ -400,7 +443,7 @@ try {
     Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing openedshows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
-    Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
+    Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.published -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }

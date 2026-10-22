@@ -669,6 +669,45 @@ export function rankBody({ rankId, machine, snapshot, number, which, level }) {
   return utf8(JSON.stringify(body));
 }
 
+// EACH ORC'S PUBLISHED LIST (channels/decisions/Channel.ps1, EACH ORC'S PUBLISHED LIST; T-0328): a snapshot's
+// "published" member, read strictly and never trusted past its shape. null when the machine sent no member (an
+// earlier machine, or one with no fleet.db: the page says so in words), else an array of
+//   { lane, orc, publishedAt (ms), count, more,
+//     items: [{ text, recommendation, importance, blocks, question }] }
+// A list that does not hold together is left out whole, and so is an item; nothing is repaired.
+const PUBLISHED_LANE = /^(thrall|[A-Z][A-Z0-9]{0,3})$/;
+const PUBLISHED_MOST_LISTS = 64;
+const PUBLISHED_MOST_ITEMS = 50;
+const PUBLISHED_MOST_TEXT = 500;
+function publishedText(v, required) {
+  if (v === null || v === undefined) return required ? undefined : null;
+  return typeof v === "string" && v.length <= PUBLISHED_MOST_TEXT && (!required || v.length > 0) ? v : undefined;
+}
+export function readPublishedLists(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const l of raw.slice(0, PUBLISHED_MOST_LISTS)) {
+    if (!l || typeof l !== "object" || typeof l.lane !== "string" || !PUBLISHED_LANE.test(l.lane) || typeof l.orc !== "string" || !Array.isArray(l.items) || l.items.length > PUBLISHED_MOST_ITEMS) continue;
+    const publishedAt = typeof l.publishedAt === "string" ? Date.parse(l.publishedAt) : NaN;
+    if (!Number.isFinite(publishedAt)) continue;
+    const items = [];
+    for (const it of l.items) {
+      if (!it || typeof it !== "object") continue;
+      const text = publishedText(it.text, true);
+      const recommendation = publishedText(it.recommendation, false);
+      const importance = publishedText(it.importance, false);
+      const blocks = publishedText(it.blocks, false);
+      const question = it.question === null || it.question === undefined ? null : (Number.isSafeInteger(it.question) && it.question >= 1 ? it.question : undefined);
+      if (text === undefined || recommendation === undefined || importance === undefined || blocks === undefined || question === undefined) continue;
+      items.push({ text, recommendation, importance, blocks, question });
+    }
+    const more = Number.isSafeInteger(l.more) && l.more > 0 ? l.more : 0;
+    const count = Number.isSafeInteger(l.count) && l.count >= 0 ? l.count : items.length;
+    out.push({ lane: l.lane, orc: l.orc, publishedAt, count, more, items });
+  }
+  return out;
+}
+
 // A snapshot page, read: { ok, reason, value }. The page must be the decisions snapshot of the machine
 // that signed its envelope, for the horde the phone paired with.
 export function readSnapshotPage(bodyBytes, horde, machine) {
@@ -712,7 +751,10 @@ export function newestSnapshot(pages) {
       ranks: first.ranks === 1,
       // What became of the founder's answers (receiptFor), as the machine said it; undefined from a
       // machine before receipts. ts: when the machine signed the snapshot's newest page, 0 if unknown.
-      receipts: first.receipts, ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };
+      receipts: first.receipts,
+      // Each Orc's published list as the machine sent it (readPublishedLists): null from a machine that sent none.
+      published: readPublishedLists(first.published),
+      ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };
   }
   return best;
 }

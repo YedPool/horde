@@ -10,8 +10,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "snapshot-carries-no-receipts"
-           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1,"receipts":'' + $Receipts + ''}'''
-           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1}''' }
+           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1,"receipts":'' + $Receipts + $('
+           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1'' + $(' }
         @{ Name = "pages-are-not-handed-the-receipts"
            Find = '-OnePage:$onePage -Receipts $receipts.text'
            Replace = '-OnePage:$onePage' }
@@ -43,11 +43,11 @@
            Find = '$through = [long][System.Math]::Max([long]0, [long]$st.last)'
            Replace = '$through = [long]0' }
         @{ Name = "a-change-of-receipts-alone-sends-nothing"
-           Find = '-and $receipts.text -ceq "$($mine.receipts)")'
-           Replace = ')' }
+           Find = '-and $receipts.text -ceq "$($mine.receipts)" -and'
+           Replace = '-and' }
         @{ Name = "the-receipts-sent-are-not-remembered"
-           Find = '$mine.fingerprint = $print; $mine.receipts = $receipts.text; return'
-           Replace = '$mine.fingerprint = $print; return'
+           Find = '$mine.fingerprint = $print; $mine.receipts = $receipts.text; $mine.published = $published.text; return'
+           Replace = '$mine.fingerprint = $print; $mine.published = $published.text; return'
            Expect = "survives"
            Reason = "That path is a look whose snapshot is the very one already sent: forgetting its receipts there costs the next look a reading of the list and sends nothing, as list-read-on-every-look's cost does in relay-channel-decisions.psd1 - nothing a phone can see. The suite does not time a look." }
         # --- the review of PR 262

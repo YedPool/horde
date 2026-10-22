@@ -24,6 +24,7 @@ const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
 const LC = await load("app/lane-card.js");
 const DC = await load("app/decision-cards.js");
+const PL = await load("app/published-lists.js");
 const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
@@ -88,12 +89,12 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 // says nothing of them, as every machine's did before a part could be answered by itself.
 // ranks: 1 from a machine that takes a change of rank from the phone (channels/decisions); left out, as
 // every machine's was before the founder's little buttons.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined, ranks = undefined } = {}) {
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined, ranks = undefined, published = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(ranks === undefined ? {} : { ranks }), ...(receipts === undefined ? {} : { receipts }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(ranks === undefined ? {} : { ranks }), ...(receipts === undefined ? {} : { receipts }), ...(published === undefined ? {} : { published }) })));
   }
   return out;
 }
@@ -1818,6 +1819,121 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(all.length === 1 && all[0].attrs["aria-pressed"] === "true" && typeof all[0].on.click === "undefined", "nothing to answer anywhere: the All card alone, chosen; with no onChoose a tap does nothing");
   check(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0 }) === null && nameOf(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0, orName: "Orc Q" })) === "Orc Q" && nameOf(LC.renderLaneCard(fake, lanesDoc, "B", { nowMs: 0, orName: "Orc B" })) === "B - lane B", "lane-card.js: orName draws a lane the document lacks by that name, and never replaces a card the document has; without it such a lane is still no card");
 }
+
+// --- 10e4. EACH ORC'S PUBLISHED LIST (published-lists.js; protocol.js readPublishedLists; T-0328) ---
+{
+  const node = (tag) => ({ tag, className: "", textContent: "", attrs: {}, kids: [], appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; } });
+  const fake = { createElement: node };
+  const text = (n) => (n.textContent || "") + (n.kids || []).map(text).join("|");
+  const T1 = "2026-10-21T17:01:31.698Z";
+  const T2 = "2026-10-21T18:22:18.181Z";
+  const item = (t, o = {}) => ({ text: t, recommendation: null, importance: null, blocks: null, question: null, ...o });
+  const thrall = { lane: "thrall", orc: "M", publishedAt: T1, confirmedAt: T2, count: 4, more: 0, items: [item("Sales queue?", { importance: "high", blocks: "part" }), item("Notifications on fleet.db?", { recommendation: "wait for fleet.db", importance: "normal", blocks: "part" }), item("Q31 (b): end the call?", { recommendation: "yes", question: 31 }), item("OV657?", { recommendation: "leave it", importance: "low", blocks: "none" })] };
+  const orcE = { lane: "E", orc: "E", publishedAt: T1, confirmedAt: T1, count: 0, more: 0, items: [] };
+  const orcF = { lane: "F", orc: "F", publishedAt: T1, confirmedAt: T2, count: 1, more: 0, items: [item("Build on fleet.db?", { recommendation: "straight on it" })] };
+
+  // THE READ: shape by shape, nothing repaired.
+  check(P.readPublishedLists(undefined) === null && P.readPublishedLists(null) === null && P.readPublishedLists("x") === null && P.readPublishedLists({}) === null, "a snapshot with no published member (an earlier machine) reads as null, not as an empty list: the page can tell none sent from none published");
+  const got = P.readPublishedLists([thrall, orcE, orcF]);
+  check(got.length === 3 && got[0].lane === "thrall" && got[0].publishedAt === Date.parse(T1) && !("confirmedAt" in got[0]) && !("checkedAt" in got[0]) && got[0].items.length === 4 && got[0].items[2].question === 31 && got[1].items.length === 0 && got[1].count === 0, "a good member is read whole: the lane, the published time (no checked time is sent or kept, review of PR 365 M2), every item, an empty list as an empty list", JSON.stringify(got && got[0]));
+  const bad = P.readPublishedLists([{ ...thrall, lane: "<b>" }, { ...thrall, lane: "f" }, { ...thrall, publishedAt: "yesterday" }, { ...thrall, items: "x" }, null, 7, { ...orcF, items: [item("ok"), { ...item("q0"), question: 0 }, { ...item("empty text"), text: "" }, { ...item("long"), text: "x".repeat(501) }, { ...item("rec"), recommendation: 5 }, null, item("kept", { question: 9 })] }]);
+  check(bad.length === 1 && bad[0].items.map((i) => i.text).join(",") === "ok,kept", "MUST-REFUSE: a list with a lane that is no lane, a time that is no time, or items that are no list is left out whole; an item with question 0, no text, 501 characters or a recommendation that is no text is left out; the rest stand", JSON.stringify(bad));
+  check(P.readPublishedLists(Array.from({ length: 100 }, () => orcE)).length === 64, "no more than 64 lists are read");
+
+  // THE SNAPSHOT CARRIES IT, to the page's list record.
+  {
+    const t = R.memoryTransport();
+    const m = await newMachine("work");
+    const a = await pairedApp(t, m);
+    const bridge = createBridge(a.phone, { loadKinds: async () => ({}) });
+    await bridge.request("pick", { id: a.paired.id });
+    await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")]);
+    const none = await bridge.request("refresh");
+    check(none.state === "known" && none.value.published === null, "a snapshot with no member gives the page published: null");
+    await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")], { published: [thrall, orcE] });
+    const rec = await bridge.request("refresh");
+    check(rec.state === "known" && Array.isArray(rec.value.published) && rec.value.published.length === 2 && rec.value.published[0].items.length === 4 && rec.value.published[1].items.length === 0, "a snapshot with the member gives the page the lists, the Thrall's four and Orc E's none", JSON.stringify(rec.value.published));
+    const viaCore = await a.phone.refresh(a.paired.id);
+    check(Array.isArray(viaCore.published) && viaCore.published[0].lane === "thrall", "and the phone core's refresh hands them on");
+    await bridge.request("lock", { id: a.paired.id });
+    const locked = await bridge.request("list");
+    check(locked.state === "unknown" && (!locked.value || !locked.value.published), "a locked horde's list carries none");
+  }
+
+  // THE VIEW.
+  const pub = P.readPublishedLists([thrall, orcE, orcF]);
+  const qs = [question(22, "The store question?"), question(31, "Video Mode?"), question(40, "Closed one?", { state: "closed" })];
+  let v = PL.publishedView(null, qs, "thrall");
+  check(v.lists.length === 0 && v.words.indexOf("has not sent the Orcs' published lists yet") >= 0, "a machine that sent none is said so in words, not shown as an empty list", v.words);
+  v = PL.publishedView(pub, qs, "thrall");
+  check(v.words === "" && v.lists.length === 1 && v.lists[0].title === "Thrall" && v.lists[0].items.map((i) => i.text).join("|") === "Sales queue?|Notifications on fleet.db?|OV657?" && v.lists[0].hidden === 1, "THE THRALL'S LANE shows its published list; the item that links open question 31 is not drawn twice (it is the question in the list)", JSON.stringify(v.lists[0] && v.lists[0].items.map((i) => i.text)));
+  const unshown = PL.publishedView(pub, [question(22, "x")], "thrall");
+  check(unshown.lists[0].items.length === 4 && unshown.lists[0].hidden === 0, "MUST-SHOW TWIN: when question 31 is not in the snapshot, its item is drawn - nothing is dropped for a question that is not there", String(unshown.lists[0].items.length));
+  const closed = PL.publishedView(pub, [question(31, "closed", { state: "closed" })], "thrall");
+  check(closed.lists[0].items.length === 4, "and a CLOSED question is not 'shown': its item stays", String(closed.lists[0].items.length));
+  v = PL.publishedView(pub, qs, "E");
+  check(v.lists.length === 1 && v.lists[0].state === "empty" && v.lists[0].words === "Orc E published an empty list: nothing waits on you from here.", "AN EMPTY LIST says so in plain words", JSON.stringify(v.lists[0]));
+  v = PL.publishedView(pub, qs, "Z");
+  check(v.lists.length === 0 && v.words === "Orc Z has never published a list.", "A LANE THAT NEVER PUBLISHED says that", v.words);
+  v = PL.publishedView(pub, qs, "");
+  check(v.lists.map((l) => l.lane).join(",") === "thrall,E,F" && v.words === "", "all lanes: the Thrall's first, then by name");
+  const onlyLinked = PL.publishedView(P.readPublishedLists([{ ...thrall, items: [item("Q31", { question: 31 })], count: 1 }]), qs, "thrall");
+  check(onlyLinked.lists[0].state === "linked" && onlyLinked.lists[0].words === "Every item of this list is a question in the list of questions.", "a list whose every item is a question already shown says so");
+
+  // THE RECOMMENDATION: the published item's, on the question, once.
+  const merged = PL.mergePublished([question(31, "Video Mode?", { recommendation: "stale words" }), question(22, "Untouched?", { recommendation: "mine" }), question(40, "Closed", { state: "closed", recommendation: "old" })], P.readPublishedLists([{ ...thrall, items: [item("Q31", { recommendation: "yes", question: 31 }), item("Q40", { recommendation: "new", question: 40 }), item("Q22 no rec", { question: 22 })] }]));
+  check(merged[0].recommendation === "yes" && merged[1].recommendation === "mine" && merged[2].recommendation === "old", "THE PUBLISHED RECOMMENDATION is the question's recommendation; an item with none leaves the question's own; a closed question is untouched", JSON.stringify(merged.map((q) => q.recommendation)));
+  const orig = [question(31, "x", { recommendation: "stale words" })];
+  const before = JSON.stringify(orig);
+  PL.mergePublished(orig, pub);
+  check(JSON.stringify(orig) === before && PL.mergePublished(orig, null) === orig, "the snapshot's own questions are not changed (a copy is), and with no lists they come back as they are");
+
+  // THE DRAWING: all text as text; the times; the words for the levels.
+  const drawn = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, items: [item("<b>bold</b> & <script>x</script>", { recommendation: "r", importance: "high", blocks: "all" }), item("Linked", { question: 9, blocks: "none" })], count: 2 }]), [], "thrall"), { fmt: (ms) => "T" + ms });
+  const flat = drawn.map(text).join("\n");
+  check(drawn.length === 1 && drawn[0].tag === "section" && flat.indexOf("<b>bold</b> & <script>x</script>") >= 0 && flat.indexOf("Recommended: r") >= 0 && flat.indexOf("importance high - blocks all work") >= 0 && flat.indexOf("Question 9 - blocks nothing") >= 0, "each item's text, recommendation, importance, blocking and linked question are drawn - as TEXT (markup stays markup characters)", flat);
+  check(flat.indexOf("Published T" + Date.parse(T1)) >= 0 && flat.indexOf("checked") < 0, "the list's published time, and no 'checked' time (none is sent: review of PR 365, M2)", flat);
+  const note = PL.renderPublishedLists(fake, PL.publishedView(null, [], ""), {});
+  check(note.length === 1 && note[0].className === "pl-note", "no lists sent draws the one plain line");
+  const more = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, more: 3 }]), [], "thrall"), {});
+  check(text(more[0]).indexOf("3 more items are shown at the machine only.") >= 0, "items the machine left out for size are counted and said");
+
+  // M1 (review of PR 365): AN ORC THAT PUBLISHED HAS A CARD, with no question to answer and no status card.
+  {
+    const dnode = (tag) => ({ tag, className: "", textContent: "", attrs: {}, kids: [], appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener() {} });
+    const dfake = { createElement: dnode, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+    const dtext = (n) => (n.textContent || "") + (n.kids || []).map(dtext).join("");
+    const orcK = { lane: "K", orc: "K", publishedAt: T1, confirmedAt: T1, count: 5, more: 0, items: Array.from({ length: 5 }, (_, i) => item("K item " + (i + 1))) };
+    const pk = P.readPublishedLists([orcK, orcE]);
+    const cv = DC.decisionCardsView(null, [{ lane: "B", open: 2, blocksAll: false }], "", pk);
+    check(cv.map((c) => c.lane + ":" + c.open + ":" + c.published).join(",") === "all:2:0,B:2:0,E:0:0,K:0:5", "A PUBLISHED-ONLY ORC GETS A CARD: K published 5 items, asks nothing and has no status card, and is a card at 0 open with its 5; an empty list (E) is a card with none to count", JSON.stringify(cv));
+    check(DC.decisionCardsView(null, [{ lane: "B", open: 2, blocksAll: false }], "").map((c) => c.lane).join(",") === "all,B" && DC.decisionCardsView(null, [], "", null).length === 1, "MUST-FAIL TWIN: without the published lists K has no card (what the founder met), and null or none changes nothing");
+    const cs = DC.renderDecisionCards(dfake, null, [{ lane: "B", open: 2, blocksAll: false }], { published: pk, nowMs: 0 });
+    const slotText = (c) => dtext(c.kids[0].kids.find((k) => k.className === "card-badge"));
+    check(cs.length === 4 && slotText(cs[3]) === "0 open - 5 published" && slotText(cs[2]) === "0 open" && slotText(cs[1]) === "2 open", "the card says '0 open - 5 published' in words; an Orc with nothing published, or an empty list, has the count alone", cs.map(slotText).join(" / "));
+    check(DC.decisionCardsView(null, [{ lane: "K", open: 1, blocksAll: true }], "K", pk).filter((c) => c.lane === "K").length === 1 && DC.decisionCardsView(null, [{ lane: "K", open: 1, blocksAll: true }], "K", pk).find((c) => c.lane === "K").open === 1, "an Orc that both asks and published is one card, with its open count");
+  }
+
+  // S1 (review of PR 365): AN ITEM IS HIDDEN ONLY BY A QUESTION THE DOCUMENT DRAWS IN ITS LANE.
+  {
+    const laneOf = (q) => { const m = /^Orc ([A-Z])/.exec(q.askedBy || ""); return m ? m[1] : ""; };
+    const listB = P.readPublishedLists([{ lane: "B", orc: "B", publishedAt: T1, confirmedAt: T1, count: 2, more: 0, items: [item("B links C's question", { question: 7, recommendation: "yes" }), item("B plain")] }]);
+    const qC = [question(7, "C asks", { askedBy: "Orc C" })];
+    const qB = [question(7, "B asks", { askedBy: "Orc B" })];
+    check(PL.publishedView(listB, qC, "B", laneOf).lists[0].items.length === 2 && PL.publishedView(listB, qC, "B", laneOf).lists[0].hidden === 0, "LANE B CHOSEN, the item links question 7 that Orc C asked: the document shows only B's questions, so the item stays in B's list");
+    check(PL.publishedView(listB, qB, "B", laneOf).lists[0].hidden === 1, "MUST-HIDE TWIN: question 7 asked by Orc B is drawn in lane B, so its item is not drawn twice");
+    check(PL.publishedView(listB, qC, "", laneOf).lists[0].hidden === 1, "ALL chosen: every open question is drawn, so the item that links C's question is hidden");
+    check(PL.publishedView(listB, qC, "B").lists[0].hidden === 1, "without the document's laneOf every open question counts (the old rule)");
+    check(PL.mergePublished(qC, listB, laneOf)[0].recommendation === undefined && PL.mergePublished(qB, listB, laneOf)[0].recommendation === "yes" && PL.mergePublished(qC, listB)[0].recommendation === "yes", "a recommendation of B's item goes to B's own question only (with laneOf), to any (without)");
+
+    // S1, THE GAP (review of PR 365, round 2): an open question the founder has ANSWERED sits in the hidden With Thrall fold
+    // and is not drawn in the list of questions, so the item that links it must stay in the Orc's list.
+    const listedMain = (q) => q.number !== 7;
+    const qAnsweredOpen = [question(7, "answered, in With Thrall", { askedBy: "Orc B" })];
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, listedMain).lists[0].hidden === 0 && PL.publishedView(listB, qAnsweredOpen, "B", laneOf, listedMain).lists[0].items.length === 2, "AN ANSWERED-BUT-OPEN QUESTION IN THE HIDDEN FOLD does not hide its item: it is not drawn, so the item stays in the Orc's list");
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, () => true).lists[0].hidden === 1 && PL.publishedView(listB, qAnsweredOpen, "", laneOf, () => true).lists[0].hidden === 1, "MUST-HIDE TWIN: the same question drawn in the list of questions (listed true) hides its item, in a lane and in All");
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, (q) => q.number === 7 ? 1 : 0).lists[0].hidden === 0, "only the answer true (listed === true) counts as shown");
+  }}
 
 // --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---
 {

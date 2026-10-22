@@ -1,0 +1,58 @@
+# Mutations of the published lists on the decisions page (surfaces/pwa/page/published-lists.js; T-0328). Run:
+#   powershell -File tools\Mutate.ps1 -Spec test\mutations\pwa-published-lists-page.psd1
+# surfaces\pwa\test\test-pwa-site.ps1 (its units) must fail for every one. Every find string occurs exactly once.
+@{
+    Target = "surfaces\pwa\page\published-lists.js"
+    Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
+    Mutations = @(
+        @{ Name = "a-machine-that-sent-none-reads-as-none-published"
+           Find = 'if (!Array.isArray(published)) return { words:'
+           Replace = 'if (published === undefined) return { words:' }
+        @{ Name = "a-linked-item-is-drawn-twice"
+           Find = 'const items = l.items.filter((it) => it.question === null || !open.has(it.question));'
+           Replace = 'const items = l.items;' }
+        @{ Name = "a-closed-question-counts-as-shown"
+           Find = 'if (!q || !Number.isSafeInteger(q.number) || q.state !== "open") continue;'
+           Replace = 'if (!q || !Number.isSafeInteger(q.number)) continue;' }
+        @{ Name = "another-lanes-question-hides-the-item"
+           Find = 'if (lane && typeof laneOf === "function" && laneOf(q) !== lane) continue;'
+           Replace = '' }
+        @{ Name = "a-recommendation-goes-to-another-lanes-question"
+           Find = 'if (typeof laneOf === "function") return rec.get(q.number + "|" + laneOf(q));'
+           Replace = '' }
+        @{ Name = "an-empty-list-is-not-said-to-be-empty"
+           Find = 'if (l.count === 0 && l.items.length === 0) {'
+           Replace = 'if (false) {' }
+        @{ Name = "a-lane-that-never-published-is-not-said"
+           Find = 'if (lane && chosen.length === 0) return'
+           Replace = 'if (false) return' }
+        @{ Name = "an-item-with-no-recommendation-blanks-the-questions"
+           Find = 'if (it.question !== null && it.recommendation !== null && !rec.has(it.question + "|" + l.lane))'
+           Replace = 'if (it.question !== null && !rec.has(it.question + "|" + l.lane))' }
+        @{ Name = "a-closed-question-takes-the-recommendation"
+           Find = 'q && q.state === "open" ? recOf(q)'
+           Replace = 'q ? recOf(q)' }
+        @{ Name = "the-published-time-is-another-time"
+           Find = '"Published " + fmt(l.publishedAt)'
+           Replace = '"Published " + fmt(l.publishedAt + 1)' }
+        @{ Name = "a-question-in-a-hidden-fold-hides-its-item"
+           Find = 'if (typeof listed === "function") {'
+           Replace = 'if (false) {' }
+        @{ Name = "only-the-word-true-is-not-needed-any-answer-counts"
+           Find = 'if (listed(q) === true) open.add(q.number); continue;'
+           Replace = 'if (listed(q)) open.add(q.number); continue;' }
+        @{ Name = "the-thrall-is-not-first"
+           Find = 'if (a.lane === THRALL_LANE || b.lane === THRALL_LANE) return a.lane === THRALL_LANE ? -1 : 1;'
+           Replace = '' }
+        @{ Name = "the-recommendation-line-is-left-out"
+           Find = 'if (it.recommendation !== null) row.appendChild('
+           Replace = 'if (false) row.appendChild(' }
+        @{ Name = "the-blocking-words-are-the-machines"
+           Find = 'meta.push(BLOCKS_WORDS[it.blocks] || "blocks " + it.blocks);'
+           Replace = 'meta.push("blocks " + it.blocks);' }
+        @{ Name = "left-out-items-are-not-said"
+           Find = 'if (l.more > 0) box.appendChild('
+           Replace = 'if (false) box.appendChild(' }
+    )
+}
