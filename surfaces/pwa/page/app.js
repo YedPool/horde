@@ -262,7 +262,7 @@ function drawPublishedLists(id) {
   while (d.pub.firstChild) d.pub.removeChild(d.pub.firstChild);
   const v = d.value;
   if (!v) return;
-  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion), { fmt: lastTime })) d.pub.appendChild(node);
+  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime })) d.pub.appendChild(node);
 }
 function showCounts() {
   const d = current && docs[current];

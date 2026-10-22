@@ -19,6 +19,9 @@
         @{ Name = "the-cards-are-not-given-the-published-lists"
            Find = 'published: d.value && d.value.published })) d.cards'
            Replace = 'published: null })) d.cards' }
+        @{ Name = "the-document-is-not-asked-what-it-lists"
+           Find = 'laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime }'
+           Replace = 'laneOfQuestion), { fmt: lastTime }' }
         @{ Name = "the-lists-box-is-never-shown"
            Find = '  d.pub.hidden = false;'
            Replace = '  d.pub.hidden = true;' }

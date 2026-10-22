@@ -2439,6 +2439,10 @@
       // anything that is no lane: all). The host draws the cards (surfaces/pwa/page/decision-cards.js)
       // and reads these again on each onDraw.
       lanes: function () { return lanesOf(questions, toAnswer); },
+      // Whether the list of questions SHOWS a question now: in the lane chosen and in the main list, not in a
+      // fold (With Thrall, Parked, History), which is collapsed or hidden. The phone's published lists hide an
+      // item only for a question that is shown (review of PR 365, S1).
+      listed: function (q) { return !!q && (!laneChosen || laneOf(q) === laneChosen) && sectionOf(q) === "main"; },
       lane: function () { return laneChosen; },
       setLane: setLane,
       drive: drive,

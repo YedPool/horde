@@ -121,7 +121,7 @@ try {
     $emptyList = [pscustomobject]@{ orc = "E"; rank = "orc"; snapshot = "S2"; publishedAt = "2026-10-21T16:24:27.644Z"; confirmedAt = "2026-10-21T16:56:17.608Z"; count = 0; items = @() }
     $text = ConvertTo-HordeDecisionsChannelPublished -Lists @($thrallList, $emptyList)
     $m = @(ConvertFrom-HordeJson $text | ForEach-Object { $_ })
-    Check ($m.Count -eq 2 -and $m[0].lane -ceq "thrall" -and $m[0].orc -ceq "M" -and $m[0].count -eq 2 -and $m[0].more -eq 0 -and $m[0].publishedAt -ceq "2026-10-21T17:01:31.698Z" -and $m[0].confirmedAt -ceq "2026-10-21T18:00:00.000Z") ("the Thrall's list is the lane 'thrall', with both times (the checked time rounded down to 30 minutes) and its count (" + $text.Substring(0, [Math]::Min(160, $text.Length)) + ")")
+    Check ($m.Count -eq 2 -and $m[0].lane -ceq "thrall" -and $m[0].orc -ceq "M" -and $m[0].count -eq 2 -and $m[0].more -eq 0 -and $m[0].publishedAt -ceq "2026-10-21T17:01:31.698Z" -and -not (Test-HordeTestMember $m[0] "confirmedAt")) ("the Thrall's list is the lane 'thrall', with its published time (and no confirmed time) and its count (" + $text.Substring(0, [Math]::Min(160, $text.Length)) + ")")
     $i1 = @($m[0].items | ForEach-Object { $_ })
     Check ($i1.Count -eq 2 -and $i1[0].text -ceq "Sales queue: forward the page?" -and $i1[0].importance -ceq "high" -and $i1[0].blocks -ceq "part" -and $null -eq $i1[0].question -and $null -eq $i1[0].recommendation -and $i1[1].question -eq 31 -and $i1[1].recommendation -ceq "yes") "each item carries its text, recommendation, importance, blocking and the question it links, null where there is none"
     Check ($m[1].lane -ceq "E" -and $m[1].count -eq 0 -and @($m[1].items).Count -eq 0 -and $text.Contains('"items":[]')) "AN EMPTY LIST is a list with no items - not left out, not a list of one empty item"
@@ -167,18 +167,23 @@ try {
     $dash2 = ConvertTo-HordeDecisionsChannelPublished -Lists @((New-FleetList -Orc "F" -Items 20 -Text ([string][char]0x2014 * 20)))
     Check ((@(ConvertFrom-HordeJson $dash2 | ForEach-Object { $_ })[0].more) -eq 0 -and $dash2.Length -le 16384) "MUST-ACCEPT TWIN: a list of non-ASCII text that fits escaped loses nothing"
 
-    # M2 (review of PR 365): THE "CHECKED" TIME IS ROUNDED DOWN TO 30 MINUTES, so an unchanged republish changes nothing.
-    $pubAt = "2026-10-21T17:01:31.698Z"
-    Check ((ConvertTo-HordeDecisionsChannelCheckedAt -ConfirmedAt "2026-10-21T18:29:59.999Z" -PublishedAt $pubAt) -ceq "2026-10-21T18:00:00.000Z" -and (ConvertTo-HordeDecisionsChannelCheckedAt -ConfirmedAt "2026-10-21T18:30:00.000Z" -PublishedAt $pubAt) -ceq "2026-10-21T18:30:00.000Z") "the checked time is rounded down to the half hour (18:29:59 reads 18:00, 18:30:00 reads 18:30)"
-    Check ((ConvertTo-HordeDecisionsChannelCheckedAt -ConfirmedAt "2026-10-21T17:10:00.000Z" -PublishedAt $pubAt) -ceq $pubAt) "and never before the published time (a confirm 9 minutes after publishing reads as the published time)"
-    Check ((ConvertTo-HordeDecisionsChannelCheckedAt -ConfirmedAt "not a time" -PublishedAt $pubAt) -ceq "not a time") "a time that does not parse is passed on as it came"
+    # M2 (review of PR 365, round 3): THE SEALED MEMBER CARRIES publishedAt ONLY, never the time an Orc last confirmed.
     $c1 = New-FleetList -Orc "F" -Items 2
     $c2 = New-FleetList -Orc "F" -Items 2
     $c2.confirmedAt = "2026-10-21T18:29:00.000Z"
     $c3 = New-FleetList -Orc "F" -Items 2
     $c3.confirmedAt = "2026-10-21T18:31:00.000Z"
-    Check ((ConvertTo-HordeDecisionsChannelPublished -Lists @($c1)) -ceq (ConvertTo-HordeDecisionsChannelPublished -Lists @($c2))) "AN UNCHANGED REPUBLISH IS THE SAME TEXT: confirms at 18:22 and 18:29 give byte for byte the member (so the same hash)"
-    Check ((ConvertTo-HordeDecisionsChannelPublished -Lists @($c1)) -cne (ConvertTo-HordeDecisionsChannelPublished -Lists @($c3))) "MUST-CHANGE TWIN: a confirm in the next half hour is a new member (the : only when fleet.db changed, and a failed read keeps what was read ---" -ForegroundColor Cyan
+    $c4 = New-FleetList -Orc "F" -Items 2
+    $c4.confirmedAt = "2031-01-01T00:00:00.000Z"
+    $t1 = ConvertTo-HordeDecisionsChannelPublished -Lists @($c1)
+    Check ($t1 -ceq (ConvertTo-HordeDecisionsChannelPublished -Lists @($c2)) -and $t1 -ceq (ConvertTo-HordeDecisionsChannelPublished -Lists @($c3)) -and $t1 -ceq (ConvertTo-HordeDecisionsChannelPublished -Lists @($c4))) "AN UNCHANGED REPUBLISH IS THE SAME TEXT whatever the confirm time: confirms at 18:22, 18:29, 18:31 and years later give byte for byte the member (so the same hash)"
+    Check (-not $t1.Contains("confirmed") -and -not $t1.Contains("checked") -and $t1.Contains('"publishedAt":"2026-10-21T17:01:31.698Z"')) "the member names the published time and no confirmed or checked time"
+    $c5 = New-FleetList -Orc "F" -Items 2
+    $c5.publishedAt = "2026-10-21T19:00:00.000Z"
+    Check ($t1 -cne (ConvertTo-HordeDecisionsChannelPublished -Lists @($c5))) "MUST-CHANGE TWIN: a list published again at another time is a new member"
+
+    Write-Host ""
+    Write-Host "--- 2. the read: only when fleet.db changed, and a failed read keeps what was read ---" -ForegroundColor Cyan
     $rh = New-TestHome
     $script:reads = 0
     $script:answer = [pscustomobject]@{ code = 0; out = '{"lists":[{"orc":"M","rank":"thrall","snapshot":"S","publishedAt":"2026-10-21T17:01:31.698Z","confirmedAt":"2026-10-21T17:01:31.698Z","count":1,"items":[{"position":1,"questionNumber":null,"text":"First?","recommendation":null,"importance":null,"blocks":null}]}]}'; err = "" }
@@ -214,6 +219,17 @@ try {
     $r7 = Get-HordeDecisionsChannelPublished -Context ([pscustomobject]@{ hordeHome = $rh2 }) -Mine $fresh
     Check ($r7.text -ceq "" -and $r7.problem.Contains("fleet.db: no")) "A FIRST READ THAT FAILS sends no member at all, and says why"
     $script:HordeDecisionsChannelPublishedReader = $null
+    # S4 (review of PR 365): a home that cannot be resolved is a read that failed, said once, never thrown out of the member's read.
+    $badMine = @{}
+    $envBefore = $env:HORDE_HOME
+    $env:HORDE_HOME = "relative
+o\drive"
+    $thrown = ""
+    $b1 = $null
+    $b2 = $null
+    try { $b1 = Get-HordeDecisionsChannelPublished -Context ([pscustomobject]@{ hordeHome = "" }) -Mine $badMine; $b2 = Get-HordeDecisionsChannelPublished -Context ([pscustomobject]@{ hordeHome = "" }) -Mine $badMine } catch { $thrown = $_.Exception.Message }
+    $env:HORDE_HOME = $envBefore
+    Check ($thrown -ceq "" -and $null -ne $b1 -and $b1.text -ceq "" -and $b1.problem.StartsWith("the published lists could not be read") -and $b2.problem -ceq "") ("A BAD HOME POINTER is a read that failed, said once and not thrown (" + $(if ($thrown -cne "") { "threw: " + $thrown } elseif ($null -ne $b1) { $b1.problem } else { "" }) + ")")
 
     Write-Host ""
     Write-Host "--- 3. the snapshot: sealed to the phone, with a real fleet.db ---" -ForegroundColor Cyan
@@ -227,9 +243,6 @@ try {
         Check (Invoke-Seed @("publish", $W.home, "thrall", $thrallFile)) "CONTROL: the Thrall publishes a list of two, one linking question 1"
         Check (Invoke-Seed @("publish", $W.home, "F", $emptyFile)) "CONTROL: Orc F publishes an empty list (Orc G never publishes)"
         $env:HORDE_HOME = $W.home
-        # The real step is 30 minutes of the wall clock, and a run could straddle its edge: the suite rounds to 10 years
-        # (so "checked" reads as the published time), and the rounding itself is held by part 1 on fixed times.
-        $script:HordeDecisionsChannelCheckedStep = 315360000
         $tick = Invoke-HordeRelayChannelTicks -Context $W.ctx
         $pub = Get-Published $W
         Check ($null -ne $pub -and $pub.Count -eq 2) ("the phone opens a snapshot with the published member: two lists (" + $(if ($null -eq $pub) { "no member" } else { $pub.Count }) + ")")
@@ -258,7 +271,48 @@ try {
         $null = Invoke-HordeRelayChannelTicks -Context $W.ctx
         $changed = @((Get-Published $W) | Where-Object { $_.lane -ceq "thrall" })
         Check ($changed.Count -eq 1 -and @($changed[0].items).Count -eq 1 -and @($changed[0].items)[0].text.Contains("v3") -and (Get-PhoneSnapshot $W).body.snapshot -cne $first) "a changed list is sent: one new snapshot with the new words and the dropped item gone"
-        $script:HordeDecisionsChannelCheckedStep = 1800
+
+        # M2 (review of PR 365, round 3), END TO END WITH SEVERAL ORCS: three Orcs (the Thrall, F and G) each publish a list, then each
+        # republishes it UNCHANGED at staggered times that cross 30-minute boundaries, 12 confirms in all. The clock is the confirm's
+        # own time in fleet.db and nothing in the code under test is switched off. Not one new snapshot may be sealed or sent.
+        $C = New-World
+        $env:HORDE_HOME = $C.home
+        Check (Invoke-Seed @("seed", $C.home)) "CONTROL: a second machine's fleet.db is seeded for the staggered republishes"
+        $fM = Write-Items "multi-m" '[{"text":"M: sales queue?","recommendation":"yes"}]'
+        $fF = Write-Items "multi-f" '[{"text":"F: build on fleet.db?","importance":"high"},{"text":"F: second item"}]'
+        $fG = Write-Items "multi-g" '[{"text":"G: ship the form?"}]'
+        $okP = (Invoke-Seed @("publish", $C.home, "thrall", $fM, "2026-10-21T12:05:10.000Z")) -and (Invoke-Seed @("publish", $C.home, "F", $fF, "2026-10-21T12:12:40.000Z")) -and (Invoke-Seed @("publish", $C.home, "G", $fG, "2026-10-21T12:20:15.000Z"))
+        Check $okP "CONTROL: three Orcs publish, 7 minutes apart"
+        $null = Invoke-HordeRelayChannelTicks -Context $C.ctx
+        $base = Get-PhoneSnapshot $C
+        $basePub = @($base.body.published | ForEach-Object { $_ })
+        Check ($null -ne $base -and $basePub.Count -eq 3 -and @($basePub | Where-Object { (Test-HordeTestMember $_ "confirmedAt") -or (Test-HordeTestMember $_ "checkedAt") }).Count -eq 0) "the first snapshot carries all three lists and no confirmed or checked time"
+        $steps = @(
+            @("thrall", $fM, "2026-10-21T12:29:59.999Z"), @("F", $fF, "2026-10-21T12:30:00.000Z"), @("G", $fG, "2026-10-21T12:44:00.000Z"),
+            @("thrall", $fM, "2026-10-21T12:59:59.999Z"), @("F", $fF, "2026-10-21T13:00:01.000Z"), @("G", $fG, "2026-10-21T13:29:59.000Z"),
+            @("thrall", $fM, "2026-10-21T13:30:00.000Z"), @("F", $fF, "2026-10-21T13:31:00.000Z"), @("G", $fG, "2026-10-21T14:00:00.000Z"),
+            @("thrall", $fM, "2026-10-21T14:00:01.000Z"), @("F", $fF, "2026-10-21T14:29:59.999Z"), @("G", $fG, "2026-10-21T14:30:00.000Z"))
+        $applied = 0
+        $moved = New-Object System.Collections.ArrayList
+        foreach ($st in $steps) {
+            $okC = Invoke-Seed @("confirm", $C.home, $st[0], $st[1], $st[2])
+            $null = Invoke-HordeRelayChannelTicks -Context $C.ctx
+            $now = Get-PhoneSnapshot $C
+            if ($okC) { $applied++ }
+            if ($now.body.snapshot -cne $base.body.snapshot -or $now.mail.Count -ne $base.mail.Count) { [void]$moved.Add($st[0] + " at " + $st[2]) }
+        }
+        Check ($applied -eq 12 -and $moved.Count -eq 0) ("SEVERAL ORCS REPUBLISHING UNCHANGED ACROSS 30-MINUTE EDGES SEND NOTHING NEW: 12 confirms by 3 Orcs, zero new snapshots, zero new mail (" + $applied + " confirms applied; moved: " + ($moved -join ", ") + ")")
+        $fG2 = Write-Items "multi-g2" '[{"text":"G: ship the form, v2?"}]'
+        Check (Invoke-Seed @("publish", $C.home, "G", $fG2, "2026-10-21T15:00:00.000Z")) "MUST-SEND TWIN: Orc G publishes a CHANGED list"
+        $null = Invoke-HordeRelayChannelTicks -Context $C.ctx
+        $afterG = Get-PhoneSnapshot $C
+        $gNow = @($afterG.body.published | Where-Object { $_.lane -ceq "G" })
+        Check ($afterG.body.snapshot -cne $base.body.snapshot -and $gNow.Count -eq 1 -and @($gNow[0].items)[0].text.Contains("v2")) "and that one change is sent as a new snapshot, with the new words"
+        # S3 (review of PR 365): a retired Orc has no card, so no list.
+        Check (Invoke-Seed @("retire", $C.home, "F")) "Orc F is retired"
+        $null = Invoke-HordeRelayChannelTicks -Context $C.ctx
+        $afterR = @((Get-PhoneSnapshot $C).body.published | ForEach-Object { $_ })
+        Check ($afterR.Count -eq 2 -and @($afterR | Where-Object { $_.lane -ceq "F" }).Count -eq 0 -and @($afterR | Where-Object { $_.lane -ceq "G" }).Count -eq 1) "A RETIRED ORC'S LIST IS NOT SENT: the member holds the Thrall's and G's lists and none for F"
 
         $B = New-World
         $env:HORDE_HOME = $B.home
@@ -269,7 +323,6 @@ try {
 } finally {
     $env:HORDE_HOME = $realHome
     $script:HordeDecisionsChannelPublishedReader = $null
-    $script:HordeDecisionsChannelCheckedStep = 1800
     foreach ($w in @($script:worlds)) { Close-HordeRelayRunContext -Context $w.ctx }
     $made = New-Object System.Collections.ArrayList
     foreach ($h in @($script:homes)) {

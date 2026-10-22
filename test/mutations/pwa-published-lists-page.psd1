@@ -33,9 +33,15 @@
         @{ Name = "a-closed-question-takes-the-recommendation"
            Find = 'q && q.state === "open" ? recOf(q)'
            Replace = 'q ? recOf(q)' }
-        @{ Name = "the-checked-time-is-the-published-time"
-           Find = '" - checked " + fmt(l.checkedAt)'
-           Replace = '" - checked " + fmt(l.publishedAt)' }
+        @{ Name = "the-published-time-is-another-time"
+           Find = '"Published " + fmt(l.publishedAt)'
+           Replace = '"Published " + fmt(l.publishedAt + 1)' }
+        @{ Name = "a-question-in-a-hidden-fold-hides-its-item"
+           Find = 'if (typeof listed === "function") {'
+           Replace = 'if (false) {' }
+        @{ Name = "only-the-word-true-is-not-needed-any-answer-counts"
+           Find = 'if (listed(q) === true) open.add(q.number); continue;'
+           Replace = 'if (listed(q)) open.add(q.number); continue;' }
         @{ Name = "the-thrall-is-not-first"
            Find = 'if (a.lane === THRALL_LANE || b.lane === THRALL_LANE) return a.lane === THRALL_LANE ? -1 : 1;'
            Replace = '' }

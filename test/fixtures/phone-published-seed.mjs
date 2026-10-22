@@ -2,7 +2,9 @@
 // the founder's phone (test/test-relay-decisions-published.ps1, surfaces/pwa/test/test-pwa-browser.ps1).
 //   node phone-published-seed.mjs seed <home>                      the Thrall M, Orcs F and G, a task and questions 1 to 3
 //   node phone-published-seed.mjs publish <home> <thrall|F> <items.json>   publish a list ([{questionNumber, text, ...}])
-//   node phone-published-seed.mjs confirm <home> <thrall|F> <items.json>   the same list again: a confirm, no new snapshot
+//   node phone-published-seed.mjs confirm <home> <thrall|F> <items.json> [<ISO time>]   the same list again: a confirm, no new snapshot;
+//                                                                  the optional time is when it is confirmed (a suite's staggered clock)
+//   node phone-published-seed.mjs retire <home> <letter>            the Orc is retired (its list is no longer live)
 // Only ever run against a folder a suite made; seed refuses a home that already holds a fleet.db. Publishing goes
 // through fleet-db/decisions-cli.mjs publishFromInput, the one path `horde decisions publish` uses.
 import fs from 'node:fs';
@@ -14,7 +16,7 @@ const { openStore, dbPathFor } = await import(pathToFileURL(path.join(root, 'fle
 const { ulid } = await import(pathToFileURL(path.join(root, 'fleet-db', 'ids.mjs')).href);
 const { publishFromInput } = await import(pathToFileURL(path.join(root, 'fleet-db', 'decisions-cli.mjs')).href);
 
-const [, , verb, home, who, itemsFile] = process.argv;
+const [, , verb, home, who, itemsFile, atText] = process.argv;
 const file = dbPathFor(home);
 
 if (verb === 'seed') {
@@ -36,9 +38,15 @@ if (verb === 'seed') {
   const db = openStore(file);
   const items = JSON.parse(fs.readFileSync(itemsFile, 'utf8'));
   const input = { who: who === 'thrall' ? { thrall: true } : { letter: who }, sessionId: null, items };
-  const r = publishFromInput(db, input);
+  const at = atText ? Date.parse(atText) : undefined;
+  if (atText && !Number.isSafeInteger(at)) throw new Error('the time is not a time: ' + atText);
+  const r = at === undefined ? publishFromInput(db, input) : publishFromInput(db, input, at);
   if (verb === 'confirm' && !r.unchanged) throw new Error('confirm: the list was not the live one');
   db.close();
+} else if (verb === 'retire') {
+  const db = openStore(file);
+  db.prepare("UPDATE orc SET retired_at = ?, retired_reason = 'hand' WHERE letter = ?").run(Date.now(), who);
+  db.close();
 } else {
-  throw new Error('usage: seed <home> | publish <home> <thrall|letter> <items.json> | confirm <home> <thrall|letter> <items.json>');
+  throw new Error('usage: seed <home> | retire <home> <letter> | publish <home> <thrall|letter> <items.json> | confirm <home> <thrall|letter> <items.json> [time]');
 }

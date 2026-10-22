@@ -10,7 +10,7 @@
            Find = 'const PUBLISHED_LANE = /^(thrall|[A-Z][A-Z0-9]{0,3})$/;'
            Replace = 'const PUBLISHED_LANE = /^.*$/;' }
         @{ Name = "a-list-with-no-time-is-kept"
-           Find = 'if (!Number.isFinite(publishedAt) || !Number.isFinite(confirmedAt)) continue;'
+           Find = 'if (!Number.isFinite(publishedAt)) continue;'
            Replace = '' }
         @{ Name = "any-number-of-lists-is-read"
            Find = 'for (const l of raw.slice(0, PUBLISHED_MOST_LISTS)) {'
@@ -24,9 +24,6 @@
         @{ Name = "an-empty-text-is-kept"
            Find = '(!required || v.length > 0) ? v : undefined;'
            Replace = 'true ? v : undefined;' }
-        @{ Name = "the-checked-time-is-the-published-time"
-           Find = 'checkedAt: Math.max(publishedAt, confirmedAt)'
-           Replace = 'checkedAt: publishedAt' }
         @{ Name = "no-member-reads-as-none-published"
            Find = 'if (!Array.isArray(raw)) return null;'
            Replace = 'if (!Array.isArray(raw)) return [];' }

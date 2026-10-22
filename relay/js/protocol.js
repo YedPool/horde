@@ -672,7 +672,7 @@ export function rankBody({ rankId, machine, snapshot, number, which, level }) {
 // EACH ORC'S PUBLISHED LIST (channels/decisions/Channel.ps1, EACH ORC'S PUBLISHED LIST; T-0328): a snapshot's
 // "published" member, read strictly and never trusted past its shape. null when the machine sent no member (an
 // earlier machine, or one with no fleet.db: the page says so in words), else an array of
-//   { lane, orc, publishedAt (ms), confirmedAt (ms), checkedAt (ms, the later of the two), count, more,
+//   { lane, orc, publishedAt (ms), count, more,
 //     items: [{ text, recommendation, importance, blocks, question }] }
 // A list that does not hold together is left out whole, and so is an item; nothing is repaired.
 const PUBLISHED_LANE = /^(thrall|[A-Z][A-Z0-9]{0,3})$/;
@@ -689,8 +689,7 @@ export function readPublishedLists(raw) {
   for (const l of raw.slice(0, PUBLISHED_MOST_LISTS)) {
     if (!l || typeof l !== "object" || typeof l.lane !== "string" || !PUBLISHED_LANE.test(l.lane) || typeof l.orc !== "string" || !Array.isArray(l.items) || l.items.length > PUBLISHED_MOST_ITEMS) continue;
     const publishedAt = typeof l.publishedAt === "string" ? Date.parse(l.publishedAt) : NaN;
-    const confirmedAt = typeof l.confirmedAt === "string" ? Date.parse(l.confirmedAt) : NaN;
-    if (!Number.isFinite(publishedAt) || !Number.isFinite(confirmedAt)) continue;
+    if (!Number.isFinite(publishedAt)) continue;
     const items = [];
     for (const it of l.items) {
       if (!it || typeof it !== "object") continue;
@@ -704,7 +703,7 @@ export function readPublishedLists(raw) {
     }
     const more = Number.isSafeInteger(l.more) && l.more > 0 ? l.more : 0;
     const count = Number.isSafeInteger(l.count) && l.count >= 0 ? l.count : items.length;
-    out.push({ lane: l.lane, orc: l.orc, publishedAt, confirmedAt, checkedAt: Math.max(publishedAt, confirmedAt), count, more, items });
+    out.push({ lane: l.lane, orc: l.orc, publishedAt, count, more, items });
   }
   return out;
 }

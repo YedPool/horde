@@ -167,6 +167,15 @@ test('published carries each Orc rank, so the phone tells the Thrall from an Orc
   assert.ok(JSON.parse(JSON.stringify(all)).every((l) => l.rank === 'thrall' || l.rank === 'orc'));
 });
 
+test('a retired Orc has no live list, so the phone is not sent a card for it (T-0328, round 3)', () => {
+  const w = world();
+  publishFromInput(w.db, input({ letter: 'F' }, [lineA]), T0);
+  publishFromInput(w.db, input({ letter: 'K' }, [lineB]), T0 + 1);
+  w.db.prepare("UPDATE orc SET retired_at = 1, retired_reason = 'hand' WHERE letter = 'K'").run();
+  assert.deepEqual(readPublished(w.db).map((l) => l.orc), ['F']);
+  assert.deepEqual(readPublished(w.db, 'K'), []);
+});
+
 test('the live lists read back from the views, with question numbers, one Orc or all', () => {
   const w = world();
   publishFromInput(w.db, input({ letter: 'F' }, [lineA, lineB]), T0);

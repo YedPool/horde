@@ -36,12 +36,12 @@
         @{ Name = "the-size-counts-an-escape-as-one-byte"
            Find = 'while ($utf8.GetByteCount($text) -gt $MostBytes) {'
            Replace = 'while ($utf8.GetByteCount([regex]::Replace($text, ''\\u[0-9a-f]{4}'', "x")) -gt $MostBytes) {' }
-        @{ Name = "the-checked-time-is-not-rounded"
-           Find = '$floor = $c - ($c % $stepMs)'
-           Replace = '$floor = $c' }
-        @{ Name = "the-checked-time-may-precede-the-published-time"
-           Find = 'if ($floor -le $p) { return $PublishedAt }'
-           Replace = '' }
+        @{ Name = "the-confirm-time-replaces-the-published-time"
+           Find = 'publishedAt = "$($l.publishedAt)"; count = [int]$l.count;'
+           Replace = 'publishedAt = "$($l.confirmedAt)"; count = [int]$l.count;' }
+        @{ Name = "a-bad-home-pointer-is-thrown"
+           Find = '$problem = "the published lists could not be read: " + "$($_.Exception.Message)"'
+           Replace = 'throw $_' }
         @{ Name = "fleet-db-is-read-on-every-look"
            Find = 'if ($print -ceq "$($Mine.pubPrint)") {'
            Replace = 'if ($false) {' }

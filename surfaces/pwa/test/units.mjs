@@ -1830,8 +1830,8 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   // THE READ: shape by shape, nothing repaired.
   check(P.readPublishedLists(undefined) === null && P.readPublishedLists(null) === null && P.readPublishedLists("x") === null && P.readPublishedLists({}) === null, "a snapshot with no published member (an earlier machine) reads as null, not as an empty list: the page can tell none sent from none published");
   const got = P.readPublishedLists([thrall, orcE, orcF]);
-  check(got.length === 3 && got[0].lane === "thrall" && got[0].publishedAt === Date.parse(T1) && got[0].confirmedAt === Date.parse(T2) && got[0].checkedAt === Date.parse(T2) && got[0].items.length === 4 && got[0].items[2].question === 31 && got[1].items.length === 0 && got[1].count === 0 && got[1].checkedAt === Date.parse(T1), "a good member is read whole: the lane, both times and the later as checkedAt, every item, an empty list as an empty list", JSON.stringify(got && got[0]));
-  const bad = P.readPublishedLists([{ ...thrall, lane: "<b>" }, { ...thrall, lane: "f" }, { ...thrall, publishedAt: "yesterday" }, { ...thrall, confirmedAt: 5 }, { ...thrall, items: "x" }, null, 7, { ...orcF, items: [item("ok"), { ...item("q0"), question: 0 }, { ...item("empty text"), text: "" }, { ...item("long"), text: "x".repeat(501) }, { ...item("rec"), recommendation: 5 }, null, item("kept", { question: 9 })] }]);
+  check(got.length === 3 && got[0].lane === "thrall" && got[0].publishedAt === Date.parse(T1) && !("confirmedAt" in got[0]) && !("checkedAt" in got[0]) && got[0].items.length === 4 && got[0].items[2].question === 31 && got[1].items.length === 0 && got[1].count === 0, "a good member is read whole: the lane, the published time (no checked time is sent or kept, review of PR 365 M2), every item, an empty list as an empty list", JSON.stringify(got && got[0]));
+  const bad = P.readPublishedLists([{ ...thrall, lane: "<b>" }, { ...thrall, lane: "f" }, { ...thrall, publishedAt: "yesterday" }, { ...thrall, items: "x" }, null, 7, { ...orcF, items: [item("ok"), { ...item("q0"), question: 0 }, { ...item("empty text"), text: "" }, { ...item("long"), text: "x".repeat(501) }, { ...item("rec"), recommendation: 5 }, null, item("kept", { question: 9 })] }]);
   check(bad.length === 1 && bad[0].items.map((i) => i.text).join(",") === "ok,kept", "MUST-REFUSE: a list with a lane that is no lane, a time that is no time, or items that are no list is left out whole; an item with question 0, no text, 501 characters or a recommendation that is no text is left out; the rest stand", JSON.stringify(bad));
   check(P.readPublishedLists(Array.from({ length: 100 }, () => orcE)).length === 64, "no more than 64 lists are read");
 
@@ -1887,7 +1887,7 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const drawn = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, items: [item("<b>bold</b> & <script>x</script>", { recommendation: "r", importance: "high", blocks: "all" }), item("Linked", { question: 9, blocks: "none" })], count: 2 }]), [], "thrall"), { fmt: (ms) => "T" + ms });
   const flat = drawn.map(text).join("\n");
   check(drawn.length === 1 && drawn[0].tag === "section" && flat.indexOf("<b>bold</b> & <script>x</script>") >= 0 && flat.indexOf("Recommended: r") >= 0 && flat.indexOf("importance high - blocks all work") >= 0 && flat.indexOf("Question 9 - blocks nothing") >= 0, "each item's text, recommendation, importance, blocking and linked question are drawn - as TEXT (markup stays markup characters)", flat);
-  check(flat.indexOf("Published T" + Date.parse(T1) + " - checked T" + Date.parse(T2)) >= 0, "the list's published time, and the later time as 'checked'", flat);
+  check(flat.indexOf("Published T" + Date.parse(T1)) >= 0 && flat.indexOf("checked") < 0, "the list's published time, and no 'checked' time (none is sent: review of PR 365, M2)", flat);
   const note = PL.renderPublishedLists(fake, PL.publishedView(null, [], ""), {});
   check(note.length === 1 && note[0].className === "pl-note", "no lists sent draws the one plain line");
   const more = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, more: 3 }]), [], "thrall"), {});
@@ -1920,6 +1920,14 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
     check(PL.publishedView(listB, qC, "", laneOf).lists[0].hidden === 1, "ALL chosen: every open question is drawn, so the item that links C's question is hidden");
     check(PL.publishedView(listB, qC, "B").lists[0].hidden === 1, "without the document's laneOf every open question counts (the old rule)");
     check(PL.mergePublished(qC, listB, laneOf)[0].recommendation === undefined && PL.mergePublished(qB, listB, laneOf)[0].recommendation === "yes" && PL.mergePublished(qC, listB)[0].recommendation === "yes", "a recommendation of B's item goes to B's own question only (with laneOf), to any (without)");
+
+    // S1, THE GAP (review of PR 365, round 2): an open question the founder has ANSWERED sits in the hidden With Thrall fold
+    // and is not drawn in the list of questions, so the item that links it must stay in the Orc's list.
+    const listedMain = (q) => q.number !== 7;
+    const qAnsweredOpen = [question(7, "answered, in With Thrall", { askedBy: "Orc B" })];
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, listedMain).lists[0].hidden === 0 && PL.publishedView(listB, qAnsweredOpen, "B", laneOf, listedMain).lists[0].items.length === 2, "AN ANSWERED-BUT-OPEN QUESTION IN THE HIDDEN FOLD does not hide its item: it is not drawn, so the item stays in the Orc's list");
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, () => true).lists[0].hidden === 1 && PL.publishedView(listB, qAnsweredOpen, "", laneOf, () => true).lists[0].hidden === 1, "MUST-HIDE TWIN: the same question drawn in the list of questions (listed true) hides its item, in a lane and in All");
+    check(PL.publishedView(listB, qAnsweredOpen, "B", laneOf, (q) => q.number === 7 ? 1 : 0).lists[0].hidden === 0, "only the answer true (listed === true) counts as shown");
   }}
 
 // --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---

@@ -104,12 +104,16 @@ try {
   const marked = r.cards.filter((c) => c.mark);
   check(marked.length === 3 && marked.every((c) => c.markShown && c.mark.indexOf("blocks all work") >= 0 && c.mark.indexOf(STOP) >= 0), "THE BLOCKS MARK is drawn and seen, words and a sign together, on All, B and F1 alone", JSON.stringify(marked.map((c) => c.name + ": " + c.mark)));
   check(sorted(r.main) === "1,3,6,7,8,9,10,12" && sorted(r.done) === "2,4,5", "All questions shows every question he has to answer, and in the folds every other", r.main + " / " + r.done);
+  // THE PHONE'S PUBLISHED LISTS hide an item only for a question the list SHOWS (review of PR 365, S1): listed() is the document's own answer.
+  const listedNow = () => evaluate("(" + JSON.stringify(list()) + ").filter((q) => window.doc.listed(q)).map((q) => q.number).join(',')");
+  check(sorted(await listedNow()) === "1,3,6,7,8,9,10,12", "LISTED: with All chosen, the questions in the list of questions are listed; the answered ones in the fold (2, 4) and the closed one (5) are not", await listedNow());
 
   // ---------------- 3. A TAP ON A CARD SHOWS THAT LANE'S QUESTIONS ----------------
   r = await tapCard("Orc B");
   check(!!r && sorted(r.main) === "1,3" && r.lane === "B" && r.cards.find((c) => c.name === "Orc B").chosen && r.cards.filter((c) => c.chosen).length === 1,
     "A TAP ON ORC B'S CARD shows B's questions alone (1 and 3), and its card alone is chosen", r ? r.main + " / " + cardWords(r) : "no card");
   check(!!r && r.heads.some((h) => /With Thrall \(1\)/.test(h)) && r.done === "2", "and B's answered question stands alone in its fold (With Thrall (1))", r ? r.heads.join(" | ") : "");
+  check(sorted(await listedNow()) === "1,3", "LISTED, a lane chosen: only B's questions in the list are listed (the other lanes' are not drawn, and B's answered one is in its fold)", await listedNow());
   check(!!r && r.barTop !== null && r.barTop >= 0 && r.barTop < 915, "and B's two questions, shorter than the screen, are on it with the order line above them", r ? "order line at " + r.barTop : "");
   r = await tapCard("All questions");
   check(!!r && sorted(r.main) === "1,3,6,7,8,9,10,12" && r.lane === "" && r.cards[0].chosen, "A TAP ON ALL QUESTIONS shows everything again", r ? r.main : "");

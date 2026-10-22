@@ -261,7 +261,7 @@ try {
     $pl = Invoke-Browser @{ cmd = "waitPublished"; text = "Sales queue: forward the contract page?" }
     $plText = $(if ($pl.ok) { $pl.value.text } else { "" })
     Check ($pl.ok -and $pl.value.found -and $plText.Contains("Thrall: published list") -and $plText.Contains("Recommended: yes, today") -and $plText.Contains("importance high - blocks part of the work") -and $plText.Contains("Notifications on fleet.db?")) ("EACH ORC'S PUBLISHED LIST is on the phone beside the questions: the Thrall's items with their recommendation, importance and blocking (" + ($plText -replace "\s+", " ") + ")")
-    Check ($plText -match 'Published .+ - checked ') "and its published time and the time it was checked"
+    Check (($plText -match 'Published \S') -and -not $plText.Contains("checked")) "and its published time, and no 'checked' time (none is sent: review of PR 365, M2)"
     Check ($plText.Contains("Orc F published an empty list: nothing waits on you from here.")) "AN ORC WITH AN EMPTY LIST: the phone says so in plain words"
     Check (-not $plText.Contains("Orc G") -and -not $plText.Contains("Closing sound: play it?")) "an Orc that never published is not drawn as a list, and the item that links question 1 is not drawn twice"
     Check ($pl.ok -and $pl.value.listed.Contains($title) -and $pl.value.listed.Contains("play it, short")) "and that question, shown once, carries the published item's recommendation"
