@@ -2,6 +2,7 @@
 // proven who, a question number becomes a question id, the list replaces the live one and the old one stays,
 // the same list twice writes nothing, and the lists read back from the views. Databases of their own under
 // the temp folder; nothing real is read or written.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

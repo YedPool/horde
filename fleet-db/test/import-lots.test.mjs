@@ -3,6 +3,7 @@
 // ({"v":1,"table":...,"rows":[...]}, fleet/LotTables.ps1); every test writes such a folder under the temp
 // folder: a lot with members and a wake, a legacy record, a file of the wrong table, a session fleet.db has
 // never seen, a re-import with a member's state changed, a dry run, a failure part-way. Nothing real is read.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

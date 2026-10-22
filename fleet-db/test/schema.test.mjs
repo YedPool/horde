@@ -1,6 +1,7 @@
 // fleet.db's rules, each attacked: every test writes the row the rule exists to stop and requires the
 // database to refuse it, and writes the row the rule must still allow. A database of their own under the
 // temp folder; nothing real is read or written.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

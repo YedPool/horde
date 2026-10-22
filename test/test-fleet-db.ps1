@@ -20,6 +20,10 @@ if ($null -eq $node) {
 
 $tests = @(Get-ChildItem -Path (Join-Path $root "fleet-db\test") -Filter "*.test.mjs" -File)
 Check ($tests.Count -ge 1) ("CONTROL: the fleet.db test files are found (" + $tests.Count + ")")
+# A test with an empty environment falls back to the system's home folder; own-profile.mjs points that at a
+# temp folder, so no test reaches the real pointer file and the real fleet.db. It must be every file's first import.
+$unguarded = @($tests | Where-Object { -not ((Get-Content -LiteralPath $_.FullName | Where-Object { $_ -cmatch '^import ' } | Select-Object -First 1) -ceq "import './own-profile.mjs';") } | ForEach-Object { $_.Name })
+Check ($unguarded.Count -eq 0) ("every fleet.db test file imports own-profile.mjs first, so none reaches the real profile (" + ($unguarded -join ", ") + ")")
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $node.Source
