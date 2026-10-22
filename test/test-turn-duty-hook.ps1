@@ -67,6 +67,8 @@ else if (mode.startsWith("rawpub:")) { const o = JSON.parse(list(orc, 0)); o.lis
 else if (mode === "otherorc") { console.log(list("ZZ", 1)); }
 else if (mode === "badjson") { console.log("this is not json"); }
 else if (mode === "dbmissing") { console.error("horde decisions published: refused: fleet.db does not exist yet at X; run horde db init"); process.exitCode = 1; }
+else if (mode.startsWith("newer:")) { console.error("horde: fleet.db is version " + mode.slice(6) + ", newer than this code (3): update Horde"); process.exitCode = 1; }
+else if (mode === "othererr") { console.error("horde: something else broke"); process.exitCode = 1; }
 else if (mode === "hang") { setTimeout(() => { console.log('{"lists":[]}'); }, 6000); }
 '@
 [System.IO.File]::WriteAllText((Join-Path $work "standin.mjs"), $standinJs, $utf8)
@@ -98,6 +100,14 @@ function Put-BlockedState {
     $c = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
     $b = [long]([datetimeoffset]::UtcNow.AddMinutes(-$BlockedMinutesAgo).ToUnixTimeMilliseconds())
     [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $c + ',"lastBlockedAt":' + $b + ',"lastDecisionsBlockedAt":' + $b + ',"lastBlockedSnapshot":"' + $Snapshot + '"}'), $utf8)
+}
+function Put-OutdatedState {
+    # A state whose last check was 31 minutes ago and whose last "older than its database" block was $AskedMinutesAgo, for $Message.
+    param([string]$Sid, [int]$AskedMinutesAgo, [string]$Message)
+    New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    $c = [long]([datetimeoffset]::UtcNow.AddMinutes(-31).ToUnixTimeMilliseconds())
+    $a = [long]([datetimeoffset]::UtcNow.AddMinutes(-$AskedMinutesAgo).ToUnixTimeMilliseconds())
+    [System.IO.File]::WriteAllText((State-Path $Sid), ('{"lastCheckedAt":' + $c + ',"lastBlockedAt":' + $a + ',"lastOutdatedAt":' + $a + ',"lastOutdatedMessage":"' + $Message + '"}'), $utf8)
 }
 function Get-StateObj { param([string]$Sid) $p = State-Path $Sid; if (-not [System.IO.File]::Exists($p)) { return $null }; return (Text $p | ConvertFrom-Json) }
 
@@ -583,6 +593,43 @@ Reset-Marks
 $s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
 $r = Stop-Hook $s @{ TD_MODE = "age:2"; TD_TASK = "age:2"; HORDE_TURN_DUTY_TEST_TASKLIST = "1" }
 Check (Test-Pass $r) "both checks done: pass"
+
+Write-Host ""
+Write-Host "--- an installed Horde older than fleet.db is said aloud, once (T-0319 follow-up) ---" -ForegroundColor Cyan
+$msg4 = "horde: fleet.db is version 4, newer than this code (3): update Horde"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "newer:4" }
+$b = Get-Block $r
+$st = Get-StateObj $s
+Check ($null -ne $b -and $b.reason -cmatch 'Horde is older than its database' -and $b.reason.Contains("fleet.db is version 4, newer than this code (3)") -and $b.reason.Contains("update Horde (git -C ") -and $b.reason.Contains("merge --ff-only origin/main), or tell M")) "horde says 'newer than this code': ONE block, in plain words, with the update command and 'or tell M'"
+Check ($b.reason -cnotmatch 'no published decisions list') "   and it is not the decisions text"
+Check ($null -ne $st -and $st.lastOutdatedAt -gt 0 -and $st.lastBlockedAt -gt 0 -and $st.lastOutdatedMessage -match 'newer than this code') "   the state remembers the message and the time, before the block"
+Reset-Marks
+$r = Stop-Hook $s @{ TD_MODE = "newer:4" }
+Check ((Test-Pass $r) -and -not (Ran)) "   the stop right after passes and spawns nothing (the 30 minute throttle)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-OutdatedState $s 40 $msg4
+$r = Stop-Hook $s @{ TD_MODE = "newer:4" }
+Check ((Test-Pass $r) -and (Ran)) "same message asked 40 minutes ago, throttle over: checked, but passes (once per message in the quiet window)"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-OutdatedState $s 250 $msg4
+$r = Stop-Hook $s @{ TD_MODE = "newer:4" }
+Check ($null -ne (Get-Block $r)) "same message asked 250 minutes ago (past 4 hours): blocks again"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-OutdatedState $s 40 $msg4
+$r = Stop-Hook $s @{ TD_MODE = "newer:5" }
+$b = Get-Block $r
+Check ($null -ne $b -and $b.reason.Contains("version 5")) "a DIFFERENT message (version 5) inside the window: blocks"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"; Put-OutdatedState $s -600 $msg4
+$r = Stop-Hook $s @{ TD_MODE = "newer:4" }
+Check ($null -ne (Get-Block $r)) "an asked time in the FUTURE does not silence the message"
+Reset-Marks
+$s = New-Sid; Put-Session $s "orchestrator" "K" "parent-1"
+$r = Stop-Hook $s @{ TD_MODE = "othererr" }
+$st = Get-StateObj $s
+Check ((Test-Pass $r) -and (Log-Lines) -eq 1 -and $st.lastBlockedAt -eq 0) "any OTHER horde error still fails open: pass, one log line, no block"
 
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-turn-duty-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }

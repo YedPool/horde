@@ -186,5 +186,41 @@
         @{ Name = "state-dir-default-moved"
            Find = 'return join(homedir(), ".horde", "turn-duty");'
            Replace = 'return join(homedir(), ".horde2", "turn-duty");' }
+        @{ Name = "outdated-horde-fails-open"
+           Find = 'if (OUTDATED_HORDE.test(r.why)) return {'
+           Replace = 'if (false) return {' }
+        @{ Name = "outdated-pattern-matches-every-error"
+           Find = 'const OUTDATED_HORDE = /newer than this code/;'
+           Replace = 'const OUTDATED_HORDE = /./;' }
+        @{ Name = "outdated-said-every-time"
+           Find = 'r.message === state.lastOutdatedMessage && now >= state.lastOutdatedAt'
+           Replace = 'false && now >= state.lastOutdatedAt' }
+        @{ Name = "outdated-new-message-silenced"
+           Find = 'r.message === state.lastOutdatedMessage && '
+           Replace = '' }
+        @{ Name = "outdated-quiet-window-forever"
+           Find = ' && now - state.lastOutdatedAt < SNAPSHOT_QUIET_MS;'
+           Replace = ';' }
+        @{ Name = "outdated-future-time-counts"
+           Find = 'now >= state.lastOutdatedAt && '
+           Replace = '' }
+        @{ Name = "outdated-time-not-recorded"
+           Find = 'outdatedAt = now;'
+           Replace = '' }
+        @{ Name = "outdated-message-not-recorded"
+           Find = 'outdatedMessage = r.message;'
+           Replace = '' }
+        @{ Name = "outdated-time-not-read-from-state"
+           Find = 'lastOutdatedAt: num(s.lastOutdatedAt),'
+           Replace = 'lastOutdatedAt: 0,' }
+        @{ Name = "outdated-message-not-read-from-state"
+           Find = 'lastOutdatedMessage: snap(s.lastOutdatedMessage) }'
+           Replace = 'lastOutdatedMessage: "" }' }
+        @{ Name = "outdated-update-command-dropped"
+           Find = 'merge --ff-only origin/main'
+           Replace = 'merge --abort' }
+        @{ Name = "outdated-tell-m-dropped"
+           Find = '), or tell M"'
+           Replace = ')"' }
     )
 }
