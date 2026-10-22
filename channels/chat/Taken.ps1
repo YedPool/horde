@@ -243,9 +243,6 @@ function Invoke-HordeChatTakenTick {
     foreach ($mark in @($d.awaiting)) {
         $e = ConvertFrom-HordeChatTakenMark -Mark $mark
         if ($null -eq $e) { [void]$lines.Add("chat: an awaiting mark that is not one was dropped"); $changed = $true; continue }
-        $every = Get-HordeChatTakenDueMs -Settings $Settings -Alarmed $e.alarmed
-        $last = $(if ($Mine.takenChecked.ContainsKey($e.messageId)) { [long]$Mine.takenChecked[$e.messageId] } else { [long]0 })
-        if ($now - $last -lt $every) { [void]$keep.Add($mark); continue }
         if (-not $mayAsk.ContainsKey($e.messageId)) { [void]$keep.Add($mark); continue }
         $Mine.takenChecked[$e.messageId] = $now
         $status = $null

@@ -717,7 +717,7 @@ function Open-HordeRelayChannelRecord {
     $r = Read-HordeRelayEnvelope -Text $Record.text
     if (-not $r.ok) { return (& $no "refused" ("the journaled text is not an envelope: " + $r.reason)) }
     if ($Reread) {
-        $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind -Reread
+        $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders @{} -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind -Reread
     } else {
         $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache -Now $Now
         if ($senders.state -cne "known") { return (& $no "retry" ("the trust store cannot be read: " + $senders.reason)) }

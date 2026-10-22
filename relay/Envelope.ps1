@@ -400,7 +400,7 @@ function Unprotect-HordeRelayEnvelope {
     # Replay is a core/tristate answer from the journal: known, with value { key; fresh }, where key is
     # Get-HordeRelayReplayKey of THIS envelope's header and fresh is the boolean $true. Anything else
     # refuses, before a single byte is decrypted.
-    param([Parameter(Mandatory = $true)]$Envelope, [hashtable]$Senders = $null,
+    param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders,
         [Parameter(Mandatory = $true)][hashtable]$RecipientKeys, [Parameter(Mandatory = $true)][AllowNull()]$Replay,
         [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind, [switch]$Reread)
     # -Reread: a record this machine opened and verified once, read again for its words alone (channels/chat,
@@ -412,7 +412,6 @@ function Unprotect-HordeRelayEnvelope {
     if ($Reread) {
         if (-not (Test-HordeRelayEnvelopeParts -Envelope $Envelope)) { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope's parts do not match its signed text") }
     } else {
-        if ($null -eq $Senders) { return (New-HordeRelayEnvelopeAnswer -Reason "no trusted senders were given") }
         $verified = Test-HordeRelayEnvelope -Envelope $Envelope -Senders $Senders
         if (-not $verified.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $verified.reason) }
     }
