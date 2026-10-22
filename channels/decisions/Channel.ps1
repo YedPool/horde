@@ -236,7 +236,10 @@
 #     imported or written another way might hold one) is sent as its number and the words that it is shown at
 #     the machine only.
 #   - THE SIZE IS HELD: 20 items to a list; over 16 KB in all, the last item of the longest list goes first,
-#     and each list says how many it left out in "more".
+#     and each list says how many it left out in "more". The 16 KB is the text AS SENT, after the \uXXXX
+#     escaping of what is not ASCII (a quote or a dash costs six bytes), which is what every page carries.
+#   - AN UNCHANGED REPUBLISH SENDS NOTHING NEW: confirmedAt (the phone's "checked") is rounded down to 30
+#     minutes, never below publishedAt (HordeDecisionsChannelCheckedStep).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -254,6 +257,12 @@ $script:HordeDecisionsChannelFolder = $PSScriptRoot
 $script:HordeDecisionsChannelPublishedItems = 20
 $script:HordeDecisionsChannelPublishedBytes = 16384
 $script:HordeDecisionsChannelPublishedReader = $null
+# THE "CHECKED" TIME IS SENT ROUNDED DOWN to this many seconds (30 minutes). It is in the sealed text and so in the
+# hash, and an Orc re-publishing an unchanged list moves it on every confirm (about every 30 minutes for each of
+# 14 Orcs, so about 28 new snapshots an hour, each sealed and sent to every phone key). Rounded down on the clock,
+# all the Orcs' times move together: an unchanged republish sends nothing new, and at most two snapshots an hour
+# carry only a fresher "checked". A test sets it very large so no clock edge can fall inside a run.
+$script:HordeDecisionsChannelCheckedStep = 1800
 $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snapshot", "number", "wordingVersion", "text")
 # THE ANSWER'S VERSIONS, each with the one member it adds to those above (header, IN). The highest is
 # what a snapshot tells the phone this machine reads. Keyed by the version AS TEXT: an ordered table
@@ -946,6 +955,23 @@ function Get-HordeDecisionsChannelFleetPrint {
     return (@($parts) -join "|")
 }
 
+function ConvertTo-HordeDecisionsChannelCheckedAt {
+    # confirmedAt rounded down to -Step seconds on the clock, as the same ISO text, and never before -PublishedAt;
+    # a time that does not parse is returned as it came. Pure.
+    param([string]$ConfirmedAt, [string]$PublishedAt, [int]$Step = $script:HordeDecisionsChannelCheckedStep)
+    try {
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $style = [System.Globalization.DateTimeStyles]::AssumeUniversal
+        $c = [DateTimeOffset]::Parse($ConfirmedAt, $inv, $style).ToUnixTimeMilliseconds()
+        $stepMs = [long]$Step * 1000
+        if ($stepMs -le 0) { return $ConfirmedAt }
+        $floor = $c - ($c % $stepMs)
+        $p = [DateTimeOffset]::Parse($PublishedAt, $inv, $style).ToUnixTimeMilliseconds()
+        if ($floor -le $p) { return $PublishedAt }
+        return [DateTimeOffset]::FromUnixTimeMilliseconds($floor).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", $inv)
+    } catch { return $ConfirmedAt }
+}
+
 function ConvertTo-HordeDecisionsChannelPublished {
     # The lists `published --json` read, as the member's JSON text (the header): an array, "[]" for none.
     # -Lists the parsed "lists" array. Pure: nothing is read or written here.
@@ -967,7 +993,7 @@ function ConvertTo-HordeDecisionsChannelPublished {
             [void]$items.Add((ConvertTo-Json -InputObject $line -Compress))
         }
         $lane = $(if ("$($l.rank)" -ceq "thrall") { "thrall" } else { "$($l.orc)" })
-        [void]$made.Add([pscustomobject]@{ lane = $lane; orc = "$($l.orc)"; publishedAt = "$($l.publishedAt)"; confirmedAt = "$($l.confirmedAt)"; count = [int]$l.count; items = $items; more = [int]([Math]::Max(0, $all.Count - $items.Count)) })
+        [void]$made.Add([pscustomobject]@{ lane = $lane; orc = "$($l.orc)"; publishedAt = "$($l.publishedAt)"; confirmedAt = (ConvertTo-HordeDecisionsChannelCheckedAt -ConfirmedAt "$($l.confirmedAt)" -PublishedAt "$($l.publishedAt)"); count = [int]$l.count; items = $items; more = [int]([Math]::Max(0, $all.Count - $items.Count)) })
     }
     $render = {
         $texts = New-Object System.Collections.ArrayList
@@ -975,7 +1001,8 @@ function ConvertTo-HordeDecisionsChannelPublished {
             $head = ConvertTo-Json -InputObject ([ordered]@{ lane = $m.lane; orc = $m.orc; publishedAt = $m.publishedAt; confirmedAt = $m.confirmedAt; count = $m.count; more = $m.more }) -Compress
             [void]$texts.Add($head.Substring(0, $head.Length - 1) + ',"items":[' + (@($m.items) -join ",") + ']}')
         }
-        return ("[" + (@($texts) -join ",") + "]")
+        # ESCAPED HERE, so the size is measured on what is sent: a character that is not ASCII costs six bytes.
+        return [regex]::Replace(("[" + (@($texts) -join ",") + "]"), '[^\x20-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") })
     }
     $text = & $render
     while ($utf8.GetByteCount($text) -gt $MostBytes) {
@@ -986,7 +1013,7 @@ function ConvertTo-HordeDecisionsChannelPublished {
         $longest.more = $longest.more + 1
         $text = & $render
     }
-    return [regex]::Replace($text, '[^\x20-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") })
+    return $text
 }
 
 function Get-HordeDecisionsChannelPublished {

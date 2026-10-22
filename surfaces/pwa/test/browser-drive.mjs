@@ -412,6 +412,16 @@ const commands = {
     const found = await until(box + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
     return { found: !!found, text: await evaluate(box), listed: await evaluate(listed) };
   },
+  // THE DECISIONS PAGE'S CARD of one lane (decision-cards.js), waited for by its name ("Orc G"): { found, slot, pressed }.
+  // With c.click it is tapped, and pressed says whether the page then marks it chosen.
+  async publishedCard(c) {
+    const card = "(Array.from(document.querySelectorAll('#lists .decision-cards .dq-card')).find((b) => { const n = b.querySelector('.card-name'); return n && n.textContent === " + JSON.stringify(String(c.name)) + "; }) || null)";
+    const found = await until(card + " !== null", c.timeoutMs || 30000);
+    if (found && c.click === true) await evaluate(card + ".click()");
+    const slot = found ? await evaluate("(" + card + ".querySelector('.card-badge') || { textContent: '' }).textContent") : "";
+    const pressed = found ? await evaluate(card + ".getAttribute('aria-pressed')") : "";
+    return { found: !!found, slot, pressed };
+  },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);

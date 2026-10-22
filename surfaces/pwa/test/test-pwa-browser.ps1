@@ -270,6 +270,20 @@ try {
     $run = Invoke-Run -Turns 1
     $pl2 = Invoke-Browser @{ cmd = "waitPublished"; text = "contract page, v3?" }
     Check ($run.code -eq 0 -and $pl2.ok -and $pl2.value.found -and -not $pl2.value.text.Contains("Notifications on fleet.db?")) ("a list published again reaches the phone without a reload, and the item it dropped is gone (exit " + $run.code + ")")
+    # M1 (review of PR 365): an Orc that published and asks nothing, with no status card, is still a card the founder
+    # can choose. Orc G has no question and no card in a lanes document: it publishes one item and nothing else.
+    $gFile = Join-Path $work "g-items.json"
+    [System.IO.File]::WriteAllText($gFile, '[{"text":"Orc G only item: rotate the keys?","recommendation":"next week","importance":"low"}]', $utf8)
+    & $node.Source $seedJs publish $hh G $gFile
+    $gSeeded = ($LASTEXITCODE -eq 0)
+    $run = Invoke-Run -Turns 1
+    $gc = Invoke-Browser @{ cmd = "publishedCard"; name = "Orc G" }
+    Check ($gSeeded -and $run.code -eq 0 -and $gc.ok -and $gc.value.found -and $gc.value.slot -ceq "0 open - 1 published") ("A PUBLISHED-ONLY ORC HAS A CARD: Orc G publishes one item, asks nothing and has no status card, and its card says '0 open - 1 published' (exit " + $run.code + "; " + $(if ($gc.ok) { "found " + $gc.value.found + ", '" + $gc.value.slot + "'" } else { $gc.reason }) + ")")
+    $gt = Invoke-Browser @{ cmd = "publishedCard"; name = "Orc G"; click = $true }
+    $gp = Invoke-Browser @{ cmd = "waitPublished"; text = "Orc G only item: rotate the keys?" }
+    $gpText = $(if ($gp.ok) { $gp.value.text } else { "" })
+    Check ($gt.ok -and $gt.value.pressed -ceq "true" -and $gp.ok -and $gp.value.found -and $gpText.Contains("Recommended: next week") -and -not $gpText.Contains("Thrall: published list")) ("choosing that card shows Orc G's list, and only its own (" + ($gpText -replace "\s+", " ") + ")")
+    $null = Invoke-Browser @{ cmd = "publishedCard"; name = "All questions"; click = $true }
     $shot1 = Save-Shot "phone-list"
 
     Write-Host ""

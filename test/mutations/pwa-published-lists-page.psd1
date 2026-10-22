@@ -13,8 +13,14 @@
            Find = 'const items = l.items.filter((it) => it.question === null || !open.has(it.question));'
            Replace = 'const items = l.items;' }
         @{ Name = "a-closed-question-counts-as-shown"
-           Find = 'if (q && Number.isSafeInteger(q.number) && q.state === "open") open.add(q.number);'
-           Replace = 'if (q && Number.isSafeInteger(q.number)) open.add(q.number);' }
+           Find = 'if (!q || !Number.isSafeInteger(q.number) || q.state !== "open") continue;'
+           Replace = 'if (!q || !Number.isSafeInteger(q.number)) continue;' }
+        @{ Name = "another-lanes-question-hides-the-item"
+           Find = 'if (lane && typeof laneOf === "function" && laneOf(q) !== lane) continue;'
+           Replace = '' }
+        @{ Name = "a-recommendation-goes-to-another-lanes-question"
+           Find = 'if (typeof laneOf === "function") return rec.get(q.number + "|" + laneOf(q));'
+           Replace = '' }
         @{ Name = "an-empty-list-is-not-said-to-be-empty"
            Find = 'if (l.count === 0 && l.items.length === 0) {'
            Replace = 'if (false) {' }
@@ -22,11 +28,11 @@
            Find = 'if (lane && chosen.length === 0) return'
            Replace = 'if (false) return' }
         @{ Name = "an-item-with-no-recommendation-blanks-the-questions"
-           Find = 'if (it.question !== null && it.recommendation !== null && !rec.has(it.question))'
-           Replace = 'if (it.question !== null && !rec.has(it.question))' }
+           Find = 'if (it.question !== null && it.recommendation !== null && !rec.has(it.question + "|" + l.lane))'
+           Replace = 'if (it.question !== null && !rec.has(it.question + "|" + l.lane))' }
         @{ Name = "a-closed-question-takes-the-recommendation"
-           Find = 'rec.has(q.number) && q.state === "open" ? '
-           Replace = 'rec.has(q.number) ? ' }
+           Find = 'q && q.state === "open" ? recOf(q)'
+           Replace = 'q ? recOf(q)' }
         @{ Name = "the-checked-time-is-the-published-time"
            Find = '" - checked " + fmt(l.checkedAt)'
            Replace = '" - checked " + fmt(l.publishedAt)' }

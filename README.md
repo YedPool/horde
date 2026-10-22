@@ -33,7 +33,8 @@ on the phone.** What reaches it:
 - **Decisions** (`channels/decisions`): every open question on the decisions list (`horde decisions
   add`), with his answers sent back signed by his phone. An Orc that needs him asks here. Each Orc's
   published list (`horde decisions publish`) is on the same page, in that Orc's lane beside its
-  questions, with when it was published and last checked: publish yours every turn.
+  questions (an Orc with a list and no question has its own card), with when it was published and last
+  checked (to the half hour): publish yours every turn.
 - **Progress** (`channels/progress`): the fleet's progress log, the analyst's changelog. Work worth
   his attention is written there.
 - **Notices** (`horde notify -Text "<one line>"`): a line from any session, sent to his phone's

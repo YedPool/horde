@@ -14,8 +14,14 @@
            Find = 'if (known) d.value = { published: rec.value.published, questions: rec.value.questions };'
            Replace = '' }
         @{ Name = "a-linked-question-keeps-its-own-recommendation"
-           Find = 'questions: mergePublished(rec.value.questions, rec.value.published) } } : rec;'
+           Find = 'questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;'
            Replace = 'questions: rec.value.questions } } : rec;' }
+        @{ Name = "the-cards-are-not-given-the-published-lists"
+           Find = 'published: d.value && d.value.published })) d.cards'
+           Replace = 'published: null })) d.cards' }
+        @{ Name = "a-list-published-alone-does-not-redraw-the-cards"
+           Find = '  drawDecisionCards(h.id);'
+           Replace = '' }
         @{ Name = "the-lists-box-is-never-shown"
            Find = '  d.pub.hidden = false;'
            Replace = '  d.pub.hidden = true;' }

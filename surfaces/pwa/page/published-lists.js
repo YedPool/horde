@@ -10,17 +10,22 @@
 // A PURE VIEW AND A PURE RENDER: it knows nothing of the list or the bridge - what was sent, the questions
 // the snapshot holds and the lane chosen are handed in; the clock's words are handed in too (fmt).
 //
-//   publishedView(published, questions, lane) -> { words, lists }
+//   publishedView(published, questions, lane, laneOf) -> { words, lists }
 //     published   readPublishedLists' answer: null (the machine sent none) or the lists
 //     questions   the snapshot's questions: an item that links one of them that is open is NOT drawn here
 //                 (the question is in the list, once), and mergePublished gives the question the item's
 //                 recommendation
 //     lane        the lane chosen, "" for all, "thrall" for the Thrall's
+//     laneOf      the document's laneOf(question) -> lane (window.HordeDecisionsDocument.lanes.laneOf), or null.
+//                 A question counts as drawn in the list of questions only if the document draws it: with a lane
+//                 chosen the document shows that lane's questions alone, so an item that links ANOTHER lane's open
+//                 question stays in this list (review of PR 365, S1). With laneOf null every open question counts.
 //     words       one plain sentence when there is nothing to draw (the machine sends none, or the lane never
 //                 published); "" otherwise
 //     lists       [{ lane, title, state ("items", "empty" or "linked"), publishedAt, checkedAt, items, more, hidden, words }]
-//   mergePublished(questions, published) -> the questions, each linked by an item that has a recommendation
-//     carrying that recommendation (a copy; the snapshot's own are not touched)
+//   mergePublished(questions, published, laneOf) -> the questions, each linked by an item that has a recommendation
+//     carrying that recommendation (a copy; the snapshot's own are not touched); with laneOf, only an item of
+//     the question's own lane gives it one
 //   renderPublishedLists(doc, view, { fmt }) -> the nodes to draw
 //
 // EVERY TEXT IS SET AS TEXT (textContent): an item's words are an Orc's, never markup.
@@ -31,10 +36,12 @@ const BLOCKS_WORDS = { all: "blocks all work", part: "blocks part of the work", 
 const titleOf = (lane) => (lane === THRALL_LANE ? "Thrall" : "Orc " + lane);
 const whoOf = (lane) => (lane === THRALL_LANE ? "The Thrall" : "Orc " + lane);
 
-function openNumbers(questions) {
+function openNumbers(questions, lane, laneOf) {
   const open = new Set();
   for (const q of Array.isArray(questions) ? questions : []) {
-    if (q && Number.isSafeInteger(q.number) && q.state === "open") open.add(q.number);
+    if (!q || !Number.isSafeInteger(q.number) || q.state !== "open") continue;
+    if (lane && typeof laneOf === "function" && laneOf(q) !== lane) continue;
+    open.add(q.number);
   }
   return open;
 }
@@ -45,9 +52,9 @@ function byLane(a, b) {
   return a.lane < b.lane ? -1 : 1;
 }
 
-export function publishedView(published, questions, lane = "") {
+export function publishedView(published, questions, lane = "", laneOf = null) {
   if (!Array.isArray(published)) return { words: "This machine has not sent the Orcs' published lists yet, so none can be shown here.", lists: [] };
-  const open = openNumbers(questions);
+  const open = openNumbers(questions, lane, laneOf);
   const chosen = published.filter((l) => !lane || l.lane === lane).sort(byLane);
   if (lane && chosen.length === 0) return { words: whoOf(lane) + " has never published a list.", lists: [] };
   const lists = chosen.map((l) => {
@@ -62,14 +69,22 @@ export function publishedView(published, questions, lane = "") {
   return { words: "", lists };
 }
 
-export function mergePublished(questions, published) {
+export function mergePublished(questions, published, laneOf = null) {
   if (!Array.isArray(questions) || !Array.isArray(published)) return questions;
   const rec = new Map();
   for (const l of published.slice().sort(byLane)) {
-    for (const it of l.items) if (it.question !== null && it.recommendation !== null && !rec.has(it.question)) rec.set(it.question, it.recommendation);
+    for (const it of l.items) if (it.question !== null && it.recommendation !== null && !rec.has(it.question + "|" + l.lane)) rec.set(it.question + "|" + l.lane, it.recommendation);
   }
+  const recOf = (q) => {
+    if (typeof laneOf === "function") return rec.get(q.number + "|" + laneOf(q));
+    for (const l of published.slice().sort(byLane)) if (rec.has(q.number + "|" + l.lane)) return rec.get(q.number + "|" + l.lane);
+    return undefined;
+  };
   if (rec.size === 0) return questions;
-  return questions.map((q) => (q && rec.has(q.number) && q.state === "open" ? { ...q, recommendation: rec.get(q.number) } : q));
+  return questions.map((q) => {
+    const r = q && q.state === "open" ? recOf(q) : undefined;
+    return r === undefined ? q : { ...q, recommendation: r };
+  });
 }
 
 function line(doc, cls, text) {

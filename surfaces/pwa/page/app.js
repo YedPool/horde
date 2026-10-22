@@ -250,8 +250,10 @@ function drawDecisionCards(id) {
   const d = docs[id];
   if (!d) return;
   while (d.cards.firstChild) d.cards.removeChild(d.cards.firstChild);
-  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane) })) d.cards.appendChild(card);
+  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane), published: d.value && d.value.published })) d.cards.appendChild(card);
 }
+// The document's own lane of a question (who asked it): the published lists count a question as drawn only where the document draws it.
+const laneOfQuestion = (q) => window.HordeDecisionsDocument.lanes.laneOf(q);
 // The published lists of the lane chosen (published-lists.js), drawn from what the snapshot on screen carried.
 // The lane is the document's: a card tapped redraws the document, which comes back here.
 function drawPublishedLists(id) {
@@ -260,7 +262,7 @@ function drawPublishedLists(id) {
   while (d.pub.firstChild) d.pub.removeChild(d.pub.firstChild);
   const v = d.value;
   if (!v) return;
-  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane()), { fmt: lastTime })) d.pub.appendChild(node);
+  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion), { fmt: lastTime })) d.pub.appendChild(node);
 }
 function showCounts() {
   const d = current && docs[current];
@@ -340,8 +342,11 @@ function render(h, rec) {
   // item is drawn once, as that question (published-lists.js). A read that failed keeps the lists drawn, as it keeps the questions; the draw is the document's (onDraw).
   const known = rec && rec.state === "known" && rec.value;
   if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
-  const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published) } } : rec;
+  const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
   const did = d.doc.setList(shown);
+  // The document draws only when its own list changed; a list published, or one more item, changes nothing in it.
+  drawDecisionCards(h.id);
+  drawPublishedLists(h.id);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
   // next - the old snapshot, kept - cleared those words at once, so a 401 left old content with no sign.
   say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");

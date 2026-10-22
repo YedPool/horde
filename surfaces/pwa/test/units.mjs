@@ -1892,7 +1892,35 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(note.length === 1 && note[0].className === "pl-note", "no lists sent draws the one plain line");
   const more = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, more: 3 }]), [], "thrall"), {});
   check(text(more[0]).indexOf("3 more items are shown at the machine only.") >= 0, "items the machine left out for size are counted and said");
-}
+
+  // M1 (review of PR 365): AN ORC THAT PUBLISHED HAS A CARD, with no question to answer and no status card.
+  {
+    const dnode = (tag) => ({ tag, className: "", textContent: "", attrs: {}, kids: [], appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener() {} });
+    const dfake = { createElement: dnode, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+    const dtext = (n) => (n.textContent || "") + (n.kids || []).map(dtext).join("");
+    const orcK = { lane: "K", orc: "K", publishedAt: T1, confirmedAt: T1, count: 5, more: 0, items: Array.from({ length: 5 }, (_, i) => item("K item " + (i + 1))) };
+    const pk = P.readPublishedLists([orcK, orcE]);
+    const cv = DC.decisionCardsView(null, [{ lane: "B", open: 2, blocksAll: false }], "", pk);
+    check(cv.map((c) => c.lane + ":" + c.open + ":" + c.published).join(",") === "all:2:0,B:2:0,E:0:0,K:0:5", "A PUBLISHED-ONLY ORC GETS A CARD: K published 5 items, asks nothing and has no status card, and is a card at 0 open with its 5; an empty list (E) is a card with none to count", JSON.stringify(cv));
+    check(DC.decisionCardsView(null, [{ lane: "B", open: 2, blocksAll: false }], "").map((c) => c.lane).join(",") === "all,B" && DC.decisionCardsView(null, [], "", null).length === 1, "MUST-FAIL TWIN: without the published lists K has no card (what the founder met), and null or none changes nothing");
+    const cs = DC.renderDecisionCards(dfake, null, [{ lane: "B", open: 2, blocksAll: false }], { published: pk, nowMs: 0 });
+    const slotText = (c) => dtext(c.kids[0].kids.find((k) => k.className === "card-badge"));
+    check(cs.length === 4 && slotText(cs[3]) === "0 open - 5 published" && slotText(cs[2]) === "0 open" && slotText(cs[1]) === "2 open", "the card says '0 open - 5 published' in words; an Orc with nothing published, or an empty list, has the count alone", cs.map(slotText).join(" / "));
+    check(DC.decisionCardsView(null, [{ lane: "K", open: 1, blocksAll: true }], "K", pk).filter((c) => c.lane === "K").length === 1 && DC.decisionCardsView(null, [{ lane: "K", open: 1, blocksAll: true }], "K", pk).find((c) => c.lane === "K").open === 1, "an Orc that both asks and published is one card, with its open count");
+  }
+
+  // S1 (review of PR 365): AN ITEM IS HIDDEN ONLY BY A QUESTION THE DOCUMENT DRAWS IN ITS LANE.
+  {
+    const laneOf = (q) => { const m = /^Orc ([A-Z])/.exec(q.askedBy || ""); return m ? m[1] : ""; };
+    const listB = P.readPublishedLists([{ lane: "B", orc: "B", publishedAt: T1, confirmedAt: T1, count: 2, more: 0, items: [item("B links C's question", { question: 7, recommendation: "yes" }), item("B plain")] }]);
+    const qC = [question(7, "C asks", { askedBy: "Orc C" })];
+    const qB = [question(7, "B asks", { askedBy: "Orc B" })];
+    check(PL.publishedView(listB, qC, "B", laneOf).lists[0].items.length === 2 && PL.publishedView(listB, qC, "B", laneOf).lists[0].hidden === 0, "LANE B CHOSEN, the item links question 7 that Orc C asked: the document shows only B's questions, so the item stays in B's list");
+    check(PL.publishedView(listB, qB, "B", laneOf).lists[0].hidden === 1, "MUST-HIDE TWIN: question 7 asked by Orc B is drawn in lane B, so its item is not drawn twice");
+    check(PL.publishedView(listB, qC, "", laneOf).lists[0].hidden === 1, "ALL chosen: every open question is drawn, so the item that links C's question is hidden");
+    check(PL.publishedView(listB, qC, "B").lists[0].hidden === 1, "without the document's laneOf every open question counts (the old rule)");
+    check(PL.mergePublished(qC, listB, laneOf)[0].recommendation === undefined && PL.mergePublished(qB, listB, laneOf)[0].recommendation === "yes" && PL.mergePublished(qC, listB)[0].recommendation === "yes", "a recommendation of B's item goes to B's own question only (with laneOf), to any (without)");
+  }}
 
 // --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---
 {

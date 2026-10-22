@@ -31,8 +31,17 @@
            Find = 'if ($null -ne $it.questionNumber) { $question = [long]$it.questionNumber }'
            Replace = 'if ($false) { $question = [long]$it.questionNumber }' }
         @{ Name = "non-ascii-is-sent-as-it-is"
-           Find = 'return [regex]::Replace($text, ''[^\x20-\x7E]'', { param($m) ''\u'' + ([int][char]$m.Value).ToString("x4") })'
-           Replace = 'return $text' }
+           Find = 'return [regex]::Replace(("[" + (@($texts) -join ",") + "]"), ''[^\x20-\x7E]'', { param($m) ''\u'' + ([int][char]$m.Value).ToString("x4") })'
+           Replace = 'return ("[" + (@($texts) -join ",") + "]")' }
+        @{ Name = "the-size-counts-an-escape-as-one-byte"
+           Find = 'while ($utf8.GetByteCount($text) -gt $MostBytes) {'
+           Replace = 'while ($utf8.GetByteCount([regex]::Replace($text, ''\\u[0-9a-f]{4}'', "x")) -gt $MostBytes) {' }
+        @{ Name = "the-checked-time-is-not-rounded"
+           Find = '$floor = $c - ($c % $stepMs)'
+           Replace = '$floor = $c' }
+        @{ Name = "the-checked-time-may-precede-the-published-time"
+           Find = 'if ($floor -le $p) { return $PublishedAt }'
+           Replace = '' }
         @{ Name = "fleet-db-is-read-on-every-look"
            Find = 'if ($print -ceq "$($Mine.pubPrint)") {'
            Replace = 'if ($false) {' }
