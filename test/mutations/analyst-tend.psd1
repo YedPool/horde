@@ -46,7 +46,7 @@
            Replace = '"the warchief was told."' }
         # A new session starts a new run: adoption clears both no-answer keys.
         @{ Name = "adoption-keeps-no-answer-keys"
-           Find = '"start-too-soon-over-cap", "start-retry", "no-answer", "no-answer-founder")'
+           Find = '"start-too-soon-over-cap", "start-retry", "start-no-log", "start-wait-unbounded", "start-late-session", "no-answer", "no-answer-founder")'
            Replace = '"start-too-soon-over-cap")' }
         @{ Name = "no-answer-cleared-without-new-ack"
            Find = 'if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) {'
@@ -65,14 +65,14 @@
            Find = '$s.contextAt = $null; $s.startAttempts = [long]0'
            Replace = '$s.contextAt = $null' }
         @{ Name = "retry-told-once-only"
-           Find = '"spawn-failed", "start-silent", "start-retry")'
-           Replace = '"spawn-failed", "start-silent")' }
+           Find = '"start-silent", "start-retry", "start-no-log", "start-wait-unbounded", "start-late-session")'
+           Replace = '"start-silent", "start-no-log", "start-wait-unbounded", "start-late-session")' }
         @{ Name = "no-spawn-log-is-not-asked"
            Find = 'if ($asked -and $null -eq $logAt) { $spawnLogged = $false }'
            Replace = 'if ($asked -and $null -eq $logAt) { $spawnLogged = $null }' }
         @{ Name = "old-spawn-log-entry-accepted"
-           Find = '-ge $s.startedAt.AddMinutes(-1))'
-           Replace = '-ge $s.startedAt.AddDays(-9))' }
+           Find = '$spawnLogged = ($logAt.ToUniversalTime() -ge $s.startedAt.AddMinutes(-1))'
+           Replace = '$spawnLogged = ($logAt.ToUniversalTime() -ge $s.startedAt.AddDays(-9))' }
         @{ Name = "stale-recorded-terminal-kept"
            Find = '$live = Split-Path -Leaf ("" + $own.value.socket)'
            Replace = '$live = $Recorded' }
@@ -82,5 +82,27 @@
         @{ Name = "silent-spawn-script-is-a-start"
            Find = 'if ($after -le $before) { return'
            Replace = 'if ($false) { return' }
+        # T-0341 review.
+        @{ Name = "no-reading-of-sessions-is-not-unknown"
+           Find = 'if ($null -eq $identStart) { $previousAlive = New-HordeUnknown -Reason "the running sessions could not be read" }'
+           Replace = 'if ($null -eq $identStart) { $previousAlive = $null }' }
+        @{ Name = "late-sessions-not-asked"
+           Find = '-PreviousAlive $previousAlive -Late $late'
+           Replace = '-PreviousAlive $previousAlive' }
+        @{ Name = "second-analyst-not-told"
+           Find = 'if ($s.phase -ceq "running" -and $d.action -ceq "keep" -and $handover.state -ceq "known"'
+           Replace = 'if ($false -and $d.action -ceq "keep" -and $handover.state -ceq "known"' }
+        @{ Name = "second-analyst-wears-no-sentence"
+           Find = '$sentenceKey = $(if ($Key -cmatch ''\Asecond-analyst-'')'
+           Replace = '$sentenceKey = $(if ($Key -cmatch ''\Anothing-'')' }
+        @{ Name = "unparsable-spawn-log-line-is-no-entry"
+           Find = 'if (-not $m.Success) { return "unreadable" }'
+           Replace = 'if (-not $m.Success) { return $null }' }
+        @{ Name = "missing-spawn-log-is-unreadable"
+           Find = 'return $null }; return "unreadable" } finally'
+           Replace = 'return "unreadable" }; return "unreadable" } finally' }
+        @{ Name = "spawn-wiring-loses-the-adapters"
+           Find = '-Actors @(Get-HordeHostActors)) }'
+           Replace = '-Actors @()) }' }
     )
 }

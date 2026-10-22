@@ -277,6 +277,40 @@ function Get-HordeAnalystContextTokens {
     return (New-HordeKnown -Value ([pscustomobject]@{ tokens = ([long]$u.input + [long]$u.cacheRead + [long]$u.cacheWrite); at = $sink.last.ts }))
 }
 
+function Get-HordeAnalystLateSessions {
+    # PURE. The live sessions that may be a start's own, as an answer: known [session ids] (maybe none), or
+    # unknown with why (T-0341). A session counts when its process is VERIFIED running (core/Identity.ps1),
+    # it is not in -Exclude (the session that was replaced), it started no earlier than a minute before
+    # -Since (the start), and its working directory is the analyst folder or the folder above it (the spawn
+    # starts the session in the analyst's own folder). An unknown is never an answer of "none": a listing that
+    # is not whole, or a record whose process could not be checked, makes the whole answer unknown.
+    param($Identity, [Parameter(Mandatory = $true)][datetime]$Since, [string[]]$Exclude = @(), [Parameter(Mandatory = $true)][string]$Folder)
+    if ($null -eq $Identity) { return (New-HordeUnknown -Reason "the running sessions could not be read") }
+    $whole = $Identity.verifiedLive
+    if ($null -eq $whole -or $whole.state -cne "known") { return (New-HordeUnknown -Reason ("the listing of running sessions is not whole" + $(if ($null -ne $whole -and $whole.state -ceq "unknown") { ": " + $whole.reason } else { "" }))) }
+    $dirs = New-Object System.Collections.ArrayList
+    $own = $Folder.TrimEnd('\', '/')
+    [void]$dirs.Add($own)
+    $above = [System.IO.Path]::GetDirectoryName($own)
+    if ($null -ne $above -and $above -ne "") { [void]$dirs.Add($above.TrimEnd('\', '/')) }
+    $found = New-Object System.Collections.ArrayList
+    foreach ($rec in @($Identity.records.Values)) {
+        $check = "" + $rec.processCheck
+        if (@("gone", "reused") -ccontains $check) { continue }
+        if ($check -cne "verified") { return (New-HordeUnknown -Reason ("a session's process could not be checked (" + $check + ")")) }
+        if (@($Exclude) -ccontains ("" + $rec.sessionId)) { continue }
+        $ps = $rec.fields["procStart"]
+        if ($null -eq $ps -or $ps.state -cne "known") { return (New-HordeUnknown -Reason ("the start time of session " + $rec.sessionId + " is not known")) }
+        $began = [DateTime]::FromFileTimeUtc([long]$ps.value)
+        if ($began -lt $Since.ToUniversalTime().AddMinutes(-1)) { continue }
+        $cwd = $rec.fields["cwd"]
+        if ($null -eq $cwd -or $cwd.state -cne "known") { return (New-HordeUnknown -Reason ("the folder of session " + $rec.sessionId + " is not known")) }
+        $where = ("" + $cwd.value).TrimEnd('\', '/')
+        foreach ($d in $dirs) { if ($where -ieq $d) { [void]$found.Add("" + $rec.sessionId); break } }
+    }
+    return (New-HordeKnown -Value ([string[]]@($found.ToArray())))
+}
+
 function Get-HordeAnalystSessionDecision {
     # PURE. What to do about the session this pass: { action; why; tell; sessionId; reason }.
     #   keep    the session it has is running and under the cap (or no round is due): go on.
@@ -299,14 +333,17 @@ function Get-HordeAnalystSessionDecision {
         [bool]$RoundDue = $false,
         [bool]$CanStart = $false,
         $SpawnLogged = $null,
-        $PreviousAlive = $null
+        $PreviousAlive = $null,
+        $Late = $null
     )
-    $out = { param($Action, $Why, $Tell, $Sid, $Reason, $Retry = $false) return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason; retry = $Retry } }
+    $out = { param($Action, $Why, $Tell, $Sid, $Reason, $Retry = $false, $Extra = "") return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason; retry = $Retry; extra = $Extra } }
     $utcNow = $Now.ToUniversalTime()
     $fresh = ($Handover.state -ceq "known")
     switch -CaseSensitive ("" + $State.phase) {
         "starting" {
-            $since = $(if ($State.startedAt -is [datetime]) { $State.startedAt } else { $utcNow })
+            # A start time that is missing or garbled is NOT now: that would move the bound along with the clock and it
+            # would never trip (T-0341). It is taken as long past, so the bound is passed and the retry gates decide.
+            $since = $(if ($State.startedAt -is [datetime]) { $State.startedAt } else { $utcNow.AddYears(-1) })
             # A handover written after the start (a minute of clock slack), by a session that is not the
             # one replaced, is the new one.
             if ($fresh -and $Handover.value.sessionId -cne ("" + $State.previousSessionId) -and $Handover.value.writtenAt -ge $since.AddMinutes(-1)) {
@@ -325,14 +362,31 @@ function Get-HordeAnalystSessionDecision {
                 return (& $out "adopt" "the session that was replaced is running again, so it is the analyst and no second one is started" "" ("" + $State.previousSessionId) "")
             }
             $prevUnsure = ($replacedGone -and $null -ne $PreviousAlive -and $PreviousAlive.state -cne "known")
-            # A START THAT BRINGS NO SESSION IS FAILED, NOT AWAITED FOREVER (T-0341). Failed when the bound has
-            # passed, or sooner when the spawn script left no spawn.log entry for it (-SpawnLogged $false; $null
-            # is "not asked", never a failure). Then retried, a bound apart, up to startMaxAttempts starts in all;
-            # the one start a state written before this field made counts as the first.
-            $failedWhy = ""
-            if ($SpawnLogged -eq $false -and $utcNow -ge $since.AddSeconds($script:HordeAnalystSpawnLogGraceSeconds)) { $failedWhy = "the spawn script left no entry in spawn.log for the start " + [int]($utcNow - $since).TotalMinutes + " minutes ago, so it never ran to its start" }
-            elseif ($utcNow -ge $since.AddMinutes([int]$Policy.startBoundMinutes)) { $failedWhy = "no session has appeared in the " + [int]$Policy.startBoundMinutes + " minutes allowed since the start" }
-            if ($failedWhy -ne "" -and $CanStart -and -not $prevUnsure -and [Math]::Max([long]1, [long]$State.startAttempts) -lt [long]$Policy.startMaxAttempts) {
+            # A START THAT BRINGS NO SESSION IS FAILED, NOT AWAITED FOREVER (T-0341), AND NEVER RETRIED OVER A
+            # SESSION THAT MAY EXIST. Failed when the bound has passed. A spawn script that left no spawn.log
+            # entry (-SpawnLogged $false; $null is "not asked", never a failure) is reported at once, but its
+            # retry waits for the same bound: the spacing between starts is the bound whatever the reason, so
+            # three starts are never minutes apart. A retry proves only that no handover has come, not that no
+            # session exists (a slow first spawn can come up after the second), so before ANY retry the live
+            # sessions are asked for one started since this start in the analyst's folder (-Late): one found is
+            # not started over, an unknown is never a start.
+            $boundAt = $since.AddMinutes([int]$Policy.startBoundMinutes)
+            $noLog = ($SpawnLogged -eq $false -and $utcNow -ge $since.AddSeconds($script:HordeAnalystSpawnLogGraceSeconds))
+            if ($noLog -and $utcNow -lt $boundAt) {
+                return (& $out "wait" ("the spawn script left no entry in spawn.log for the start " + [int]($utcNow - $since).TotalMinutes + " minutes ago, so it never ran to its start; the next start waits for the bound") "start-no-log" "" "")
+            }
+            if ($utcNow -ge $boundAt -and $CanStart -and [Math]::Max([long]1, [long]$State.startAttempts) -lt [long]$Policy.startMaxAttempts) {
+                $failedWhy = $(if ($noLog) { "the spawn script left no entry in spawn.log for the start" } else { "no session has appeared in the " + [int]$Policy.startBoundMinutes + " minutes allowed since the start" })
+                $lateKnown = ($null -ne $Late -and $Late.state -ceq "known")
+                $unsure = New-Object System.Collections.ArrayList
+                if ($prevUnsure) { [void]$unsure.Add("the replaced session: " + $PreviousAlive.reason) }
+                if (-not $lateKnown) { [void]$unsure.Add("the sessions started since: " + $(if ($null -ne $Late -and $Late.state -ceq "unknown") { $Late.reason } else { "nobody looked" })) }
+                if ($unsure.Count -gt 0) {
+                    return (& $out "wait" ($failedWhy + ", but whether a session exists cannot be told, so none is started and the wait has no bound") "start-wait-unbounded" "" "" $false ("`nWhy: " + ($unsure -join "; ")))
+                }
+                if (@($Late.value).Count -gt 0) {
+                    return (& $out "wait" ($failedWhy + ", but a session started since is running and has not written a handover, so none is started over it") "start-late-session" "" "" $false ("`nSession: " + (@($Late.value) -join ", ")))
+                }
                 $again = $(if ("" + $State.startReason -ceq "over-cap") { "over-cap" } else { "gone" })
                 return (& $out "start" ($failedWhy + "; starting another") "start-retry" "" $again $true)
             }

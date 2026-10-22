@@ -40,10 +40,12 @@ Register-HordeTranscriptAdapter -Name "suite-calls" -Claim { param($p) $p -like 
 function New-Listing {
     # A reading of who is running, in core/Identity.ps1's shape: -Live ids verified, -Gone ids whose
     # process ended; -Whole $false makes the listing incomplete.
-    param([string[]]$Live = @(), [string[]]$Gone = @(), [bool]$Whole = $true, [string]$Transcript = "")
+    param([string[]]$Live = @(), [string[]]$Gone = @(), [bool]$Whole = $true, [string]$Transcript = "", [object[]]$Late = @())
     $records = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($id in $Live) { $records[$id] = [pscustomobject]@{ sessionId = $id; processCheck = "verified"; fields = @{ transcriptPath = $(if ($Transcript -ne "") { New-HordeKnown -Value $Transcript } else { New-HordeUnknown -Reason "none" }) } } }
     foreach ($id in $Gone) { $records[$id] = [pscustomobject]@{ sessionId = $id; processCheck = "gone"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none") } } }
+    # -Late: live sessions with a start time and a working folder, { id; started; cwd }: what a slow first spawn looks like.
+    foreach ($l in $Late) { $records["" + $l.id] = [pscustomobject]@{ sessionId = ("" + $l.id); processCheck = "verified"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none"); procStart = (New-HordeKnown -Value ([long]$l.started.ToUniversalTime().ToFileTimeUtc())); cwd = (New-HordeKnown -Value ("" + $l.cwd)) } } }
     return [pscustomobject]@{ records = $records; duplicates = @(); verifiedLive = $(if ($Whole) { New-HordeKnown -Value @($Live) } else { New-HordeUnknown -Reason "the process table could not be read" }) }
 }
 
@@ -594,13 +596,89 @@ try {
     $dead.now = $t0.AddHours(5); $null = Pass $dead
     Check ((State $dead).phase -ceq "running" -and (State $dead).sessionId -ceq $sidA) "a running session is judged by its process, whatever its recorded terminal: alive means kept, never replaced"
 
+    Write-Host ""
+    Write-Host "--- T-0341 review: no retry over a session that may exist; an unknown is never a start; a second analyst is told ---" -ForegroundColor Cyan
+    $ls1 = New-StartedRig "late-slow"
+    $ls1.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = $ls1.folder })
+    $ls1.now = $t0.AddMinutes(17); $null = Pass $ls1
+    Check ($ls1.spawns.Count -eq 1 -and (State $ls1).phase -ceq "starting" -and @($ls1.tells | Where-Object { $_.key -ceq "start-late-session" -and $_.body -like ("*" + $sidB + "*") }).Count -eq 1) "a slow first spawn came up (a live session of the analyst folder started since): past the bound there is no second spawn, and the warchief is told once, naming it"
+    $ls1.now = $t0.AddMinutes(20); $null = Pass $ls1
+    Check ($ls1.spawns.Count -eq 1 -and @($ls1.tells | Where-Object { $_.key -ceq "start-late-session" }).Count -eq 1) "and it is told once, not every pass"
+    Write-Handover -Folder $ls1.folder -Sid $sidB -At $t0.AddMinutes(21)
+    $ls1.listing = New-Listing -Live @($sidB)
+    $ls1.now = $t0.AddMinutes(22); $null = Pass $ls1
+    Check ((State $ls1).phase -ceq "running" -and (State $ls1).sessionId -ceq $sidB) "and once that session writes its handover it is provably the analyst and is adopted"
+    $lc1 = New-StartedRig "late-before"
+    $lc1.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(-30); cwd = $lc1.folder })
+    $lc1.now = $t0.AddMinutes(17); $null = Pass $lc1
+    Check ($lc1.spawns.Count -eq 2) "CONTROL: a live session that started long before this start is not this start's: the retry goes ahead"
+    $lc2 = New-StartedRig "late-elsewhere"
+    $lc2.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = (Join-Path $work "some-other-project") })
+    $lc2.now = $t0.AddMinutes(17); $null = Pass $lc2
+    Check ($lc2.spawns.Count -eq 2) "CONTROL: a live session started since, in another folder, is not the analyst's: the retry goes ahead"
+
+    # Over-cap: the replaced session is still alive by design, and a late session may be the fresh one.
+    $ovs = New-HordeAnalystState
+    $ovs.phase = "starting"; $ovs.startedAt = $t0; $ovs.startReason = "over-cap"; $ovs.previousSessionId = $sidA; $ovs.startAttempts = 1
+    $oc1 = New-Rig "overcap-late" $spawnSetting
+    Write-HordeAnalystState -Path (Join-Path $oc1.folder "supervisor.json") -State $ovs
+    $oc1.listing = New-Listing -Live @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(2); cwd = $oc1.folder })
+    $oc1.now = $t0.AddMinutes(16); $null = Pass $oc1
+    Check ($oc1.spawns.Count -eq 0 -and (State $oc1).phase -ceq "starting" -and @($oc1.tells | Where-Object { $_.key -ceq "start-late-session" }).Count -eq 1) "OVER-CAP: the old session is alive by design and a late session exists: no second spawn, and the old one is not adopted back"
+    $oc2 = New-Rig "overcap-retry" $spawnSetting
+    Write-HordeAnalystState -Path (Join-Path $oc2.folder "supervisor.json") -State $ovs
+    $oc2.listing = New-Listing -Live @($sidA)
+    $oc2.now = $t0.AddMinutes(16); $null = Pass $oc2
+    Check ($oc2.spawns.Count -eq 1 -and $oc2.spawns[0].reason -ceq "over-cap") "OVER-CAP: with no late session the retry goes ahead and keeps the reason over-cap"
+
+    # Unknown liveness: no spawn, told once that the wait has no bound and why.
+    $uk = New-StartedRig "late-unknown"
+    $uk.listing = New-Listing -Whole $false
+    $uk.now = $t0.AddMinutes(17); $null = Pass $uk
+    $uk.now = $t0.AddMinutes(20); $null = Pass $uk
+    $ukTell = @($uk.tells | Where-Object { $_.key -ceq "start-wait-unbounded" })
+    Check ($uk.spawns.Count -eq 1 -and $ukTell.Count -eq 1 -and $ukTell[0].body -like "*NO BOUND*" -and $ukTell[0].body -like "*Why:*not whole*") "an unreadable listing: nothing is started, and the warchief is told ONCE that the wait has no bound, with the reason"
+    $nid = New-StartedRig "identity-null"
+    $nid.tools["Identity"] = { return $null }
+    $nid.now = $t0.AddMinutes(17); $null = Pass $nid
+    $nidTell = @($nid.tells | Where-Object { $_.key -ceq "start-wait-unbounded" })
+    Check ($nid.spawns.Count -eq 1 -and $nidTell.Count -eq 1 -and $nidTell[0].body -like "*the replaced session: the running sessions could not be read*") "no reading of who is running at all: the replaced session's liveness is unknown, not gone, and nothing is started"
+
+    # A start time that is missing is not now.
+    $gs = New-HordeAnalystState
+    $gs.phase = "starting"; $gs.startedAt = $null; $gs.startReason = "gone"; $gs.previousSessionId = $sidA; $gs.startAttempts = 1
+    $g1 = New-Rig "no-startedat" $spawnSetting
+    Write-HordeAnalystState -Path (Join-Path $g1.folder "supervisor.json") -State $gs
+    $g1.now = $t0.AddMinutes(1); $null = Pass $g1
+    Check ($g1.spawns.Count -eq 1) "a starting state with no start time is past the bound (it used to move along with the clock and never trip)"
+    $g2 = New-Rig "no-startedat-late" $spawnSetting
+    Write-HordeAnalystState -Path (Join-Path $g2.folder "supervisor.json") -State $gs
+    $g2.listing = New-Listing -Late @(@{ id = $sidB; started = $t0; cwd = $g2.folder })
+    $g2.now = $t0.AddMinutes(1); $null = Pass $g2
+    Check ($g2.spawns.Count -eq 0) "and the live-session guard still holds before that retry"
+
+    # A second analyst that writes a handover after the replaced session was adopted.
+    $sa = New-StartedRig "second-analyst"
+    $sa.listing = New-Listing -Live @($sidA)
+    $sa.now = $t0.AddMinutes(4); $null = Pass $sa
+    Write-Handover -Folder $sa.folder -Sid $sidB -At $t0.AddMinutes(5)
+    $sa.now = $t0.AddMinutes(6); $null = Pass $sa
+    $sa.now = $t0.AddMinutes(7); $null = Pass $sa
+    $saTell = @($sa.tells | Where-Object { $_.key -like "second-analyst-*" })
+    Check ((State $sa).sessionId -ceq $sidA -and (State $sa).phase -ceq "running" -and $saTell.Count -eq 1 -and $saTell[0].body -like ("*" + $sidB + "*") -and $saTell[0].body -like "*second fleet analyst session*") "a second analyst's handover is not adopted, not stopped, and the warchief is told once, naming its session id"
+
     Write-Host "--- T-0341: a start with no spawn.log entry is failed with its reason ---" -ForegroundColor Cyan
     $nl = New-StartedRig "nolog"
     $nl.tools["SpawnLog"] = { param($Handover) return $null }
     $nl.now = $t0.AddMinutes(5); $null = Pass $nl
     Check ($nl.spawns.Count -eq 1) "CONTROL: 3 minutes in, the spawn script may still be running: no verdict yet"
     $nl.now = $t0.AddMinutes(7); $p7 = Pass $nl
-    Check ($nl.spawns.Count -eq 2 -and (@($p7.lines) -join " ") -like "*spawn.log*") "5 minutes in with no spawn.log entry: failed at once, not after the 15 minute bound, and the journal says why"
+    Check ($nl.spawns.Count -eq 1 -and @($nl.tells | Where-Object { $_.key -ceq "start-no-log" }).Count -eq 1 -and (@($p7.lines) -join " ") -like "*spawn.log*") "5 minutes in with no spawn.log entry: reported at once with its reason, told once, but NOT restarted: the spacing between starts is the bound"
+    $nl.now = $t0.AddMinutes(9); $null = Pass $nl
+    $nl.now = $t0.AddMinutes(10); $null = Pass $nl
+    Check ($nl.spawns.Count -eq 1 -and @($nl.tells | Where-Object { $_.key -ceq "start-no-log" }).Count -eq 1) "and 8 minutes in it is still one start, told once: three spawns are never minutes apart"
+    $nl.now = $t0.AddMinutes(17); $null = Pass $nl
+    Check ($nl.spawns.Count -eq 2) "the retry comes a full bound after the start"
     $lg = New-StartedRig "withlog"
     $logAt = $t0.AddMinutes(2)
     $lg.tools["SpawnLog"] = { param($Handover) return $logAt }.GetNewClosure()
@@ -610,7 +688,11 @@ try {
     $oldAt = $t0.AddDays(-1)
     $ol.tools["SpawnLog"] = { param($Handover) return $oldAt }.GetNewClosure()
     $ol.now = $t0.AddMinutes(7); $null = Pass $ol
-    Check ($ol.spawns.Count -eq 2) "an entry from the day before is not an entry for this start"
+    Check (@($ol.tells | Where-Object { $_.key -ceq "start-no-log" }).Count -eq 1) "an entry from the day before is not an entry for this start"
+    $nf = New-StartedRig "unreadable-log"
+    $nf.tools["SpawnLog"] = { param($Handover) return "unreadable" }
+    $nf.now = $t0.AddMinutes(7); $null = Pass $nf
+    Check (@($nf.tells | Where-Object { $_.key -ceq "start-no-log" }).Count -eq 0 -and $nf.spawns.Count -eq 1) "a log that cannot be read is not asked, never a failure"
 
     Write-Host ""
     Write-Host "--- T-0341: the spawn targets a live terminal, never a stale recorded one ---" -ForegroundColor Cyan
@@ -647,6 +729,34 @@ try {
     Check ($a.ok -eq $false -and $a.detail -like "*two sessions say they are the warchief*") "a warchief seat that cannot be told is a failed start with the reason"
 
     Write-Host ""
+    Write-Host ""
+    Write-Host "--- T-0341 review: the spawn log reader, and the Spawn wiring of the real command ---" -ForegroundColor Cyan
+    $logDir = Join-Path $work "spawnlog"
+    [void][System.IO.Directory]::CreateDirectory($logDir)
+    $hov = Join-Path $logDir "handover.json"
+    $logFile = Join-Path $logDir "spawn.log"
+    Check ($null -eq (Get-HordeAnalystSpawnLogNewest -Handover $hov)) "no spawn.log: null, which means no entry for the start"
+    [System.IO.File]::WriteAllText($logFile, "", $utf8)
+    Check ($null -eq (Get-HordeAnalystSpawnLogNewest -Handover $hov)) "an empty spawn.log: null"
+    [System.IO.File]::WriteAllText($logFile, (("20260101T000000Z old line`r`n" * 400) + "20261022T123456Z launch for gone`r`n"), $utf8)
+    $got = Get-HordeAnalystSpawnLogNewest -Handover $hov
+    Check ($got -is [datetime] -and $got -eq [datetime]::new(2026, 10, 22, 12, 34, 56, [System.DateTimeKind]::Utc) -and $got.Kind -eq [System.DateTimeKind]::Utc) "the stamp of the LAST line of a log longer than the 4 KB tail, with CRLF line ends, as UTC"
+    [System.IO.File]::AppendAllText($logFile, "this line has no stamp`n", $utf8)
+    Check ((Get-HordeAnalystSpawnLogNewest -Handover $hov) -ceq "unreadable") "a last line that does not open with a stamp: unreadable (not asked), never null"
+    [System.IO.File]::AppendAllText($logFile, "20261399T000000Z a stamp that is not a date`n", $utf8)
+    Check ((Get-HordeAnalystSpawnLogNewest -Handover $hov) -ceq "unreadable") "a stamp that is not a date: unreadable"
+    [System.IO.File]::AppendAllText($logFile, "20261022T130000Z fine again`n", $utf8)
+    Check ((Get-HordeAnalystSpawnLogNewest -Handover $hov) -eq [datetime]::new(2026, 10, 22, 13, 0, 0, [System.DateTimeKind]::Utc)) "and a good last line is read again"
+
+    # The tool the command wires, made by the function the command calls, called from this scope: the
+    # adapters' functions must be found by the caller's scope chain (here a double Get-HordeHostActors).
+    function Get-HordeHostActors { return @($liveActor) }
+    $script:ran.Clear()
+    $wired = New-HordeAnalystSpawnTool -FindSeat $staleSeat -RunScript $logging
+    $viaWire = Invoke-HordeAnalystTool -Tools @{ Spawn = $wired } -Name "Spawn" -With @($fakeScript, $fakeHandover, "gone", $null)
+    Check ($viaWire.ok -eq $true -and $script:ran.Count -eq 1 -and $script:ran[0] -like "*-ParentInstance sock-18404 *") "the Spawn block of the real command reaches Get-HordeHostActors from where the pass calls it, and spawns into the live terminal"
+    Remove-Item Function:\Get-HordeHostActors
+
     Write-Host "--- the spawn script's command line ---" -ForegroundColor Cyan
     $seat = [pscustomobject]@{ sessionId = $warchief; pane = "23"; instance = "sock-15852" }
     $line = Get-HordeAnalystSpawnArguments -Script "C:\f\spawn.ps1" -Seat $seat -Handover "C:\f\handover.json" -Reason "gone"

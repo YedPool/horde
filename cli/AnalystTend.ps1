@@ -59,7 +59,11 @@ $script:HordeAnalystTellSentences = [ordered]@{
     "spawn-failed"           = "The supervisor's spawn script did not report that a fresh fleet analyst started. It waits for a handover all the same; nothing more is started until one is written or you start one. The status of the analyst supervisor says more."
     "start-silent"           = "A fresh fleet analyst was started and has not written its handover file in the time allowed. Look at its tab; nothing more is started until it does or you start one."
     "start-retry"            = "A fresh fleet analyst was started and no session appeared in the time allowed, so the supervisor started another. After a few tries it stops and tells you. The status of the analyst supervisor says more."
-    "start-too-soon-gone"    ="The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
+    "start-no-log"           = "A fresh fleet analyst was started, but its spawn script wrote nothing to its spawn log, so it did not run to its start. The next start waits for the bound. The status of the analyst supervisor says more."
+    "start-wait-unbounded"   = "A fresh fleet analyst has not appeared in the time allowed, but the supervisor cannot tell whether a session of the analyst is already running, so it starts none and WAITS WITH NO BOUND. Look at the analyst's tabs and start or close one by hand. The status of the analyst supervisor says more."
+    "start-late-session"     = "A fresh fleet analyst has not written its handover in the time allowed, but a session started since is running in the analyst's folder, so the supervisor starts no other. Look at its tab; it is not stopped."
+    "second-analyst"         = "A second fleet analyst session wrote a handover and was not adopted: the supervisor keeps following the session it has, so the second gets no rounds. It is not stopped; close one of the two when you choose."
+    "start-too-soon-gone"    = "The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
     "start-too-soon-over-cap" = "The fleet analyst went over its context cap within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
     "no-answer"              = "The fleet analyst has not acked a round in the time allowed. The status of the analyst supervisor says more."
     "refused"                = "The analyst's supervisor cannot read one of its own files, so it acts on nothing until a person mends it. The status of the analyst supervisor says more."
@@ -115,7 +119,9 @@ function Send-HordeAnalystTell {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string]$Extra = "")
     if (@($State.told) -ccontains $Key) { return "" }
     if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return ("would tell the warchief (" + $Key + "), but telling is off") }
-    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $Extra
+    # A key that names a session (second-analyst-<8 hex>) wears its family's sentence; the session id is in -Extra.
+    $sentenceKey = $(if ($Key -cmatch '\Asecond-analyst-') { "second-analyst" } else { $Key })
+    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($sentenceKey)) { $script:HordeAnalystTellSentences[$sentenceKey] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $Extra
     $r = $null
     try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Tell" -With @($Key, $body, $Values) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
     if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); return ("told the warchief: " + $Key) }
@@ -192,16 +198,21 @@ function Invoke-HordeAnalystPass {
         try { $logAt = Invoke-HordeAnalystTool -Tools $Tools -Name "SpawnLog" -With @($sp.handover) } catch { $asked = $false }
         if ($asked -and $null -eq $logAt) { $spawnLogged = $false } elseif ($asked -and $logAt -is [datetime]) { $spawnLogged = ($logAt.ToUniversalTime() -ge $s.startedAt.AddMinutes(-1)) }
     }
-    # Is the session this start replaced running again (resumed by hand under its old id)? $null when there is
-    # nothing to ask. The liveness is the same proven reading a running phase uses.
-    $previousAlive = $null
-    if ($s.phase -ceq "starting" -and "" + $s.previousSessionId -ne "") {
-        $identPrev = $null
-        try { $identPrev = Invoke-HordeAnalystTool -Tools $Tools -Name "Identity" } catch { $identPrev = $null }
-        if ($null -eq $identPrev) { $previousAlive = New-HordeUnknown -Reason "the running sessions could not be read" }
-        else { $previousAlive = (Get-HordeAnalystLiveness -SessionId ("" + $s.previousSessionId) -Identity $identPrev).alive }
+    # Is the session this start replaced running again (resumed by hand under its old id), and is there a
+    # session started since this start that may be its own? Both are asked of ONE reading of who is running;
+    # an unreadable one is unknown for both, and an unknown is never a start. $null when no start is in progress.
+    $previousAlive = $null; $late = $null
+    if ($s.phase -ceq "starting") {
+        $identStart = $null
+        try { $identStart = Invoke-HordeAnalystTool -Tools $Tools -Name "Identity" } catch { $identStart = $null }
+        if ("" + $s.previousSessionId -ne "") {
+            if ($null -eq $identStart) { $previousAlive = New-HordeUnknown -Reason "the running sessions could not be read" }
+            else { $previousAlive = (Get-HordeAnalystLiveness -SessionId ("" + $s.previousSessionId) -Identity $identStart).alive }
+        }
+        $lateSince = $(if ($s.startedAt -is [datetime]) { [datetime]$s.startedAt } else { $now.AddYears(-1) })
+        $late = Get-HordeAnalystLateSessions -Identity $identStart -Since $lateSince -Exclude @("" + $s.previousSessionId) -Folder $Folder
     }
-    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart -SpawnLogged $spawnLogged -PreviousAlive $previousAlive
+    $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart -SpawnLogged $spawnLogged -PreviousAlive $previousAlive -Late $late
     switch -CaseSensitive ($d.action) {
         "adopt" {
             & $say ("adopted session " + $d.sessionId + ": " + $d.why)
@@ -209,7 +220,7 @@ function Invoke-HordeAnalystPass {
             # A NEW SESSION STARTS A NEW RUN (review of PR 306): the last one's untold-until-ack "no-answer"
             # would silence a fresh session that writes its handover and never acks. Its old rounds stay
             # marked alerted, so clearing here tells nothing about them again.
-            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "start-retry", "no-answer", "no-answer-founder")
+            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "start-retry", "start-no-log", "start-wait-unbounded", "start-late-session", "no-answer", "no-answer-founder")
             # It was awake when it wrote the handover: a session that has just said who it is is not
             # sent a heartbeat for having been silent before the supervisor knew it.
             # (A replaced session found running again may have no handover to read.)
@@ -227,7 +238,7 @@ function Invoke-HordeAnalystPass {
             $s.startAttempts = $(if ($d.retry -eq $true) { [Math]::Max([long]1, [long]$s.startAttempts) + 1 } else { [long]1 })
             $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
             $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
-            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent", "start-retry")
+            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent", "start-retry", "start-no-log", "start-wait-unbounded", "start-late-session")
             if ($d.retry -eq $true) { & $say ("the last start failed: " + $d.why) }
             Write-HordeAnalystState -Path $sp.state -State $s
             $r = $null
@@ -247,7 +258,16 @@ function Invoke-HordeAnalystPass {
         }
         default { if ($d.action -cne "keep") { & $say ($d.action + ": " + $d.why) } }
     }
-    if ($d.tell -ne "") { & $say (Send-HordeAnalystTell -State $s -Key $d.tell -Tools $Tools -Values $v) }
+    # A SECOND ANALYST THAT WROTE A HANDOVER IS NEVER SILENTLY IGNORED (T-0341): once the session in hand is
+    # running, a handover written since the last start by another session (not the one it replaced) is a second
+    # analyst - a slow first spawn that came up after the replaced session was adopted. It is not stopped, and
+    # the warchief is told once, naming it.
+    if ($s.phase -ceq "running" -and $d.action -ceq "keep" -and $handover.state -ceq "known" -and $s.startedAt -is [datetime] -and
+        $handover.value.sessionId -cne $s.sessionId -and $handover.value.sessionId -cne ("" + $s.previousSessionId) -and $handover.value.writtenAt -ge $s.startedAt.AddMinutes(-1)) {
+        & $say ("session " + $handover.value.sessionId + " wrote a handover but is not the analyst this supervisor follows (" + $s.sessionId + "); it is not stopped")
+        & $say (Send-HordeAnalystTell -State $s -Key ("second-analyst-" + $handover.value.sessionId.Substring(0, 8)) -Tools $Tools -Values $v -Extra ("`nSession: " + $handover.value.sessionId))
+    }
+    if ($d.tell -ne "") { & $say (Send-HordeAnalystTell -State $s -Key $d.tell -Tools $Tools -Values $v -Extra ("" + $d.extra)) }
 
     # 4. Rounds with no ack: told ONCE for a run of them (review of PR 306: a wedged session that is still
     #    alive gets a round every half hour, and telling each one was up to 48 alerts a day). The run ends,
@@ -359,8 +379,8 @@ function Get-HordeAnalystSpawnArguments {
 
 function Get-HordeAnalystSpawnLogNewest {
     # When the spawn script last wrote spawn.log, the file beside the handover file (the spawn script
-    # appends "<yyyyMMddTHHmmssZ> <what>" to it, one line per step): a UTC time, or $null for no file, no
-    # line, or a last line that does not open with a stamp. Only the end of the file is read.
+    # appends "<yyyyMMddTHHmmssZ> <what>" to it, one line per step): a UTC time; $null for no file or no
+    # line (a start with no entry); the string "unreadable" for a file whose last line does not open with a stamp, or that cannot be read (not asked, never a failure). Only the end of the file is read.
     param([Parameter(Mandatory = $true)][string]$Handover)
     $log = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($Handover), "spawn.log")
     $stream = $null
@@ -373,9 +393,9 @@ function Get-HordeAnalystSpawnLogNewest {
         $last = @([System.Text.Encoding]::ASCII.GetString($buf, 0, $got).Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Select-Object -Last 1)
         if ($last.Count -eq 0) { return $null }
         $m = [regex]::Match($last[0], '\A([0-9]{8}T[0-9]{6}Z) ')
-        if (-not $m.Success) { return $null }
+        if (-not $m.Success) { return "unreadable" }
         return [datetime]::ParseExact($m.Groups[1].Value, "yyyyMMdd'T'HHmmss'Z'", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
-    } catch { return $null } finally { if ($null -ne $stream) { $stream.Dispose() } }
+    } catch { $cause = $_.Exception.GetBaseException(); if ($cause -is [System.IO.FileNotFoundException] -or $cause -is [System.IO.DirectoryNotFoundException]) { return $null }; return "unreadable" } finally { if ($null -ne $stream) { $stream.Dispose() } }
 }
 
 function Resolve-HordeAnalystTerminal {
@@ -446,6 +466,20 @@ function Start-HordeAnalystSession {
     if ($ran.timedOut -eq $true) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script did not return in " + $script:HordeAnalystSpawnSeconds + " s") } }
     if ($ran.exitCode -ne 0) { return [pscustomobject]@{ ok = $false; detail = ("the spawn script exited " + $ran.exitCode) } }
     return [pscustomobject]@{ ok = $true; detail = "" }
+}
+
+function New-HordeAnalystSpawnTool {
+    # The Spawn tool of the real command: a block that runs Start-HordeAnalystSession with the terminal found
+    # by asking the loaded terminal adapters (Get-HordeHostActors, core/HostAct.ps1). It is a function so a suite
+    # can make the very block the command uses and call it from another scope: the adapters' functions are found
+    # by the CALLER's scope chain, not where the block was written (T-0341 review). -FindSeat and -RunScript
+    # are a suite's doubles; the command passes neither.
+    param([scriptblock]$FindSeat = $null, [scriptblock]$RunScript = $null)
+    return {
+        param($Script, $Handover, $Reason, $Values)
+        $resolve = { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @(Get-HordeHostActors)) }
+        return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason -ResolveTerminal $resolve -FindSeat $FindSeat -RunScript $RunScript)
+    }.GetNewClosure()
 }
 
 function Send-HordeAnalystPost {
