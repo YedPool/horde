@@ -1,6 +1,7 @@
 // Migration 6 (work_unit) and the write verb (work.mjs, work-cli.mjs), each attacked: a row the rule exists to
 // stop is written and must be refused, and the row it must still allow is written too. Databases of their own
 // under the temp folder; nothing real is read or written.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
