@@ -69,6 +69,17 @@ export function findProblems(db) {
   // hold both; a raw connection with triggers off could break them).
   for (const r of db.prepare(`SELECT c.id FROM decisions_confirm c JOIN decisions_snapshot s ON s.id = c.snapshot_id
     WHERE s.orc_id <> c.orc_id OR c.confirmed_at < s.published_at ORDER BY c.id`).all()) problems.push('decisions confirm ' + r.id + ' is not of its own Orc list or is before it was published');
+  // A work unit: a warg's own session was spawned by the unit's parent (when the session says who spawned it),
+  // and the unit's Orc is its parent session's Orc (when both are known). The CHECKs hold the shape of one row;
+  // these two compare it with the session rows.
+  for (const r of db.prepare(`SELECT w.id FROM work_unit w JOIN session s ON s.id = w.session_id
+    WHERE s.parent_session_id IS NOT NULL AND s.parent_session_id <> w.parent_session_id ORDER BY w.id`).all()) {
+    problems.push('work unit ' + r.id + ': its session has a different parent than the unit names');
+  }
+  for (const r of db.prepare(`SELECT w.id FROM work_unit w JOIN session p ON p.id = w.parent_session_id
+    WHERE w.orc_id IS NOT NULL AND p.orc_id IS NOT NULL AND w.orc_id <> p.orc_id ORDER BY w.id`).all()) {
+    problems.push('work unit ' + r.id + ': its Orc is not the Orc of its parent session');
+  }
   // A list's hash is recomputed from the lines it holds, so a line changed or added outside the write
   // module shows (the database cannot compare a hash with its rows).
   const lines = db.prepare('SELECT question_id, text, recommendation, importance, blocks FROM decisions_snapshot_item WHERE snapshot_id = ? ORDER BY position');

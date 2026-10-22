@@ -38,11 +38,11 @@ export function dbPathFor(home) {
   return path.join(path.resolve(h), DB_FILE);
 }
 
-export function openStore(file, { readOnly = false } = {}) {
+export function openStore(file, { readOnly = false, busyMs = 5000 } = {}) {
   if (readOnly && !fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; open it for writing once');
   if (!readOnly) fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file, { readOnly, enableForeignKeyConstraints: true });
-  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
   if (!readOnly) {
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA synchronous = NORMAL');
