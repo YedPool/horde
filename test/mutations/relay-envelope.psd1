@@ -80,8 +80,8 @@
            Find = 'if ($h.kind -cne $Kind) {'
            Replace = 'if ($false) {' }
         @{ Name = "parts-not-matched-to-signed-text"
-           Find = '-cne $env.ctText) {'
-           Replace = '-cne $env.ctText -and $false) {' }
+           Find = '-ceq $env.ctText)'
+           Replace = '-ceq $env.ctText -or $true)' }
         @{ Name = "recipient-key-not-matched-to-kid"
            Find = 'if ((Get-HordeRelayKeyId -Public (ConvertTo-HordeRelayP256Public -Key $key)) -cne $mine.kid) {'
            Replace = 'if ($false) {' }
