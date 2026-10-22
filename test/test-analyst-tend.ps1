@@ -589,15 +589,15 @@ try {
 
     Write-Host ""
     Write-Host "--- T-0341: the spawn targets a live terminal, never a stale recorded one ---" -ForegroundColor Cyan
-    $liveActor = [pscustomobject]@{ name = "double"; own = { return (New-HordeKnown -Value ([pscustomobject]@{ socket = "C:\socks\gui-sock-18404" })) } }
+    $liveActor = [pscustomobject]@{ name = "double"; own = { return (New-HordeKnown -Value ([pscustomobject]@{ socket = "C:\socks\sock-18404" })) } }
     $deadActor = [pscustomobject]@{ name = "double"; own = { return (New-HordeUnknown -Reason "no terminal of this user is running with a socket") } }
-    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @($liveActor)
-    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "gui-sock-18404" -and $rs.value.replaced -eq $true) "a recorded terminal that is not the live one is replaced by the live one"
-    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-18404" -Actors @($liveActor)
-    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "gui-sock-18404" -and $rs.value.replaced -eq $false) "CONTROL: a recorded terminal that is the live one is kept"
-    $rs = Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @($deadActor)
-    Check ($rs.state -ceq "unknown" -and $rs.reason -like "*no terminal of this user is running*" -and $rs.reason -like "*gui-sock-43224*") "no live terminal: unknown, with the host's reason and the stale name, never the recorded one"
-    Check ((Resolve-HordeAnalystTerminal -Recorded "gui-sock-43224" -Actors @()).state -ceq "unknown") "no terminal adapter loaded: unknown"
+    $rs = Resolve-HordeAnalystTerminal -Recorded "sock-43224" -Actors @($liveActor)
+    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "sock-18404" -and $rs.value.replaced -eq $true) "a recorded terminal that is not the live one is replaced by the live one"
+    $rs = Resolve-HordeAnalystTerminal -Recorded "sock-18404" -Actors @($liveActor)
+    Check ($rs.state -ceq "known" -and $rs.value.instance -ceq "sock-18404" -and $rs.value.replaced -eq $false) "CONTROL: a recorded terminal that is the live one is kept"
+    $rs = Resolve-HordeAnalystTerminal -Recorded "sock-43224" -Actors @($deadActor)
+    Check ($rs.state -ceq "unknown" -and $rs.reason -like "*no terminal of this user is running*" -and $rs.reason -like "*sock-43224*") "no live terminal: unknown, with the host's reason and the stale name, never the recorded one"
+    Check ((Resolve-HordeAnalystTerminal -Recorded "sock-43224" -Actors @()).state -ceq "unknown") "no terminal adapter loaded: unknown"
 
     $spawnDir = Join-Path $work "spawn-direct"
     [void][System.IO.Directory]::CreateDirectory($spawnDir)
@@ -605,14 +605,14 @@ try {
     [System.IO.File]::WriteAllText($fakeScript, "# never run: the suite hands in the runner", $utf8)
     $fakeHandover = Join-Path $spawnDir "handover.json"
     $fakeLog = Join-Path $spawnDir "spawn.log"
-    $staleSeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = $warchief; pane = "10"; instance = "gui-sock-43224" })) }
+    $staleSeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = $warchief; pane = "10"; instance = "sock-43224" })) }
     $script:ran = New-Object System.Collections.ArrayList
     $logging = { param($Line, $Seconds) [void]$script:ran.Add($Line); [System.IO.File]::AppendAllText($fakeLog, "20261022T000000Z launch`n", $utf8); return [pscustomobject]@{ exitCode = 0; timedOut = $false } }
     $silent = { param($Line, $Seconds) [void]$script:ran.Add($Line); return [pscustomobject]@{ exitCode = 0; timedOut = $false } }
     $resolveLive = { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @($liveActor)) }
     $resolveDead = { param($Recorded) return (Resolve-HordeAnalystTerminal -Recorded $Recorded -Actors @($deadActor)) }
     $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat $staleSeat -ResolveTerminal $resolveLive -RunScript $logging
-    Check ($a.ok -eq $true -and $script:ran.Count -eq 1 -and $script:ran[0] -like "*-ParentInstance gui-sock-18404 *" -and $script:ran[0] -notlike "*43224*") "a stale recorded socket is not passed to the spawn script: the live one is"
+    Check ($a.ok -eq $true -and $script:ran.Count -eq 1 -and $script:ran[0] -like "*-ParentInstance sock-18404 *" -and $script:ran[0] -notlike "*43224*") "a stale recorded socket is not passed to the spawn script: the live one is"
     $script:ran.Clear()
     $a = Start-HordeAnalystSession -Script $fakeScript -Handover $fakeHandover -Reason "gone" -FindSeat $staleSeat -ResolveTerminal $resolveDead -RunScript $logging
     Check ($a.ok -eq $false -and $a.detail -like "*no live terminal*" -and $a.detail -like "*no terminal of this user is running*" -and $script:ran.Count -eq 0) "no live terminal: the spawn is not run, and the failure says so"

@@ -46,7 +46,7 @@
            Replace = '"the warchief was told."' }
         # A new session starts a new run: adoption clears both no-answer keys.
         @{ Name = "adoption-keeps-no-answer-keys"
-           Find = '"start-too-soon-over-cap", "no-answer", "no-answer-founder")'
+           Find = '"start-too-soon-over-cap", "start-retry", "no-answer", "no-answer-founder")'
            Replace = '"start-too-soon-over-cap")' }
         @{ Name = "no-answer-cleared-without-new-ack"
            Find = 'if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) {'
