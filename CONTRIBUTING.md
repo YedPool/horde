@@ -367,18 +367,38 @@ its branch can break main when main moved under it").
 9. **Every repo-wide guard listed in `test\guards.txt` (`test-host-names`, `test-mutation-specs`,
    `test-function-names`, `test-json-parse-allowlist`, `test-param-shadow`, `test-core-load`,
    `test-exec-scan`, `test-start-sites`) is part of EVERY pull request's targeted set**, in both Windows
-   PowerShell 5.1 and PowerShell 7, and run on the final head, in a clean tree, before every merge, by any Orc. They
-   are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
-   278, 279 and 288 each merged green on their own suites and left `main` red on both.
+   PowerShell 5.1 and PowerShell 7, and run on the final head, in a clean tree, by any Orc. **They run
+   once a day, at night or at idle, over everything merged that day - not before each merge**
+   (founder rule of 2026-10-22: merges do not wait for test runs; rule 10 says how the nightly run
+   names the merge that broke one). They are light and read the whole repository, so any pull
+   request can break them: on 2026-10-14 PRs 278, 279 and 288 each merged green on their own suites
+   and left `main` red on both. That is why the daily run names the merge behind a red guard, and
+   why its owner fixes it first thing.
 10. **Merges go through `horde merge`**, which does what rule 9 and rule 4 ask in one command, so no
    step rests on memory: it refuses a PR that is not open, is a draft, conflicts or misses a required
-   review; runs every guard of rule 9 (the list is `test\guards.txt`) on the merge result, in Windows PowerShell 5.1 and PowerShell 7, with current `main` (rule 2), in a scratch
-   checkout of its own, and refuses if either is red; checks again if `main` moved meanwhile; merges
-   with `gh pr merge --merge`; and records the task ledger's merged event and tells the warchief and
+   review; merges with `gh pr merge --merge`; and records the task ledger's merged event and tells the warchief and
    the analyst, saying loudly what to run by hand if any of those fails after the merge. Before it, on
    2026-10-14 three merges skipped the guards and left `main` red, and on 2026-10-06 three merges were
    told to nobody (fleet audit of 2026-10-16, findings 2, 4 and 10). The repository's CI runs the
    same guards on every pull request and on `main`; it notifies and never blocks.
+
+   **The guards are owed, not run, at merge time (founder rule of 2026-10-22, T-0347).** Running
+   every guard in two shells before each merge was a test run, and it held every Orc's daytime
+   merge. So `horde merge` takes `-Guards later|now`, default `later`: it skips the combined-tree
+   build, the guards and the base-moved re-check, merges, and appends one line
+   (`repo, pr, task, by, at, headSha, mergeSha, firstParent`) to `<HORDE_HOME>\merge\guards-owed.jsonl`;
+   the warchief's message, the analyst's mail and the progress line say the guards are OWED, never
+   that they passed. `-Guards now` is the old behaviour (guards first, nothing merged on a red one),
+   for a merge someone wants checked first. **`horde merge -RunOwed [-Repo OWNER/REPO] [-Json]`** is
+   the daily run: for each repository with unchecked entries it runs `test\guards.txt` in both shells
+   on the base tip; for each guard red there it walks the queued merges in order, running only that
+   guard (first at the first merge's first parent, as the baseline), and names the first merge that
+   is red - or says "red before today's first queued merge" and names none. The report goes to
+   `<HORDE_HOME>\merge\nightly\<UTC date>-<owner>-<repo>.txt` and is printed, one line per red
+   guard naming the PR, task, lane and merge sha, or "all green over N merges"; each checked merge
+   sha is then appended to `guards-checked.jsonl` (`guards-owed.jsonl` is append-only). The named
+   merge's owner fixes it first thing. It schedules nothing and checks no idle: the nightly
+   scheduler (T-0331) does, and reports to M by 07:00.
 
 ## 16. Horde never depends on a Microsoft Store package
 

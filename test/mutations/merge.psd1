@@ -163,7 +163,7 @@
            Find = '$a = Invoke-HordeMergeTool -Tools $Tools -Name "Mail" -With @($message)'
            Replace = '$a = [pscustomobject]@{ ok = $true; detail = "" }' }
         @{ Name = "progress-draft-missing"
-           Find = '& $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title))'
+           Find = '& $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title) -GuardsOwed:($check.skipped -eq $true))'
            Replace = '' }
         @{ Name = "ps1-program-not-run-by-powershell"
            Find = 'if ($Program -match ''\.ps1\z'') {'
@@ -196,7 +196,7 @@
            Find = '} catch { return $true }'
            Replace = '} catch { return $false }' }
         @{ Name = "landed-on-moved-main-not-seen"
-           Find = 'elseif ($first -cne $check.base) {'
+           Find = 'elseif ($check.skipped -ne $true -and $first -cne $check.base) {'
            Replace = 'elseif ($false) {' }
         @{ Name = "landed-on-moved-main-not-a-problem"
            Find = '[void]$problems.Add($landed + "; run the guards on " + $pr.baseRefName + " now")'
@@ -216,5 +216,59 @@
         @{ Name = "pr-ref-kept-in-cache"
            Find = '$null = Invoke-HordeMergeTool -Tools $Tools -Name "Git" -With @(, [string[]]@("-C", $cache, "update-ref", "-d", $prRef))'
            Replace = '' }
+        @{ Name = "daytime-default-is-now"
+           Find = '[string]$Reason = "", [string]$Guards = "later")'
+           Replace = '[string]$Reason = "", [string]$Guards = "now")' }
+        @{ Name = "daytime-still-runs-guards"
+           Find = 'while (-not ($Request.guards -ceq "later")) {'
+           Replace = 'while ($true) {' }
+        @{ Name = "daytime-merge-not-queued"
+           Find = 'else { $ow = Invoke-HordeMergeTool -Tools $Tools -Name "Owed" -With @($owedLine) }'
+           Replace = 'else { $ow = [pscustomobject]@{ ok = $true; detail = "" } }' }
+        @{ Name = "daytime-queue-failure-silent"
+           Find = '[void]$problems.Add("the merge was not queued for the nightly guards run; add this line to guards-owed.jsonl: " + $hand)'
+           Replace = '' }
+        @{ Name = "daytime-queue-failure-says-queued"
+           Find = '& $say ("THE MERGE HAPPENED, BUT IT WAS NOT QUEUED FOR THE NIGHTLY GUARDS RUN: " + $ow.detail)'
+           Replace = '& $say "guards not run: queued for the nightly run (guards-owed.jsonl)"' }
+        @{ Name = "daytime-tell-claims-green"
+           Find = 'if ($Check.skipped -eq $true) { return ("HORDE MERGE: "'
+           Replace = 'if ($false) { return ("HORDE MERGE: "' }
+        @{ Name = "daytime-progress-silent-about-owed"
+           Find = 'if ($GuardsOwed) { $line += "; guards owed to the nightly run" }'
+           Replace = '' }
+        @{ Name = "owed-line-loses-first-parent"
+           Find = 'headSha = $HeadSha; mergeSha = $MergeSha; firstParent = $FirstParent }'
+           Replace = 'headSha = $HeadSha; mergeSha = $MergeSha; firstParent = "" }' }
+        @{ Name = "owed-line-appended-over-the-file"
+           Find = '[System.IO.File]::AppendAllText($Path, ($Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))'
+           Replace = '[System.IO.File]::WriteAllText($Path, ($Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))' }
+        @{ Name = "nightly-names-the-last-red-merge"
+           Find = '$item.lines = @($step.lines); $found = $true; break }'
+           Replace = '$item.lines = @($step.lines); $found = $true }' }
+        @{ Name = "nightly-skips-the-baseline"
+           Find = 'if ($bl.red) { $item.note ='
+           Replace = 'if ($false) { $item.note =' }
+        @{ Name = "nightly-red-in-one-shell-only"
+           Find = 'if (-not $read.ok) { $shells += $sh.label;'
+           Replace = 'if (-not $read.ok -and $sh.key -ceq "5.1") { $shells += $sh.label;' }
+        @{ Name = "nightly-checked-not-marked"
+           Find = '$ap = Add-HordeMergeJsonLine -Path $checkedPath -Line $l'
+           Replace = '$ap = [pscustomobject]@{ ok = $true; detail = "" }' }
+        @{ Name = "nightly-checked-merges-run-again"
+           Find = 'if ($checked.ContainsKey($e.mergeSha)) { continue }'
+           Replace = '' }
+        @{ Name = "nightly-red-exits-zero"
+           Find = 'if ($anyRed) { $code = 1 }'
+           Replace = '' }
+        @{ Name = "nightly-bad-line-ignored"
+           Find = 'if ($owed.bad.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nightly-unwalkable-merge-skipped"
+           Find = 'if ($h.code -ne 0) { return (& $err ("the merge "'
+           Replace = 'if ($false) { return (& $err ("the merge "' }
+        @{ Name = "nightly-report-not-written"
+           Find = '$wrote = Add-HordeMergeJsonLine -Path $reportPath -Line (($text -join "`n") + "`n")'
+           Replace = '$wrote = [pscustomobject]@{ ok = $true; detail = "" }' }
     )
 }

@@ -8,13 +8,13 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "missing-by-not-named"
-           Find = 'foreach ($need in @("Pr", "Task", "State", "By")) {'
-           Replace = 'foreach ($need in @("Pr", "Task", "State")) {' }
+           Find = 'foreach ($need in $(if ($RunOwed) { @() } else { @("Pr", "Task", "State", "By") })) {'
+           Replace = 'foreach ($need in $(if ($RunOwed) { @() } else { @("Pr", "Task", "State") })) {' }
         @{ Name = "bad-request-exits-one"
            Find = 'if (-not $request.ok) { throw (New-HordeUsageError $request.why) }'
            Replace = 'if (-not $request.ok) { throw $request.why }' }
         @{ Name = "no-ledger-script-not-named"
-           Find = 'if ("" + $mergeValues.ledgerScript -eq "") {'
+           Find = 'if (-not $RunOwed -and "" + $mergeValues.ledgerScript -eq "") {'
            Replace = 'if ($false) {' }
         @{ Name = "analyst-mail-not-written"
            Find = '(Write-HordeAnalystMail -Folder $folder -Text $Text -Markers $policy.markers)'
@@ -31,5 +31,20 @@
         @{ Name = "merge-lock-not-waited-for"
            Find = 'try { $held = $lock.WaitOne(0) }'
            Replace = 'try { $held = $true }' }
+        @{ Name = "runowed-takes-a-pull-request"
+           Find = 'foreach ($no in @("Pr", "Task", "State", "By", "On", "Reason", "Guards")) {'
+           Replace = 'foreach ($no in @("Task")) {' }
+        @{ Name = "json-without-runowed-taken"
+           Find = '} elseif ($PSBoundParameters.ContainsKey("Repo") -or $Json) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "runowed-json-not-printed"
+           Find = 'if ($Json) { Write-Output $owedRun.json }'
+           Replace = '' }
+        @{ Name = "runowed-red-exits-zero"
+           Find = 'if ($owedRun.exit -ne 0) { throw ('
+           Replace = 'if ($false) { throw (' }
+        @{ Name = "command-default-is-now"
+           Find = '[string]$Guards = "later",'
+           Replace = '[string]$Guards = "now",' }
     )
 }
