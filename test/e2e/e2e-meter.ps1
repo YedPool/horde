@@ -7,8 +7,8 @@
 # finding nothing new, the status report with its row counts, the limit watch's dry run naming the
 # stopped session, a flag refused for the wrong verb, and a machine without Node failing in one
 # sentence and not hanging. No pane, no terminal and no session is touched, and the watch is only ever
-# run with -DryRun, so nobody is told anything. The real Horde home is checked before and after: it must
-# not have gained a metrics folder (CONTRIBUTING 9). The relay journal is a synthetic one under the test home:
+# run with -DryRun, so nobody is told anything. The real Horde home (as horde resolves it) is checked before
+# and after: its database must not be created or gain a synthetic row (CONTRIBUTING 9). The relay journal is a synthetic one under the test home:
 # its hops are read, a damaged header is counted, and its files are checked unchanged afterwards.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -28,8 +28,36 @@ New-Item -ItemType Directory -Path $script:work | Out-Null
 $hordeHome = Join-Path $script:work "home"
 $projects = Join-Path $script:work "projects"
 $registry = Join-Path $script:work "registry"
-$realMetrics = Join-Path (Join-Path "$env:USERPROFILE" ".horde") "metrics"
-$realBefore = Test-Path -LiteralPath $realMetrics
+# The REAL home is the one horde itself would use (HORDE_HOME, else the pointer file, else <profile>\.horde),
+# read before anything runs. Until 2026-10-21 this watched <profile>\.horde\metrics only; the one-home move
+# (PR 366) put the real home elsewhere, and that old folder already existed, so the check proved nothing.
+. (Join-Path $root "core\Home.ps1")
+$realHome = $null
+try { $realHome = Get-HordeHome } catch { Write-Host ("  the real home does not resolve: " + $_.Exception.Message) }
+Check ($null -ne $realHome) "CONTROL: the real Horde home resolves, so it can be checked untouched"
+$realDb = $(if ($null -ne $realHome) { Join-Path $realHome "metrics\fleet.sqlite" } else { "" })
+# The synthetic sessions, read from the fixture builder so the ids live in one place. A row for one of them in
+# the real database is this suite's own write. Rows are counted, not file times compared: the live meter
+# writes the real database on its own while this runs.
+$fixtureIds = @()
+$builderFile = @(Get-ChildItem -Path (Join-Path $root "agents") -Filter "make-projects.mjs" -Recurse -File | Select-Object -First 1)
+if ($builderFile.Count -eq 1) {
+    $fixtureIds = @([regex]::Matches([System.IO.File]::ReadAllText($builderFile[0].FullName), "export const SID_\w+ = '([0-9a-f-]{36})'") | ForEach-Object { $_.Groups[1].Value })
+}
+Check ($fixtureIds.Count -ge 2) ("CONTROL: the synthetic session ids are read from the fixture builder (" + $fixtureIds.Count + ")")
+function Get-FixtureRows {
+    # -1 when -Db is not there, -2 when it cannot be read; else its tokens_requests rows for the synthetic
+    # sessions, opened read-only. --no-warnings and no stderr redirect: node:sqlite warns on stderr, and under
+    # 5.1 with $ErrorActionPreference Stop a redirected native stderr line is a terminating error.
+    param([string]$Db)
+    if ($Db -eq "" -or -not (Test-Path -LiteralPath $Db -PathType Leaf)) { return -1 }
+    $js = "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1],{readOnly:true});const ids=process.argv.slice(2);console.log(d.prepare('SELECT count(*) AS n FROM tokens_requests WHERE session_id IN ('+ids.map(()=>'?').join(',')+')').get(...ids).n)"
+    $said = & $node.Source --no-warnings -e $js $Db @($fixtureIds)
+    if ($LASTEXITCODE -ne 0 -or "$said".Trim() -notmatch '\A\d+\z') { return -2 }
+    return [int]("$said".Trim())
+}
+$realBefore = Get-FixtureRows $realDb
+Check ($realBefore -ne -2) ("CONTROL: the real database, if any, can be read (" + $realDb + ")")
 $cliEnv = @{ HORDE_HOME = $hordeHome }
 function Invoke-Meter { param([string[]]$MeterArgs, [hashtable]$Env = $cliEnv) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("meter") + $MeterArgs) -Env $Env) }
 
@@ -69,6 +97,8 @@ $c1 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
 Check ($c1.code -eq 0) ("collect exits 0 (" + $c1.code + ": " + $c1.out.Trim() + ")")
 Check ($c1.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=[1-9]\d* rows: tokens_requests=4 tokens_turns=3 tokens_agents=2 tokens_limits=1 tokens_usage=3 ms=\d+') ("one summary line: 3 files (two sessions and a subagent), 4 requests (a repeated one counted once), 3 turns, 1 subagent call written twice - by the parent's call and by its sidecar, 1 limit hit, live rows for the two sessions and the subagent (3 distinct rows, whichever of the subagent and its parent is read first) (" + $c1.out.Trim() + ")")
 Check ($c1.out -cmatch 'mail: journal_records=3 hops_added=4 skipped_headers=1') "and a mail line: 2 journal records give 4 hops, the damaged header is skipped and counted"
+$ownRows = Get-FixtureRows (Join-Path $hordeHome "metrics\fleet.sqlite")
+Check ($ownRows -gt 0) ("CONTROL: the row count used on the real home finds the synthetic rows in the test home (" + $ownRows + ")")
 $c2 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
 Check ($c2.code -eq 0 -and $c2.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=0 rows: tokens_requests=0 tokens_turns=0 tokens_agents=0 tokens_limits=0 tokens_usage=0' -and $c2.out -cmatch 'hops_added=0') ("the same collect again finds nothing new (" + $c2.out.Trim() + ")")
 
@@ -119,9 +149,13 @@ Check ($badSession.code -ne 0 -and $badSession.out -like "*-Session does not app
 $noNode = Invoke-Meter @("status") @{ HORDE_HOME = $hordeHome; PATH = ($env:SystemRoot + "\System32;" + $env:SystemRoot + "\System32\WindowsPowerShell\v1.0") }
 Check ($noNode.code -ne 0 -and $noNode.out -like "*needs Node.js 24 or later*") ("with no Node on the PATH it fails at once in one sentence (" + $noNode.code + ")")
 
+# Checked inside the try, before the test home is removed, so a run whose "real" home were the test home
+# would be caught by its own synthetic rows.
+$realAfter = Get-FixtureRows $realDb
+Check ($realAfter -eq $realBefore) ("the real Horde home's database gained no synthetic row and was not created (" + $realBefore + " -> " + $realAfter + "; -1 = no database)")
+
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-meter-e2e-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue }
 }
-Check ((Test-Path -LiteralPath $realMetrics) -eq $realBefore) "the real Horde home under the user profile has gained no metrics folder"
 
 Complete-HordeSuite -Success "collect is incremental and idempotent, status reports it, the dry-run watch names the stopped session, and nothing real is touched"
