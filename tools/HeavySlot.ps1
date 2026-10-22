@@ -4,6 +4,10 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\HeavySlot.ps1 -Script <suite, relative to -Worktree> [-Worktree <path>]
 #       [-ScriptArgs <a>,<b> | -ArgsFile <args.json>] [-Out <log>] [-MinFreeGB 3] [-WaitSeconds 7200] [-RunSeconds 3600]
+# A RUN STARTS ONLY WHEN THE PC IS IDLE OR IT IS NIGHT (founder rule, 2026-10-22): 10 minutes without keyboard
+# or mouse input, or 22:00 to 07:00 local; core/IdleState.ps1 says what counts, and <HORDE_HOME>\settings\idle.json
+# sets the thresholds. There is no switch to skip it: a suite that must stand clear of the machine's clock points
+# HORDE_HOME at a folder whose idle.json makes every hour night (nightStartHour 0, nightEndHour 24).
 # THE RUN'S ARGUMENTS. -ScriptArgs is split on commas, and each piece loses one layer of matching quotes:
 #   powershell -File hands the list over as ONE string with its quotes still on (measured 2026-10-15:
 #   -ScriptArgs '-Spec','x.psd1' reached the suite as the single argument '-Spec','x.psd1'). A piece that
@@ -23,14 +27,19 @@
 # queue. So the slot is a machine-wide named mutex, and memory is waited for only by its holder.
 #
 # WHAT IT DOES, in order:
-#   1. waits for the mutex -SlotName, up to -WaitSeconds, in short slices so Ctrl+C can break the wait;
+#   1. WAITS FIRST, TAKES LAST (T-0331; core/HeavySlotAcquire.ps1). Until 2026-10-22 it took the slot and then
+#      waited for memory, so one waiter under the floor held every lane back for as long as ITS -WaitSeconds
+#      (about 2.5 hours on that day). Now it waits, holding nothing, for BOTH idle-or-night and free memory of
+#      at least -MinFreeGB, and only then tries the mutex -SlotName, in short slices so Ctrl+C can break the
+#      wait. It checks both again after taking the slot; if either failed in between it RELEASES the slot
+#      and goes back to waiting. -WaitSeconds bounds all of it together;
 #   2. A HOLDER THAT WAS KILLED leaves the mutex abandoned, and Windows hands it to the next waiter. Its run
 #      dies with it (step 4's job), but a run of an older gate, or one started some other way, may not. So
 #      the holder keeps a record (-HolderFile: the run's process id, start time and script), and a later
 #      holder that finds a record of a run still alive - the same id AND the same start time, so a reused
 #      id is not mistaken for it - waits for that run to end first. A record that cannot be read is
 #      ignored: refusing on it would block every run for ever;
-#   3. waits, still holding the slot, until free memory is at least -MinFreeGB;
+#   3. (the memory wait is step 1 now, before the slot);
 #   4. runs the script - a .ps1 under Windows PowerShell 5.1, a .mjs under node - with standard input
 #      closed and PSModulePath cleared, output to -Out, for at most -RunSeconds, INSIDE A KILL-ON-CLOSE
 #      JOB OBJECT that allows no breakaway. It is created suspended, put in the job, recorded (step 2),
@@ -47,7 +56,7 @@
 # output so a stopped pipeline cannot swallow it.
 #
 # EXIT CODES: the script's own; 124 the run passed -RunSeconds; 125 the slot, a killed holder's run or
-# the memory was not had within -WaitSeconds (nothing was run); 126 the script is not there; 127 an
+# the memory was not had within -WaitSeconds (nothing was run); 128 the PC was not idle and it was not night within -WaitSeconds (nothing was run, nothing held); 126 the script is not there; 127 an
 # error the gate did not plan for. 126 also means the run's arguments were refused (THE RUN'S
 # ARGUMENTS). A suite that itself exits 124 to 127 reads the same: tell them apart by
 # the gate's own words above the closing line.
@@ -67,6 +76,8 @@ param(
     [string]$HolderFile = ""
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\IdleState.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\HeavySlotAcquire.ps1")
 
 if (-not ([System.Management.Automation.PSTypeName]"HordeHeavySlotJobV1").Type) {
     Add-Type -TypeDefinition @'
@@ -200,13 +211,31 @@ $main = {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126; Write-HordeHeavySlotLine ("heavy-slot: there is no script " + $path + "; nothing was run"); return }
     $script:mutex = New-Object System.Threading.Mutex($false, $SlotName)
     Write-HordeHeavySlotLine ("heavy-slot: waiting for the slot " + $SlotName + " for " + $Script)
-    # In slices, so Ctrl+C is seen between them: one long WaitOne cannot be broken.
-    while (-not $held) {
-        try { $script:held = $mutex.WaitOne([int][math]::Min($slice, (& $left) * 1000)) }
-        catch [System.Threading.AbandonedMutexException] { $script:held = $true; Write-HordeHeavySlotLine "heavy-slot: the last holder was killed before it released the slot" }
-        if (-not $held -and (& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run"); return }
+    $idleCfg = Get-HordeIdleConfig
+    if (-not $idleCfg.ok) { throw ($idleCfg.findings -join " ") }
+    # WAIT FIRST, TAKE LAST (core/HeavySlotAcquire.ps1): idle-or-night, then memory, then the slot, each
+    # checked again after the take; nothing is held while waiting for any of them, and -WaitSeconds
+    # bounds the whole. The slot itself is waited for in slices, so Ctrl+C is seen between them: one long
+    # WaitOne cannot be broken.
+    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -WaitSeconds $WaitSeconds -SliceMs $slice `
+        -GetIdle { Get-HordeIdleState -Config $idleCfg } `
+        -GetFreeGB { Get-HordeHeavySlotFreeGB } `
+        -TrySlot {
+            param($ms)
+            try { $script:held = $script:mutex.WaitOne($ms) }
+            catch [System.Threading.AbandonedMutexException] { $script:held = $true; Write-HordeHeavySlotLine "heavy-slot: the last holder was killed before it released the slot" }
+            return $script:held
+        } `
+        -ReleaseSlot { $script:mutex.ReleaseMutex(); $script:held = $false } `
+        -Elapsed { $clock.Elapsed.TotalSeconds } `
+        -Sleep { param($ms) Start-Sleep -Milliseconds $ms } `
+        -Say { param($line) Write-HordeHeavySlotLine $line }
+    if ($got.state -cne "held") {
+        if ($got.blocker -ceq "idle") { $script:code = 128; Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the PC to be idle or for night; nothing was run"); return }
+        if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); return }
+        Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")
+        return
     }
-
     # Measured 2026-10-14 on this PC: a holder killed with Stop-Process did NOT leave the mutex abandoned
     # for the next waiter, whose WaitOne simply returned true, so the record, not the mutex, says a holder
     # did not finish: a record still there with its run gone is a holder that never reached its finally.
@@ -217,13 +246,6 @@ $main = {
         while (-not $orphan.process.WaitForExit($slice)) {
             if ((& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for that run to end; nothing was run"); return }
         }
-    }
-
-    $said = $false
-    while ((Get-HordeHeavySlotFreeGB) -lt $MinFreeGB) {
-        if ((& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); return }
-        if (-not $said) { Write-HordeHeavySlotLine ("heavy-slot: holding the slot, waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + ")"); $said = $true }
-        Start-Sleep -Milliseconds ([math]::Min(5000, [math]::Max(200, (& $left) * 1000)))
     }
 
     Write-HordeHeavySlotLine ("heavy-slot: running " + $Script + " with " + (Get-HordeHeavySlotFreeGB) + " GB free, output in " + $Out)
