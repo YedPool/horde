@@ -1,0 +1,26 @@
+# THE REPO-WIDE GUARDS: the suites that read the whole repository, so any pull request can break them
+# (CONTRIBUTING 15 rule 9). ONE LIST, TWO READERS: `horde merge` (cli/Merge.ps1) and the CI workflow
+# (.github/workflows/guards.yml) both read this file, so adding a guard is one line here and nothing else.
+#
+# Format: one script per line, relative to the repository root, under test/ and ending .ps1. A # starts a
+# comment; blank lines are ignored. A line that is not a script path refuses the whole list (a skipped
+# line is a guard that silently does not run).
+#
+# Each guard runs in Windows PowerShell 5.1 AND in PowerShell 7 (the MSI install, never the Store copy),
+# and is green only on exit 0 with a closing "==== ... ====" banner that is not a failures banner. A guard
+# must therefore pass in both shells. horde merge also keeps every guard the BASE branch lists: a pull
+# request may add a line, but removing one here does not stop it running.
+#
+# History: host-names and mutation-specs were the two of rule 9 (2026-10-14, PRs 278/279/288 left main
+# red on both). function-names, json-parse-allowlist, param-shadow, core-load and exec-scan made "the
+# seven repo-wide guards" in the PR bodies of the fleet.db arc (PRs 339-346). test-start-sites is the
+# eighth ("all eight repo-wide guards", first named in PRs 342, 350 and 356); it reads messengers/ and
+# wakers/ and their start-sites lists.
+test/test-host-names.ps1
+test/test-mutation-specs.ps1
+test/test-function-names.ps1
+test/test-json-parse-allowlist.ps1
+test/test-param-shadow.ps1
+test/test-core-load.ps1
+test/test-exec-scan.ps1
+test/test-start-sites.ps1
