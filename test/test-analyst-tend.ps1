@@ -629,6 +629,15 @@ try {
     $lc5.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = (Join-Path $work "elsewhere"); name = "analyst - M fleet analyst" })
     $lc5.now = $t0.AddMinutes(17); $null = Pass $lc5
     Check ($lc5.spawns.Count -eq 1) "a session that calls itself the fleet analyst counts wherever it was started"
+    $lc6 = New-StartedRig "late-reviewer"
+    $lc6.listing = New-Listing -Gone @($sidA) -Late @(@{ id = $sidB; started = $t0.AddMinutes(3); cwd = (Join-Path $work "elsewhere"); name = "review M fleet analyst PR" })
+    $lc6.now = $t0.AddMinutes(17); $null = Pass $lc6
+    Check ($lc6.spawns.Count -eq 2 -and @($lc6.tells | Where-Object { $_.key -ceq "start-late-session" }).Count -eq 0) "CONTROL: a later session whose name merely contains the words (a reviewer of the fleet analyst), in another folder, is not the analyst and does not block the retry"
+    $lc7 = New-StartedRig "late-unverified"
+    $lc7.listing = New-Listing -Gone @($sidA)
+    $lc7.listing.records["dddddddd-4444-4444-8444-dddddddddddd"] = [pscustomobject]@{ sessionId = "dddddddd-4444-4444-8444-dddddddddddd"; processCheck = "uncheckable"; fields = @{} }
+    $lc7.now = $t0.AddMinutes(17); $null = Pass $lc7
+    Check ($lc7.spawns.Count -eq 1 -and @($lc7.tells | Where-Object { $_.key -ceq "start-wait-unbounded" }).Count -eq 1) "an unrelated record whose process cannot be checked makes the listing unknown: nothing is started, and the warchief is told (conservative, on purpose)"
     # Over-cap: the replaced session is still alive by design, and a late session may be the fresh one.
     $ovs = New-HordeAnalystState
     $ovs.phase = "starting"; $ovs.startedAt = $t0; $ovs.startReason = "over-cap"; $ovs.previousSessionId = $sidA; $ovs.startAttempts = 1

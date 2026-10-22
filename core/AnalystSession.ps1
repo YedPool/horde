@@ -70,6 +70,10 @@ $script:HordeAnalystSessionActions = @("keep", "adopt", "start", "wait", "tell")
 # (cli/AnalystTend.ps1, HordeAnalystSpawnSeconds) and writes its first line within seconds, so 240 s is that
 # plus a minute of slack.
 $script:HordeAnalystSpawnLogGraceSeconds = 240
+# The name the spawn script gives the analyst: its manifest id "analyst" and title "M fleet analyst" become the
+# control file's name "analyst - M fleet analyst" (read from the resumed analyst's control file, 2026-10-22). Compared in full:
+# a session that only mentions the words (a reviewer of the analyst) is not the analyst.
+$script:HordeAnalystSessionName = "analyst - M fleet analyst"
 
 function Get-HordeAnalystSessionPaths {
     # The two files of this contract under -Folder.
@@ -305,7 +309,7 @@ function Get-HordeAnalystLateSessions {
         # A session that names itself the fleet analyst is one wherever it was started (measured 2026-10-22: the
         # resumed analyst's control file says name "analyst - M fleet analyst", the title the spawn gives it).
         $nm = $rec.fields["name"]
-        if ($null -ne $nm -and $nm.state -ceq "known" -and ("" + $nm.value) -like "*M fleet analyst*") { [void]$found.Add("" + $rec.sessionId); continue }
+        if ($null -ne $nm -and $nm.state -ceq "known" -and ("" + $nm.value) -ieq $script:HordeAnalystSessionName) { [void]$found.Add("" + $rec.sessionId); continue }
         $cwd = $rec.fields["cwd"]
         if ($null -eq $cwd -or $cwd.state -cne "known") { return (New-HordeUnknown -Reason ("the folder of session " + $rec.sessionId + " is not known")) }
         $where = (("" + $cwd.value) -replace '/', '\').TrimEnd('\')

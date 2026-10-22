@@ -64,7 +64,13 @@
            Find = '$dirs = @(($Folder -replace ''/'', ''\'').TrimEnd(''\''))'
            Replace = '$dirs = @(($Folder -replace ''/'', ''\'').TrimEnd(''\''), [System.IO.Path]::GetDirectoryName($Folder.TrimEnd(''\'')))' }
         @{ Name = "session-named-fleet-analyst-not-counted"
-           Find = '-like "*M fleet analyst*"'
-           Replace = '-like "*no such name*"' }
+           Find = '-ieq $script:HordeAnalystSessionName)'
+           Replace = '-ieq "no such name")' }
+        @{ Name = "name-matched-as-a-substring"
+           Find = '-ieq $script:HordeAnalystSessionName)'
+           Replace = '-like "*M fleet analyst*")' }
+        @{ Name = "unverified-record-ignored-by-late-listing"
+           Find = 'if ($check -cne "verified") { return (New-HordeUnknown -Reason ("a session''s process could not be checked (" + $check + ")")) }'
+           Replace = 'if ($check -cne "verified") { continue }' }
     )
 }
