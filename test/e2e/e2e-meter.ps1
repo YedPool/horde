@@ -51,13 +51,21 @@ function Get-FixtureRows {
     # 5.1 with $ErrorActionPreference Stop a redirected native stderr line is a terminating error.
     param([string]$Db)
     if ($Db -eq "" -or -not (Test-Path -LiteralPath $Db -PathType Leaf)) { return -1 }
-    $js = "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1],{readOnly:true});const ids=process.argv.slice(2);console.log(d.prepare('SELECT count(*) AS n FROM tokens_requests WHERE session_id IN ('+ids.map(()=>'?').join(',')+')').get(...ids).n)"
-    $said = & $node.Source --no-warnings -e $js $Db @($fixtureIds)
-    if ($LASTEXITCODE -ne 0 -or "$said".Trim() -notmatch '\A\d+\z') { return -2 }
-    return [int]("$said".Trim())
+    # A database with no tokens_requests table yet holds no synthetic row: 0, not an error.
+    $js = "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1],{readOnly:true});const ids=process.argv.slice(2);if(!d.prepare('SELECT 1 FROM sqlite_master WHERE type=? AND name=?').get('table','tokens_requests')){console.log(0)}else{console.log(d.prepare('SELECT count(*) AS n FROM tokens_requests WHERE session_id IN ('+ids.map(()=>'?').join(',')+')').get(...ids).n)}"
+    # Two tries: the live meter may hold the real database for a moment while it writes.
+    foreach ($try in 1..2) {
+        $said = & $node.Source --no-warnings -e $js $Db @($fixtureIds)
+        if ($LASTEXITCODE -eq 0 -and "$said".Trim() -match '\A\d+\z') { return [int]("$said".Trim()) }
+        if ($try -eq 1) { Start-Sleep -Seconds 2 }
+    }
+    return -2
 }
 $realBefore = Get-FixtureRows $realDb
 Check ($realBefore -ne -2) ("CONTROL: the real database, if any, can be read (" + $realDb + ")")
+# The store writes these rows idempotently, so a real database that already holds them (an earlier leak) would
+# hide a new one behind an unchanged count: it must hold none before the run.
+Check ($realBefore -le 0) ("CONTROL: the real database holds no synthetic row before the run (" + $realBefore + "; -1 = no database)")
 $cliEnv = @{ HORDE_HOME = $hordeHome }
 function Invoke-Meter { param([string[]]$MeterArgs, [hashtable]$Env = $cliEnv) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("meter") + $MeterArgs) -Env $Env) }
 
