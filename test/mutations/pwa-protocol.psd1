@@ -163,8 +163,18 @@
            Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
            Replace = 'if (false) return' }
         @{ Name = "chat-receipt-words-not-shown"
-           Find = 'messageId: r.messageId, text: r.text !== "" ? r.text : (had ? had.text : ""), at: had'
+           Find = 'messageId: r.messageId, text: r.text !== "" ? r.text : (had ? had.text : CHAT_NO_WORDS), at: had'
            Replace = 'messageId: r.messageId, text: had ? had.text : r.text, at: had' }
+        # T-0340 round 2: a wordless line with nothing held draws the fixed placeholder; a receipt without a session keeps the line's.
+        @{ Name = "chat-wordless-receipt-empty-bubble"
+           Find = '(had ? had.text : CHAT_NO_WORDS)'
+           Replace = '(had ? had.text : "")' }
+        @{ Name = "chat-wordless-receipt-blanks-the-session"
+           Find = 'const session = r.session !== CHAT_NO_SESSION || !had ? r.session : had.session;'
+           Replace = 'const session = r.session;' }
+        @{ Name = "chat-receipt-session-rule-relaxed"
+           Find = 'if (typeof b.session !== "string" || !SESSION.test(b.session)) return { error: "the chat body names no session" };'
+           Replace = 'if (typeof b.session !== "string") return { error: "the chat body names no session" };' }
         @{ Name = "chat-founder-turn-shown-twice"
            Find = 'if (t.role === "founder") {'
            Replace = 'if (false) {' }

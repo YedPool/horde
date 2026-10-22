@@ -267,7 +267,7 @@ try {
     Check ((($rc -join ",") -ceq "accepted/queued")) ("the line is accepted and its receipt says only queued (" + ($rc -join ",") + ")")
     $aw = @(Get-Awaiting $W)
     Check ($aw.Count -eq 1 -and $aw[0].StartsWith($a.id + ":")) ("and it is AWAITED in the durable state, owned by the list from the moment its record was done (" + $aw.Count + ")")
-    Check ($aw.Count -eq 1 -and $aw[0].EndsWith(":0:0")) "not alarmed, and the knock did not wake the Thrall"
+    Check ($aw.Count -eq 1 -and $aw[0] -match ':0:0:\S+\z') "not alarmed, and the knock did not wake the Thrall"
     $state = [System.IO.File]::ReadAllText((Join-Path $W.home "relay\chat\state.json"))
     Check (-not $state.Contains("Park the Orcs")) "the state holds the mark and no word of the line"
     Check ((Has $a.turn "done ") -and (Has $a.turn "awaiting the Thrall")) ("the runner's line says it is done only as AWAITING the Thrall's own side (" + $a.turn.text + ")")
@@ -283,7 +283,7 @@ try {
     Check ((($rc -join ",") -ceq "held/not-now")) ("95 s on, not taken: the phone gets ONE alarm receipt, held/not-now, still trying (" + ($rc -join ",") + ")")
     Check ((($t.lines -join "|").Contains("ALARM: chat line " + $a.id)) -and (($t.lines -join "|").Contains("Thrall was not woken"))) ("and the runner's log carries an ALARM line that says the Thrall was not woken (" + ($t.lines -join " | ") + ")")
     $aw = @(Get-Awaiting $W)
-    Check ($aw.Count -eq 1 -and $aw[0].EndsWith(":1:0")) "the line is NOT dropped: it is still awaited, marked alarmed"
+    Check ($aw.Count -eq 1 -and $aw[0] -match ':1:0:\S+\z') "the line is NOT dropped: it is still awaited, marked alarmed"
     foreach ($ms in 100000, 160000, 400000) {
         Set-HordeChatTakenClock -Ms ($base + $ms)
         $null = Invoke-Tick $W
@@ -598,7 +598,7 @@ try {
     $rc = @(Get-ReceiptsOf $W5 $r1.id)
     Check ($rc.Count -eq 0) ("the same line coming again (re-signed) sends no 'Sent' over the alarm (" + ($rc -join ",") + "; " + $turn.text + ")")
     $awB = @(Get-Awaiting $W5)
-    Check ($awB.Count -eq 1 -and $awB[0] -ceq $awA[0] -and $awB[0].EndsWith(":1:0")) "and the line keeps its alarmed mark and its own clock"
+    Check ($awB.Count -eq 1 -and $awB[0] -ceq $awA[0] -and $awB[0] -match ':1:0:\S+\z') "and the line keeps its alarmed mark and its own clock"
     Check (Has $turn "done ") "and the duplicate's record is done, not stuck"
 
     Write-Host ""
@@ -682,9 +682,9 @@ try {
     $t = Invoke-Tick $W8
     $all = @(Get-Receipts @(Get-NewMail $W8 -All) | Where-Object { $_.messageId -ceq $g1.id })
     $al = @($all | Where-Object { $_.status -ceq "held" -and $_.code -ceq "not-now" })
-    Check ($al.Count -eq 1 -and $al[0].text -ceq "" -and $al[0].session -ceq "") ("an unusable record is alarmed on the phone (held/not-now), with no words, once (" + $al.Count + "; " + ($t.lines -join " | ") + ")")
+    Check ($al.Count -eq 1 -and $al[0].text -ceq "" -and $al[0].session -ceq (Get-ThrallSession $W8)) ("an unusable record is alarmed on the phone (held/not-now), with no words, once (" + $al.Count + "; " + ($t.lines -join " | ") + ")")
     $awG = @(Get-Awaiting $W8 | Where-Object { $_.StartsWith($g1.id + ":") })
-    Check ($awG.Count -eq 1 -and $awG[0] -match ':1:[01]\z') "and its mark is KEPT, alarmed, so a later TAKEN can still turn it into delivered"
+    Check ($awG.Count -eq 1 -and $awG[0] -match ':1:[01]:\S+\z') "and its mark is KEPT, alarmed, so a later TAKEN can still turn it into delivered"
     Set-HordeChatTakenClock -Ms ($base + 70160000)
     $null = Invoke-Tick $W8
     $all = @(Get-Receipts @(Get-NewMail $W8 -All) | Where-Object { $_.messageId -ceq $g1.id -and $_.code -ceq "not-now" })
@@ -827,6 +827,160 @@ try {
     Check ($end.state -ceq "known" -and -not $o.ok -and $o.reason.Contains("not opened")) ("the normal path REFUSES a session-signed line once the session ended (" + $o.reason + ")")
     $o = Open-HordeRelayChannelRecord -Context $W10.ctx -Channel $chatCh -Record $rec10.value -Reread
     Check ($o.ok -and (& $wordsOf $o) -ceq "Port words, session.") "while -Reread still gives the accepted line's words"
+
+    Write-Host ""
+    Write-Host "--- TAKEN 24. a WORDLESS receipt is read by the phone's own reader, as the PC writes it (T-0340 round 2, M1) ---" -ForegroundColor Cyan
+    # The bodies below are the exact bytes the PC put in the phone's mailbox, opened by the test phone; the phone's
+    # reader (relay/js/protocol.js, run by node) must accept each and draw the right line. Before round 2 the receipt
+    # named "session":"" and the phone dropped it: the alarm never reached the founder.
+    $nodeCmd = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $readerJs = Join-Path $root "test\fixtures\relay-chat\phone-reads-receipt.mjs"
+    function Get-RawReceiptBodies {
+        param($World, [string]$Id)
+        $out = New-Object System.Collections.ArrayList
+        foreach ($it in @(Get-PhoneItems $World)) {
+            $txt = Get-OpenedText $World.phone $it.text $World
+            if ($txt.Contains('"kind":"chat-receipt"') -and $txt.Contains('"messageId":"' + $Id + '"')) { [void]$out.Add($txt) }
+        }
+        return @($out.ToArray())
+    }
+    function Read-ReceiptAsPhone {
+        param($World, [string]$Body, [string]$Kept)
+        $f = Join-Path $World.home ("receipt-" + [guid]::NewGuid().ToString("N") + ".json")
+        [System.IO.File]::WriteAllText($f, $Body, $utf8)
+        $o = & $nodeCmd.Source $readerJs $f "work" $World.id.sign.keyId $Kept
+        return ($o | ConvertFrom-Json)
+    }
+    function Set-AwaitingNoSession {
+        # A mark as written before the session rode in it.
+        param($World, [string]$Id)
+        $rs = Read-HordeChatChannelState -HordeHome $World.home
+        $st = $rs.value
+        $st.awaiting = @(foreach ($m in @($st.awaiting)) { $en = ConvertFrom-HordeChatTakenMark -Mark $m; if ($en.messageId -ceq $Id) { $en.session = "" }; ConvertTo-HordeChatTakenMark -Entry $en })
+        Write-HordeChatChannelState -HordeHome $World.home -State $st
+        Close-HordeRelayRunContext -Context $World.ctx
+        $World.ctx = (New-HordeRelayRunContext -HordeHome $World.home -Connection $World.conn).value
+    }
+    if ($null -eq $nodeCmd) { Write-Host "  [SKIP] node is not installed here, so there is no phone reader to run" -ForegroundColor Yellow }
+    else {
+        $W12 = New-World -Settings $S
+        Set-HordeChatTakenClock -Ms ($base + 100000000)
+        $null = Invoke-Tick $W12
+        $null = Get-NewMail $W12
+        Reset-Posts
+        Remove-TestMessengers
+        $null = Register-TestMessenger "chat-wakes"
+        $sess12 = Get-ThrallSession $W12
+        $mAl = Send-OneLine $W12 "Wordless alarm words."
+        $mEx = Send-OneLine $W12 "Wordless expiry words."
+        $mDl = Send-OneLine $W12 "Wordless delivered words."
+        $mLg = Send-OneLine $W12 "Wordless legacy mark words."
+        $awM = @(Get-Awaiting $W12)
+        Check ($awM.Count -eq 4 -and (@($awM | Where-Object { $_ -match (':' + [regex]::Escape($sess12) + '\z') }).Count -eq 4)) ("every awaiting mark carries the Thrall's session id (" + $awM[0] + ")")
+        Check (-not ($awM -join ",").Contains("Wordless")) "and no mark holds a word of his"
+        foreach ($x in @($mAl, $mEx, $mDl, $mLg)) { Set-AwaitingSeq $W12 $x.id 99999 }
+        Set-AwaitingNoSession $W12 $mLg.id
+        $awL = @(Get-Awaiting $W12 | Where-Object { $_.StartsWith($mLg.id + ":") })
+        Check ($awL.Count -eq 1 -and $awL[0] -match ':[01]:[01]\z') "CONTROL: the legacy mark has no session"
+        $script:stages[$mDl.messengerId] = "handed-over"
+        Set-HordeChatTakenClock -Ms ($base + 100000000 + 100000)
+        $null = Invoke-Tick $W12
+        $kinds = @(
+            @{ what = "alarm (held/not-now)"; x = $mAl; status = "held"; code = "not-now"; legacy = $false },
+            @{ what = "alarm of a legacy mark (held/not-now, no session in the mark)"; x = $mLg; status = "held"; code = "not-now"; legacy = $true }
+        )
+        foreach ($k in $kinds) {
+            $bodies = @(Get-RawReceiptBodies $W12 $k.x.id | Where-Object { $_.Contains('"code":"' + $k.code + '"') })
+            Check ($bodies.Count -eq 1 -and $bodies[0].Contains('"text":""')) ("the PC wrote ONE wordless " + $k.what + " receipt (" + $bodies.Count + ")")
+            if ($bodies.Count -ne 1) { continue }
+            $res = Read-ReceiptAsPhone $W12 $bodies[0] $k.x.words
+            Check ($res.read.ok -eq $true) ("the phone's reader ACCEPTS the exact wordless " + $k.what + " body (" + $res.read.reason + "; " + $bodies[0] + ")")
+            if ($res.read.ok -ne $true) { continue }
+            Check ($res.read.value.status -ceq $k.status -and $res.read.value.code -ceq $k.code -and $res.read.value.text -ceq "") "with its status and code, and no words"
+            Check ($null -ne $res.held -and $res.held.status -ceq $k.status -and $res.held.code -ceq $k.code -and $res.held.text -ceq $k.x.words -and $res.held.count -eq 1) ("the line the phone holds shows that status on the right line, with its own words kept (" + ($res.held | ConvertTo-Json -Compress) + ")")
+            if ($k.legacy) { Check ($res.read.value.session -ceq "unknown" -and $res.held.session -ceq "kept-session") "a legacy mark's receipt names the no-session id, and the phone keeps the line's own session over it" }
+            else { Check ($res.read.value.session -ceq $sess12 -and $res.held.session -ceq $sess12) "and it names the Thrall's session the mark held, which the line shows" }
+            Check ($null -ne $res.bare -and $res.bare.text -ceq "(the words of this line could not be read back)" -and $res.bare.code -ceq $k.code) ("with nothing held, the phone draws a fixed placeholder, never an empty bubble (" + ($res.bare | ConvertTo-Json -Compress) + ")")
+        }
+        Set-HordeChatTakenClock -Ms ($base + 100000000 + 3700000)
+        $null = Invoke-Tick $W12
+        # TAKEN while its record cannot be read waits for the words inside the ttl (TAKEN 20) and is told wordless past it.
+        $dl = @(Get-RawReceiptBodies $W12 $mDl.id | Where-Object { $_.Contains('"code":"delivered"') })
+        Check ($dl.Count -eq 1 -and $dl[0].Contains('"text":""')) ("the PC wrote ONE wordless delivered receipt (" + $dl.Count + ")")
+        if ($dl.Count -eq 1) {
+            $res = Read-ReceiptAsPhone $W12 $dl[0] $mDl.words
+            Check ($res.read.ok -eq $true -and $res.held.status -ceq "accepted" -and $res.held.code -ceq "delivered" -and $res.held.text -ceq $mDl.words -and $res.held.session -ceq $sess12) ("the phone ACCEPTS the exact wordless delivered body and shows it on its line (" + $res.read.reason + ")")
+            Check ($res.bare.text -ceq "(the words of this line could not be read back)") "and draws the placeholder when it holds nothing of the line"
+        }
+        $ex = @(Get-RawReceiptBodies $W12 $mEx.id | Where-Object { $_.Contains('"code":"expired"') })
+        Check ($ex.Count -eq 1 -and $ex[0].Contains('"text":""')) ("the PC wrote ONE wordless expired receipt (" + $ex.Count + ")")
+        if ($ex.Count -eq 1) {
+            $res = Read-ReceiptAsPhone $W12 $ex[0] $mEx.words
+            Check ($res.read.ok -eq $true -and $res.held.status -ceq "held" -and $res.held.code -ceq "expired" -and $res.held.text -ceq $mEx.words) ("the phone ACCEPTS the exact wordless expired body and shows it on its line (" + $res.read.reason + ")")
+        }
+    }
+
+    Write-Host ""
+    Write-Host "--- TAKEN 25. a give-up whose receipt cannot be sent keeps the entry; a failed state write does not make it re-send (T-0340 round 2, S4) ---" -ForegroundColor Cyan
+    $script:HordeChatTakenKept = 3
+    $savedPhones = ${function:Get-HordeChatChannelPhones}
+    $script:phonesDown = $false
+    function Get-HordeChatChannelPhones {
+        param($Context)
+        if ($script:phonesDown) { return (New-HordeUnknown -Reason "the trust store cannot be read (suite)") }
+        return (& $savedPhones -Context $Context)
+    }
+    function Get-GiveUpBodies {
+        param($World, [string]$Id)
+        $out = New-Object System.Collections.ArrayList
+        foreach ($it in @(Get-PhoneItems $World)) {
+            $txt = Get-OpenedText $World.phone $it.text $World
+            if ($txt.Contains('"kind":"chat-receipt"') -and $txt.Contains('"messageId":"' + $Id + '"') -and $txt.Contains('"code":"not-delivered"')) { [void]$out.Add($txt) }
+        }
+        return @($out.ToArray())
+    }
+    try {
+        $W13 = New-World -Settings $S
+        Set-HordeChatTakenClock -Ms ($base + 110000000)
+        $null = Invoke-Tick $W13
+        $null = Get-NewMail $W13
+        Reset-Posts
+        Remove-TestMessengers
+        $null = Register-TestMessenger "chat-wakes"
+        $ol = @()
+        foreach ($i in 1..3) { $ol += Send-OneLine $W13 ("Retry line " + $i + ".") }
+        $script:phonesDown = $true
+        $ol += Send-OneLine $W13 "Retry line 4."
+        $aw = @(Get-Awaiting $W13)
+        Check ($aw.Count -eq 3 -and ($aw -join ",").Contains($ol[0].id) -and -not ($aw -join ",").Contains($ol[3].id)) ("the phone cannot be told: the oldest entry is KEPT, nothing is evicted (" + $aw.Count + ")")
+        Check ((Has $ol[3].turn "retry") -and -not (Has $ol[3].turn "done ")) ("and the record is retried, not done (" + $ol[3].turn.text + ")")
+        $script:phonesDown = $false
+        $turn = Invoke-Turn $W13
+        $aw = @(Get-Awaiting $W13)
+        Check ((Has $turn "done ") -and $aw.Count -eq 3 -and -not ($aw -join ",").Contains($ol[0].id) -and ($aw -join ",").Contains($ol[3].id)) ("once the phone can be told the record comes again, the oldest is given up and the new line awaited (" + $turn.text + ")")
+        Check (@(Get-GiveUpBodies $W13 $ol[0].id).Count -eq 1) "and the oldest was told not delivered once"
+
+        # A state that cannot be written after the give-up receipt went out: every retry of the record must not tell again.
+        $W14 = New-World -Settings $S
+        Set-HordeChatTakenClock -Ms ($base + 111000000)
+        $null = Invoke-Tick $W14
+        $null = Get-NewMail $W14
+        Reset-Posts
+        Remove-TestMessengers
+        $null = Register-TestMessenger "chat-wakes"
+        $wl14 = @()
+        foreach ($i in 1..3) { $wl14 += Send-OneLine $W14 ("Write line " + $i + ".") }
+        $statePath14 = Join-Path $W14.home "relay\chat\state.json"
+        Remove-Item -LiteralPath $statePath14 -Force
+        New-Item -ItemType Directory -Path $statePath14 | Out-Null
+        $wl14 += Send-OneLine $W14 "Write line 4."
+        $null = Invoke-Turn $W14
+        $null = Invoke-Turn $W14
+        Check (@(Get-GiveUpBodies $W14 $wl14[0].id).Count -eq 1) "the state cannot be written: three tries of the record tell the evicted line ONCE"
+        Remove-Item -LiteralPath $statePath14 -Recurse -Force
+        $turn = Invoke-Turn $W14
+        Check ((Has $turn "done ") -and @(Get-GiveUpBodies $W14 $wl14[0].id).Count -eq 1) ("and once the state is written the line is awaited and the evicted one still told once (" + $turn.text + ")")
+    } finally { $script:HordeChatTakenKept = 200; $script:phonesDown = $false; ${function:Get-HordeChatChannelPhones} = $savedPhones }
 
     Set-HordeChatTakenClock -Ms 0
     Reset-Posts

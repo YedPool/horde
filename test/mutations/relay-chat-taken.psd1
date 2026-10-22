@@ -64,8 +64,8 @@
            Replace = '        $d.awaiting = @()' }
         # The mark keeps no word of the conversation.
         @{ Name = "words-stored-in-awaiting-mark"
-           Find = '":" + $(if ($Entry.woken) { "1" } else { "0" }))'
-           Replace = '":" + $(if ($Entry.woken) { "1" } else { "0" }) + ":" + $Entry.text)' }
+           Find = '$(if ($Entry.woken) { "1" } else { "0" }) + $(if ("$($Entry.session)" -cne "")'
+           Replace = '$(if ($Entry.woken) { "1" } else { "0" }) + ":" + $Entry.text + $(if ("$($Entry.session)" -cne "")' }
         # M1: a receipt never depends on the session later. The words are read back WITHOUT judging the
         # session again; a record that cannot be opened at all is an ALARM line, never a silence.
         @{ Name = "receipt-judges-the-session-again"
@@ -91,8 +91,25 @@
            Find = 'if ($w.state -ceq "retry" -and $act -cne "alarm" -and $age -le [double]$Settings.ttlSeconds) {'
            Replace = 'if ($w.state -ceq "retry" -and $age -le [double]$Settings.ttlSeconds) {' }
         @{ Name = "wordless-receipt-invents-words"
-           Find = 'return [pscustomobject]@{ session = ""; text = ""; sentAt = [long]0;'
-           Replace = 'return [pscustomobject]@{ session = ""; text = "a line"; sentAt = [long]0;' }
+           Find = 'return [pscustomobject]@{ session = $session; text = ""; sentAt = [long]0;'
+           Replace = 'return [pscustomobject]@{ session = $session; text = "a line"; sentAt = [long]0;' }
+        # M1 (round 2): a wordless receipt names a session that passes the phone's session rule; an empty one is dropped by the phone.
+        @{ Name = "wordless-receipt-names-no-session"
+           Find = '    $session = $(if ("$($Entry.session)" -cne "") { "$($Entry.session)" } else { $script:HordeChatTakenNoSession })'
+           Replace = '    $session = ""' }
+        @{ Name = "wordless-receipt-ignores-the-marks-session"
+           Find = '    $session = $(if ("$($Entry.session)" -cne "") { "$($Entry.session)" } else { $script:HordeChatTakenNoSession })'
+           Replace = '    $session = $script:HordeChatTakenNoSession' }
+        @{ Name = "mark-drops-the-session"
+           Find = '$(if ("$($Entry.session)" -cne "") { ":" + $Entry.session } else { "" })'
+           Replace = '""' }
+        # S4 (round 2): a give-up whose receipt cannot be sent keeps its entry; one that was sent is not sent again.
+        @{ Name = "giveup-failure-reported-as-sent"
+           Find = 'return [pscustomobject]@{ sent = $false; line ='
+           Replace = 'return [pscustomobject]@{ sent = $true; line =' }
+        @{ Name = "giveup-sent-again-on-every-try"
+           Find = '    $Mine.heldSaid[$said] = $true'
+           Replace = '' }
         @{ Name = "wordless-receipt-silent-in-the-log"
            Find = '            if ($act -cne "alarm") { [void]$lines.Add("ALARM: chat line " + $e.messageId + " left the list as " + $act + " " + $rw.note) }'
            Replace = '' }
@@ -119,8 +136,8 @@
            Find = '-MessageId $Entry.messageId -Status "held" -Code "not-delivered"'
            Replace = '-MessageId $Entry.messageId -Status "accepted" -Code "delivered"' }
         @{ Name = "overflow-alarm-line-lost"
-           Find = 'return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched'
-           Replace = 'return ("chat: line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched' }
+           Find = 'line = ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched'
+           Replace = 'line = ("chat: line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched' }
         # The Glance says yes when a line is due.
         @{ Name = "glance-never-due"
            Find = '        if ($now - $last -ge $every) { return $true }'

@@ -39,14 +39,22 @@
            Replace = 'if ($false) {' }
         # S2: a line pushed off a full list is given up with a receipt and an ALARM line, never in silence.
         @{ Name = "overflow-line-dropped-silently"
-           Find = '$gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })'
-           Replace = '$gaveUp = @()' }
+           Find = '$told = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })'
+           Replace = '$told = @()' }
         # S-d: the evicted line is told BEFORE the state write that drops it, never after.
-        @{ Name = "giveup-after-the-state-write"
+        @{ Name = "giveup-disabled-when-the-list-is-full"
            Find = '            if ($null -eq $already) {'
            Replace = '            if ($false) {' }
+        # S4 (round 2): an entry whose phone could not be told is not evicted; the record is retried.
+        @{ Name = "giveup-unsent-entry-evicted-anyway"
+           Find = '                if (@($told | Where-Object { -not $_.sent }).Count -gt 0) {'
+           Replace = '                if ($false) {' }
+        # M1 (round 2): the awaiting mark carries the line's session, for the wordless receipt.
+        @{ Name = "mark-written-without-the-session"
+           Find = 'woken = ($null -ne $wp -and $wp.Value -eq $true); session = "$($line.session)" }'
+           Replace = 'woken = ($null -ne $wp -and $wp.Value -eq $true); session = "" }' }
         @{ Name = "giveup-sent-after-the-state-write"
-           Find = '            if (Add-HordeChatTaken -State $mine.durable -Entry $entry) {'
-           Replace = '            if ($(Add-HordeChatTaken -State $mine.durable -Entry $entry) -and $(try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable } catch { }; $true) -and $(if ($null -eq $already) { $gaveUp = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" }) }; $true)) {' }
+           Find = '$told = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })'
+           Replace = '[void](Add-HordeChatTaken -State $mine.durable -Entry $entry); try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable } catch { }; $told = @(foreach ($old in $overflow) { Send-HordeChatTakenGiveUp -Context $Context -Mine $mine -Entry $old -Why "the awaiting list is full" })' }
     )
 }
