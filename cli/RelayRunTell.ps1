@@ -44,7 +44,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Device.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
 
-$script:HordeRelayRunTellNeeds = @("body.untyped", "idempotent.post")
+$script:HordeRelayRunTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeRelayRunTellRole = "warchief"
 # Who the notice is from: the run is no session, so it names itself in a session id's shape, and wears
 # the label of the setting fromLabel (a messenger may hold a message whose sender it cannot place).

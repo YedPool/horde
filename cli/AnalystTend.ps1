@@ -40,7 +40,7 @@
 $script:HordeAnalystTellRole = "warchief"
 $script:HordeAnalystFromSession = "horde-analyst"
 $script:HordeAnalystTtlSeconds = 604800
-$script:HordeAnalystTellNeeds = @("body.untyped", "idempotent.post")
+$script:HordeAnalystTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeAnalystTakenStages = @("accepted", "handed-over", "seen")
 # How long the spawn script may take: the fleet tool waits for the new tab to open, about 30 s for a
 # launch on this fleet; three minutes leaves room for a slow, throttled machine.
