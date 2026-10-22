@@ -34,6 +34,7 @@ function Get-HordeCommandGroups {
         services = "long-lived pieces kept running and current"
         files = "files shared for the founder to read"
         analyst = "the fleet analyst, kept always on"
+        work = "merging the fleet's work"
         fleet = "hibernating sessions and waking them"
         status = "the Orc status card the founder's phone shows"
         data = "the fleet's one database of work"
