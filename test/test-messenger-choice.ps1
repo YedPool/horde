@@ -56,10 +56,6 @@ try {
         $found = Find-HordeMessenger -Require $needs
         Check ($found.state -ceq "known" -and "$($found.value.name)" -ceq "wezfleet") ($case.n + ": its need-list picks wezfleet (" + $found.state + ")")
         if ($found.state -cne "known") { continue }
-        # The wezfleet messenger starts the fleet through Windows PowerShell and reads folder ACLs with a
-        # .NET Framework call (GetAccessControl), so it posts on 5.1 only; under PowerShell 7 the choice is
-        # still proved above, and the post is left to 5.1, as it is for the messenger's own suites.
-        if ($PSVersionTable.PSEdition -cne "Desktop") { continue }
         $st = & $fx.New
         try {
             $msg = New-Msg

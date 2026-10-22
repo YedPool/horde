@@ -290,16 +290,37 @@ function Get-HordeWezfleetMessengerOutgoing {
         $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
         $sec.AddAccessRule($rule)
-        [System.IO.Directory]::SetAccessControl($dir, $sec)
+        Set-HordeWezfleetMessengerFolderAcl -Path $dir -Acl $sec
     }
     return $dir
+}
+
+function Get-HordeWezfleetMessengerFolderAcl {
+    # A folder's access list, read by .NET on both shells. Windows PowerShell 5.1 (.NET Framework) has
+    # GetAccessControl on DirectoryInfo; PowerShell 7 (.NET) dropped it, along with the static
+    # [System.IO.Directory]::GetAccessControl, and has it as the FileSystemAclExtensions extension
+    # (measured 2026-10-22: the static call threw on 7 and every tell posted from a pwsh 7 process died
+    # before sending). Not the Get-Acl cmdlet: its module does not load in a Windows PowerShell child of
+    # a PowerShell 7 parent. Neither branch catches: a list that cannot be read stays an error, never a pass.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $di = New-Object System.IO.DirectoryInfo($Path)
+    if ($di.PSObject.Methods["GetAccessControl"]) { return $di.GetAccessControl() }
+    return [System.IO.FileSystemAclExtensions]::GetAccessControl($di)
+}
+
+function Set-HordeWezfleetMessengerFolderAcl {
+    # A folder's access list written, the same two ways (see Get-HordeWezfleetMessengerFolderAcl).
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Acl)
+    $di = New-Object System.IO.DirectoryInfo($Path)
+    if ($di.PSObject.Methods["SetAccessControl"]) { $di.SetAccessControl($Acl); return }
+    [System.IO.FileSystemAclExtensions]::SetAccessControl($di, $Acl)
 }
 
 function Test-HordeWezfleetMessengerUserOnly {
     # Is the folder's access list protected from inheritance, with one rule: full control for this user?
     param([Parameter(Mandatory = $true)][string]$Path)
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = [System.IO.Directory]::GetAccessControl($Path)
+    $acl = Get-HordeWezfleetMessengerFolderAcl -Path $Path
     $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { return $false }
     $r = $rules[0]
