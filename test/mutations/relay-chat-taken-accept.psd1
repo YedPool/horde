@@ -8,8 +8,8 @@
     Mutations = @(
         # Done before taken: the accepted post is answered as delivered at once.
         @{ Name = "done-before-taken"
-           Find = 'return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting'
-           Replace = 'return (& $answer "done" "accepted" "delivered" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting' }
+           Find = '$queued = & $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting'
+           Replace = '$queued = & $answer "done" "accepted" "delivered" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake + "; awaiting' }
         # The line is not put on the awaiting list at all.
         @{ Name = "accepted-line-not-awaited"
            Find = 'if (Add-HordeChatTaken -State $mine.durable -Entry $entry) {'

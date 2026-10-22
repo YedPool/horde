@@ -52,8 +52,8 @@
            Find = 'if ($AgeSeconds -ge $TtlSeconds) { return "expired" }'
            Replace = 'if ($false) { return "expired" }' }
         @{ Name = "asked-on-every-turn"
-           Find = 'if ($now - $last -lt $every) { [void]$keep.Add($mark); continue }'
-           Replace = '' }
+           Find = 'if ($now - $dLast -ge (Get-HordeChatTakenDueMs -Settings $Settings -Alarmed $de.alarmed)) {'
+           Replace = 'if ($true) {' }
         # A duplicate or a restart does not double-send or lose a line.
         @{ Name = "duplicate-added-twice"
            Find = 'if ($null -ne $e -and $e.messageId -ceq $Entry.messageId) { return $false }'
@@ -73,6 +73,9 @@
         @{ Name = "unopenable-line-dropped-silently"
            Find = '[void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") and the phone could NOT be told: its record cannot be opened again - " + $w.reason)'
            Replace = '[void]$lines.Add("chat: line " + $e.messageId + " is left (" + $act + "): its record cannot be opened again - " + $w.reason)' }
+        @{ Name = "unreadable-record-kept-for-ever"
+           Find = 'if ($w.state -ceq "retry" -and $age -gt [double]$Settings.ttlSeconds) {'
+           Replace = 'if ($false) {' }
         @{ Name = "another-line-s-words-echoed"
            Find = 'if ($r.value.messageId -cne $Entry.messageId) {'
            Replace = 'if ($false) {' }

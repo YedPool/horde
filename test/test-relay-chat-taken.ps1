@@ -548,6 +548,19 @@ try {
     $t = Invoke-Tick $W4
     Check ((($t.lines -join "|").Contains("ALARM: chat line " + $s4.id)) -and (($t.lines -join "|").Contains("could NOT be told"))) ("a line whose record cannot be opened leaves with an ALARM line naming it, not in silence (" + ($t.lines -join " | ") + ")")
 
+    # (e) a record that opens but holds ANOTHER line than the one awaited is never echoed: ALARM line, left.
+    $e5 = ConvertFrom-HordeChatTakenMark -Mark (ConvertTo-HordeChatTakenMark -Entry $e4)
+    $e5.seq = [long]$awm[0].Split(":")[4]
+    $e5.messageId = "a" * 32
+    $rs = Read-HordeChatChannelState -HordeHome $W4.home
+    $st = $rs.value
+    $st.awaiting = @(ConvertTo-HordeChatTakenMark -Entry $e5)
+    Write-HordeChatChannelState -HordeHome $W4.home -State $st
+    Close-HordeRelayRunContext -Context $W4.ctx
+    $W4.ctx = (New-HordeRelayRunContext -HordeHome $W4.home -Connection $W4.conn).value
+    Set-HordeChatTakenClock -Ms ($base + 32000000 + 3800000)
+    $t = Invoke-Tick $W4
+    Check ((($t.lines -join "|").Contains("ALARM: chat line " + $e5.messageId)) -and @(Get-Awaiting $W4).Count -eq 0) ("a record holding another line is not echoed: an ALARM line, and the mark leaves (" + ($t.lines -join " | ") + ")")
     Write-Host ""
     Write-Host "--- TAKEN 15. a line already awaited and ALARMED is not answered 'Sent' again over its alarm (S1) ---" -ForegroundColor Cyan
     $W5 = New-World -Settings $S
