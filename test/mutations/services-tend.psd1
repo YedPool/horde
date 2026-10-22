@@ -106,9 +106,9 @@
         @{ Name = "job-not-at-start-up"
            Find = '{ @{ AtStartup = $true } }'
            Replace = '{ @{} }' }
-        @{ Name = "job-home-not-carried"
-           Find = '    $environment = @{ HORDE_HOME = $home2 }'
-           Replace = '    $environment = @{}' }
+        @{ Name = "job-home-baked-in"
+           Find = '    $environment = @{}'
+           Replace = '    $environment = @{ HORDE_HOME = $home2 }' }
         @{ Name = "install-unverified"
            Find = 'if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job "'
            Replace = 'if ($false) { throw ("the " + $s.name + " did not keep the job "' }

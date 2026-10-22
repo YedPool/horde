@@ -48,6 +48,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "Price.ps1")
 . (Join-Path $PSScriptRoot "Schedule.ps1")
@@ -76,11 +77,8 @@ function Read-HordeCollectIndex {
     $path = Get-HordeCollectIndexPath
     $entries = @{}
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ entries = $entries; note = "" } }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $doc = $null
-    try { $doc = $ser.DeserializeObject((Read-HordeSharedText -Path $path)) } catch { $doc = $null }
+    try { $doc = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $path)) } catch { $doc = $null }
     if ($doc -isnot [System.Collections.IDictionary] -or $doc["schemaVersion"] -ne 2 -or $doc["entries"] -isnot [System.Collections.IDictionary]) {
         return [pscustomobject]@{ entries = $entries; note = "the index could not be read, so every transcript is collected again" }
     }
@@ -98,8 +96,9 @@ function Read-HordeCollectIndex {
 function Write-HordeCollectIndex {
     # Written whole, by temp file and replace (Write-HordeMetricsFile), AFTER EVERY TRANSCRIPT (review of
     # #70, NEW-1: written once at the end, a run killed by the scheduler's time limit lost all its work,
-    # and a large backlog never finished). Serialised by .NET in one call, not ConvertTo-Json, so a commit
-    # per transcript stays cheap.
+    # and a large backlog never finished). Serialised in one ConvertTo-Json -Compress call over plain
+    # dictionaries, so a commit per transcript stays cheap: byte-identical to the old JavaScriptSerializer
+    # output on 5.1 and faster (20,000 entries: 136 ms against 246 ms, T-0323 review), and it works on pwsh 7.
     param([Parameter(Mandatory = $true)][hashtable]$Entries)
     $out = [System.Collections.Generic.Dictionary[string,object]]::new()
     foreach ($k in @($Entries.Keys | Sort-Object)) {
@@ -111,10 +110,7 @@ function Write-HordeCollectIndex {
     }
     $doc = [System.Collections.Generic.Dictionary[string,object]]::new()
     $doc["schemaVersion"] = 2; $doc["kind"] = "metrics.collectIndex"; $doc["entries"] = $out
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
-    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text $ser.Serialize($doc)
+    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text (ConvertTo-Json -InputObject $doc -Depth 30 -Compress)
 }
 
 function Get-HordeHashText {
@@ -155,10 +151,7 @@ function Set-HordeRecordSourceGone {
     $parts = $Record.Split("/", 2)
     $path = Get-HordeMetricsRecordPath -Adapter $parts[0] -Name $parts[1]
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
-    $doc = $ser.DeserializeObject([System.IO.File]::ReadAllText($path))
+    $doc = ConvertFrom-HordeJsonObject -Text ([System.IO.File]::ReadAllText($path))
     if ($doc -isnot [System.Collections.IDictionary] -or $doc["collection"] -isnot [System.Collections.IDictionary] -or $doc["collection"]["provisional"] -ne $true) { return }
     $doc["collection"]["sourceGone"] = $true
     $doc["collection"]["why"] = "its transcript is gone, so this provisional record can never be made final"
@@ -170,11 +163,8 @@ function Test-HordeMetricsFileValid {
     # record: a JSON object of kind transcript.summary.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $d = $null
-    try { $d = $ser.DeserializeObject((Read-HordeSharedText -Path $Path)) } catch { return $false }
+    try { $d = ConvertFrom-HordeJsonObject -Text ((Read-HordeSharedText -Path $Path)) } catch { return $false }
     if ($d -isnot [System.Collections.IDictionary]) { return $false }
     if ($Name -ceq "collect-index.json") { return ($d["schemaVersion"] -eq 2 -and $d["entries"] -is [System.Collections.IDictionary]) }
     return ("$($d["kind"])" -ceq "transcript.summary")
@@ -437,7 +427,7 @@ function Invoke-HordeMetricsSchedule {
     # INSTALL ONLY WHILE THE GATE SAYS USAGE: a job that collects nothing every 30 minutes is a job
     # nobody needs, and the gate stays the one switch. Collect checks the gate again on every run, so
     # turning metrics off later stops the recording at once, with or without removing the job.
-    param([Parameter(Mandatory = $true)][ValidateSet("install", "remove", "status")][string]$Action, [string]$TaskName = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled, [Parameter(Mandatory = $true)][string]$HordeScript)
+    param([Parameter(Mandatory = $true)][ValidateSet("install", "remove", "status")][string]$Action, [string]$TaskName = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled, [switch]$TakeOver, [Parameter(Mandatory = $true)][string]$HordeScript)
     Assert-HordeJobName -Name $TaskName -Folder $Folder
     $sched = Get-HordeScheduler
     if ($sched.state -ne "known") { throw ("cannot schedule collect: " + $sched.reason) }
@@ -449,11 +439,11 @@ function Invoke-HordeMetricsSchedule {
     switch ($Action) {
         "install" {
             if ($gate.state -ne "known" -or $gate.value.level -cne "usage") { throw ("metrics are " + $gateText + ", so a collect job would record nothing; it was not installed") }
-            $job = New-HordeCollectJob -HordeScript $HordeScript -Name $TaskName -Folder $Folder -Disabled:$Disabled
+            $job = New-HordeCollectJob -HordeScript $HordeScript -Name $TaskName -Folder $Folder -Disabled:$Disabled -TakeOver:$TakeOver
             & $s.install $job
             $st = & $s.status $TaskName $Folder
             if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job " + $where + ": " + $st.reason) }
-            return @("installed " + $where + ": every " + $job.everyMinutes + " minutes, low priority, stopped after " + $job.timeLimitMinutes + " minutes, for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }), ("runs: " + $job.script + " " + ($job.arguments -join " ")))
+            return @("installed " + $where + ": every " + $job.everyMinutes + " minutes, low priority, stopped after " + $job.timeLimitMinutes + " minutes, for the Horde home " + $job.hordeHome + $(if ($TakeOver) { "; -TakeOver: any task of this name registered under another home was replaced WITHOUT the check; " } else { "" }) + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }), ("runs: " + $job.script + " " + ($job.arguments -join " ")))
         }
         "remove" {
             $gone = & $s.remove $TaskName $Folder
@@ -467,7 +457,7 @@ function Invoke-HordeMetricsSchedule {
             $v = $st.value
             $fmt = { param($t) if ($null -eq $t) { "never" } else { $t.ToString("yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture) } }
             $lines += ($where + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", every " + $v.everyMinutes + " minutes, logon " + $v.logonType + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" }))
-            $lines += ("serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + " (result " + $v.lastResult + "), next run " + (& $fmt $v.nextRunAt))
+            $lines += ("registered under the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + " (result " + $v.lastResult + "), next run " + (& $fmt $v.nextRunAt))
             return $lines
         }
     }

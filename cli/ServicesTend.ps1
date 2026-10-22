@@ -536,14 +536,14 @@ function New-HordeServiceTendJob {
     # MINUTES, NOT ONE: a pass decides to take a step while it has budget left, and the step it then
     # takes - the move of a checkout, a self-check - may itself run a minute; ended at one minute, a
     # pass was being cut down in the middle of exactly the steps that must not be cut (safety review
-    # of the first build, item 6). The home travels with it as data, as the metrics job's does.
+    # of the first build, item 6). The home is NOT baked in (T-0299): the job resolves it at each run (HORDE_HOME, then the pointer), so horde home set moves it.
     # -PersonJob, for the start-up job: the name of the job in the person's session beside it.
-    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [string]$PersonJob = "", [switch]$Disabled)
+    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [string]$PersonJob = "", [switch]$Disabled, [switch]$TakeOver)
     $home2 = Get-HordeHome
     $where = $(if ($Kind -ceq "startup") { @{ AtStartup = $true } } else { @{ WithPerson = $true; AtLogon = $true } })
-    $environment = @{ HORDE_HOME = $home2 }
+    $environment = @{}
     if ($Kind -ceq "startup" -and $PersonJob -ne "") { $environment[$script:HordeServicePersonJobVariable] = $Folder + "\" + $PersonJob }
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment $environment -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment $environment -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -TakeOver:$TakeOver -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }
 
 function Invoke-HordeServiceSchedule {
@@ -553,7 +553,7 @@ function Invoke-HordeServiceSchedule {
     # a job that does not carry Horde's marker are refused by the scheduler, as for every Horde job.
     # INSTALL IS THE START-UP JOB FIRST: it is the one that may be refused for want of rights, and
     # refused, nothing else is touched - the job in the person's session stays exactly as it was.
-    param([Parameter(Mandatory = $true)][ValidateSet("install", "remove", "status")][string]$Action, [string]$TaskName = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled, [Parameter(Mandatory = $true)][string]$HordeScript)
+    param([Parameter(Mandatory = $true)][ValidateSet("install", "remove", "status")][string]$Action, [string]$TaskName = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled, [switch]$TakeOver, [Parameter(Mandatory = $true)][string]$HordeScript)
     $names = Get-HordeServiceTendJobNames -TaskName $TaskName -Folder $Folder
     $sched = Get-HordeScheduler
     if ($sched.state -ne "known") { throw ("cannot schedule the supervisor: " + $sched.reason) }
@@ -565,13 +565,13 @@ function Invoke-HordeServiceSchedule {
         "install" {
             $lines = New-Object System.Collections.ArrayList
             foreach ($b in @($both)) {
-                $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $b.name -Folder $Folder -Kind $b.kind -PersonJob $names.person -Disabled:$Disabled
+                $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $b.name -Folder $Folder -Kind $b.kind -PersonJob $names.person -Disabled:$Disabled -TakeOver:$TakeOver
                 # Installed over a job of the same name REPLACES it: one job of each kind, never two.
                 & $s.install $job
                 $st = & $s.status $b.name $Folder
                 if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job " + (& $where $b.name) + ": " + $st.reason) }
                 $as = $(if ($null -ne $st.value.PSObject.Properties["runsAs"] -and "" + $st.value.runsAs -ne "") { ", as " + $st.value.runsAs } else { "" })
-                [void]$lines.Add("installed " + (& $where $b.name) + ": " + $b.says + $as + ", for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }))
+                [void]$lines.Add("installed " + (& $where $b.name) + ": " + $b.says + $as + ", for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }) + $(if ($TakeOver) { "; -TakeOver: any task of this name registered under another home was replaced WITHOUT the check" } else { "" }))
             }
             [void]$lines.Add("both run: " + $HordeScript + " services tend; one pass at a time, whichever starts it")
             [void]$lines.Add("horde services status says whether their passes are coming round")
@@ -602,7 +602,7 @@ function Invoke-HordeServiceSchedule {
                 $when = $(if ($null -ne $v.PSObject.Properties["atStartup"] -and $v.atStartup -eq $true) { "at start-up and " } elseif ($null -ne $v.PSObject.Properties["atLogon"] -and $v.atLogon -eq $true) { "at sign-in and " } else { "" })
                 $as = $(if ($null -ne $v.PSObject.Properties["runsAs"] -and "" + $v.runsAs -ne "") { ", as " + $v.runsAs } else { "" })
                 [void]$lines.Add((& $where $b.name) + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", " + $when + "every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $as + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" }))
-                [void]$lines.Add("    serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt))
+                [void]$lines.Add("    registered under the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt))
             }
             if ($none -eq 2) { [void]$lines.Add("neither job is installed: no service is being supervised") }
             elseif ($none -eq 1) { [void]$lines.Add("ONE OF THE TWO JOBS IS MISSING: horde services schedule installs both") }

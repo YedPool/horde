@@ -104,7 +104,8 @@ function New-HordeScheduledJob {
         [switch]$WithPerson,
         [switch]$AtStartup,
         [switch]$AtLogon,
-        [switch]$MayOutlastInterval
+        [switch]$MayOutlastInterval,
+        [switch]$TakeOver
     )
     Assert-HordeJobName -Name $Name -Folder $Folder
     if ($AtStartup -and $WithPerson) { throw "a job that runs in the person's own session cannot run at start-up, before anyone has signed in" }
@@ -123,7 +124,7 @@ function New-HordeScheduledJob {
     foreach ($a in @($Arguments)) { if ("$a".Length -gt 0 -and $dashes -contains "$a"[0]) { throw ("a job argument cannot start with '-': '" + $a + "'") } }
     foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
     $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
-    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson; atStartup = [bool]$AtStartup; atLogon = [bool]$AtLogon }
+    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson; takeOver = [bool]$TakeOver; atStartup = [bool]$AtStartup; atLogon = [bool]$AtLogon }
 }
 
 function Read-HordeJobMarker {
@@ -138,11 +139,11 @@ function Read-HordeJobMarker {
 function New-HordeCollectJob {
     # The collect job: the shipped horde.ps1 of THIS checkout, `metrics collect`, every 30 minutes.
     #
-    # THE HOME TRAVELS WITH IT, AS DATA. A scheduler starts the job with the user's own environment, not
-    # this shell's, so the job sets HORDE_HOME itself, to the home this shell resolves - which is also the
-    # home its marker names. How the value reaches the program is the scheduler's business, never a
-    # command string built here (review of PR #70, F2: a curly quote closed one).
-    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled)
+    # THE HOME IS NOT BAKED IN (T-0299, round-1 review). The job runs as the user who registered it, so at each
+    # run it resolves the home as every other command does: HORDE_HOME, then the pointer file, then the default.
+    # A baked HORDE_HOME would outrank the pointer and keep the old folder after horde home set. The marker still
+    # records the home it was registered under, for status and for the check that a re-register is deliberate.
+    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled, [switch]$TakeOver)
     $home2 = Get-HordeHome
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -Disabled:$Disabled -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("metrics", "collect") -HordeHome $home2 -Disabled:$Disabled -TakeOver:$TakeOver -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
 }

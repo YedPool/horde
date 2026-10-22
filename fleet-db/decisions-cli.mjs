@@ -9,7 +9,7 @@
 // question number -> question id step, which needs fleet.db's question table.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dbPathFor, openStore } from './store.mjs';
+import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { publishDecisions } from './write.mjs';
 
 export const VERBS = ['publish', 'published'];
@@ -109,7 +109,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
   }
   let file;
   try {
-    file = dbPathFor(env.HORDE_HOME);
+    file = dbPathFor(homeFromEnv(env));
   } catch (e) {
     err('fleet.db: ' + e.message);
     return 2;

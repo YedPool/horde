@@ -43,6 +43,7 @@
 # What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 
 $script:HordeTranscriptKinds = @("call", "toolCall", "toolResult", "input", "usageTotal", "turnEnd", "compaction", "event")
 # A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
@@ -119,7 +120,7 @@ function Read-HordeJsonLines {
     # built on skipped lines is a smaller number that must say so. The LAST line, when the file does
     # not end with a newline, is the line being written right now; it is counted apart as tornTail.
     #
-    # THE PARSER IS .NET's JavaScriptSerializer, not ConvertFrom-Json: it returns dictionaries and
+    # THE PARSER IS ConvertFrom-HordeJsonObject (core/JsonText.ps1; JavaScriptSerializer on 5.1), not ConvertFrom-Json: it returns dictionaries and
     # arrays without building a PowerShell object per field. Measured 2026-10-01 on PowerShell 5.1: a
     # 46 MB, 31,204-line transcript parsed in 925 ms. A missing key reads as $null on its dictionaries
     # (measured the same day), and integers arrive as Int32 or Int64, fractions as Decimal.
@@ -149,9 +150,6 @@ function Read-HordeJsonLines {
     $private:endsWithNewline = $true; $private:reader = $null; $private:n = 0; $private:pendingBad = $false; $private:text = $null; $private:value = $null
     $private:limit = 0; $private:stopped = $false
     if ($null -ne $Upto) { $limit = [int]$Upto.lineCount }
-    Add-Type -AssemblyName System.Web.Extensions
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
     $out = New-Object System.Collections.ArrayList
     $skipped = 0; $torn = 0
     $stream = Open-HordeSharedStream -Path $Path
@@ -173,7 +171,7 @@ function Read-HordeJsonLines {
                 if ($null -ne $Upto -and $n -eq $limit -and $Upto.lastBad) { $pendingBad = $true; continue }
                 if ($text.Trim() -eq "") { continue }
                 $value = $null
-                try { $value = $ser.DeserializeObject($text) } catch { $value = $null }
+                try { $value = ConvertFrom-HordeJsonObject -Text ($text) } catch { $value = $null }
                 if ($value -isnot [System.Collections.Generic.Dictionary[string, object]]) { $pendingBad = $true; continue }
                 # The block's output is discarded, so a stray value in an adapter can never become a line.
                 if ($null -ne $Each) { $null = & $Each $n $value } else { [void]$out.Add([pscustomobject]@{ line = $n; value = $value }) }
