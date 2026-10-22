@@ -33,7 +33,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
-$script:HordeServiceTellNeeds = @("body.untyped", "idempotent.post")
+$script:HordeServiceTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeServiceTellRole = "warchief"
 # Who a notice is from: the supervisor is no session, so it names itself in a session id's shape, and
 # wears the label of the setting fromLabel (a messenger may hold a message whose sender it cannot place).
