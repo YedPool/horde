@@ -631,6 +631,12 @@ try {
     $oc2.now = $t0.AddMinutes(16); $null = Pass $oc2
     Check ($oc2.spawns.Count -eq 1 -and $oc2.spawns[0].reason -ceq "over-cap") "OVER-CAP: with no late session the retry goes ahead and keeps the reason over-cap"
 
+    $oc3 = New-Rig "overcap-unknown" $spawnSetting
+    Write-HordeAnalystState -Path (Join-Path $oc3.folder "supervisor.json") -State $ovs
+    $oc3.listing = New-Listing -Whole $false
+    $oc3.now = $t0.AddMinutes(16); $null = Pass $oc3
+    $oc3Tell = @($oc3.tells | Where-Object { $_.key -ceq "start-wait-unbounded" })
+    Check ($oc3.spawns.Count -eq 0 -and $oc3Tell.Count -eq 1 -and $oc3Tell[0].body -like "*the sessions started since*not whole*") "OVER-CAP, listing not whole: the replaced session is not in question, but sessions started since cannot be listed: nothing is started, told once with that reason"
     # Unknown liveness: no spawn, told once that the wait has no bound and why.
     $uk = New-StartedRig "late-unknown"
     $uk.listing = New-Listing -Whole $false

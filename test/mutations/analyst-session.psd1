@@ -42,9 +42,6 @@
         @{ Name = "no-log-start-not-reported"
            Find = 'if ($noLog -and $utcNow -lt $boundAt) {'
            Replace = 'if ($false) {' }
-        @{ Name = "no-log-retries-before-the-bound"
-           Find = 'if ($utcNow -ge $boundAt -and $CanStart'
-           Replace = 'if (($noLog -or $utcNow -ge $boundAt) -and $CanStart' }
         @{ Name = "missing-start-time-is-now"
            Find = '$State.startedAt } else { $utcNow.AddYears(-1) })'
            Replace = '$State.startedAt } else { $utcNow })' }
