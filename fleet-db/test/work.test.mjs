@@ -589,3 +589,73 @@ test('importer: a kind that disagrees with a session already stored is reported 
   assert.equal(again.unlinked.filter((u) => u.reason.includes('disagrees')).length, 1);
   assert.equal(rankOfSession(w.db, 2), 'warg');
 });
+
+test('importer: a stub made by work start is upgraded by the record, its units take the Orc, and a second import is silent', () => {
+  const w = world();
+  const g = id();
+  w.db.prepare("INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, 'G', 'g-lane', 'G', 'orc', ?)").run(g, T0);
+  startWork(w.db, { kind: 'agent', parentSession: uuid(40), agentId: 'early1', workType: 'build', at: T0 + 1 });
+  startWork(w.db, { kind: 'agent', parentSession: uuid(41), agentId: 'early2', workType: 'build', at: T0 + 2 });
+  assert.equal(rankOfSession(w.db, 40), 'unknown');
+  assert.deepEqual(listWork(w.db, { orc: 'F' }), []);
+  const reg = registryOf({ [uuid(40)]: { kind: 'warg', owner: 'F' }, [uuid(41)]: { kind: 'orc', label: 'G' } });
+  const rep = importFleet(w.db, { registry: reg });
+  assert.equal(rep.unlinked.filter((u) => u.reason.includes('disagrees')).length, 0, 'a stub is not a disagreement');
+  assert.equal(rankOfSession(w.db, 40), 'warg');
+  assert.equal(rankOfSession(w.db, 41), 'orc');
+  assert.equal(w.db.prepare('SELECT orc_id FROM session WHERE id = ?').get(uuid(40)).orc_id, w.f);
+  assert.deepEqual(listWork(w.db, { orc: 'F' }).map((r) => r.agent_id), ['early1']);
+  assert.deepEqual(listWork(w.db, { orc: 'G' }).map((r) => r.agent_id), ['early2']);
+  assert.deepEqual(findProblems(w.db), []);
+  const again = importFleet(w.db, { registry: reg });
+  assert.equal(again.unlinked.filter((u) => u.reason.includes('disagrees')).length, 0, 'the second import is silent');
+  // a row with a real rank that disagrees is still reported and kept
+  const third = importFleet(w.db, { registry: registryOf({ [uuid(40)]: { kind: 'orc', label: 'F' } }) });
+  assert.equal(third.unlinked.filter((u) => u.reason.includes('kind orc disagrees with the stored rank warg')).length, 1);
+  assert.equal(rankOfSession(w.db, 40), 'warg');
+});
+
+test('importer: a stub whose record names no usable rank stays a stub and its units keep no Orc', () => {
+  const w = world();
+  startWork(w.db, { kind: 'agent', parentSession: uuid(42), agentId: 'early3', workType: 'build' });
+  importFleet(w.db, { registry: registryOf({ [uuid(42)]: {} }) });
+  assert.equal(rankOfSession(w.db, 42), 'unknown');
+  assert.equal(w.db.prepare('SELECT orc_id FROM work_unit').get().orc_id, null);
+});
+
+test('a repeat start on a no_task unit fills the task when fleet.db knows it, and says so', () => {
+  const w = world();
+  const a = { kind: 'agent', parentSession: uuid(1), agentId: 'fill1', workType: 'build' };
+  startWork(w.db, a);
+  const unknown = startWork(w.db, { ...a, task: 'T-0888' });
+  assert.equal(unknown.action, 'already');
+  assert.equal(unknown.filled, false);
+  assert.equal(unknown.warnings.length, 1);
+  assert.equal(w.db.prepare('SELECT task_flag FROM work_unit').get().task_flag, 'no_task');
+  const r = startWork(w.db, { ...a, task: 'T-0001' });
+  assert.deepEqual({ action: r.action, filled: r.filled, note: r.note }, { action: 'already', filled: true, note: null });
+  assert.deepEqual({ ...w.db.prepare('SELECT task_id, task_flag FROM work_unit').get() }, { task_id: w.task, task_flag: null });
+  const cli = run({ HORDE_HOME: w.dir }, 'start', '--kind', 'agent', '--parent-session', uuid(1), '--agent-id', 'fill2', '--work-type', 'build');
+  assert.equal(cli.code, 0);
+  const cli2 = run({ HORDE_HOME: w.dir }, 'start', '--kind', 'agent', '--parent-session', uuid(1), '--agent-id', 'fill2', '--work-type', 'build', '--task', 'T-0001');
+  assert.match(cli2.out[0], /^already started; task filled agent [0-9A-Z]{26}$/);
+});
+
+test('any other repeat with different fields keeps the first row and names the fields that differ', () => {
+  const w = world();
+  const a = { kind: 'agent', parentSession: uuid(1), agentId: 'diff1', agentType: 'general-purpose', workType: 'build', domain: 'one', model: 'sonnet', task: 'T-0001' };
+  startWork(w.db, a);
+  const same = startWork(w.db, a);
+  assert.equal(same.note, null);
+  const r = startWork(w.db, { ...a, workType: 'review', domain: 'two', model: 'opus', agentType: 'Explore', task: 'T-0777' });
+  assert.equal(r.action, 'already');
+  assert.equal(r.filled, false);
+  assert.equal(r.note, 'note: the repeat differs from the first row in task, work type, domain, model, agent type; the first row is kept');
+  const row = w.db.prepare('SELECT work_type, domain, model, agent_type, task_id FROM work_unit').get();
+  assert.deepEqual({ ...row }, { work_type: 'build', domain: 'one', model: 'sonnet', agent_type: 'general-purpose', task_id: w.task });
+  assert.equal(startWork(w.db, { kind: 'agent', parentSession: uuid(1), agentId: 'diff1', workType: 'build' }).note, null, 'omitted fields are not differences');
+  const cli = run({ HORDE_HOME: w.dir }, 'start', '--kind', 'agent', '--parent-session', uuid(1), '--agent-id', 'diff1', '--work-type', 'verify');
+  assert.equal(cli.code, 0);
+  assert.match(cli.out[0], /^already started agent /);
+  assert.equal(cli.out[1], 'note: the repeat differs from the first row in work type; the first row is kept');
+});

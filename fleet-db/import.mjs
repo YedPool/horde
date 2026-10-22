@@ -406,7 +406,7 @@ function stepSessions(ctx, data) {
   const order = [...rows.values()].sort((a, b) => b.last - a.last || (a.id < b.id ? -1 : 1));
   const done = new Set();
   const visiting = new Set();
-  const exists = db.prepare('SELECT rank FROM session WHERE id = ?');
+  const exists = db.prepare('SELECT rank, orc_id FROM session WHERE id = ?');
   const seat = db.prepare("SELECT id FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
   // SEATS ARE DECIDED BEFORE ANY INSERT, freshest session first: the schema allows one live seat per Orc
   // and PC, and the freshest session must hold it. Inserting a parent early (for its child) never claims
@@ -418,7 +418,10 @@ function stepSessions(ctx, data) {
     // that disagrees is reported, never written over it. A kind that is none of the three is reported too.
     if (rec.kind !== undefined && rec.kind !== null && !RECORD_KINDS.includes(rec.kind)) rep.unlink('registry', 'kind is not thrall, orc or warg (the older rule decides the rank)', row.id);
     const have = exists.get(row.id);
-    if (have) {
+    // A STUB (rank unknown, no Orc) is what horde work start writes for a session the importer has not seen
+    // yet: the record upgrades it, and is not a disagreement with it.
+    const stub = have !== undefined && have.rank === 'unknown' && have.orc_id === null;
+    if (have && !stub) {
       if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink('registry', 'kind ' + rec.kind + ' disagrees with the stored rank ' + have.rank + ' (rank kept)', row.id);
       continue;
     }
@@ -439,6 +442,11 @@ function stepSessions(ctx, data) {
         rep.unlink('registry', 'a second live seat for one Orc (rank unknown)', row.id);
         row.rank = 'unknown';
       } else claimed.add(row.orcId);
+    }
+    if (stub && (row.rank !== 'unknown' || row.orcId !== null)) {
+      db.prepare('UPDATE session SET rank = ?, orc_id = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?').run(row.rank, row.orcId, row.retiredAt, row.id);
+      // The units this session spawned before the importer knew its Orc take it now (orc_id is not identity).
+      if (row.orcId !== null) db.prepare('UPDATE work_unit SET orc_id = ? WHERE orc_id IS NULL AND parent_session_id = ?').run(row.orcId, row.id);
     }
   }
   const link = (child, field, parentId) => {

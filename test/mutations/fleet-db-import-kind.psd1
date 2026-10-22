@@ -32,5 +32,17 @@
         @{ Name = "disagreeing-row-rewritten"
            Find = 'if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink('
            Replace = 'if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) db.prepare(''UPDATE session SET rank = ? WHERE id = ?'').run(rec.kind, row.id); if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink(' }
+        @{ Name = "stub-not-upgraded"
+           Find = 'const stub = have !== undefined && have.rank === ''unknown'' && have.orc_id === null;'
+           Replace = 'const stub = false;' }
+        @{ Name = "stub-units-keep-no-orc"
+           Find = 'if (row.orcId !== null) db.prepare(''UPDATE work_unit SET orc_id = ? WHERE orc_id IS NULL AND parent_session_id = ?'')'
+           Replace = 'if (false) db.prepare(''UPDATE work_unit SET orc_id = ? WHERE orc_id IS NULL AND parent_session_id = ?'')' }
+        @{ Name = "stub-upgrade-takes-other-parents-units"
+           Find = 'WHERE orc_id IS NULL AND parent_session_id = ?'').run(row.orcId, row.id);'
+           Replace = 'WHERE orc_id IS NULL'').run(row.orcId);' }
+        @{ Name = "stub-orc-not-written"
+           Find = 'UPDATE session SET rank = ?, orc_id = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?'').run(row.rank, row.orcId, row.retiredAt, row.id);'
+           Replace = 'UPDATE session SET rank = ?, orc_id = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?'').run(row.rank, null, row.retiredAt, row.id);' }
     )
 }

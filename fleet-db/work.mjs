@@ -88,7 +88,7 @@ export function startWork(db, req, { mint = newId, now = Date.now } = {}) {
       : db.prepare('SELECT id, parent_session_id FROM work_unit WHERE session_id = ?').get(session);
     if (find) {
       if (kind === 'warg' && find.parent_session_id !== parent) throw refuse('session ' + session + ' is already recorded as a warg of another parent');
-      return { action: 'already', id: find.id, warnings: [] };
+      return repeatOf(db, find.id, { workType: req.workType, domain, model, agentType, taskKey });
     }
     const nodeId = ensureNode(db, at, mint);
     let p = db.prepare('SELECT id, orc_id FROM session WHERE id = ?').get(parent);
@@ -118,6 +118,30 @@ export function startWork(db, req, { mint = newId, now = Date.now } = {}) {
       .run(id, kind, parent, p.orc_id, agentId, agentType, session, taskId, taskId === null ? 'no_task' : null, req.workType, domain, model, at);
     return { action: 'started', id, warnings };
   });
+}
+
+// A start that names a unit already there. The first row is kept. A no_task unit is given the task a repeat
+// names when fleet.db knows it (the one change a repeat may make); any other field that differs is only noted.
+function repeatOf(db, id, want) {
+  const row = db.prepare('SELECT work_type, domain, model, agent_type, task_id, task_flag FROM work_unit WHERE id = ?').get(id);
+  const warnings = [];
+  const differs = [];
+  let filled = false;
+  if (want.taskKey !== null) {
+    const t = db.prepare('SELECT id FROM task WHERE key = ?').get(want.taskKey);
+    if (row.task_id === null) {
+      if (t) {
+        db.prepare('UPDATE work_unit SET task_id = ?, task_flag = NULL WHERE id = ?').run(t.id, id);
+        filled = true;
+      } else warnings.push('warning: task ' + want.taskKey + ' is not in fleet.db yet (the ledger may be ahead of the last import); the unit stays no_task');
+    } else if (!t || t.id !== row.task_id) differs.push('task');
+  }
+  if (want.workType !== row.work_type) differs.push('work type');
+  if (want.domain !== null && want.domain !== row.domain) differs.push('domain');
+  if (want.model !== null && want.model !== row.model) differs.push('model');
+  if (want.agentType !== null && want.agentType !== row.agent_type) differs.push('agent type');
+  const note = differs.length ? 'note: the repeat differs from the first row in ' + differs.join(', ') + '; the first row is kept' : null;
+  return { action: 'already', id, warnings, filled, note };
 }
 
 // End a unit. Returns { action: 'ended' | 'already', id, outcome }.

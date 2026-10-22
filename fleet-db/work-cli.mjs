@@ -94,7 +94,8 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         session: flags['--session'], workType: flags['--work-type'], task: flags['--task'], domain: flags['--domain'], model: flags['--model'], at: timeFlag(flags['--at']),
       });
       for (const w of r.warnings) out(ascii(w));
-      out((r.action === 'started' ? 'started ' : 'already started ') + flags['--kind'] + ' ' + r.id);
+      out((r.action === 'started' ? 'started ' : r.filled ? 'already started; task filled ' : 'already started ') + flags['--kind'] + ' ' + r.id);
+      if (r.note) out(ascii(r.note));
       return 0;
     }
     if (verb === 'end') {
