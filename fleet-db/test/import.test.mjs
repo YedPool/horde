@@ -3,6 +3,7 @@
 // temp folder (CRLF lines, mixed Z and +00:00, lines out of time order, a line with no by, lane folder names,
 // free-text waits, comma lanes, Thrall and fleet-wide, a task suffix, corrections, a BOM, a US-locale time, a
 // parent session the registry lacks, an invalid card). Nothing real is read: the real files are never named.
+import './own-profile.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
