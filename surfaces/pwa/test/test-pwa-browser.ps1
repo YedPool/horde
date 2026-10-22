@@ -272,6 +272,9 @@ try {
     Check ($run.code -eq 0 -and $pl2.ok -and $pl2.value.found -and -not $pl2.value.text.Contains("Notifications on fleet.db?")) ("a list published again reaches the phone without a reload, and the item it dropped is gone (exit " + $run.code + ")")
     # M1 (review of PR 365): an Orc that published and asks nothing, with no status card, is still a card the founder
     # can choose. Orc G has no question and no card in a lanes document: it publishes one item and nothing else.
+    # THE PUBLISHED LISTS ALONE CHANGE here (no question changes after the first draw): the card must appear without a reload.
+    # (The record the document compares holds the published member, so it redraws the cards itself; a second redraw in
+    # app.js was tried as a mutant, survived, and was removed as dead code.)
     $gFile = Join-Path $work "g-items.json"
     [System.IO.File]::WriteAllText($gFile, '[{"text":"Orc G only item: rotate the keys?","recommendation":"next week","importance":"low"}]', $utf8)
     & $node.Source $seedJs publish $hh G $gFile

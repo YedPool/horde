@@ -344,9 +344,6 @@ function render(h, rec) {
   if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
   const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
   const did = d.doc.setList(shown);
-  // The document draws only when its own list changed; a list published, or one more item, changes nothing in it.
-  drawDecisionCards(h.id);
-  drawPublishedLists(h.id);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
   // next - the old snapshot, kept - cleared those words at once, so a 401 left old content with no sign.
   say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");

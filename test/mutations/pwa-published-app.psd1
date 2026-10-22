@@ -19,9 +19,6 @@
         @{ Name = "the-cards-are-not-given-the-published-lists"
            Find = 'published: d.value && d.value.published })) d.cards'
            Replace = 'published: null })) d.cards' }
-        @{ Name = "a-list-published-alone-does-not-redraw-the-cards"
-           Find = '  drawDecisionCards(h.id);'
-           Replace = '' }
         @{ Name = "the-lists-box-is-never-shown"
            Find = '  d.pub.hidden = false;'
            Replace = '  d.pub.hidden = true;' }
