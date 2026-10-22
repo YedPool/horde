@@ -23,9 +23,6 @@
         @{ Name = "invalid-card-letter-accepted"
            Find = 'if (!/^[A-Z]$/.test(card.orc)) return'
            Replace = 'if (!/^[A-Z]\d?$/.test(card.orc)) return' }
-        @{ Name = "existing-orc-matched-by-both"
-           Find = 'WHERE lane_dir = ? OR letter = ? ORDER BY'
-           Replace = 'WHERE lane_dir = ? AND letter = ? ORDER BY' }
         @{ Name = "lane-folder-not-mapped"
            Find = 'ctx.byLetter.get(name) ?? ctx.byDir.get(name) ?? null'
            Replace = 'ctx.byLetter.get(name) ?? null' }

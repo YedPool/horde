@@ -20,6 +20,7 @@
 # No Set-StrictMode here: this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 . (Join-Path $PSScriptRoot "StatusPanel.ps1")
 
 # The copy the guard hook restores from. One name, here and in the hook's checker.
@@ -132,5 +133,53 @@ function Invoke-HordeStatusSet {
         return [pscustomobject]@{ ok = $false; written = $false; undone = $true; problems = @("read back after the write, the card does not read clean: " + (@($back.problems) -join "; ") + "; " + $undone); lines = $recordLines; message = ""; usage = $false }
     }
     Write-HordeStatusFileAtomic -Path (Join-Path $Folder $script:HordeStatusLastGoodFile) -Bytes $bytes
-    return [pscustomobject]@{ ok = $true; written = $true; problems = @(); lines = $recordLines; message = ("status written for " + $back.orc + ": " + $back.doing); usage = $false }
+    return [pscustomobject]@{ ok = $true; written = $true; problems = @(); lines = $recordLines; message = ("status written for " + $back.orc + ": " + $back.doing); usage = $false; orc = $back.orc; lane = $back.lane }
+}
+
+function Invoke-HordeStatusOrcRow {
+    # After a card is written: make sure fleet.db has an orc row for it (T-0299: a new Orc had none until a hand
+    # `horde db import`, and `horde decisions publish` refused with "no row for Orc X"). The rule is the importer's
+    # own, one function in fleet-db/orc-row.mjs, reached through fleet-db/orc-cli.mjs.
+    # FAIL-OPEN, because the card is what matters and it is already written: no home, no node (or one older than
+    # 24), no fleet.db, a busy or newer database all come back as { state = "skipped"; reason }, never as a throw.
+    # state is "added" (a row was made), "kept" (it was there) or "skipped". Only a folder named "thrall" is the Thrall's.
+    param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][string]$Orc, [AllowEmptyString()][string]$Lane = "")
+    try {
+        $resolved = Resolve-HordeHome
+        if ($resolved.source -eq "default") { return [pscustomobject]@{ state = "skipped"; reason = "no Horde home (set HORDE_HOME, or horde home set -Path <folder>)" } }
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $node) { return [pscustomobject]@{ state = "skipped"; reason = "node is not installed (fleet.db needs Node.js 24 or later)" } }
+        $major = 0
+        $ver = "" + (& $node.Source --version)
+        if ($ver -match '^v(\d+)\.') { $major = [int]$Matches[1] }
+        if ($major -lt 24) { return [pscustomobject]@{ state = "skipped"; reason = ("fleet.db needs Node.js 24 or later, and this machine has " + $ver.Trim()) } }
+        $leaf = Split-Path -Leaf ([System.IO.Path]::GetFullPath($Folder).TrimEnd("\", "/"))
+        # The lane text goes in a quoted argument: a double quote or a backslash in it would end the argument early under
+        # Windows PowerShell 5.1's quoting, so each becomes an apostrophe (the row's name is a label, not the card).
+        $laneText = ($Lane -replace '["\\]', "'")
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $node.Source
+        $psi.Arguments = '"' + (Join-Path (Split-Path -Parent $PSScriptRoot) "fleet-db\orc-cli.mjs") + '" ensure --folder "' + $leaf + '" --letter "' + $Orc + '" --lane "' + $laneText + '"'
+        if ($leaf -ceq "thrall") { $psi.Arguments += " --thrall" }
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables["HORDE_HOME"] = $resolved.path
+        $p = [System.Diagnostics.Process]::Start($psi)
+        try {
+            $errTask = $p.StandardError.ReadToEndAsync()
+            $outTask = $p.StandardOutput.ReadToEndAsync()
+            # The database waits at most a few seconds for its lock; this is the net under that, killing only the process started here.
+            if (-not $p.WaitForExit(20000)) { try { $p.Kill() } catch { }; return [pscustomobject]@{ state = "skipped"; reason = "fleet.db did not answer in 20 seconds" } }
+            $p.WaitForExit()
+            $said = ("" + $outTask.Result).Trim()
+            if ($p.ExitCode -eq 0 -and ($said -ceq "added" -or $said -ceq "kept")) { return [pscustomobject]@{ state = $said; reason = "" } }
+            $why = (("" + $errTask.Result) -split "\r?\n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1)
+            if (-not $why) { $why = "the row command stopped with exit code " + $p.ExitCode }
+            return [pscustomobject]@{ state = "skipped"; reason = ("" + $why).Trim() }
+        } finally { $p.Dispose() }
+    } catch {
+        return [pscustomobject]@{ state = "skipped"; reason = $_.Exception.Message }
+    }
 }

@@ -22,6 +22,11 @@ $work = Join-Path $env:TEMP ("horde-status-set-" + [guid]::NewGuid().ToString("N
 New-Item -ItemType Directory -Path $work | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:n = 0
+# Every run of the real command gets a Horde home and a profile of its own: status set also makes the card its fleet.db row, and an environment that named the real home would reach the real database.
+$fakeProfile = Join-Path $work "profile"
+$homeDir = Join-Path $work "home"
+New-Item -ItemType Directory -Path $fakeProfile, $homeDir | Out-Null
+$cliEnv = @{ HORDE_HOME = $homeDir; USERPROFILE = $fakeProfile }
 
 function New-Lane {
     param([string]$Card = "")
@@ -264,24 +269,97 @@ Check ((Get-HordeTestMember $res "ok") -eq $false -and (Says $res "and so does a
 Write-Host ""
 Write-Host "--- the real horde command ---" -ForegroundColor Cyan
 $dir = New-Lane
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "driving the real command", "-Finished", "wrote the writer", "-Blocked", "no", "-Orc", "K", "-Lane", "status writer", "-Folder", $dir)
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "driving the real command", "-Finished", "wrote the writer", "-Blocked", "no", "-Orc", "K", "-Lane", "status writer", "-Folder", $dir) -Env $cliEnv
 Check ($cli.code -eq 0 -and $cli.out -match "status written for K: driving the real command") "exit 0 and the one-line answer"
 Check ((Read-HordeFleetStatusFolder -Path $dir).written -eq $true) "the file it wrote reads clean"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "fixing PR 68", "-Finished", "x", "-Blocked", "no", "-Folder", $dir)
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "fixing PR 68", "-Finished", "x", "-Blocked", "no", "-Folder", $dir) -Env $cliEnv
 Check ($cli.code -eq 1 -and $cli.out -match "NOT written" -and $cli.out -match "bare reference or a path") "a card the reader would refuse: exit 1 and the reader's words"
 Check ((Read-HordeFleetStatusFolder -Path $dir).doing -ceq "driving the real command") "   and the card on disk is still the good one"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "only this", "-Folder", $dir)
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "only this", "-Folder", $dir) -Env $cliEnv
 Check ($cli.code -eq 2 -and $cli.out -match "-Finished, -Blocked") "leaving out -Finished and -Blocked is a usage error naming them (exit 2)"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "a", "-Finished", "b", "-Blocked", "no", "-Folder", (New-Lane))
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "a", "-Finished", "b", "-Blocked", "no", "-Folder", (New-Lane)) -Env $cliEnv
 Check ($cli.code -eq 2 -and $cli.out -match "-Orc and -Lane") "no card and no -Orc/-Lane: exit 2, naming both"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "a", "-Finished", "b", "-Blocked", "no", "-Folder", (Join-Path $work "nope"))
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "a", "-Finished", "b", "-Blocked", "no", "-Folder", (Join-Path $work "nope")) -Env $cliEnv
 Check ($cli.code -eq 2 -and $cli.out -match "does not exist") "a folder that is not there: exit 2"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "frobnicate")
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "frobnicate") -Env $cliEnv
 Check ($cli.code -eq 2) "a verb that is not 'set': exit 2"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "dry one", "-Finished", "b", "-Blocked", "no", "-DryRun", "-Folder", $dir)
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "dry one", "-Finished", "b", "-Blocked", "no", "-DryRun", "-Folder", $dir) -Env $cliEnv
 Check ($cli.code -eq 0 -and $cli.out -match "dry run" -and (Read-HordeFleetStatusFolder -Path $dir).doing -ceq "driving the real command") "-DryRun: exit 0, the record shown, the card unchanged"
-$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "under seven", "-Finished", "b", "-Blocked", "no", "-Folder", $dir) -Shell (Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe")
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "under seven", "-Finished", "b", "-Blocked", "no", "-Folder", $dir) -Shell (Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe") -Env $cliEnv
 Check ($cli.code -eq 0 -and (Read-HordeFleetStatusFolder -Path $dir).doing -ceq "under seven") "and the same command works under PowerShell 7"
+
+Write-Host ""
+Write-Host "--- the written card also gets its fleet.db row, and never fails the card for it ---" -ForegroundColor Cyan
+# A helper node script, written into the work folder: init a fleet.db, list its orc rows, or make its schema newer than the code.
+$tool = Join-Path $work "dbtool.mjs"
+$toolText = @'
+import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+const [verb, file, storeUrl] = process.argv.slice(2);
+if (verb === 'init') {
+  const m = await import(storeUrl);
+  m.openStore(file).close();
+} else if (verb === 'newer') {
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA user_version = 999');
+  db.close();
+} else if (verb === 'list') {
+  if (!fs.existsSync(file)) { console.log('no file'); } else {
+    const db = new DatabaseSync(file, { readOnly: true });
+    console.log(db.prepare('SELECT letter, lane_dir, rank FROM orc ORDER BY lane_dir').all().map((r) => r.letter + '|' + r.lane_dir + '|' + r.rank).join(';'));
+    db.close();
+  }
+}
+'@
+[System.IO.File]::WriteAllText($tool, $toolText, (New-Object System.Text.UTF8Encoding($false)))
+$storeUrl = ([System.Uri](Join-Path $root "fleet-db\store.mjs")).AbsoluteUri
+function Invoke-DbTool { param([string]$Verb, [string]$File) return (@(& node $tool $Verb $File $storeUrl) -join ";") }
+function New-RowHome {
+    param([switch]$NoDb)
+    $script:n++
+    $h = Join-Path $work ("rowhome" + $script:n)
+    New-Item -ItemType Directory -Path $h | Out-Null
+    if (-not $NoDb) { $null = Invoke-DbTool "init" (Join-Path $h "fleet.db") }
+    return $h
+}
+$orcsDir = Join-Path $work "orcs"
+function New-OrcFolder { param([string]$Name) $d = Join-Path $orcsDir $Name; New-Item -ItemType Directory -Path $d -Force | Out-Null; return $d }
+function Set-RowCard { param([string]$Dir, [string]$Orc, $RowHome, [switch]$DryRun, [string]$Lane = "row lane")
+    $a = @("status", "set", "-Doing", "making a row", "-Finished", "wrote the card", "-Blocked", "no", "-Orc", $Orc, "-Lane", $Lane, "-Folder", $Dir)
+    if ($DryRun) { $a += "-DryRun" }
+    return (Invoke-HordeCliProcess -Root $root -HordeArgs $a -Env @{ HORDE_HOME = $RowHome; USERPROFILE = $fakeProfile })
+}
+
+$h1 = New-RowHome
+$db1 = Join-Path $h1 "fleet.db"
+$laneR = New-OrcFolder "row-lane"
+$cli = Set-RowCard $laneR "R" $h1
+Check ($cli.code -eq 0 -and $cli.out -match "status written for R: making a row" -and $cli.out -match "fleet.db: row made for Orc R") "the first card of a new Orc: written, and one line says its fleet.db row was made"
+Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   the row has the card's letter and folder, rank orc"
+$cli = Set-RowCard $laneR "R" $h1
+Check ($cli.code -eq 0 -and $cli.out -match "status written for R" -and $cli.out -notmatch "fleet.db") "the second card prints nothing about fleet.db: the row was there"
+Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   and no second row was made"
+$laneS = New-OrcFolder "dry-lane"
+$cli = Set-RowCard $laneS "S" $h1 -DryRun
+Check ($cli.code -eq 0 -and $cli.out -match "dry run" -and $cli.out -notmatch "fleet.db" -and -not (Test-Path -LiteralPath (Join-Path $laneS "status.txt"))) "-DryRun: no card and no word about fleet.db"
+Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   and fleet.db was not touched"
+$laneT = New-OrcFolder "thrall"
+$cli = Set-RowCard $laneT "M" $h1 -Lane "the master"
+Check ($cli.code -eq 0 -and $cli.out -match "fleet.db: row made for Orc M" -and (Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc;M|thrall|thrall") "a card in a folder named thrall makes the Thrall's row (rank thrall)"
+
+$h2 = New-RowHome -NoDb
+$laneN = New-OrcFolder "nodb-lane"
+$cli = Set-RowCard $laneN "N" $h2
+Check ($cli.code -eq 0 -and $cli.out -match "status written for N" -and $cli.out -match "card written; fleet.db row not made: fleet.db does not exist yet") "no fleet.db: the card is written, one warning line, exit 0"
+Check ((Read-HordeFleetStatusFolder -Path $laneN).written -eq $true -and -not (Test-Path -LiteralPath (Join-Path $h2 "fleet.db"))) "   the card reads clean, and the command did not make a fleet.db"
+$cli = Invoke-HordeCliProcess -Root $root -HordeArgs @("status", "set", "-Doing", "no home at all", "-Finished", "x", "-Blocked", "no", "-Orc", "N", "-Lane", "row lane", "-Folder", $laneN) -Env @{ HORDE_HOME = ""; USERPROFILE = $fakeProfile }
+Check ($cli.code -eq 0 -and $cli.out -match "card written; fleet.db row not made: no Horde home" -and (Read-HordeFleetStatusFolder -Path $laneN).doing -ceq "no home at all") "no Horde home: the card is still written, one warning line, exit 0"
+$h3 = New-RowHome
+$null = Invoke-DbTool "newer" (Join-Path $h3 "fleet.db")
+$laneW = New-OrcFolder "newer-lane"
+$cli = Set-RowCard $laneW "W" $h3
+Check ($cli.code -eq 0 -and $cli.out -match "card written; fleet.db row not made: .*newer than this code" -and (Read-HordeFleetStatusFolder -Path $laneW).written -eq $true) "a fleet.db of a newer schema: the card is written, the warning says why, exit 0"
 
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-status-set-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }

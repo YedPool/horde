@@ -283,6 +283,19 @@ row's own time. The report counts, per table, rows added and rows already there.
 | ledger | `task`, `task_event`, `task_pr`, `pr` | tasks by key, title/source/parent from the first `opened`, parents created first. Every line is one event, sorted by time (Z and +00:00 alike; file order breaks ties); `by` is `by_orc_id` for a known letter, else `by_text`; opened lane and handed `to` map letters or lane folders to Orcs; `waiting on` keeps the words in `on_text` with the class in `on_kind` (founder; `M`, a letter or `lane:X` = orc; device, merge, push, gate, service = external; anything else = other); superseded `to` = replacement task. The ledger's `merged` flag is not copied. A `pr` is linked through `task_pr` (linked_by backfill, at the line's time); a PR the cache lacks is made open and reported |
 | changelog | `changelog_entry`, `tag`, `entity_tag` | legacy_id = the entry id; lane letter = orc_id, `Thrall` = the Thrall, `fleet-wide` = fleet_wide; a comma list gives the first letter as orc_id and a `lane:x` tag for every letter; task = the leading T-NNNN (suffix dropped); `corrects` = corrects_id, the original written first; an unknown kind is a note; `area` is not imported yet. An entry whose legacy id is there is kept |
 
+WHERE ORC ROWS COME FROM (T-0299). Two paths make an `orc` row from a status card, and both call the one function in
+`fleet-db/orc-row.mjs` (`ensureOrcRow`): the importer above, for every card it reads, and `horde status set`, for the card it
+has just written and read back clean (`fleet-db/orc-cli.mjs ensure --folder <name> --letter <X> --lane <text> [--thrall]`,
+called by `Invoke-HordeStatusOrcRow` in `fleet/StatusWrite.ps1`). The rule is the importer's: a row found by lane folder OR
+letter is kept (a Thrall card matches the live Thrall row first), never a second one; only when none exists is one inserted
+(lane_dir = the folder name, name = the lane text or else the folder, rank orc or thrall, created_at = now). So a new Orc has
+its row from its first card and `horde decisions publish` no longer needs a hand `horde db import` first. `status set` prints
+`fleet.db: row made for Orc X` only when it made the row, and nothing when it was there. It is FAIL-OPEN: the card is what
+matters, so with no home, no node 24 or later, no fleet.db yet (the command never makes the database), a busy database (the
+lock wait is `HORDE_ORC_BUSY_MS`, default 3000) or a newer schema, the card stays written, the command succeeds, and one line
+says `card written; fleet.db row not made: <reason>`. Exit codes of `orc-cli.mjs`: 0 done (`added` or `kept`), 1 refused or
+failed, 2 no home, 3 busy, 4 no fleet.db. `-DryRun` never reaches it. A folder named `thrall` is the Thrall's card.
+
 Refused, whole, with nothing written: a ledger or a changelog in a run when the database has no `orc` rows and
 the same run brings no usable cards. Event hashes hold Orc ids (`by_orc_id`, `to_orc_id`, `on_orc_id`), so a
 ledger imported before the Orcs exist would be written again, as other rows, by the next import that has them.

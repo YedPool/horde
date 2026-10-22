@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { inWrite } from './store.mjs';
 import { appendHistory, newId } from './write.mjs';
+import { ensureOrcRow } from './orc-row.mjs';
 import { RANKS, TASK_EVENT_KINDS, CHANGELOG_KINDS } from './schema.mjs';
 import { canonical } from './ids.mjs';
 
@@ -309,19 +310,13 @@ function stepOrcs(ctx, data) {
   const cards = all.filter((c) => newest.get(c.orc) === c);
   ctx.cards = cards;
   ctx.cardOrc = new Map(); // card -> orc id
-  const find = db.prepare('SELECT id FROM orc WHERE lane_dir = ? OR letter = ? ORDER BY letter = ? DESC LIMIT 1');
-  const findThrall = db.prepare("SELECT id FROM orc WHERE rank = 'thrall' AND retired_at IS NULL");
   for (const c of cards) {
-    // An existing row is kept, by lane folder or by letter: never a second row for the same Orc.
-    const existing = (c.isThrall ? findThrall.get() : null) ?? find.get(c.folder, c.orc, c.orc);
-    if (existing) { rep.count('orc', false); ctx.cardOrc.set(c, existing.id); continue; }
-    let name = c.lane === '' ? c.folder : c.lane;
-    if (name.length > 120) { rep.unlink('cards', 'lane name longer than 120 characters (cut)', c.folder); name = name.slice(0, 120); }
-    const id = newId(c.mtime);
-    db.prepare('INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, c.orc, c.folder, name, c.isThrall ? 'thrall' : 'orc', c.mtime);
-    rep.count('orc', true);
-    ctx.cardOrc.set(c, id);
+    // An existing row is kept, by lane folder or by letter: never a second row for the same Orc (orc-row.mjs, the
+    // one rule, shared with `horde status set`).
+    const r = ensureOrcRow(db, { folder: c.folder, letter: c.orc, lane: c.lane, isThrall: c.isThrall, createdAt: c.mtime });
+    if (r.cut) rep.unlink('cards', 'lane name longer than 120 characters (cut)', c.folder);
+    rep.count('orc', r.added);
+    ctx.cardOrc.set(c, r.id);
   }
   loadOrcMaps(ctx);
 }
