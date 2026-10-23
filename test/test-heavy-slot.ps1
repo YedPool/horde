@@ -18,6 +18,13 @@ $gate = Join-Path $root "tools\HeavySlot.ps1"
 $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-heavy-slot-test-" + [guid]::NewGuid().ToString("N"))
 [void][System.IO.Directory]::CreateDirectory($work)
+# THE GATE WAITS FOR IDLE-OR-NIGHT (core/IdleState.ps1), which this suite is not about and must not depend
+# on the machine's clock or the person at the desk. Every gate below inherits a HORDE_HOME of its own
+# whose idle.json makes every hour night (start 0, end 24); the real home is never read, and not written.
+$idleHome = Join-Path $work "home"
+[void][System.IO.Directory]::CreateDirectory((Join-Path $idleHome "settings"))
+[System.IO.File]::WriteAllText((Join-Path $idleHome "settings\idle.json"), '{ "schemaVersion": 1, "settings": { "nightStartHour": 0, "nightEndHour": 24 } }')
+$env:HORDE_HOME = $idleHome
 
 # The fixture run: writes "<tag> start <ticks>", sleeps, writes "<tag> end <ticks>", exits -Code.
 [System.IO.File]::WriteAllText((Join-Path $work "sleeper.ps1"), @'
@@ -191,7 +198,17 @@ try {
     $m = Start-Gate -Slot $slot -Tag "memory" -Seconds 0 -MinFreeGB "1000000" -More @("-WaitSeconds", "2")
     $m.WaitForExit()
     Check ($m.ExitCode -eq 125) ("a run that cannot have the memory in 2 s ends with 125 (" + $m.ExitCode + ")")
-    Check ((Get-GateText "memory") -match "waiting for 1000000 GB of free memory") "it says it gave up waiting for memory"
+    Check ((Get-GateText "memory") -match "gave up after 2 s waiting for 1000000 GB of free memory") "it says it gave up waiting for memory"
+    # T-0331: a gate that waits for memory holds NOTHING, so another gate runs while it waits.
+    $slot = New-Slot
+    $m = Start-Gate -Slot $slot -Tag "memwait" -Seconds 0 -MinFreeGB "1000000" -More @("-WaitSeconds", "20")
+    Check (Wait-For { (Get-GateText "memwait") -match "waiting for 1000000 GB of free memory" }) "the memory waiter says it is waiting, before taking the slot"
+    $o = Start-Gate -Slot $slot -Tag "memother" -Seconds 0
+    $done = $o.WaitForExit(15000)
+    Check ($done -and $o.ExitCode -eq 0) "another gate took the slot and ran while the first waited for memory (the first holds nothing)"
+    Check (-not $m.HasExited) "and the memory waiter is still waiting"
+    Stop-Process -Id $m.Id -Force
+    $m.WaitForExit()
     $n = Start-Gate -Slot $slot -Tag "next" -Seconds 0 -More @("-WaitSeconds", "5")
     $n.WaitForExit()
     Check ($n.ExitCode -eq 0) "the slot was released after the memory refusal: the next run had it"
