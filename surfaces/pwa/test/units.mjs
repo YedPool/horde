@@ -694,7 +694,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   check(lines.length === 1 && lines[0].words === P.CHAT_WORDS.accepted.delivered, "the receipt's code is shown in the phone's own fixed words", JSON.stringify(lines));
   check(c.items.some((x) => x.kind === "turn" && x.role === "user" && x.text.indexOf(P.lineMarker(mid)) >= 0), "a turn that quotes his line's header is shown as what it is - a user turn - never as his line");
   check(c.items.filter((x) => x.kind === "line" && x.messageId === mid).length === 1 && c.items.some((x) => x.text === "on it"), "the machine's founder turn for his line, handed over twice, is that one line, not three; the Thrall's reply is shown");
-  check((await throwsAsync(async () => { const r = P.readChatTurns(chatBody(m, "s", [{ id: "x", role: "founder", session: "s", text: "t" }]), "work", m.keyId); if (r.value.turns.length) throw new Error("kept"); })) === "", "a founder turn that names no line is dropped");
+  check((await throwsAsync(async () => { const r = P.readChatTurns(chatBody(m, "s", [{ id: "x", role: "founder", session: "s", text: "t" }]), m.horde, m.keyId); if (r.value.turns.length) throw new Error("kept"); })) === "", "a founder turn that names no line is dropped");
   // Other words under an id already sent are refused on the phone (review of 3d837f0, finding 1), and
   // a receipt's words - the words posted - are what the line shows.
   const headNow = (await t.get(m.mailbox, 0, 256)).value.items.length;
@@ -702,6 +702,29 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   check(edited.indexOf("other words") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headNow, "other words under a line id already sent are refused before anything is signed", edited);
   const tl = P.chatTimeline({ sent: [{ messageId: "f".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "f".repeat(32), status: "accepted", code: "delivered", text: "posted words", session: "s", seq: 3, ts: 2 }] });
   check(tl.length === 1 && tl[0].text === "posted words", "a line shows the words its receipt says were posted, not what the phone kept", JSON.stringify(tl));
+  // A receipt with no words (the machine could not read the line's record back, T-0340) keeps the words held.
+  const tlw = P.chatTimeline({ sent: [{ messageId: "e".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "e".repeat(32), status: "held", code: "not-now", text: "", session: "", seq: 3, ts: 2 }] });
+  check(tlw.length === 1 && tlw[0].text === "typed here" && tlw[0].code === "not-now", "a receipt with no words keeps the line's own words and shows its status", JSON.stringify(tlw));
+  const tlw2 = P.chatTimeline({ receipts: [{ messageId: "d".repeat(32), status: "accepted", code: "queued", text: "posted words", session: "s", seq: 3, ts: 2 }, { messageId: "d".repeat(32), status: "held", code: "not-now", text: "", session: "", seq: 4, ts: 3 }] });
+  check(tlw2.length === 1 && tlw2[0].text === "posted words" && tlw2[0].code === "not-now", "and so does a wordless receipt after one that carried them (a phone that kept nothing)", JSON.stringify(tlw2));
+  // The EXACT bodies the PC writes for a wordless receipt (channels/chat/Channel.ps1, Send-HordeChatChannelReceipt, with
+  // the session the awaiting mark holds, or the no-session id of a mark written before it): the phone's reader takes each.
+  const wid = "c".repeat(32);
+  const wordless = (session, status, code) => P.utf8('{"v":1,"kind":"chat-receipt","horde":"' + m.horde + '","machine":"' + m.keyId + '","session":"' + session + '","messageId":"' + wid + '","status":"' + status + '","code":"' + code + '","text":""}');
+  for (const [status, code] of [["held", "not-now"], ["held", "expired"], ["held", "not-delivered"], ["accepted", "delivered"]]) {
+    for (const sess of ["9f0c1c7e-2b7d-4c1a-9d57-0e1f2a3b4c5d", P.CHAT_NO_SESSION]) {
+      const rr = P.readChatReceipt(wordless(sess, status, code), m.horde, m.keyId);
+      check(rr.ok === true && rr.value.status === status && rr.value.code === code && rr.value.text === "", "the reader takes the wordless " + status + "/" + code + " receipt the PC writes (session " + sess + ")", JSON.stringify(rr));
+    }
+  }
+  const noSession = P.readChatReceipt(P.utf8('{"v":1,"kind":"chat-receipt","horde":"' + m.horde + '","machine":"' + m.keyId + '","session":"","messageId":"' + wid + '","status":"held","code":"not-now","text":""}'), m.horde, m.keyId);
+  check(noSession.ok === false, "a receipt with an empty session is still refused (the session rule is not relaxed)", JSON.stringify(noSession));
+  const kept = P.chatTimeline({ sent: [{ messageId: wid, text: "typed here", at: 1, session: "held-session" }], receipts: [{ messageId: wid, status: "held", code: "not-now", text: "", session: P.CHAT_NO_SESSION, seq: 3, ts: 2 }] });
+  check(kept.length === 1 && kept[0].session === "held-session" && kept[0].text === "typed here", "a receipt that names no session keeps the line's own session", JSON.stringify(kept));
+  const real = P.chatTimeline({ sent: [{ messageId: wid, text: "typed here", at: 1, session: "held-session" }], receipts: [{ messageId: wid, status: "held", code: "not-now", text: "", session: "named-session", seq: 3, ts: 2 }] });
+  check(real[0].session === "named-session", "and a receipt that names one still sets it", JSON.stringify(real));
+  const bare = P.chatTimeline({ receipts: [{ messageId: wid, status: "held", code: "expired", text: "", session: P.CHAT_NO_SESSION, seq: 3, ts: 2 }] });
+  check(bare.length === 1 && bare[0].text === P.CHAT_NO_WORDS && bare[0].text !== "" && bare[0].code === "expired", "a wordless receipt with no line held draws the fixed placeholder, not an empty bubble", JSON.stringify(bare));
   // Through the bridge: the page's id for the words is the line's id, so a resend is the same line.
   const brp = createBridge(a.phone, { loadKinds: async () => ({}) });
   await brp.request("pick", { id: a.paired.id });
@@ -886,8 +909,8 @@ const PH = await load("app/photo.js");
   await phone.refresh(a.paired.id);
   ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
   check(ph.length === 1 && ph[0].words === P.PHOTO_WORDS.accepted.delivered && ph[0].file === "photo-20261014-120000-0a1b2c3d.jpg", "the newest receipt's code is shown in the phone's own words, with the machine's file name; a code it does not know is not", JSON.stringify(ph));
-  check(P.readPhotoReceipt(prBody("refused", "your-account-closed"), "work", m.keyId).ok === false && P.readPhotoReceipt(prBody("held", "receiving"), "work", m.keyId).ok === false, "a receipt whose code this phone does not know, or a known code under another status, is not read at all - the newest receipt winning is not what refuses it");
-  check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), "work", m.keyId).value.file ==="", "a file name that is not a plain name is not shown");
+  check(P.readPhotoReceipt(prBody("refused", "your-account-closed"), m.horde, m.keyId).ok === false && P.readPhotoReceipt(prBody("held", "receiving"), m.horde, m.keyId).ok === false, "a receipt whose code this phone does not know, or a known code under another status, is not read at all - the newest receipt winning is not what refuses it");
+  check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), m.horde, m.keyId).value.file ==="", "a file name that is not a plain name is not shown");
   // THE HOUR, in the timeline alone: sending, waiting, not delivered; any word from the PC outranks the clock.
   const ph0 = { photoId: "a".repeat(32), at: 1000, session: "s", expiresAt: 1000 + P.PHOTO_WINDOW_MS };
   const one = (p, now, rs = []) => P.chatTimeline({ photos: [p], photoReceipts: rs }, now).filter((x) => x.kind === "photo")[0];
@@ -999,9 +1022,9 @@ const PH = await load("app/photo.js");
   check(lineOf(N).said === 0 && lineOf(N).at === at + 9000, "a receipt from a machine that sends no signed time gives the line NO time: the receipt's own envelope time orders it and is never shown as when he said it", JSON.stringify(lineOf(N)));
   check(lineOf(O).said === Date.parse("2026-10-12T21:40:00.000Z") && lineOf(O).saidHow === "delivered" && lineOf("e".repeat(32)).saidHow === "delivered" && lineOf("e".repeat(32)).said === Date.parse("2026-10-12T21:41:00.000Z"), "with no signed time left, the line says when it reached the Thrall - the founder turn's own time - and that this is what it is", JSON.stringify(lineOf(O)));
   const m = await newMachine("work");
-  const withTime = P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: at, text: "t" })), "work", m.keyId);
-  const bad = ["soon", -1, 1.5, null, 0].map((v) => P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: v, text: "t" })), "work", m.keyId));
-  const none = P.readChatReceipt(receiptBody(m, "s", L, "accepted", "queued", "t"), "work", m.keyId);
+  const withTime = P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: at, text: "t" })), m.horde, m.keyId);
+  const bad = ["soon", -1, 1.5, null, 0].map((v) => P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: v, text: "t" })), m.horde, m.keyId));
+  const none = P.readChatReceipt(receiptBody(m, "s", L, "accepted", "queued", "t"), m.horde, m.keyId);
   check(withTime.ok && withTime.value.sentAt === at && none.ok && none.value.sentAt === 0 && bad.every((r) => r.ok && r.value.sentAt === 0), "a receipt's sentAt is read as a whole number of milliseconds; one with none (an older machine), or with something else in its place, is still read, with no time");
 }
 
@@ -1047,7 +1070,7 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   g = await a.phone.progress(a.paired.id);
   check(g.items.map((x) => x.id).join(",") === "e2,e3,e4,e5,ok6" && dropped.anomalies.some((x) => x.indexOf("10 progress entries that do not hold together were left out") >= 0), "entries that do not hold together - a bad id, no line number, a time with no zone, a title or text too long, a bad corrects - are left out and counted, and the good one beside them is shown", JSON.stringify(dropped.anomalies));
   check(g.items.find((x) => x.id === "ok6").area === "" && g.items.find((x) => x.id === "ok6").lane === "", "a label that is not a short plain text is shown as no label");
-  check(!P.readProgressEntries(entriesBody({ horde: "work", keyId: "b".repeat(32) }, []), "work", m.keyId).ok && !P.readProgressEntries(entriesBody({ horde: "personal", keyId: m.keyId }, []), "work", m.keyId).ok && !P.readProgressEntries(P.utf8("{"), "work", m.keyId).ok && !P.readProgressEntries(P.utf8(JSON.stringify({ v: 1, kind: "progress-entries", horde: "work", machine: m.keyId, backfill: false })), "work", m.keyId).ok, "an entries body of another machine or horde, or with no entries list, is refused");
+  check(!P.readProgressEntries(entriesBody({ horde: "work", keyId: "b".repeat(32) }, []), m.horde, m.keyId).ok && !P.readProgressEntries(entriesBody({ horde: "personal", keyId: m.keyId }, []), m.horde, m.keyId).ok && !P.readProgressEntries(P.utf8("{"), m.horde, m.keyId).ok && !P.readProgressEntries(P.utf8(JSON.stringify({ v: 1, kind: "progress-entries", horde: "work", machine: m.keyId, backfill: false })), m.horde, m.keyId).ok, "an entries body of another machine or horde, or with no entries list, is refused");
 
   // Corrections: on the entry they correct, and in their own place.
   await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("c7", 7, { corrects: "e4", title: "Not merged yet", text: "Means: it is still open." }), entry("c8", 8, { corrects: "gone-from-this-phone" }), entry("c9", 9, { corrects: "c9" })]));
@@ -1138,7 +1161,7 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(JSON.stringify(P.progressParagraphs("Asked: a\n\nNext:b\nAsked later: c\nUnknown: d\n: e\n  \nMeans: ")) === JSON.stringify([{ label: "Asked", text: "a" }, { label: "Next", text: "b" }, { label: "", text: "Asked later: c" }, { label: "", text: "Unknown: d" }, { label: "", text: ": e" }, { label: "Means", text: "" }]), "a text's lines are its paragraphs: a known label and a colon open a labelled one, anything else is the line as it stands, and an empty line is none", JSON.stringify(P.progressParagraphs("Asked: a\n\nNext:b\nAsked later: c\nUnknown: d\n: e\n  \nMeans: ")));
   check(Object.keys(P.PROGRESS_KINDS).join(",") === "decision,result,merged,blocked,waiting,started,progress,done,note", "the kinds the phone has a word for are the nine the log is written with");
   const m = { horde: "work", keyId: "a".repeat(32) };
-  const k = P.readProgressEntries(entriesBody(m, [entry("p1", 1, { kind: "__proto__" }), entry("p2", 2, { kind: "toString" })]), "work", m.keyId);
+  const k = P.readProgressEntries(entriesBody(m, [entry("p1", 1, { kind: "__proto__" }), entry("p2", 2, { kind: "toString" })]), m.horde, m.keyId);
   check(k.ok && k.value.entries.length === 2 && k.value.entries.every((e) => e.kind === "note"), "a kind that is the name of something every object has is still not a kind: a note");
   const same = P.progressLog({ entries: [{ ...entry("a", 5), at: 1, seq: 9 }, { ...entry("b", 5), at: 1, seq: 3 }, { ...entry("a", 5, { title: "earlier envelope" }), at: 1, seq: 2 }] });
   check(same.items.map((x) => x.id + ":" + x.title).join(",") === "a:earlier envelope,b:title b", "of two envelopes carrying one id the earlier stands, and entries of one line number keep their envelopes' order", same.items.map((x) => x.id + ":" + x.title).join(","));
@@ -1466,7 +1489,7 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   const request = P.hex(P.randomBytes(16));
   const device = P.hex(P.randomBytes(16));
   const nowMs = Date.now();
-  const text = '{"v":1,"kind":"horde-relay-join-transcript","request":"' + request + '","horde":"work","machine":"' + m.keyId + '","offer":"' + P.hex(P.randomBytes(16)) + '","challenge":"' + P.b64u(challenge) +
+  const text = '{"v":1,"kind":"horde-relay-join-transcript","request":"' + request + '","horde":"' + m.horde + '","machine":"' + m.keyId + '","offer":"' + P.hex(P.randomBytes(16)) + '","challenge":"' + P.b64u(challenge) +
     '","device":"' + device + '","credentialId":"' + P.b64u(cred) + '","publicKey":"' + P.b64u(new Uint8Array(pub)) + '","rpId":"relay.example.test","label":"Pixel 9","agent":"Safari on iPhone","country":"IL","requestedAt":' + nowMs + ',"expiresAt":' + (nowMs + 600000) + "}";
   const e = await machineEnvelope(m, { kind: "request", channel: "join", body: P.utf8(text), phones: [a.phoneKey] });
   await t.put(m.horde + "/phone", e.key, e.text);

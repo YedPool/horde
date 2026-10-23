@@ -44,8 +44,12 @@
 #   - A RECEIPT NEVER DEPENDS ON THE SESSION LATER. The words a receipt echoes are read back from the
 #     journal record with Open-HordeRelayChannelRecord -Reread: the sender is not judged again. A line
 #     signed with the unlocked SESSION key (every real phone line) was judged once, when it was accepted;
-#     the session ending, going idle or being pruned afterwards takes nothing from its receipts. Where a
-#     receipt truly cannot be sent (its record cannot be opened at all), an ALARM line names the line.
+#     the session ending, going idle or being pruned afterwards takes nothing from its receipts. Where its
+#     words cannot be had at all (the record can never be opened, holds another line, or has been
+#     unreadable for a whole ttlSeconds) the receipt goes WITHOUT words (Get-HordeChatTakenReceiptWords):
+#     a receipt is matched to its line by the message id alone, so the phone is still alarmed, the mark is
+#     kept, and a later TAKEN still turns the alarm into delivered. It is bounded by ttlSeconds like any
+#     other: at ttl the line is given up, wordless, and leaves the list. An ALARM line names the line too.
 #   - BOUNDED. At most HordeChatTakenAsksPerTick lines are asked about in one Tick (a status is a process
 #     started), the longest-unasked first, so the founder's new lines never wait behind them.
 #   - NEVER OFF THE LIST IN SILENCE. Past HordeChatTakenKept lines the oldest is given up WITH a
@@ -64,8 +68,15 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 # An awaiting line as the state keeps it:
-#   <phone messageId 32 hex>:<messenger uuid>:<posted at, ms>:<sender key id 32 hex>:<journal seq>:<alarmed 0|1>:<woken 0|1>
-$script:HordeChatTakenMarkPattern = '\A([0-9a-f]{32}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]{1,16}):([0-9a-f]{32}):([0-9]{1,16}):([01]):([01])\z'
+#   <phone messageId 32 hex>:<messenger uuid>:<posted at, ms>:<sender key id 32 hex>:<journal seq>:<alarmed 0|1>:<woken 0|1>[:<session id>]
+# The session id is the Thrall's session the line was written to (an id, never a word of his): a receipt that
+# goes WITHOUT his words still names it, for the phone refuses a chat body that names no session (T-0340
+# round 2). A mark from before it has none; its wordless receipts name HordeChatTakenNoSession.
+$script:HordeChatTakenMarkPattern = '\A([0-9a-f]{32}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]{1,16}):([0-9a-f]{32}):([0-9]{1,16}):([01]):([01])(?::([A-Za-z0-9._:-]{1,128}))?\z'
+# The session a wordless receipt names when the mark holds none (a mark written before it carried one). The
+# phone (relay/js/protocol.js CHAT_NO_SESSION) takes it for "no session" and keeps the session it holds.
+$script:HordeChatTakenNoSession = "unknown"
+
 # The most lines awaited at once: a day of lines many times over. The oldest past it are given up on,
 # with a receipt and an ALARM line (Get-HordeChatTakenOverflow, Send-HordeChatTakenGiveUp).
 $script:HordeChatTakenKept = 200
@@ -91,7 +102,7 @@ function Get-HordeChatTakenNowMs {
 
 function ConvertTo-HordeChatTakenMark {
     param([Parameter(Mandatory = $true)]$Entry)
-    return ($Entry.messageId + ":" + $Entry.messengerId + ":" + [long]$Entry.postedMs + ":" + $Entry.from + ":" + [long]$Entry.seq + ":" + $(if ($Entry.alarmed) { "1" } else { "0" }) + ":" + $(if ($Entry.woken) { "1" } else { "0" }))
+    return ($Entry.messageId + ":" + $Entry.messengerId + ":" + [long]$Entry.postedMs + ":" + $Entry.from + ":" + [long]$Entry.seq + ":" + $(if ($Entry.alarmed) { "1" } else { "0" }) + ":" + $(if ($Entry.woken) { "1" } else { "0" }) + $(if ("$($Entry.session)" -cne "") { ":" + $Entry.session } else { "" }))
 }
 
 function ConvertFrom-HordeChatTakenMark {
@@ -99,7 +110,7 @@ function ConvertFrom-HordeChatTakenMark {
     param([string]$Mark)
     if ($Mark -cnotmatch $script:HordeChatTakenMarkPattern) { return $null }
     $g = $Matches
-    return [pscustomobject]@{ messageId = $g[1]; messengerId = $g[2]; postedMs = [long]$g[3]; from = $g[4]; seq = [long]$g[5]; alarmed = ($g[6] -ceq "1"); woken = ($g[7] -ceq "1") }
+    return [pscustomobject]@{ messageId = $g[1]; messengerId = $g[2]; postedMs = [long]$g[3]; from = $g[4]; seq = [long]$g[5]; alarmed = ($g[6] -ceq "1"); woken = ($g[7] -ceq "1"); session = $(if ($g.ContainsKey(8)) { "$($g[8])" } else { "" }) }
 }
 
 function Get-HordeChatTakenEntry {
@@ -179,17 +190,37 @@ function Get-HordeChatTakenWords {
     return [pscustomobject]@{ state = "ok"; line = $r.value; sentAt = [long]$o.item.ts; reason = "" }
 }
 
-function Send-HordeChatTakenGiveUp {
-    # One awaiting entry that leaves the list for a reason that is not its own end: the phone is told
-    # held/not-delivered, and an ALARM line names it. Returns the log line. The caller removes the entry.
-    param($Context, $Mine, $Entry, [string]$Why)
-    $w = Get-HordeChatTakenWords -Context $Context -Entry $Entry
-    if ($w.state -cne "ok") { return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + ") and the phone could NOT be told (its words cannot be read: " + $w.reason + ")") }
-    $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $Entry.messageId -Status "held" -Code "not-delivered" -Session $w.line.session -Text $w.line.text -SentAt $w.sentAt
-    if ($sent.StartsWith("no receipt:")) { return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + ") and the phone could NOT be told (" + $sent + ")") }
-    return ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); the phone is told it was not delivered" + $(if ($sent -cne "") { "; " + $sent } else { "" }))
+function Get-HordeChatTakenReceiptWords {
+    # What a receipt echoes of one awaiting line: { session; text; sentAt; note }. The words when they
+    # were read (Get-HordeChatTakenWords state ok); else NONE - empty text, no time, but the session the mark
+    # holds (the phone refuses a body with no session) - and a note that says so. A receipt is matched to its line by the message id, and the phone keeps the words it
+    # already holds when a receipt carries none (relay/js/protocol.js, chatTimeline), so a line whose record
+    # can no longer be opened can still be told held, delivered or given up.
+    param($Words, $Entry)
+    if ($Words.state -ceq "ok") { return [pscustomobject]@{ session = "$($Words.line.session)"; text = "$($Words.line.text)"; sentAt = [long]$Words.sentAt; note = "" } }
+    $session = $(if ("$($Entry.session)" -cne "") { "$($Entry.session)" } else { $script:HordeChatTakenNoSession })
+    return [pscustomobject]@{ session = $session; text = ""; sentAt = [long]0; note = ("sent without his words, which cannot be read: " + $Words.reason) }
 }
 
+function Send-HordeChatTakenGiveUp {
+    # One awaiting entry that leaves the list for a reason that is not its own end: the phone is told
+    # held/not-delivered (its sentence: "the Thrall's mailbox holds it back"), and an ALARM line names it.
+    # HONEST ABOUT WHAT IT KNOWS: the line is no longer watched, but it may still be in the Thrall's mailbox
+    # and may yet be taken; the log line says so. Returns the log line. The caller removes the entry AFTER
+    # this (a crash in between leaves the entry listed and the receipt sent, never the entry gone and the
+    # phone told nothing). { sent; line }: sent is $false when the receipt could not even be recorded, and
+    # then the caller must NOT remove the entry (it is given up again at the next try). Told ONCE per
+    # process: a retry of the same accept after a failed state write does not send it again (heldSaid).
+    param($Context, $Mine, $Entry, [string]$Why)
+    $said = $Entry.messageId + "/gave-up"
+    if ($Mine.heldSaid.ContainsKey($said)) { return [pscustomobject]@{ sent = $true; line = ("chat line " + $Entry.messageId + " was told not delivered already (" + $Why + ")") } }
+    $rw = Get-HordeChatTakenReceiptWords -Words (Get-HordeChatTakenWords -Context $Context -Entry $Entry) -Entry $Entry
+    $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $Entry.messageId -Status "held" -Code "not-delivered" -Session $rw.session -Text $rw.text -SentAt $rw.sentAt
+    if ($sent.StartsWith("no receipt:")) { return [pscustomobject]@{ sent = $false; line = ("ALARM: chat line " + $Entry.messageId + " cannot leave the awaiting list (" + $Why + "): the phone could NOT be told (" + $sent + "); it is kept and tried again") } }
+    $Mine.heldSaid[$said] = $true
+    $extra = @(@($rw.note, $sent) | Where-Object { $_ -cne "" })
+    return [pscustomobject]@{ sent = $true; line = ("ALARM: chat line " + $Entry.messageId + " left the awaiting list (" + $Why + "); it is no longer watched, but it may still be in the Thrall's mailbox and be taken; the phone is told it was not delivered" + $(if ($extra.Count -gt 0) { "; " + ($extra -join "; ") } else { "" })) }
+}
 function Get-HordeChatTakenDueMs {
     # How long after its last look an awaiting line is asked about again: the quick cadence until it is
     # alarmed, the slow one after.
@@ -251,26 +282,27 @@ function Invoke-HordeChatTakenTick {
         $act = Get-HordeChatTakenAction -Status $status -AgeSeconds $age -Alarmed $e.alarmed -AlarmSeconds ([double]$Settings.takenAlarmSeconds) -TtlSeconds ([double]$Settings.ttlSeconds)
         if ($act -ceq "wait") { [void]$keep.Add($mark); continue }
         $w = Get-HordeChatTakenWords -Context $Context -Entry $e
-        if ($w.state -ceq "retry" -and $age -gt [double]$Settings.ttlSeconds) {
-            # A record that could not be read for a whole ttl is not coming back: never kept for ever in silence.
-            [void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") after " + [int]$age + " s and the phone could NOT be told: its record cannot be read - " + $w.reason); $changed = $true; continue
-        }
-        if ($w.state -ceq "retry") { [void]$keep.Add($mark); [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", but its words cannot be read yet (" + $w.reason + "); asked again"); continue }
-        if ($w.state -ceq "gone") {
-            # Nothing to tell the phone with: the record can never be opened again (damaged, gone), session or
-            # no session. Never in silence: an ALARM line names the line.
-            [void]$lines.Add("ALARM: chat line " + $e.messageId + " is left (" + $act + ") and the phone could NOT be told: its record cannot be opened again - " + $w.reason); $changed = $true; continue
-        }
+        if ($w.state -ceq "retry" -and $act -cne "alarm" -and $age -le [double]$Settings.ttlSeconds) { [void]$keep.Add($mark); [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", but its words cannot be read yet (" + $w.reason + "); asked again"); continue }
+        # WORDS THAT CANNOT BE HAD (the record can never be opened again, holds another line, is not in the
+        # journal, or has been unreadable for a whole ttl; the ALARM goes without them at once, for the
+        # founder is not left to wait on a record that may never come back): the receipt goes without them and the rest is as for any line - the
+        # alarm is raised and the mark kept (a later TAKEN still turns it into delivered), the end is
+        # bounded by ttl. Never a dropped mark with the phone told nothing.
+        $rw = Get-HordeChatTakenReceiptWords -Words $w -Entry $e
         $status_ = "accepted"; $code = "delivered"
         if ($act -ceq "held") { $status_ = "held"; $code = "not-delivered" }
         elseif ($act -ceq "expired") { $status_ = "held"; $code = "expired" }
         elseif ($act -ceq "alarm") { $status_ = "held"; $code = $script:HordeChatTakenAlarmCode }
-        $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $e.messageId -Status $status_ -Code $code -Session $w.line.session -Text $w.line.text -SentAt $w.sentAt
+        $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $Mine -MessageId $e.messageId -Status $status_ -Code $code -Session $rw.session -Text $rw.text -SentAt $rw.sentAt
         if ($sent.StartsWith("no receipt:")) {
             # Not even recorded: nothing told the phone, so the line stays as it was and is asked again.
             [void]$keep.Add($mark); [void]$lines.Add("chat: line " + $e.messageId + " is " + $act + ", and the phone could not be told (" + $sent + "); asked again"); continue
         }
         $note = $(if ($sent -cne "") { "; " + $sent } else { "" })
+        if ($rw.note -cne "") {
+            $note = "; " + $rw.note + $note
+            if ($act -cne "alarm") { [void]$lines.Add("ALARM: chat line " + $e.messageId + " left the list as " + $act + " " + $rw.note) }
+        }
         $changed = $true
         switch ($act) {
             "confirmed" { [void]$lines.Add("chat: line " + $e.messageId + " TAKEN by the Thrall's own side after " + [int]$age + " s: delivered" + $note) }
