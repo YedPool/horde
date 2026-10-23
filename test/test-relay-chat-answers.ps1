@@ -65,12 +65,13 @@ $postBlock = {
     if ($script:postFails) { throw "the test messenger cannot take it now" }
     $id = "$($Message.messageId)"
     if (-not $script:posts.ContainsKey($id)) { $script:posts[$id] = @{ message = $Message; by = $null } }
-    $said = [ordered]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = $script:postWhy }
+    $said = [ordered]@{ messageId = $id; stage = $(if ($script:postStage) { $script:postStage } else { "accepted" }); at = [datetime]::UtcNow; reason = $script:postWhy }
     if ($null -ne $script:postWoken) { $said["woken"] = $script:postWoken }
     return (New-HordeKnown -Value ([pscustomobject]$said))
 }
 # What a test messenger says of its knock: $null says nothing, as before; true or false is its woken.
 $script:postWoken = $null
+$script:postStage = ""
 $script:postWhy = ""
 # WHAT THE FLEET SAYS OF A POST, BY THE MESSENGER'S ID: the stage its own side has reached. Nothing here
 # makes a post "taken": a test says so by setting the stage, as the Thrall's own hook does.
@@ -493,6 +494,11 @@ try {
     Check (($t.lines -join "|").Contains("ALARM: answer " + $z.id) -and ($t.lines -join "|").Contains("the session was not woken")) ("and the runner's log carries an ALARM line (" + ($t.lines -join "|") + ")")
     foreach ($ms in 100000, 160000, 400000) { Set-HordeChatTakenClock -Ms ($base + 2000000 + $ms); $null = Invoke-Tick $W }
     Check (@(Get-AnswerReceiptsOf $W $z.id).Count -eq 0 -and @(Get-AnswerAwaiting $W | Where-Object { $_.StartsWith($z.id + ":") }).Count -eq 1) "asked again and again, never alarmed twice, still awaited"
+    # S8: an answer already awaited and alarmed, sent again in a new envelope, gets no receipt over its alarm.
+    $dupEnv = Get-AnswerEnvelope $W (New-AnswerBody -World $W -MessageId $z.id -Lane "B" -Snapshot $SNAP_B -Index 1 -Text "Slow to be taken.")
+    [void](Send-ToMachine $W $dupEnv.text)
+    $null = Invoke-Turn $W
+    Check (@(Get-AnswerReceiptsOf $W $z.id).Count -eq 0 -and @(Get-AnswerAwaiting $W | Where-Object { $_.StartsWith($z.id + ":") }).Count -eq 1 -and @(Get-AnswerAwaiting $W | Where-Object { $_.StartsWith($z.id + ":") })[0].EndsWith(":1:0")) "the same answer sent again after its alarm is not told Sent over the alarm, and stays awaited and alarmed"
     $script:stages[$z.messengerId] = "seen"
     Set-HordeChatTakenClock -Ms ($base + 2520000)
     $null = Invoke-Tick $W
@@ -559,6 +565,82 @@ try {
     $missing = New-Object System.Collections.ArrayList
     foreach ($st in $script:HordeChatAnswerCodes.Keys) { foreach ($c in $script:HordeChatAnswerCodes[$st]) { if (-not ($block -match ('(?:"' + [regex]::Escape($c) + '"|\b' + [regex]::Escape($c) + '\b):'))) { [void]$missing.Add($st + "/" + $c) } } }
     Check ($block.Length -gt 100 -and $missing.Count -eq 0) ("every code the machine can send has a sentence in the phone (" + ($missing -join ",") + ")")
+
+
+    Write-Host ""
+    Write-Host "--- ANS 11. review of PR 382: an age limit, an older list said so, the byte cap, an immediate Delivered ---" -ForegroundColor Cyan
+    Reset-Posts; $script:postWoken = $true
+    Set-HordeChatTakenClock -Ms ($base + 10000000)
+    # S3: signed two days ago and never delivered: given up with a receipt, not carried to a session that comes back later.
+    # (The journal itself refuses an envelope signed over ten minutes ago, so what can be old is one HELD and coming again: it is held first, the real clock then moves.)
+    $oldId = [guid]::NewGuid().ToString("N")
+    $script:seats["orc B"] = $null
+    $oldA = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_B -Index 1 -Text "Signed on Friday." -MessageId $oldId
+    Check ((@(Get-AnswerReceiptsOf $W $oldId) -join ",") -ceq "held/no-session") "CONTROL: an answer for an Orc with no session is held"
+    $script:seats["orc B"] = "22222222-2222-4222-8222-222222222222"
+    Set-HordeChatAnswerClock -Ms ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 2 * 86400000)
+    $turn = Invoke-Turn $W
+    Set-HordeChatAnswerClock -Ms 0
+    Check ($script:postCalls -eq 0 -and (@(Get-AnswerReceiptsOf $W $oldId) -join ",") -ceq "held/expired") ("an answer signed longer ago than ttlSeconds is given up held/expired with a receipt and posted nowhere (" + $turn.text + ")")
+    $script:seats["orc B"] = $null
+    $freshId = [guid]::NewGuid().ToString("N")
+    $f1 = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_B -Index 1 -Text "Fresh, but B is away." -MessageId $freshId
+    Check ((@(Get-AnswerReceiptsOf $W $freshId) -join ",") -ceq "held/no-session") "CONTROL: a fresh answer for an Orc with no session is still held, not expired"
+    $script:seats["orc B"] = "22222222-2222-4222-8222-222222222222"
+    $null = Invoke-Turn $W
+    Check ($script:postCalls -eq 1) "and goes when the session is back"
+    # N1: an answer to an item of a list that is no longer the Orc's newest says so.
+    Reset-Posts; $script:postWoken = $true
+    $ol = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_OLD -Index 1 -Text "About the older list."
+    Check ($null -ne $ol.post -and $ol.post.message.body.Contains("NOTE: this is an older list of yours; your newest published list is not this one, so item 1 there may be another item.")) "an answer to an item of an older list tells the Orc so"
+    $lv = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_B -Index 1 -Text "About the live list."
+    Check ($null -ne $lv.post -and -not $lv.post.message.body.Contains("NOTE:")) "and an answer to the live list does not"
+    # S8: the whole body is held to the messenger port's cap.
+    Reset-Posts
+    $capWas = $script:HordeMessengerBodyBytes
+    try {
+        $script:HordeMessengerBodyBytes = 200
+        $cap = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_B -Index 1 -Text ("w" * 150)
+        Check ($script:postCalls -eq 0 -and (@(Get-AnswerReceiptsOf $W $cap.id) -join ",") -ceq "refused/too-long") "a message over the messenger port's cap is refused too-long, nothing posted"
+    } finally { $script:HordeMessengerBodyBytes = $capWas }
+    # S8: a post the receiving side already took (stage seen) is Delivered at once, and is not awaited.
+    Reset-Posts; $script:postWoken = $true; $script:postStage = "seen"
+    $im = Send-OneAnswer $W -Lane "B" -Snapshot $SNAP_B -Index 2 -Text "Taken as it is posted."
+    $script:postStage = ""
+    Check ((@(Get-AnswerReceiptsOf $W $im.id) -join ",") -ceq "accepted/delivered" -and @(Get-AnswerAwaiting $W | Where-Object { $_.StartsWith($im.id + ":") }).Count -eq 0) "a post whose stage is already seen is Delivered at once and not awaited"
+
+    Write-Host ""
+    Write-Host "--- ANS 12. the REAL seat reader and the REAL item reader, together, against a temp fleet.db and an empty registry ---" -ForegroundColor Cyan
+    Set-HordeChatAnswerSeat -Reader $null
+    Set-HordeChatAnswerItemReader -Reader $null
+    try {
+        Reset-Posts; $script:postWoken = $true
+        $nodeExe = (Get-Command node -ErrorAction SilentlyContinue)
+        Check ($null -ne $nodeExe) "CONTROL: node is on this machine"
+        $seedJs = Join-Path $root "test\fixtures\phone-published-seed.mjs"
+        $itemsF = Join-Path $W.home "real-items.json"
+        [System.IO.File]::WriteAllText($itemsF, '[{"text":"A real item one?"},{"text":"A real item two?"}]', $utf8)
+        & $nodeExe.Source $seedJs seed $W.home
+        $okSeed = ($LASTEXITCODE -eq 0)
+        if ($okSeed) { & $nodeExe.Source $seedJs publish $W.home thrall $itemsF; $okSeed = ($LASTEXITCODE -eq 0) }
+        Check $okSeed "CONTROL: fleet.db in the temp home holds the Thrall's list of two"
+        $pub = Invoke-HordeDecisionNode -NodeArgs @("published", "--json") -FleetHome $W.home
+        $realSnap = ""
+        if ([int]$pub.code -eq 0) { $realSnap = "" + (@((ConvertFrom-HordeJson $pub.out).lists)[0].snapshot) }
+        Check ($realSnap -cmatch $script:HordeChatAnswerSnapshotPattern) ("the list's snapshot id is read from the real node call (" + $realSnap + ")")
+        $rk = Send-OneAnswer $W -Lane "thrall" -Snapshot $realSnap -Index 2 -Text "Through the real readers."
+        $rrc = @(Get-AnswerReceiptsOf $W $rk.id)
+        Check ($script:postCalls -eq 0 -and ($rrc -join ",") -ceq "held/no-session") ("the real item reader found the item (else this would be refused no-such-item) and the real seat reader found no session for the Thrall in the empty registry: held/no-session, nothing posted (" + ($rrc -join ",") + ")")
+        $rw = Send-OneAnswer $W -Lane "B" -Snapshot $realSnap -Index 1 -Text "Wrong lane, real readers."
+        Check ((@(Get-AnswerReceiptsOf $W $rw.id) -join ",") -ceq "refused/wrong-lane") "and the real item reader's owner is the Thrall's: another lane named on it is refused wrong-lane"
+        $rn = Send-OneAnswer $W -Lane "thrall" -Snapshot $realSnap -Index 7 -Text "No such item, real readers."
+        Check ((@(Get-AnswerReceiptsOf $W $rn.id) -join ",") -ceq "refused/no-such-item") "and an index the real list never had is refused no-such-item"
+        $ob = Find-HordeChatAnswerSeat -Rank "orc" -Orc "B"
+        Check ($ob.state -ceq "absent") ("the real label seat reader answers absent for Orc B in an empty registry (" + $ob.state + ")")
+    } finally {
+        Set-HordeChatAnswerSeat -Reader $seatReader
+        Set-HordeChatAnswerItemReader -Reader $itemReader
+    }
 
     Set-HordeChatTakenClock -Ms 0
     Reset-Posts

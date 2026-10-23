@@ -1962,6 +1962,16 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
     const evil = { [SNAP + "/1"]: [{ messageId: "b".repeat(32), text: "<img src=x onerror=1>", at: 1, status: "sending", code: "", words: "Sending..." }] };
     const en = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: ans(true, evil) }).flatMap((n) => walk(n));
     check(en.some((n) => n.textContent === "You: <img src=x onerror=1>"), "his words under an item are set as text, never as markup");
+    // S4/S2 of the review of PR 382: why his last send failed survives the redraw the send causes; answers kept across a reload show; a
+    // "Sending..." with no word from the PC for ten minutes says so in a fixed sentence.
+    const pn = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: { ...ans(true), problemOf: (k) => (k === SNAP + "/2" ? "Not sent: the relay would not take it." : "") } }).flatMap((n) => walk(n));
+    check(pn.filter((n) => n.className === "pl-problem" && n.textContent === "Not sent: the relay would not take it.").length === 1, "the reason his last send of an item failed is drawn under that item after a redraw, and only there");
+    const T = 5000000;
+    const held = new Map([[SNAP + "/1", [{ messageId: "a".repeat(32), text: "old", at: T - PL.ANSWER_WAIT_MS - 1, status: "sending", code: "", words: "Sending..." }, { messageId: "b".repeat(32), text: "done", at: T, status: "accepted", code: "delivered", words: "Delivered" }]]]);
+    const settled = PL.settleAnswers(held, [{ messageId: "c".repeat(32), key: SNAP + "/2", text: "kept over a reload", at: T - 1000 }, { messageId: "a".repeat(32), key: SNAP + "/1", text: "named already", at: 1 }, { messageId: "d".repeat(32), key: SNAP + "/3", text: "late", at: T - PL.ANSWER_WAIT_MS - 5 }], T);
+    check(settled.get(SNAP + "/1").length === 2 && settled.get(SNAP + "/1")[0].words === PL.ANSWER_NOT_CONFIRMED && settled.get(SNAP + "/1")[1].words === "Delivered", "an answer still Sending after ten minutes says it is not confirmed; one with a receipt is left as it is; a kept one the phone already names is not added twice");
+    check(settled.get(SNAP + "/2").length === 1 && settled.get(SNAP + "/2")[0].text === "kept over a reload" && settled.get(SNAP + "/2")[0].words === "Sending..." && settled.get(SNAP + "/3")[0].words === PL.ANSWER_NOT_CONFIRMED, "an answer kept across a reload shows under its item as Sending, and as not confirmed once it is late");
+    check(held.get(SNAP + "/1")[0].words === "Sending...", "settling copies: the phone's own entries are not changed");
   }
 
   // THE WIRE (relay/js/protocol.js): the body the machine reads strictly, the receipt the phone shows in its own words.

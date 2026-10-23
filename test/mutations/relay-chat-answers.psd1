@@ -71,5 +71,30 @@
         @{ Name = "the-glance-never-says-an-answer-is-due"
            Find = 'if ($now - $last -ge $every) { return $true }'
            Replace = 'if ($false) { return $true }' }
+        # --- review of PR 382 (S3, S8, N1) ---
+        @{ Name = "no-session-is-dropped-not-kept"
+           Find = '& $answer "retry" "held" "no-session"'
+           Replace = '& $answer "done" "held" "no-session"' }
+        @{ Name = "the-thralls-lane-is-its-letter"
+           Find = '$ownerLane = $(if ($owner.rank -ceq "thrall") { "thrall" } else { $owner.orc })'
+           Replace = '$ownerLane = $owner.orc' }
+        @{ Name = "the-body-cap-is-not-held"
+           Find = 'if ($bodyBytes -gt $script:HordeMessengerBodyBytes) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-post-already-taken-is-told-held"
+           Find = 'default { return (& $answer "done" "accepted" "delivered"'
+           Replace = 'default { return (& $answer "done" "held" "not-delivered"' }
+        @{ Name = "an-alarmed-answer-is-told-sent-over-its-alarm"
+           Find = 'if ($null -ne $already -and $already.alarmed) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-header-is-another-text"
+           Find = '"FOUNDER ANSWER from the phone (answer "'
+           Replace = '"ANSWER (answer "' }
+        @{ Name = "an-old-answer-is-carried-on"
+           Find = '-gt ([long]$set.ttlSeconds * 1000)) {'
+           Replace = '-gt ([long]$set.ttlSeconds * 1000000000)) {' }
+        @{ Name = "an-older-list-is-not-said"
+           Find = '$older = $(if ($Live) { "" } else {'
+           Replace = '$older = $(if ($true) { "" } else {' }
     )
 }

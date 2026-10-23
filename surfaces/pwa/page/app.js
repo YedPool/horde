@@ -113,7 +113,7 @@ import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, ST
 import { shrinkInBrowser } from "./photo.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderDecisionCards } from "./decision-cards.js";
-import { publishedView, mergePublished, renderPublishedLists } from "./published-lists.js";
+import { publishedView, mergePublished, renderPublishedLists, settleAnswers } from "./published-lists.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
@@ -287,18 +287,47 @@ function answersFor(id, d) {
   const slot = (key) => { const k = id + "|" + key; if (!answerDrafts.has(k)) answerDrafts.set(k, { text: "", id: "", tried: "" }); return answerDrafts.get(k); };
   return {
     canSend: d.mode === "passkey",
-    viewOf: (key) => d.itemAnswers.get(key) || [],
+    viewOf: (key) => (settleAnswers(d.itemAnswers, pendingOf(id), Date.now()).get(key) || []),
     draftOf: (key) => slot(key).text,
+    problemOf: (key) => slot(key).problem || "",
     onDraft: (key, text) => { const x = slot(key); x.text = text; if (!text) x.id = ""; },
+    // THE DRAFT IS CLEARED BEFORE THE AWAIT and given back if the send fails (review of PR 382, S1): the send itself redraws the lists, and a
+    // box rebuilt from a draft that still held the words just sent would offer them for a second Enter, which posts them again under a new id.
+    // The id is kept until the send is taken, so a retry after a failed put is the same answer.
     send: async (list, it, text) => {
-      const x = slot(list.snapshot + "/" + it.position);
+      const key = list.snapshot + "/" + it.position;
+      const x = slot(key);
       if (!x.id || text !== x.tried) x.id = newDraftId();
       x.tried = text;
-      const r = await bridge.request("answer-item", { lane: list.lane, snapshot: list.snapshot, index: it.position, text, id: x.id });
-      if (r.ok) { x.text = ""; x.id = ""; x.tried = ""; }
+      const keep = x.text;
+      x.text = "";
+      x.problem = "";
+      let r;
+      try { r = await bridge.request("answer-item", { lane: list.lane, snapshot: list.snapshot, index: it.position, text, id: x.id }); }
+      catch (e) { r = { ok: false, reason: messageOf(e) }; }
+      if (r.ok) { x.id = ""; x.tried = ""; addPending(id, { messageId: r.id, key, text, at: Date.now() }); return r; }
+      x.text = keep || text;
+      x.problem = r.reason || "Not sent.";
+      drawPublishedLists(id);
       return r;
     }
   };
+}
+// THE ANSWERS SENT AND NOT YET NAMED BY A RECEIPT are kept in sessionStorage (this tab only, gone with it, and with a lock) so a reload does not make
+// an answer the PC has not yet confirmed look lost - he would type it again and the Orc would get it twice (review of PR 382, S2). Every use is in
+// try/catch: a private window or blocked storage just keeps nothing.
+const pendingKey = (id) => "horde-item-pending|" + id;
+function pendingOf(id) {
+  try { const a = JSON.parse(sessionStorage.getItem(pendingKey(id)) || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function addPending(id, x) {
+  try { const a = pendingOf(id).filter((y) => y && y.messageId !== x.messageId).slice(-49); a.push(x); sessionStorage.setItem(pendingKey(id), JSON.stringify(a)); } catch (e) { /* nothing kept */ }
+}
+function dropPending(id, named) {
+  try {
+    const a = pendingOf(id).filter((y) => y && !named.has(y.messageId));
+    if (a.length) sessionStorage.setItem(pendingKey(id), JSON.stringify(a)); else sessionStorage.removeItem(pendingKey(id));
+  } catch (e) { /* nothing kept */ }
 }
 function showCounts() {
   const d = current && docs[current];
@@ -379,7 +408,13 @@ function render(h, rec) {
   const known = rec && rec.state === "known" && rec.value;
   if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
   d.mode = h.mode;
-  d.itemAnswers = new Map(known && Array.isArray(rec.value.itemAnswers) ? rec.value.itemAnswers : []);
+  // A read that failed keeps the receipts drawn, as it keeps the lists (review of PR 382, S4).
+  if (known) {
+    d.itemAnswers = new Map(Array.isArray(rec.value.itemAnswers) ? rec.value.itemAnswers : []);
+    const named = new Set();
+    for (const list of d.itemAnswers.values()) for (const a of list) if (a.status !== "sending") named.add(a.messageId);
+    dropPending(h.id, named);
+  }
   const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
   const did = d.doc.setList(shown);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
@@ -1266,7 +1301,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { try { sessionStorage.removeItem(pendingKey(id)); } catch (e) { /* nothing kept */ } if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

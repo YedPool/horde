@@ -432,7 +432,16 @@ const commands = {
     }
     const end = Date.now() + 30000;
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
-    return { found: true, put: headOf(c.mailbox) > before, left: await evaluate("(" + row + " || { querySelector: () => ({ value: '' }) }).querySelector('textarea.pl-box').value"), shown: await evaluate("(" + row + " || { innerText: '' }).innerText") };
+    // THE BOX IS READ A MOMENT AFTER THE SEND, from the page as it stands then (review of PR 382, S1): the send redraws the lists, and a rebuilt
+    // box must not hold the words just sent. Then a second Enter in it is pressed, and must put nothing.
+    const putNow = headOf(c.mailbox) > before;
+    await sleep(c.settleMs || 1500);
+    const after = headOf(c.mailbox);
+    const refilled = await evaluate("(" + row + " || { querySelector: () => ({ value: '' }) }).querySelector('textarea.pl-box').value");
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await sleep(1000);
+    return { found: true, put: putNow, refilled, again: headOf(c.mailbox) > after, left: await evaluate("(" + row + " || { querySelector: () => ({ value: '' }) }).querySelector('textarea.pl-box').value"), shown: await evaluate("(" + row + " || { innerText: '' }).innerText") };
   },
   // What stands under the item whose text is c.item once it holds c.contains (its answer and receipt), waited for: { found, text }.
   async itemAnswerState(c) {

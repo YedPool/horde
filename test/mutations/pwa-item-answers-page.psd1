@@ -39,5 +39,15 @@
         @{ Name = "the-list-carries-no-snapshot"
            Find = 'snapshot: l.snapshot || "", publishedAt: l.publishedAt'
            Replace = 'snapshot: "", publishedAt: l.publishedAt' }
+        # --- review of PR 382 (S2, S4) ---
+        @{ Name = "a-late-sending-says-nothing"
+           Find = '(a.status === "sending" && now - a.at >= ANSWER_WAIT_MS)'
+           Replace = 'false' }
+        @{ Name = "answers-kept-over-a-reload-are-not-shown"
+           Find = 'if (!x || named.has(x.messageId) || typeof x.key !== "string" || typeof x.text !== "string") continue;'
+           Replace = 'continue;' }
+        @{ Name = "why-a-send-failed-is-not-drawn-again"
+           Find = 'typeof answers.problemOf === "function" ? answers.problemOf(key) : ""'
+           Replace = '""' }
     )
 }

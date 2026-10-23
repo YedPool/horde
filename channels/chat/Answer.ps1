@@ -34,7 +34,7 @@
 #       <his words exactly>
 #     from.verified names the founder by the passkey whose key id signed it (messengers/Port.ps1, A VERIFIED SENDER).
 #   - EXACTLY ONCE. The messenger's message id is derived from the sender, the phone's message id, his words, the snapshot and the
-#     index (Get-HordeChatAnswerMessageId), so a record resumed after a crash, or the phone sending the same answer again in a new
+#     index (Get-HordeChatAnswerMessageId), so a record resumed after a crash, or the phone sending the same answer (under the same message id, which the page keeps until the send is taken) again in a new
 #     envelope, is the same post, which an idempotent messenger keeps once; other words, or another item, under one message id are
 #     another post. A replayed envelope never gets this far: the journal refuses it.
 #   - TOO LONG is counted as the chat line is (lineChars, and the messenger port's 64 KiB for the whole body).
@@ -85,6 +85,13 @@ $script:HordeChatAnswerAsksPerTick = 10
 $script:HordeChatAnswerSeat = $null
 $script:HordeChatAnswerItemReader = $null
 
+# For a suite only: the real clock, in milliseconds since 1970, that the age limit reads (0 means the real one).
+$script:HordeChatAnswerClockMs = [long]0
+function Set-HordeChatAnswerClock { param([long]$Ms = 0) $script:HordeChatAnswerClockMs = $Ms }
+function Get-HordeChatAnswerNowMs {
+    if ($script:HordeChatAnswerClockMs -gt 0) { return $script:HordeChatAnswerClockMs }
+    return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+}
 function Set-HordeChatAnswerSeat { param([scriptblock]$Reader = $null) $script:HordeChatAnswerSeat = $Reader }
 function Set-HordeChatAnswerItemReader { param([scriptblock]$Reader = $null) $script:HordeChatAnswerItemReader = $Reader }
 
@@ -174,9 +181,12 @@ function Get-HordeChatAnswerMessageId {
 function Get-HordeChatAnswerOrcBody {
     # What the Orc reads (header): the header line naming the answer, the item and its list, the item's text as published on one
     # line, a blank line, then his words exactly.
-    param([Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][int]$Index, [Parameter(Mandatory = $true)][string]$Snapshot, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ItemText, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    # -Live false: the snapshot is not the Orc's newest list (N1 of the review of PR 382), and the body says so, because item N of the
+    # newest list may be another item.
+    param([Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][int]$Index, [Parameter(Mandatory = $true)][string]$Snapshot, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ItemText, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [bool]$Live = $true)
     $one = [regex]::Replace($ItemText, '\s*[\r\n]+\s*', ' ').Trim()
-    return ("FOUNDER ANSWER from the phone (answer " + $MessageId + ") to your published list item " + $Index + " (snapshot " + $Snapshot + "):`n`"" + $one + "`"`n`n" + $Text)
+    $older = $(if ($Live) { "" } else { "NOTE: this is an older list of yours; your newest published list is not this one, so item " + $Index + " there may be another item.`n" })
+    return ("FOUNDER ANSWER from the phone (answer " + $MessageId + ") to your published list item " + $Index + " (snapshot " + $Snapshot + "):`n" + $older + "`"" + $one + "`"`n`n" + $Text)
 }
 
 function Find-HordeChatAnswerItem {
@@ -261,6 +271,10 @@ function Invoke-HordeChatAnswerAccept {
     if ($ans.machine -cne $Context.signKeyId) { return (& $answer "refused" "refused" "wrong-machine" ("it is for the machine " + $ans.machine + ", not this one")) }
     if ($ans.horde -cne $Context.horde) { return (& $answer "refused" "refused" "wrong-horde" ("it is for the horde " + $ans.horde + ", not " + $Context.horde)) }
     if ($ans.text.Trim() -eq "") { return (& $answer "refused" "refused" "empty" "it holds no words") }
+    # AN AGE LIMIT (review of PR 382, S3): an answer held for want of a session or a reading is not carried for ever - an Orc parked on Friday
+    # must not be handed Friday's answer on Tuesday as if it were current. Past ttlSeconds from the time his passkey signed it, it is given up
+    # with a receipt (held, expired - final), the clock being the real one.
+    if ($sentAt -gt 0 -and ((Get-HordeChatAnswerNowMs) - $sentAt) -gt ([long]$set.ttlSeconds * 1000)) { return (& $answer "done" "held" "expired" ("it was signed more than " + $set.ttlSeconds + " s ago and was not delivered; it is not carried further")) }
     if ($ans.text.Length -gt [int]$set.lineChars) { return (& $answer "refused" "refused" "too-long" ("it is " + $ans.text.Length + " characters; an answer holds " + $set.lineChars)) }
     # THE ITEM, from fleet.db: whose list it is and what it said.
     $pub = Find-HordeChatAnswerItem -Context $Context -Snapshot $ans.snapshot -Index $ans.index
@@ -270,7 +284,7 @@ function Invoke-HordeChatAnswerAccept {
     $ownerLane = $(if ($owner.rank -ceq "thrall") { "thrall" } else { $owner.orc })
     if ($ownerLane -cne $ans.lane) { return (& $answer "refused" "refused" "wrong-lane" ("the item is in the list of '" + $ownerLane + "', not of '" + $ans.lane + "'")) }
     if ($owner.retired) { return (& $answer "refused" "refused" "orc-retired" ("'" + $ownerLane + "' is retired in fleet.db, so nothing is waiting for the answer")) }
-    $bodyText = Get-HordeChatAnswerOrcBody -MessageId $ans.messageId -Index $ans.index -Snapshot $ans.snapshot -ItemText $owner.text -Text $ans.text
+    $bodyText = Get-HordeChatAnswerOrcBody -MessageId $ans.messageId -Index $ans.index -Snapshot $ans.snapshot -ItemText $owner.text -Text $ans.text -Live $owner.live
     $bodyBytes = [System.Text.Encoding]::UTF8.GetByteCount($bodyText)
     if ($bodyBytes -gt $script:HordeMessengerBodyBytes) { return (& $answer "refused" "refused" "too-long" ("its message is " + $bodyBytes + " UTF-8 bytes; a message holds " + $script:HordeMessengerBodyBytes)) }
     # THE RECIPIENT, resolved here and nowhere else.

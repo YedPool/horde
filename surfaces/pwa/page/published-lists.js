@@ -33,7 +33,8 @@
 //     carrying that recommendation (a copy; the snapshot's own are not touched); with laneOf, only an item of
 //     the question's own lane gives it one
 //   renderPublishedLists(doc, view, { fmt, answers }) -> the nodes to draw
-//     answers  { canSend, viewOf(key), draftOf(key), onDraft(key, text), send(list, item, text) -> promise of { ok, reason } },
+//     answers  { canSend, viewOf(key), draftOf(key), onDraft(key, text), send(list, item, text) -> promise of { ok, reason },
+//              problemOf(key) (optional: why his last send of this item failed, kept across the redraw the send causes) },
 //              key = "<snapshot>/<position>" (answerKey). canSend false (a recovery unlock, a passkey with no PRF) draws no box,
 //              as for a question; the answers already sent still show with their receipts. Without answers nothing is added.
 //              A list with no snapshot id (a machine older than the member) has no box and says so once.
@@ -42,6 +43,30 @@
 export const THRALL_LANE = "thrall";
 
 const BLOCKS_WORDS = { all: "blocks all work", part: "blocks part of the work", none: "blocks nothing" };
+
+// HOW LONG "Sending..." MAY STAND with no word from the PC before the page says so in a fixed sentence (T-0352 review S2): the PC may be off,
+// and an answer that seems lost is typed again - and delivered twice.
+export const ANSWER_WAIT_MS = 10 * 60 * 1000;
+export const ANSWER_NOT_CONFIRMED = "Not confirmed by the PC yet. It arrives when the PC is on; do not send it again.";
+
+// The answers to show: the phone's own (itemAnswers: a Map from "<snapshot>/<position>" to the answers) plus those this page kept
+// across a reload (pending: [{ messageId, key, text, at }]) that no receipt or phone entry names yet, and every answer still
+// "sending" after ANSWER_WAIT_MS marked not confirmed. A copy; nothing is changed.
+export function settleAnswers(itemAnswers, pending, now) {
+  const out = new Map();
+  const named = new Set();
+  for (const [k, list] of itemAnswers) {
+    out.set(k, list.map((a) => { named.add(a.messageId); return (a.status === "sending" && now - a.at >= ANSWER_WAIT_MS) ? { ...a, words: ANSWER_NOT_CONFIRMED } : a; }));
+  }
+  for (const x of Array.isArray(pending) ? pending : []) {
+    if (!x || named.has(x.messageId) || typeof x.key !== "string" || typeof x.text !== "string") continue;
+    const late = now - x.at >= ANSWER_WAIT_MS;
+    const list = out.get(x.key) || [];
+    list.push({ messageId: x.messageId, text: x.text, at: x.at, status: "sending", code: "", words: late ? ANSWER_NOT_CONFIRMED : "Sending..." });
+    out.set(x.key, list.sort((m, n) => m.at - n.at));
+  }
+  return out;
+}
 
 export const answerKey = (list, item) => list.snapshot + "/" + item.position;
 const NO_ID_WORDS = "This list has no id at the machine, so its items cannot be answered from here yet: the machine needs a Horde update.";
@@ -136,7 +161,7 @@ function answerPart(doc, list, it, answers) {
   send.className = "pl-send";
   send.type = "button";
   send.textContent = "Send";
-  const problem = line(doc, "pl-problem", "");
+  const problem = line(doc, "pl-problem", typeof answers.problemOf === "function" ? answers.problemOf(key) : "");
   problem.setAttribute("role", "alert");
   let busy = false;
   const go = async () => {

@@ -290,24 +290,25 @@ try {
     # T-0352: AN ANSWER BOX AND SEND UNDER EVERY ITEM OF A PUBLISHED LIST (the founder, 2026-10-23: the items were shown and he could
     # answer none). The Thrall's item typed into, a real Enter, a signed envelope of kind answer at the machine, a receipt under the item,
     # and the same after a reload. The synthetic fleet has NO session for the Thrall's seat (WEZFLEET_ROOT is pinned empty), so the
-    # machine HOLDS the answer (no-session) and posts it nowhere: that is what proves the recipient is resolved there and never guessed.
+    # machine HOLDS the answer and posts it nowhere (the synthetic Thrall's record names a process that is not running, so the seat cannot be proven: held, not-now): that is what proves the recipient is resolved there and never guessed.
     # Sent and Delivered, and the post to the owning session, are test\test-relay-chat-answers.ps1's.
     $itemText = "Sales queue: forward the contract page, v3?"
     $ib = Invoke-Browser @{ cmd = "itemBoxes" }
     Check ($ib.ok -and $ib.value.boxes -ge 1 -and $ib.value.boxes -eq $ib.value.buttons -and $ib.value.boxes -eq $ib.value.items) ("EVERY ITEM DRAWN HAS ITS BOX AND SEND (" + $(if ($ib.ok) { "" + $ib.value.items + " items, " + $ib.value.boxes + " boxes, " + $ib.value.buttons + " buttons" } else { $ib.reason }) + ")")
     $countBefore = Get-MachineCount
     $ia = Invoke-Browser @{ cmd = "itemAnswer"; item = $itemText; text = "Yes - forward it today."; via = "enter"; mailbox = $mailbox }
-    Check ($ia.ok -and $ia.value.found -and $ia.value.put -and $ia.value.left -ceq "") ("a real Enter in an item's box sends its words, signed, and empties the box (" + $(if ($ia.ok) { "put " + $ia.value.put + ", left '" + $ia.value.left + "'" } else { $ia.reason }) + ")")
-    $answerEnv = @(Get-MachineEnvelopes -Skip $countBefore)
-    Check ($answerEnv.Count -eq 1 -and $answerEnv[0].value.header.channel -ceq "chat" -and $answerEnv[0].value.header.kind -ceq "answer") ("it is one envelope on the chat channel, kind answer (" + $answerEnv.Count + ")")
+    Check ($ia.ok -and $ia.value.found -and $ia.value.put -and $ia.value.refilled -ceq "") ("a real Enter in an item's box sends its words, signed, and the box, as the page stands a moment after the redraw, is empty (" + $(if ($ia.ok) { "put " + $ia.value.put + ", box '" + $ia.value.refilled + "'" } else { $ia.reason }) + ")")
+    Start-Sleep -Milliseconds 300
+    $answerEnv = @(Get-MachineEnvelopes -Skip $countBefore | Where-Object { $_.ok -and $_.value.header.kind -ceq "answer" })
+    Check ($answerEnv.Count -eq 1 -and $answerEnv[0].value.header.channel -ceq "chat") ("it is ONE envelope of kind answer on the chat channel, though a second Enter was pressed in the box after the redraw: the words just sent are not posted again under a new id (review of PR 382, S1): found (" + $answerEnv.Count + ": " + (@($answerEnv | ForEach-Object { if ($_.ok) { $_.value.header.channel + "/" + $_.value.header.kind } else { "unreadable" } }) -join ", ") + ")")
     $postsBefore = @(Get-HordeTestFleetPosts -Folder $fake).Count
     $run = Invoke-Run -Turns 1
-    $held = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: that Orc has no session running now" }
-    Check ($run.code -eq 0 -and $held.ok -and $held.value.found -and $held.value.text.Contains("You: Yes - forward it today.")) ("the machine resolved the item in fleet.db, found no session for the Thrall's seat, and HELD it; the receipt shows under the item with his words (" + $(if ($held.ok) { ($held.value.text -replace "\s+", " ") } else { $held.reason }) + ")")
+    $held = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: delivery failed for now" }
+    Check ($run.code -eq 0 -and $held.ok -and $held.value.found -and $held.value.text.Contains("You: Yes - forward it today.")) ("the machine resolved the item in fleet.db, could not prove the Thrall's seat, and HELD it; the receipt shows under the item with his words (" + $(if ($held.ok) { ($held.value.text -replace "\s+", " ") } else { $held.reason }) + "; the run said: " + ((@($run.out -split "`n") | Where-Object { $_ -match "answer" }) -join " | ") + ")")
     Check (@(Get-HordeTestFleetPosts -Folder $fake).Count -eq $postsBefore) "and nothing was posted to any session: the answer is held, not sent elsewhere"
     $null = Invoke-Browser @{ cmd = "reload" }
     $null = Invoke-Browser @{ cmd = "unlock" }
-    $held2 = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: that Orc has no session running now" }
+    $held2 = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: delivery failed for now" }
     Check ($held2.ok -and $held2.value.found -and $held2.value.text.Contains("You: Yes - forward it today.")) "AFTER A RELOAD the answer and its receipt show again under the item: the receipt carries his words"
     $shot1 = Save-Shot "phone-list"
 
