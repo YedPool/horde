@@ -91,5 +91,23 @@
         @{ Name = "skip-clears-a-stored-red"
            Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
            Replace = 'if ($Verdict -ceq "skip") { return "skip" }' }
+        @{ Name = "tell-exit-6-not-told"
+           Find = 'if ($c -eq 0 -or $c -eq 6) { return "told" }'
+           Replace = 'if ($c -eq 0) { return "told" }' }
+        @{ Name = "unconfirmed-tell-resent"
+           Find = 'if ($c -eq 2) { return "unconfirmed" }'
+           Replace = '' }
+        @{ Name = "tell-not-retried"
+           Find = 'for ($try = 1; $try -le [math]::Max(1, $Tries); $try++) {'
+           Replace = 'for ($try = 1; $try -le 1; $try++) {' }
+        @{ Name = "untold-findings-dropped"
+           Find = 'else { foreach ($f in @($Findings)) {'
+           Replace = 'elseif ($false) { foreach ($f in @($Findings)) {' }
+        @{ Name = "pending-not-cleared-when-told"
+           Find = 'if ($Told) { $pending = @() }'
+           Replace = '' }
+        @{ Name = "pending-not-in-report"
+           Find = 'if ($r.PSObject.Properties["pending"]) {'
+           Replace = 'if ($false) {' }
     )
 }

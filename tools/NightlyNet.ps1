@@ -28,9 +28,11 @@
 #   3. one report to M: wezfleet tell M -Kind report -MessageFile <file>; the body has no double quote, semicolon
 #      or angle bracket (core/NightlyNet.ps1, ConvertTo-HordeNightlyText). The same text is kept in the report folder.
 # The state moves forward only for units that ran, and the tip only when the whole night's units ran, so a
-# short night widens tomorrow's range instead of losing a merge.
+# short night widens tomorrow's range instead of losing a merge. It is saved whether or not the tell got through;
+# findings M was not told stay pending in state.json and every report re-lists them until one is told.
 #
-# Exit: 0 reported, 3 the tell failed (the report is in the report folder), 4 outside the night window, 1 an error.
+# Exit: 0 reported, 3 the tell failed (the report is in the report folder, its findings pending in state.json), 4 outside
+# the night window, 1 an error (or a state that could not be saved).
 # -Plan runs nothing: it prints the window, the repos, the merges since the last run and the units it would run.
 # Windows PowerShell 5.1. ASCII only.
 param(
@@ -46,6 +48,7 @@ param(
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [int]$BisectReserveMinutes = 90,
     [int]$MaxBisectRuns = 40,
+    [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
     [switch]$Plan,
     [switch]$NoTell
 )
@@ -175,13 +178,14 @@ function Invoke-NightlyUnit {
 
 function Read-NightlyState {
     param([string]$Path)
-    $s = @{ lastTip = ""; units = @{} }
+    $s = @{ lastTip = ""; units = @{}; pending = @() }
     if (-not (Test-Path -LiteralPath $Path)) { return $s }
     try {
         $o = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($Path))
         $s.lastTip = "" + $o.lastTip
         foreach ($p in $o.units.PSObject.Properties) { $s.units["" + $p.Name] = "" + $p.Value }
-    } catch { Say ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{} } }
+        if ($o.PSObject.Properties["pending"]) { $s.pending = @(@($o.pending) | Where-Object { "" + $_ -ne "" } | ForEach-Object { "" + $_ }) }
+    } catch { Say ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{}; pending = @() } }
     return $s
 }
 
@@ -189,7 +193,7 @@ function Write-NightlyState {
     param([string]$Path, $State)
     $u = [ordered]@{}
     foreach ($k in (@($State.units.Keys) | Sort-Object)) { $u[$k] = $State.units[$k] }
-    $text = ([ordered]@{ lastTip = $State.lastTip; units = $u } | ConvertTo-Json -Depth 4)
+    $text = ([ordered]@{ lastTip = $State.lastTip; units = $u; pending = @($State.pending) } | ConvertTo-Json -Depth 4)
     $tmp = $Path + ".tmp"
     [System.IO.File]::WriteAllText($tmp, $text)
     Move-Item -LiteralPath $tmp -Destination $Path -Force
@@ -348,20 +352,11 @@ function Invoke-NightlyBisect {
 }
 
 function Save-NightlyState {
-    # Verdicts of the units that ran replace last night's; the tip moves only when every unit ran.
-    param($Ctx)
-    foreach ($k in @($Ctx.verdicts.Keys)) {
-        $v = $Ctx.verdicts[$k]
-        $prev = ""; if ($Ctx.state.units.ContainsKey($k)) { $prev = "" + $Ctx.state.units[$k] }
-        $keep = Get-HordeNightlyStoredVerdict -Verdict $v -Previous $prev
-        if ($keep -ne "") { $Ctx.state.units[$k] = $keep }
-    }
-    if ($Ctx.kind -ceq "pytest" -and $Ctx.verdicts.ContainsKey("pytest-all")) {
-        # The red list is what the whole run said: a node that passed is gone from it.
-        foreach ($k in @($Ctx.state.units.Keys)) { if ($k -like "pytest-node|*" -and -not $Ctx.verdicts.ContainsKey($k)) { $Ctx.state.units.Remove($k) } }
-    }
-    if ($Ctx.incomplete -eq "" -and $Ctx.unrun -eq 0) { $Ctx.state.lastTip = $Ctx.tip }
-    Write-NightlyState -Path $Ctx.statePath -State $Ctx.state
+    # core Update-HordeNightlyState decides: tonight's verdicts always, the tip only when every unit ran, and what M was
+    # not told (the tell failed) kept pending for the next report.
+    param($Ctx, $Row, [bool]$Told)
+    $next = Update-HordeNightlyState -State $Ctx.state -Verdicts $Ctx.verdicts -Kind $Ctx.kind -Tip $Ctx.tip -Complete ($Ctx.incomplete -eq "" -and $Ctx.unrun -eq 0) -Told $Told -Findings @(Get-HordeNightlyFindingLines -Row $Row) -Date $Date
+    Write-NightlyState -Path $Ctx.statePath -State $next
 }
 
 # ---------------------------------------------------------------- the run
@@ -374,7 +369,7 @@ if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06
 function Send-NightlyReport {
     # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
-    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -Say { param($l) Say $l })
+    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -Say { param($l) Say $l })
 }
 
 $mutex = $null
@@ -407,18 +402,27 @@ try {
     $repoRows = @()
     foreach ($c in $ctxs) {
         $repoRows += [pscustomobject]@{ repo = $c.repo; tip = $c.tip; lastTip = $c.state.lastTip; merges = $c.merges; guards = $c.guards
-            suiteCount = @($c.verdicts.Keys).Count; unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete }
+            suiteCount = @($c.verdicts.Keys).Count; unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
+            pending = @($c.state.pending) }
     }
     $body = New-HordeNightlyReport -Date $Date -Repos $repoRows
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
     Say ("report written: " + $file)
-    # State moves only after the tell succeeded: a report M never got must not turn tonight's reds into "still red" (T-0331 N6).
+    # The state is ALWAYS saved (review of PR 380, finding 2): tonight's verdicts and tip are test facts whether or not M
+    # heard them. What M did not hear is kept apart, pending, and re-listed in every report until a tell succeeds. Each
+    # repo's save is its own try: one that throws after the tell must not turn a delivered report into a FAILED night.
     $told = Send-NightlyReport $file
-    if ($told -eq 0) { foreach ($c in $ctxs) { Save-NightlyState $c } }
-    else { Say "state NOT saved: the report was not told, so tomorrow reports these reds again" }
-    exit $told
+    if ($told -ne 0) { Say "the report was not told: tonight's findings stay pending and the next report lists them again" }
+    $saved = $true
+    for ($i = 0; $i -lt $ctxs.Count; $i++) {
+        try { Save-NightlyState -Ctx $ctxs[$i] -Row $repoRows[$i] -Told ($told -eq 0) }
+        catch { $saved = $false; Say ("report " + $(if ($told -eq 0) { "sent" } else { "not sent" }) + ", but the state of " + $ctxs[$i].repo + " was not saved: " + $_.Exception.Message) }
+    }
+    if ($told -ne 0) { exit $told }
+    if (-not $saved) { exit 1 }
+    exit 0
 } catch {
     # A failed night must never be silent: one plain line to M, and the same line in the report folder.
     $why = ConvertTo-HordeNightlyText ("" + $_.Exception.Message)

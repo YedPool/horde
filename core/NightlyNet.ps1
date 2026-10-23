@@ -204,21 +204,91 @@ function Get-HordeNightlyStoredVerdict {
     return ""
 }
 
+function Get-HordeNightlyTellOutcome {
+    # What the tell program's exit means: "told", "unconfirmed" or "retry" (review of PR 380, finding 2). Its exit codes:
+    # 0 delivered and 6 posted to the target's mailbox, handed over at its next turn end ("delayed, NOT lost ... DO NOT
+    # RESEND"): both are TOLD. 2 the text left the box, unconfirmed: a resend could double it, so it is not retried, and
+    # the findings stay pending for the next report. Anything else (1 not typed, 3 the box held other text, 4 the
+    # reader failed, 5 a fragment, no exit code at all) is worth another try.
+    param($Code)
+    if ($null -eq $Code) { return "retry" }
+    $c = [int]$Code
+    if ($c -eq 0 -or $c -eq 6) { return "told" }
+    if ($c -eq 2) { return "unconfirmed" }
+    return "retry"
+}
+
 function Invoke-HordeNightlyTell {
-    # Tell the target the report in -File: 0 told, 3 not told (no program, a throw, a non-zero exit). The program's
-    # own output is swallowed: left loose it would join the return value and turn "exit (this)" into exit 0 (T-0331 N1).
-    # -Say is a scriptblock taking one line.
-    param([string]$Program, [string]$Target, [string]$File, [scriptblock]$Say = { param($l) }, [switch]$NoTell)
+    # Tell the target the report in -File: 0 told, 3 not told (no program, a throw, an exit that is not told after
+    # -Tries tries, -RetrySeconds apart). Returns exactly one int: the program's output is collected, never left loose
+    # (left loose it would join the return value, T-0331 N1), and each line of it goes to -Say, so the log keeps the
+    # program's reason and mail id (review of PR 380, finding 7). -Say is a scriptblock taking one line.
+    param([string]$Program, [string]$Target, [string]$File, [scriptblock]$Say = { param($l) }, [switch]$NoTell, [int]$Tries = 3, [int]$RetrySeconds = 120)
     if ($NoTell) { return 0 }
-    $code = 3
-    try {
-        if ($null -eq (Get-Command $Program -ErrorAction SilentlyContinue)) { & $Say ("the tell program '" + $Program + "' is not on the PATH, the report is at " + $File); return 3 }
-        $null = & $Program tell $Target -Kind report -MessageFile $File
-        $code = $LASTEXITCODE
-    } catch { & $Say ("the tell to " + $Target + " threw: " + $_.Exception.Message); return 3 }
-    if ($code -ne 0) { & $Say ("the tell to " + $Target + " failed with exit " + $code + ", the report is at " + $File); return 3 }
-    & $Say ("report sent to " + $Target)
-    return 0
+    if ($null -eq (Get-Command $Program -ErrorAction SilentlyContinue)) { & $Say ("the tell program '" + $Program + "' is not on the PATH, the report is at " + $File); return 3 }
+    for ($try = 1; $try -le [math]::Max(1, $Tries); $try++) {
+        $code = $null
+        try {
+            $out = @(& $Program tell $Target -Kind report -MessageFile $File)
+            $code = $LASTEXITCODE
+            foreach ($l in $out) { $t = ConvertTo-HordeNightlyText ("" + $l); if ($t -ne "") { & $Say ("tell: " + $t) } }
+        } catch { & $Say ("the tell to " + $Target + " threw: " + $_.Exception.Message) }
+        $what = Get-HordeNightlyTellOutcome $code
+        if ($what -ceq "told") { & $Say ("report sent to " + $Target + " (exit " + $code + ")"); return 0 }
+        if ($what -ceq "unconfirmed") { & $Say ("the tell to " + $Target + " is unconfirmed (exit 2), not resent: the report is at " + $File); return 3 }
+        & $Say ("the tell to " + $Target + " failed with exit " + $code + " (try " + $try + " of " + $Tries + "), the report is at " + $File)
+        if ($try -lt $Tries -and $RetrySeconds -gt 0) { Start-Sleep -Seconds $RetrySeconds }
+    }
+    return 3
+}
+
+function Get-HordeNightlyFindingLines {
+    # The findings of one repo row, one line each and not indented: every bisected unit's line (named merge, flaky,
+    # capped, inconclusive) and the red units with no verdict last night. The report prints them, and a night whose
+    # tell failed keeps them pending for the next report.
+    param($Row)
+    $lines = @()
+    foreach ($k in @($Row.culprits)) {
+        if ($k.state -ceq "found") { $lines += ("RED " + $k.unit + " first red at merge " + (Format-HordeNightlyMerge -Merge $k.merge) + " (" + $k.runs + " runs)") }
+        elseif ($k.state -ceq "flaky") { $lines += ("RED " + $k.unit + " was not red when run again at the tip: flaky, no merge named") }
+        elseif ($k.state -ceq "capped") { $lines += ("RED " + $k.unit + " not bisected to one merge (run cap): after " + $(if ("" + $k.between[0] -eq "") { "last night" } else { (Format-HordeNightlySha $k.between[0]) }) + " up to " + (Format-HordeNightlySha $k.between[1])) }
+        elseif ($k.state -ceq "none") { $lines += ("RED " + $k.unit + " has no merge since last night to name") }
+        else { $lines += ("RED " + $k.unit + " bisect inconclusive (a run did not happen): " + $k.state) }
+    }
+    $c = $Row.compare
+    foreach ($u in @($c.newRed | Select-Object -First 15)) { $lines += ("red, no verdict last night: " + $u) }
+    if (@($c.newRed).Count -gt 15) { $lines += ("red, no verdict last night: and " + (@($c.newRed).Count - 15) + " more") }
+    return @($lines | ForEach-Object { ConvertTo-HordeNightlyText $_ })
+}
+
+function Update-HordeNightlyState {
+    # The state.json to keep after a night, as data: @{ lastTip; units; pending }. -State is last night's (the same
+    # shape; pending may be missing). TEST STATE AND TOLD STATE ARE SEPARATE (review of PR 380, finding 2): tonight's
+    # verdicts are kept whether or not M was told, so a red is never re-labelled newly red night after night and
+    # re-bisected; what M has not been told is kept apart, in pending: when -Told is false, tonight's -Findings join it
+    # (each prefixed with -Date), and the next report re-lists all of it until a tell succeeds, which empties it.
+    # The verdicts of the units that ran replace last night's (Get-HordeNightlyStoredVerdict); for a pytest repo whose
+    # whole run finished, a stored red node that is not red tonight is gone. The tip moves only when -Complete (every
+    # unit ran), so a short night widens tomorrow's range instead of losing a merge.
+    param($State, $Verdicts, [string]$Kind = "horde", [string]$Tip = "", [bool]$Complete = $false, [bool]$Told = $false, [string[]]$Findings = @(), [string]$Date = "", [int]$MaxPending = 40)
+    $units = @{}
+    foreach ($k in @($State.units.Keys)) { $units[$k] = $State.units[$k] }
+    foreach ($k in @($Verdicts.Keys)) {
+        $prev = ""; if ($units.ContainsKey($k)) { $prev = "" + $units[$k] }
+        $keep = Get-HordeNightlyStoredVerdict -Verdict ("" + $Verdicts[$k]) -Previous $prev
+        if ($keep -ne "") { $units[$k] = $keep }
+    }
+    if ($Kind -ceq "pytest" -and $Verdicts.ContainsKey("pytest-all")) {
+        foreach ($k in @($units.Keys)) { if ($k -like "pytest-node|*" -and -not $Verdicts.ContainsKey($k)) { $units.Remove($k) } }
+    }
+    $last = "" + $State.lastTip
+    if ($Complete) { $last = $Tip }
+    $pending = @()
+    if ($State.ContainsKey("pending")) { $pending = @($State.pending | Where-Object { "" + $_ -ne "" } | ForEach-Object { "" + $_ }) }
+    if ($Told) { $pending = @() }
+    else { foreach ($f in @($Findings)) { if ("" + $f -ne "") { $pending += (ConvertTo-HordeNightlyText ($Date + ": " + $f)) } } }
+    if ($pending.Count -gt $MaxPending) { $pending = @($pending[($pending.Count - $MaxPending)..($pending.Count - 1)]) }
+    return @{ lastTip = $last; units = $units; pending = @($pending) }
 }
 
 function Get-HordeNightlyHeadlineStatus {
@@ -263,7 +333,8 @@ function Format-HordeNightlyMerge {
 
 function New-HordeNightlyReport {
     # The body of the tell to M, one repo or many: -Repos is a list of
-    #   { repo; tip; lastTip; merges (list); guards = { state; text }; suiteCount; unrunCount; compare; culprits; notes; incomplete }
+    #   { repo; tip; lastTip; merges (list); guards = { state; text }; suiteCount; unrunCount; compare; culprits; notes; incomplete;
+    #     pending (optional: findings of earlier nights whose tell failed) }
     # where culprits is a list of { unit; state; sha; merge; runs; between }. Returns the text, every line sanitized.
     param([string]$Date, [object[]]$Repos)
     $lines = @()
@@ -279,16 +350,10 @@ function New-HordeNightlyReport {
         $lines += ("  units run: " + $r.suiteCount + ", not run (slot, memory or night ran out): " + $r.unrunCount)
         $c = $r.compare
         $lines += ("  newly red (green last night): " + @($c.newlyRed).Count + ", still red: " + @($c.stillRed).Count + ", red with no verdict last night: " + @($c.newRed).Count + ", fixed: " + @($c.fixed).Count)
-        foreach ($k in @($r.culprits)) {
-            if ($k.state -ceq "found") { $lines += ("  RED " + $k.unit + " first red at merge " + (Format-HordeNightlyMerge -Merge $k.merge) + " (" + $k.runs + " runs)") }
-            elseif ($k.state -ceq "flaky") { $lines += ("  RED " + $k.unit + " was not red when run again at the tip: flaky, no merge named") }
-            elseif ($k.state -ceq "capped") { $lines += ("  RED " + $k.unit + " not bisected to one merge (run cap): after " + $(if ("" + $k.between[0] -eq "") { "last night" } else { (Format-HordeNightlySha $k.between[0]) }) + " up to " + (Format-HordeNightlySha $k.between[1])) }
-            elseif ($k.state -ceq "none") { $lines += ("  RED " + $k.unit + " has no merge since last night to name") }
-            else { $lines += ("  RED " + $k.unit + " bisect inconclusive (a run did not happen): " + $k.state) }
-        }
+        foreach ($f in @(Get-HordeNightlyFindingLines -Row $r)) { $lines += ("  " + $f) }
         foreach ($u in @($c.stillRed | Select-Object -First 15)) { $lines += ("  still red: " + $u) }
         if (@($c.stillRed).Count -gt 15) { $lines += ("  still red: and " + (@($c.stillRed).Count - 15) + " more") }
-        foreach ($u in @($c.newRed | Select-Object -First 15)) { $lines += ("  red, no verdict last night: " + $u) }
+        if ($r.PSObject.Properties["pending"]) { foreach ($p in @($r.pending)) { if ("" + $p -ne "") { $lines += ("  NOT TOLD BEFORE (that night's tell failed): " + $p) } } }
         foreach ($n in @($r.notes)) { $lines += ("  note: " + $n) }
     }
     return ((@($lines | ForEach-Object { ConvertTo-HordeNightlyText $_ })) -join "`n")
