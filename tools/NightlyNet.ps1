@@ -12,7 +12,8 @@
 # merge behind each NEW red. core/NightlyNet.ps1 holds what it decides (and is tested); this file is what it does.
 #
 # THE NIGHT. It starts at 22:00 or later and everything is over by 06:30 (a run is never started if it could
-# end after that); started outside the window it refuses with exit 4 and runs nothing. Every run goes through
+# end after 06:15, which leaves -ReportReserveMinutes for the report and the tell); started outside the window it refuses
+# with exit 4 and runs nothing. Every run goes through
 # tools/HeavySlot.ps1 in slot runs of -RunSeconds (at most 1800) and a SHORT -SlotWaitSeconds (default 900: a
 # lane that waits is said unrun, it never queues for hours, 2026-10-22), so the slot is free between runs. HeavySlot
 # itself waits for idle-or-night, which holds all night. THIS FILE REGISTERS NOTHING: whoever owns the
@@ -28,9 +29,11 @@
 #   3. one report to M: wezfleet tell M -Kind report -MessageFile <file>; the body has no double quote, semicolon
 #      or angle bracket (core/NightlyNet.ps1, ConvertTo-HordeNightlyText). The same text is kept in the report folder.
 # The state moves forward only for units that ran, and the tip only when the whole night's units ran, so a
-# short night widens tomorrow's range instead of losing a merge.
+# short night widens tomorrow's range instead of losing a merge. It is saved whether or not the tell got through;
+# findings M was not told stay pending in state.json and every report re-lists them until one is told.
 #
-# Exit: 0 reported, 3 the tell failed (the report is in the report folder), 4 outside the night window, 1 an error.
+# Exit: 0 reported, 5 another run holds the lock (M is told), 3 the tell failed (the report is in the report folder, its findings pending in state.json), 4 outside
+# the night window, 1 an error (or a state that could not be saved).
 # -Plan runs nothing: it prints the window, the repos, the merges since the last run and the units it would run.
 # Windows PowerShell 5.1. ASCII only.
 param(
@@ -46,12 +49,20 @@ param(
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [int]$BisectReserveMinutes = 90,
     [int]$MaxBisectRuns = 40,
+    [ValidateRange(0, 120)][int]$ReportReserveMinutes = 15,
+    [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
+    [ValidateRange(30, 3600)][int]$GitSeconds = 900,
+    [string]$MutexName = "Global\HordeNightlyNet",
+    [string]$AtTime = "",
     [switch]$Plan,
     [switch]$NoTell
 )
 $ErrorActionPreference = "Stop"
-# A git credential prompt must fail the clone, not hang the night (T-0331 N8).
+# A git credential prompt must fail the clone, not hang the night (T-0331 N8): GIT_TERMINAL_PROMPT stops git's own
+# prompt, and GCM_INTERACTIVE stops Git Credential Manager's window, which the first alone does not (review of PR 380,
+# finding 4: the pytest repo is private, and an expired token could open a dialog in the task's session and wait).
 $env:GIT_TERMINAL_PROMPT = "0"
+$env:GCM_INTERACTIVE = "never"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\NightlyNet.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 
@@ -63,7 +74,10 @@ if ($HordeScript -eq "") { $HordeScript = Join-Path (Split-Path -Parent $PSScrip
 $HeavySlot = Join-Path $PSScriptRoot "HeavySlot.ps1"
 $WrapDir = Join-Path $PSScriptRoot "nightly"
 $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$Date = (Get-Date).ToString("yyyy-MM-dd")
+# -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
+# any run outside the night.
+$now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
+$Date = $now.ToString("yyyy-MM-dd")
 $ReportDir = Join-Path $WorkRoot "reports"
 $RunDir = Join-Path (Join-Path $WorkRoot "runs") (Get-Date).ToString("yyyyMMdd-HHmmss")
 $LogFile = Join-Path $WorkRoot "nightly.log"
@@ -94,6 +108,15 @@ function Invoke-NightlyGit {
     $code = $LASTEXITCODE
     if ($code -ne 0 -and -not $AllowFail) { throw ("git " + ($GitArgs -join " ") + " failed with exit " + $code) }
     return @($o | ForEach-Object { "" + $_ })
+}
+
+function Invoke-NightlyNetGit {
+    # clone and fetch reach the network: each is time-boxed (-GitSeconds) and may never prompt (review of PR 380, finding 4).
+    param([string[]]$GitArgs, [string]$What)
+    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $r = Invoke-HordeNightlyProcess -FilePath $git -ArgumentList (@("-c", "credential.interactive=never") + @($GitArgs)) -TimeoutSeconds $GitSeconds
+    if ($r.timedOut) { throw ($What + " ran past " + $GitSeconds + " s and was ended") }
+    if ($r.code -ne 0) { throw ($What + " failed with exit " + $r.code) }
 }
 
 function Test-NightlyMayStart {
@@ -143,26 +166,27 @@ function Invoke-NightlySlot {
 }
 
 function Get-NightlyVerdict {
-    # See Get-HordeNightlyVerdict (core): 124 is a timeout and is unrun, never red.
-    param($Run)
-    return (Get-HordeNightlyVerdict $Run)
+    # See Get-HordeNightlyVerdict (core): gate exit 124 is hung at the tip (-AtTip), unrun in a bisect, never red.
+    param($Run, [switch]$AtTip)
+    return (Get-HordeNightlyVerdict $Run -AtTip:$AtTip)
 }
 
 function Invoke-NightlyUnit {
     # Run one unit at the checked-out tree: unit ids are "<suite rel path>|ps51", "<suite rel path>|pwsh7",
-    # "pytest-node|<node id>" and "flake8-critical". Returns the verdict word of Get-NightlyVerdict ("red" included).
-    param($Ctx, [string]$Unit, [string]$Tag)
+    # "pytest-node|<node id>" and "flake8-critical". Returns the verdict word of Get-NightlyVerdict ("red" included);
+    # -AtTip: this is the night's full run at the tip, not a bisect step.
+    param($Ctx, [string]$Unit, [string]$Tag, [switch]$AtTip)
     $tree = $Ctx.tree
     if ($Ctx.kind -ceq "horde") {
         $rel, $sh = $Unit -split '\|', 2
         if ($sh -ceq "pwsh7") {
             $abs = Join-Path $tree ($rel -replace '/', '\')
-            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag))
+            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag) -AtTip:$AtTip)
         }
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag))
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag) -AtTip:$AtTip)
     }
     if ($Unit -ceq "flake8-critical") {
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag))
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag) -AtTip:$AtTip)
     }
     $node = ($Unit -split '\|', 2)[1]
     $nf = Join-Path $RunDir (($Tag -replace '[^A-Za-z0-9._-]', '_') + ".nodes")
@@ -170,18 +194,19 @@ function Invoke-NightlyUnit {
     $r = Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "nodes", "-NodesFile", $nf) -Tag $Tag
     # pytest 4 (usage error: the file is not there) and 5 (nothing collected): the test is not in this commit.
     if (-not $r.timedOut -and ($r.code -eq 4 -or $r.code -eq 5)) { return "absent" }
-    return (Get-NightlyVerdict $r)
+    return (Get-NightlyVerdict $r -AtTip:$AtTip)
 }
 
 function Read-NightlyState {
     param([string]$Path)
-    $s = @{ lastTip = ""; units = @{} }
+    $s = @{ lastTip = ""; units = @{}; pending = @() }
     if (-not (Test-Path -LiteralPath $Path)) { return $s }
     try {
         $o = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($Path))
         $s.lastTip = "" + $o.lastTip
         foreach ($p in $o.units.PSObject.Properties) { $s.units["" + $p.Name] = "" + $p.Value }
-    } catch { Say ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{} } }
+        if ($o.PSObject.Properties["pending"]) { $s.pending = @(@($o.pending) | Where-Object { "" + $_ -ne "" } | ForEach-Object { "" + $_ }) }
+    } catch { Say ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{}; pending = @() } }
     return $s
 }
 
@@ -189,7 +214,7 @@ function Write-NightlyState {
     param([string]$Path, $State)
     $u = [ordered]@{}
     foreach ($k in (@($State.units.Keys) | Sort-Object)) { $u[$k] = $State.units[$k] }
-    $text = ([ordered]@{ lastTip = $State.lastTip; units = $u } | ConvertTo-Json -Depth 4)
+    $text = ([ordered]@{ lastTip = $State.lastTip; units = $u; pending = @($State.pending) } | ConvertTo-Json -Depth 4)
     $tmp = $Path + ".tmp"
     [System.IO.File]::WriteAllText($tmp, $text)
     Move-Item -LiteralPath $tmp -Destination $Path -Force
@@ -204,9 +229,9 @@ function New-NightlyContext {
     $dir = Join-Path $WorkRoot ($repo -replace '/', '__')
     $tree = Join-Path $dir "tree"
     [void][System.IO.Directory]::CreateDirectory($dir)
-    if (-not (Test-Path -LiteralPath (Join-Path $tree ".git"))) { & git.exe -c core.longpaths=true clone -q ("https://github.com/" + $repo + ".git") $tree; if ($LASTEXITCODE -ne 0) { throw ("git clone of " + $repo + " failed") } }
+    if (-not (Test-Path -LiteralPath (Join-Path $tree ".git"))) { Invoke-NightlyNetGit -GitArgs @("-c", "core.longpaths=true", "clone", "-q", ("https://github.com/" + $repo + ".git"), $tree) -What ("git clone of " + $repo) }
     [void](Invoke-NightlyGit $tree @("config", "core.longpaths", "true"))
-    [void](Invoke-NightlyGit $tree @("fetch", "--quiet", "origin"))
+    Invoke-NightlyNetGit -GitArgs @("-C", $tree, "fetch", "--quiet", "origin") -What ("git fetch of " + $repo)
     [void](Invoke-NightlyGit $tree @("checkout", "--quiet", "--detach", ("origin/" + $branch)))
     [void](Invoke-NightlyGit $tree @("reset", "--hard", "--quiet", ("origin/" + $branch)))
     [void](Invoke-NightlyGit $tree @("clean", "-fdq"))
@@ -289,7 +314,7 @@ function Invoke-NightlyPhaseOne {
             $Ctx.verdicts["pytest-all"] = "green"
             continue
         }
-        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u)
+        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip
         Say ($Ctx.repo + " " + $u + " -> " + $v)
         if ($v -ceq "absent") { continue }
         $Ctx.verdicts[$u] = $v
@@ -332,8 +357,7 @@ function Invoke-NightlyBisect {
                 [void](Invoke-NightlyGit $Ctx.tree @("clean", "-fdq"))
             } catch { Say ("bisect checkout of " + $sha + " failed: " + $_.Exception.Message); return $null }
             $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag (($Ctx.repo -replace '/', '_') + "-bisect-" + $sha.Substring(0, 8) + "-" + $u)
-            $res = $null
-            if ($v -ceq "red") { $res = $true } elseif ($v -ceq "green" -or $v -ceq "skip" -or $v -ceq "absent") { $res = $false }
+            $res = ConvertTo-HordeNightlyBisectAnswer $v
             $memo[$key] = $res
             return $res
         }
@@ -348,25 +372,28 @@ function Invoke-NightlyBisect {
 }
 
 function Save-NightlyState {
-    # Verdicts of the units that ran replace last night's; the tip moves only when every unit ran.
-    param($Ctx)
-    foreach ($k in @($Ctx.verdicts.Keys)) {
-        $v = $Ctx.verdicts[$k]
-        $prev = ""; if ($Ctx.state.units.ContainsKey($k)) { $prev = "" + $Ctx.state.units[$k] }
-        $keep = Get-HordeNightlyStoredVerdict -Verdict $v -Previous $prev
-        if ($keep -ne "") { $Ctx.state.units[$k] = $keep }
-    }
-    if ($Ctx.kind -ceq "pytest" -and $Ctx.verdicts.ContainsKey("pytest-all")) {
-        # The red list is what the whole run said: a node that passed is gone from it.
-        foreach ($k in @($Ctx.state.units.Keys)) { if ($k -like "pytest-node|*" -and -not $Ctx.verdicts.ContainsKey($k)) { $Ctx.state.units.Remove($k) } }
-    }
-    if ($Ctx.incomplete -eq "" -and $Ctx.unrun -eq 0) { $Ctx.state.lastTip = $Ctx.tip }
-    Write-NightlyState -Path $Ctx.statePath -State $Ctx.state
+    # core Update-HordeNightlyState decides: tonight's verdicts always, the tip only when every unit ran, and what M was
+    # not told (the tell failed) kept pending for the next report.
+    param($Ctx, $Row, [bool]$Told)
+    $next = Update-HordeNightlyState -State $Ctx.state -Verdicts $Ctx.verdicts -Kind $Ctx.kind -Tip $Ctx.tip -Complete ($Ctx.incomplete -eq "" -and $Ctx.unrun -eq 0) -Told $Told -Findings @(Get-HordeNightlyFindingLines -Row $Row) -Date $Date
+    Write-NightlyState -Path $Ctx.statePath -State $next
 }
 
 # ---------------------------------------------------------------- the run
-$now = Get-Date
-$cutoff = Get-HordeNightlyDeadline -Now $now
+# THE WORK FOLDER FIRST, before the first log line (review of PR 380, finding 6: Say ran before it existed, so a fresh
+# box lost the window line). If it cannot be made (a bad -WorkRoot, an ACL, a full disk) the log and the report go to a
+# folder under the temp path instead, and the run fails below through the catch, which tells M from there.
+$setupError = ""
+try { [void][System.IO.Directory]::CreateDirectory($WorkRoot); [void][System.IO.Directory]::CreateDirectory($ReportDir) }
+catch {
+    $setupError = "the work folder " + $WorkRoot + " could not be made: " + $_.Exception.Message
+    $fallback = Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"
+    try { [void][System.IO.Directory]::CreateDirectory($fallback) } catch { }
+    $LogFile = Join-Path $fallback "nightly.log"
+    $ReportDir = $fallback
+}
+# Runs end -ReportReserveMinutes (15) before 06:30, so the report, the tell and the save are done by then.
+$cutoff = Get-HordeNightlyRunCutoff -Now $now -ReportReserveMinutes $ReportReserveMinutes
 $inWindow = Test-HordeNightlyWindow -Now $now
 Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
 if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06:30): nothing run"; exit 4 }
@@ -374,20 +401,27 @@ if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06
 function Send-NightlyReport {
     # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
-    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -Say { param($l) Say $l })
+    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -TimeoutSeconds 300 -Say { param($l) Say $l })
 }
 
 $mutex = $null
 $held = $false
 try {
     # Inside the try (T-0331 N7): a failure here is a FAILED night told to M, not a silent one.
-    [void][System.IO.Directory]::CreateDirectory($WorkRoot)
-    [void][System.IO.Directory]::CreateDirectory($ReportDir)
-    $mutex = New-Object System.Threading.Mutex($false, "Global\HordeNightlyNet")
+    if ($setupError -ne "") { throw $setupError }
+    $mutex = New-Object System.Threading.Mutex($false, $MutexName)
     if (-not $Plan) {
     # A killed run can leave the mutex abandoned: WaitOne then throws, and the mutex is ours.
     try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
-    if (-not $held) { Say "another nightly run holds the mutex; exiting"; exit 0 }
+    if (-not $held) {
+        # Never a silent night (review of PR 380, finding 4): a run wedged from an earlier night holds the lock, and
+        # every night after it would end here with exit 0 and a log line nobody reads. M hears it, and it exits 5.
+        Say "another nightly run holds the lock: tonight runs nothing"
+        $busy = Join-Path $ReportDir ($Date + "-BUSY.txt")
+        [System.IO.File]::WriteAllText($busy, (ConvertTo-HordeNightlyText ("NIGHTLY NET " + $Date + ": NOT RUN, another nightly run still holds the lock (a run from an earlier night may be wedged). Log: " + $LogFile)) + "`n")
+        [void](Send-NightlyReport $busy)
+        exit 5
+    }
     }
     $ctxs = @()
     foreach ($spec in $Repos) { $ctxs += (New-NightlyContext $spec) }
@@ -407,18 +441,27 @@ try {
     $repoRows = @()
     foreach ($c in $ctxs) {
         $repoRows += [pscustomobject]@{ repo = $c.repo; tip = $c.tip; lastTip = $c.state.lastTip; merges = $c.merges; guards = $c.guards
-            suiteCount = @($c.verdicts.Keys).Count; unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete }
+            suiteCount = @($c.verdicts.Keys).Count; unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
+            pending = @($c.state.pending) }
     }
     $body = New-HordeNightlyReport -Date $Date -Repos $repoRows
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
     Say ("report written: " + $file)
-    # State moves only after the tell succeeded: a report M never got must not turn tonight's reds into "still red" (T-0331 N6).
+    # The state is ALWAYS saved (review of PR 380, finding 2): tonight's verdicts and tip are test facts whether or not M
+    # heard them. What M did not hear is kept apart, pending, and re-listed in every report until a tell succeeds. Each
+    # repo's save is its own try: one that throws after the tell must not turn a delivered report into a FAILED night.
     $told = Send-NightlyReport $file
-    if ($told -eq 0) { foreach ($c in $ctxs) { Save-NightlyState $c } }
-    else { Say "state NOT saved: the report was not told, so tomorrow reports these reds again" }
-    exit $told
+    if ($told -ne 0) { Say "the report was not told: tonight's findings stay pending and the next report lists them again" }
+    $saved = $true
+    for ($i = 0; $i -lt $ctxs.Count; $i++) {
+        try { Save-NightlyState -Ctx $ctxs[$i] -Row $repoRows[$i] -Told ($told -eq 0) }
+        catch { $saved = $false; Say ("report " + $(if ($told -eq 0) { "sent" } else { "not sent" }) + ", but the state of " + $ctxs[$i].repo + " was not saved: " + $_.Exception.Message) }
+    }
+    if ($told -ne 0) { exit $told }
+    if (-not $saved) { exit 1 }
+    exit 0
 } catch {
     # A failed night must never be silent: one plain line to M, and the same line in the report folder.
     $why = ConvertTo-HordeNightlyText ("" + $_.Exception.Message)
@@ -426,8 +469,17 @@ try {
     Say ("the nightly net FAILED: " + $why)
     if (-not $Plan) {
         $body = "NIGHTLY NET " + $Date + ": FAILED, the night did not complete and tonight's tests say nothing. Error: " + $why + ". Log: " + $LogFile
-        $file = Join-Path $ReportDir ($Date + "-FAILED.txt")
-        try { [void][System.IO.Directory]::CreateDirectory($ReportDir); [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n"); [void](Send-NightlyReport $file) } catch { Say ("could not report the failure: " + $_.Exception.Message) }
+        # The report folder may be what failed: the temp path is the second place to write the line M is told.
+        $sent = $false
+        foreach ($dir in @($ReportDir, (Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"))) {
+            try {
+                [void][System.IO.Directory]::CreateDirectory($dir)
+                $file = Join-Path $dir ($Date + "-FAILED.txt")
+                [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n")
+                [void](Send-NightlyReport $file); $sent = $true; break
+            } catch { Say ("could not report the failure from " + $dir + ": " + $_.Exception.Message) }
+        }
+        if (-not $sent) { Say "M was not told of the failure" }
     }
     exit 1
 } finally {

@@ -154,10 +154,34 @@ Check ($rep -like "*1 newly red across 2 repos*") "the headline counts newly red
 Write-Host ""
 Write-Host "--- follow-ups N1 to N4: the tell's exit, a timeout is unrun, a skip keeps a red, the headline says incomplete ---" -ForegroundColor Cyan
 function Run-V { param([int]$Code, [bool]$TimedOut = $false) return (Get-HordeNightlyVerdict ([pscustomobject]@{ code = $Code; timedOut = $TimedOut })) }
-Check ((Run-V 124) -ceq "unrun") "N2: gate exit 124 (a timeout) is unrun, never red"
+Check ((Run-V 124) -ceq "unrun") "N2: gate exit 124 (a timeout) inside a bisect is unrun, never red"
+# R3 (review of PR 380, finding 3): at the tip a timeout is a finding, HUNG, not unrun forever.
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 124; timedOut = $false }) -AtTip) -ceq "hung") "R3: gate exit 124 at the tip is hung"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 124; timedOut = $true }) -AtTip) -ceq "unrun") "R3: a run the night itself cut off is still unrun at the tip"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 1; timedOut = $false }) -AtTip) -ceq "red" -and (Get-HordeNightlyVerdict ([pscustomobject]@{ code = 125; timedOut = $false }) -AtTip) -ceq "unrun") "R3: the other exits mean the same at the tip"
+$hc = Compare-HordeNightlyVerdicts -Now @{ "h|ps51" = "hung"; "g|ps51" = "green" } -Last @{ "h|ps51" = "green"; "g|ps51" = "green" }
+Check ((($hc.hung -join ",") -ceq "h|ps51") -and @($hc.newlyRed).Count -eq 0 -and @($hc.unrun).Count -eq 0) "R3: a hung unit is its own finding: not unrun, and not newly red (never bisected)"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "hung" -Previous "green") -ceq "hung") "R3: hung is stored"
+$sh = Update-HordeNightlyState -State @{ lastTip = "old"; units = @{ "h|ps51" = "green" } } -Verdicts @{ "h|ps51" = "hung" } -Tip "new" -Complete $true -Told $true
+Check ($sh.lastTip -ceq "new" -and $sh.units["h|ps51"] -ceq "hung") "R3: a night with a hung unit still moves the tip"
+$hrow = [pscustomobject]@{ repo = "Y/h"; tip = "abcdef01"; lastTip = "01234567"; merges = @(); guards = [pscustomobject]@{ state = "green"; text = "" }; suiteCount = 2; unrunCount = 0
+    compare = $hc; culprits = @(); notes = @(); incomplete = "" }
+$hrep = New-HordeNightlyReport -Date "2026-10-22" -Repos @($hrow)
+Check ($hrep -like "*HUNG h|ps51 ran past its time limit at the tip*") "R3: the report names the hung unit"
+Check ((($hrep -split "`n")[0]) -like "*HUNG: 1 units ran past their time limit*") "R3: and the headline counts it"
 Check ((Run-V 0) -ceq "green" -and (Run-V 3) -ceq "skip" -and (Run-V 126) -ceq "absent" -and (Run-V 1) -ceq "red" -and (Run-V 125) -ceq "unrun" -and (Run-V 0 $true) -ceq "unrun") "the other exits keep their meaning"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "red") -ceq "") "N3: a skip does not clear a stored red"
-Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "green") -ceq "") "N3: nor a stored green"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "green") -ceq "skip") "R1: a skip does NOT keep a stored green (it is stored as skip)"
+# R1 (review of PR 380, finding 1): green on night 1, a skip on night 2 (the tip moves on), red on night 3. Night 3
+# must not be newly red: the break may be in night 2's merges, and a bisect over night 3's alone names an innocent one.
+$st = @{ "u|ps51" = "green" }
+$k = Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous $st["u|ps51"]; if ($k -ne "") { $st["u|ps51"] = $k }
+$cmp3 = Compare-HordeNightlyVerdicts -Now @{ "u|ps51" = "red" } -Last $st
+Check (@($cmp3.newlyRed).Count -eq 0 -and (($cmp3.newRed -join ",") -ceq "u|ps51")) "R1: green, skip, red is NOT newly red (red with no verdict last night, no merge named)"
+$st = @{ "u|ps51" = "red" }
+$k = Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous $st["u|ps51"]; if ($k -ne "") { $st["u|ps51"] = $k }
+$cmp3 = Compare-HordeNightlyVerdicts -Now @{ "u|ps51" = "red" } -Last $st
+Check ((($cmp3.stillRed -join ",") -ceq "u|ps51")) "N3 kept: red, skip, red is still red"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "") -ceq "skip") "a skip with nothing stored is stored"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "red" -Previous "green") -ceq "red" -and (Get-HordeNightlyStoredVerdict -Verdict "green" -Previous "red") -ceq "green") "green and red replace"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "unrun" -Previous "red") -ceq "" -and (Get-HordeNightlyStoredVerdict -Verdict "absent" -Previous "red") -ceq "") "unrun and absent change nothing"
@@ -182,15 +206,106 @@ try {
     [System.IO.File]::WriteAllText($failCmd, "@echo off`r`necho noisy output`r`nexit /b 5`r`n")
     [System.IO.File]::WriteAllText($okCmd, "@echo off`r`necho noisy output`r`nexit /b 0`r`n")
     $said = @()
-    $r = Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) $script:said += $l }
+    $r = Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File (Join-Path $tdir "r.txt") -RetrySeconds 0 -Say { param($l) $script:said += $l }
     Check (@($r).Count -eq 1 -and $r -eq 3) ("N1: a failing tell that prints is exactly one value, 3 (" + (@($r) -join "/") + ")")
-    Check ($said.Count -gt 0 -and $said[0] -like "*failed with exit 5*") "and says so"
+    Check (@($said | Where-Object { $_ -like "*failed with exit 5*" }).Count -gt 0) "and says so"
     $r = Invoke-HordeNightlyTell -Program $okCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) }
     Check (@($r).Count -eq 1 -and $r -eq 0) "N1: a tell that prints and succeeds is exactly 0"
     $r = Invoke-HordeNightlyTell -Program (Join-Path $tdir "nothere") -Target "M" -File "x" -Say { param($l) }
     Check ($r -eq 3) "a missing tell program is 3"
     Check ((Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File "x" -NoTell) -eq 0) "-NoTell is 0"
+    # R2 (review of PR 380, finding 2): 0 and 6 are told, 2 is unconfirmed and never resent, the rest are retried.
+    function New-TellStub {
+        # A tell program that counts its calls in calls.txt and answers the codes of -Codes in turn (the last one after).
+        param([string]$Name, [int[]]$Codes)
+        $d = Join-Path $tdir $Name; [void][System.IO.Directory]::CreateDirectory($d)
+        $b = "@echo off`r`necho call>>`"%~dp0calls.txt`"`r`nset n=0`r`nfor /f `"usebackq delims=`" %%l in (`"%~dp0calls.txt`") do set /a n+=1`r`necho stub said mail id abc123`r`n"
+        for ($i = 0; $i -lt $Codes.Count - 1; $i++) { $b += ("if %n%==" + ($i + 1) + " exit /b " + $Codes[$i] + "`r`n") }
+        $b += ("exit /b " + $Codes[$Codes.Count - 1] + "`r`n")
+        $f = Join-Path $d "tell.cmd"; [System.IO.File]::WriteAllText($f, $b); return $f
+    }
+    function Calls { param([string]$Stub) $c = Join-Path (Split-Path -Parent $Stub) "calls.txt"; if (-not (Test-Path -LiteralPath $c)) { return 0 }; return @(Get-Content -LiteralPath $c).Count }
+    $s6 = New-TellStub "six" @(6)
+    $r = Invoke-HordeNightlyTell -Program $s6 -Target "M" -File "x" -RetrySeconds 0 -Say { param($l) }
+    Check ($r -eq 0 -and (Calls $s6) -eq 1) ("R2: exit 6 (posted to the mailbox) is told, sent once (" + $r + ", " + (Calls $s6) + " calls)")
+    $s2 = New-TellStub "two" @(2)
+    $r = Invoke-HordeNightlyTell -Program $s2 -Target "M" -File "x" -RetrySeconds 0 -Say { param($l) }
+    Check ($r -eq 3 -and (Calls $s2) -eq 1) ("R2: exit 2 (unconfirmed) is not told and NOT resent (" + $r + ", " + (Calls $s2) + " calls)")
+    $s33 = New-TellStub "busy-then-ok" @(3, 4, 0)
+    $said = @()
+    $r = Invoke-HordeNightlyTell -Program $s33 -Target "M" -File "x" -RetrySeconds 0 -Say { param($l) $script:said += $l }
+    Check ($r -eq 0 -and (Calls $s33) -eq 3) ("R2: a tell that fails twice (3, then 4) is retried and told on the third try (" + $r + ", " + (Calls $s33) + " calls)")
+    Check (@($said | Where-Object { $_ -like "tell: stub said mail id abc123*" }).Count -eq 3) "R5: the tell program's own output is kept in the log, every try"
+    $s3 = New-TellStub "always-busy" @(3)
+    $r = Invoke-HordeNightlyTell -Program $s3 -Target "M" -File "x" -Tries 3 -RetrySeconds 0 -Say { param($l) }
+    Check ($r -eq 3 -and (Calls $s3) -eq 3) ("R2: a tell that never gets through gives up after 3 tries, not told (" + $r + ", " + (Calls $s3) + " calls)")
+    # R4 (review of PR 380, finding 4): a program that hangs is ended at its time limit, by its PID.
+    $hang = Join-Path $tdir "hang.cmd"
+    [System.IO.File]::WriteAllText($hang, "@echo off`r`nping -n 60 127.0.0.1 >nul`r`nexit /b 0`r`n")
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $pr = Invoke-HordeNightlyProcess -FilePath $hang -TimeoutSeconds 2
+    Check ($pr.timedOut -eq $true -and $null -eq $pr.code -and $clock.Elapsed.TotalSeconds -lt 30) ("R4: a process past its time limit is ended and says timed out (" + [int]$clock.Elapsed.TotalSeconds + " s)")
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-HordeNightlyTell -Program $hang -Target "M" -File "x" -Tries 1 -TimeoutSeconds 2 -Say { param($l) }
+    Check ($r -eq 3 -and $clock.Elapsed.TotalSeconds -lt 30) ("R4: a tell that hangs is not told, and does not hang the night (" + [int]$clock.Elapsed.TotalSeconds + " s)")
+    $echo = Join-Path $tdir "echo args.cmd"
+    [System.IO.File]::WriteAllText($echo, "@echo off`r`necho [%~1] [%~2] [%~3]`r`nexit /b 7`r`n")
+    $pr = Invoke-HordeNightlyProcess -FilePath $echo -ArgumentList @("a b", "c", "C:\dir with space\f.txt") -TimeoutSeconds 30
+    Check ($pr.code -eq 7 -and $pr.timedOut -eq $false -and (($pr.lines -join "|") -ceq "[a b] [c] [C:\dir with space\f.txt]")) ("R4: arguments with spaces arrive whole, and the exit code is read (" + ($pr.lines -join "|") + ", " + $pr.code + ")")
+    Check ((Format-HordeNightlyArgument "plain") -ceq "plain" -and (Format-HordeNightlyArgument "") -ceq '""' -and (Format-HordeNightlyArgument 'a"b') -ceq '"a\"b"' -and (Format-HordeNightlyArgument "x y\") -ceq '"x y\\"') "R4: command-line quoting"
+    Check ((Get-HordeNightlyTellOutcome $null) -ceq "retry" -and (Get-HordeNightlyTellOutcome 0) -ceq "told" -and (Get-HordeNightlyTellOutcome 6) -ceq "told" -and (Get-HordeNightlyTellOutcome 2) -ceq "unconfirmed" -and (Get-HordeNightlyTellOutcome 5) -ceq "retry") "R2: the tell outcomes"
 } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
+
+Write-Host ""
+Write-Host "--- R5: a missing exit code, a skip in a bisect, the report reserve, an unnamed bisect in the headline ---" -ForegroundColor Cyan
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false })) -ceq "red") "R5: a run with no exit code is red, never green"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false }) -AtTip) -ceq "red") "R5: at the tip too"
+Check ($null -eq (ConvertTo-HordeNightlyBisectAnswer "skip")) "R5: a skip in a bisect is unknown, not green"
+Check ((ConvertTo-HordeNightlyBisectAnswer "red") -eq $true -and (ConvertTo-HordeNightlyBisectAnswer "green") -eq $false -and (ConvertTo-HordeNightlyBisectAnswer "absent") -eq $false -and $null -eq (ConvertTo-HordeNightlyBisectAnswer "unrun")) "R5: red, green, absent and unrun keep their bisect meaning"
+$skipAt = { param($sha) $v = $(if ($sha -ceq "m4") { "skip" } elseif ([int]($sha.Substring(1)) -ge 6) { "red" } else { "green" }); return (ConvertTo-HordeNightlyBisectAnswer $v) }
+$r = Find-HordeNightlyCulprit -Merges @(1..8 | ForEach-Object { "m" + $_ }) -IsRed $skipAt
+Check ($r.state -ceq "inconclusive") ("R5: a bisect that meets a skip stops inconclusive instead of naming a merge past it (" + $r.state + " " + $r.sha + ")")
+Check ((Get-HordeNightlyRunCutoff -Now (Dt "23:00")) -eq ([datetime]"2026-10-23 06:15")) "R5: runs end at 06:15, 15 minutes kept for the report and the tell"
+Check ((Get-HordeNightlyRunCutoff -Now (Dt "02:00") -ReportReserveMinutes 0) -eq ([datetime]"2026-10-22 06:30")) "R5: with no reserve, 06:30"
+foreach ($st in @("capped", "inconclusive", "flaky")) {
+    $ur = $okRow.PSObject.Copy(); $ur.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = $st; sha = ""; merge = $null; runs = 2; between = @("", "abcdef01") })
+    $h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($ur)) -split "`n" | Select-Object -First 1
+    Check ($h -like "*INCOMPLETE*1 bisects named no merge*") ("R5: a " + $st + " bisect makes the headline INCOMPLETE (" + $h + ")")
+}
+$fr = $okRow.PSObject.Copy(); $fr.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "found"; sha = $merge.sha; merge = $merge; runs = 3; between = @("", $merge.sha) })
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($fr)) -split "`n" | Select-Object -First 1
+Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") "R5: a bisect that named its merge leaves the night COMPLETE"
+
+Write-Host ""
+Write-Host "--- R2: the state is always saved, and what M was not told stays pending until a tell gets through ---" -ForegroundColor Cyan
+$emptyCmp = [pscustomobject]@{ newlyRed = @(); stillRed = @(); newRed = @(); fixed = @(); unrun = @() }
+$s0 = @{ lastTip = "aaaa"; units = @{ "x|ps51" = "green"; "y|ps51" = "green" } }
+$v1 = @{ "x|ps51" = "red"; "y|ps51" = "green" }
+$row1 = [pscustomobject]@{ repo = "Y/h"; compare = [pscustomobject]@{ newlyRed = @("x|ps51"); stillRed = @(); newRed = @("z|ps51"); fixed = @(); unrun = @() }
+    culprits = @([pscustomobject]@{ unit = "x|ps51"; state = "found"; sha = $merge.sha; merge = $merge; runs = 3; between = @("", $merge.sha) }) }
+$fl = @(Get-HordeNightlyFindingLines -Row $row1)
+Check ($fl.Count -eq 2 -and $fl[0] -like "RED x|ps51 first red at merge 22222222 PR 372*" -and $fl[1] -ceq "red, no verdict last night: z|ps51") ("the finding lines: the named merge and the new red (" + ($fl -join " / ") + ")")
+$s1 = Update-HordeNightlyState -State $s0 -Verdicts $v1 -Tip "bbbb" -Complete $true -Told $false -Findings $fl -Date "2026-10-22"
+Check ($s1.units["x|ps51"] -ceq "red" -and $s1.lastTip -ceq "bbbb") "R2: a night whose tell failed still saves its verdicts and moves the tip"
+Check (@($s1.pending).Count -eq 2 -and $s1.pending[0] -like "2026-10-22: RED x|ps51 first red at merge*") ("R2: and keeps its findings pending, dated (" + (@($s1.pending) -join " / ") + ")")
+$cmp2 = Compare-HordeNightlyVerdicts -Now @{ "x|ps51" = "red" } -Last $s1.units
+Check (@($cmp2.newlyRed).Count -eq 0 -and (($cmp2.stillRed -join ",") -ceq "x|ps51")) "R2: so the next night that red is still red, not newly red again (no second bisect)"
+$row2 = [pscustomobject]@{ repo = "Y/h"; tip = "cccc"; lastTip = "bbbb"; merges = @(); guards = [pscustomobject]@{ state = "green"; text = "" }; suiteCount = 2; unrunCount = 0
+    compare = $cmp2; culprits = @(); notes = @(); incomplete = ""; pending = @($s1.pending) }
+$rep2 = New-HordeNightlyReport -Date "2026-10-23" -Repos @($row2)
+Check ($rep2 -like "*NOT TOLD BEFORE (that night's tell failed): 2026-10-22: RED x|ps51 first red at merge 22222222*") "R2: the next report re-lists what M was not told"
+$s2b = Update-HordeNightlyState -State $s1 -Verdicts @{ "x|ps51" = "red" } -Tip "cccc" -Complete $true -Told $false -Findings @() -Date "2026-10-23"
+Check (@($s2b.pending).Count -eq 2) "R2: still pending after a second failed tell"
+$s3b = Update-HordeNightlyState -State $s2b -Verdicts @{ "x|ps51" = "red" } -Tip "dddd" -Complete $true -Told $true -Findings @("RED q") -Date "2026-10-24"
+Check (@($s3b.pending).Count -eq 0 -and $s3b.lastTip -ceq "dddd") "R2: a tell that gets through empties pending"
+$s4 = Update-HordeNightlyState -State $s0 -Verdicts @{ "x|ps51" = "unrun" } -Tip "eeee" -Complete $false -Told $true
+Check ($s4.lastTip -ceq "aaaa" -and $s4.units["x|ps51"] -ceq "green") "an incomplete night keeps the tip and an unrun unit's verdict"
+$many = @(1..50 | ForEach-Object { "RED u" + $_ })
+$s5 = Update-HordeNightlyState -State $s0 -Verdicts @{} -Tip "ffff" -Complete $true -Told $false -Findings $many -Date "d" -MaxPending 40
+Check (@($s5.pending).Count -eq 40 -and $s5.pending[39] -ceq "d: RED u50") "pending keeps the newest 40"
+$sp = @{ lastTip = ""; units = @{ "pytest-node|a" = "red"; "pytest-node|b" = "red" } }
+$s6b = Update-HordeNightlyState -State $sp -Verdicts @{ "pytest-all" = "green"; "pytest-node|b" = "red" } -Kind "pytest" -Tip "t" -Complete $true -Told $true
+Check (-not $s6b.units.ContainsKey("pytest-node|a") -and $s6b.units["pytest-node|b"] -ceq "red") "pytest: a node that is no longer red is gone from the red list"
 
 Write-Host ""
 Write-Host "--- the tool, with -Plan: a throwaway repository, nothing run ---" -ForegroundColor Cyan
@@ -238,6 +353,39 @@ try {
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
+    # R4 (review of PR 380, finding 4): a lock held at the start (a wedged earlier run) tells M and exits 5, never a
+    # silent exit 0. The tell is a stub that records what it was given and what it inherited.
+    $stubDir = Join-Path $work "stub"; [void][System.IO.Directory]::CreateDirectory($stubDir)
+    $stub = Join-Path $stubDir "tell.cmd"; $rec = Join-Path $stubDir "rec.txt"
+    [System.IO.File]::WriteAllText($stub, "@echo off`r`necho GCM=%GCM_INTERACTIVE% PROMPT=%GIT_TERMINAL_PROMPT% %*>>`"%~dp0rec.txt`"`r`nexit /b 0`r`n")
+    $mname = "Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")
+    $lock = New-Object System.Threading.Mutex($true, $mname)
+    try {
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-10-22T23:00:00" -MutexName $mname -WorkRoot (Join-Path $work "wr-busy") -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+        $bc = $LASTEXITCODE
+    } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+    $rt = $(if (Test-Path -LiteralPath $rec) { [System.IO.File]::ReadAllText($rec) } else { "" })
+    Check ($bc -eq 5) ("R4: a held lock ends exit 5, not 0 (" + $bc + ")")
+    $bm = [regex]::Match($rt, '-MessageFile "?([^"\r\n]+?)"?\s*$', "Multiline")
+    Check ($bm.Success -and $rt -like "*tell M -Kind report*" -and (Test-Path -LiteralPath $bm.Groups[1].Value) -and ([System.IO.File]::ReadAllText($bm.Groups[1].Value) -like "*NOT RUN, another nightly run still holds the lock*")) ("R4: and M is told the night did not run (" + $rt.Trim() + ")")
+    Check ($rt -like "*GCM=never PROMPT=0*") "R4: the night runs with no git credential prompt of either kind (GCM_INTERACTIVE=never, GIT_TERMINAL_PROMPT=0)"
+    # R5 (review of PR 380, finding 6): a work folder that cannot be made still ends in a FAILED line told to M, written
+    # under the temp path, and the first log line is kept there. The child's temp path is pointed into this test's folder.
+    $blocker = Join-Path $work "a-file"; [System.IO.File]::WriteAllText($blocker, "x")
+    $tmpDir = Join-Path $work "tmp"; [void][System.IO.Directory]::CreateDirectory($tmpDir)
+    if (Test-Path -LiteralPath $rec) { Remove-Item -LiteralPath $rec -Force }
+    $oldTmp = $env:TMP; $oldTemp = $env:TEMP
+    try {
+        $env:TMP = $tmpDir; $env:TEMP = $tmpDir
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-10-22T23:00:00" -MutexName ($mname + "-b") -WorkRoot (Join-Path $blocker "wr") -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+        $fc = $LASTEXITCODE
+    } finally { $env:TMP = $oldTmp; $env:TEMP = $oldTemp }
+    $rt = $(if (Test-Path -LiteralPath $rec) { [System.IO.File]::ReadAllText($rec) } else { "" })
+    $fb = Join-Path $tmpDir "horde-nightly-fallback"
+    Check ($fc -eq 1) ("R5: a work folder that cannot be made ends exit 1 (" + $fc + ")")
+    Check ($rt -like ("*" + $fb + "*2026-10-22-FAILED.txt*") -and ([System.IO.File]::ReadAllText((Join-Path $fb "2026-10-22-FAILED.txt")) -like "*FAILED*could not be made*")) ("R5: and M is still told, from the temp path (" + $rt.Trim() + ")")
+    $fl = Join-Path $fb "nightly.log"
+    Check ((Test-Path -LiteralPath $fl) -and ([System.IO.File]::ReadAllText($fl) -like "*nightly net 2026-10-22: window open*")) "R5: the first log line is kept, in the fallback folder"
     # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
     Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")

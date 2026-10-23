@@ -84,5 +84,60 @@
            Replace = '    return [pscustomobject]@{ code = 0; state = "green"; text = ("the -Json exit field is " + $e' }
         @{ Name = "guards-text-exit-field-accepted"
            Find = 'if ($e -isnot [int] -and $e -isnot [long]) {'
-           Replace = 'if ($false) {' }    )
+           Replace = 'if ($false) {' }
+        @{ Name = "skip-keeps-a-stored-green"
+           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red" -or $Previous -ceq "green") { return "" } return "skip" }' }
+        @{ Name = "skip-clears-a-stored-red"
+           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip") { return "skip" }' }
+        @{ Name = "tell-exit-6-not-told"
+           Find = 'if ($c -eq 0 -or $c -eq 6) { return "told" }'
+           Replace = 'if ($c -eq 0) { return "told" }' }
+        @{ Name = "unconfirmed-tell-resent"
+           Find = 'if ($c -eq 2) { return "unconfirmed" }'
+           Replace = '' }
+        @{ Name = "tell-not-retried"
+           Find = 'for ($try = 1; $try -le [math]::Max(1, $Tries); $try++) {'
+           Replace = 'for ($try = 1; $try -le 1; $try++) {' }
+        @{ Name = "untold-findings-dropped"
+           Find = 'else { foreach ($f in @($Findings)) {'
+           Replace = 'elseif ($false) { foreach ($f in @($Findings)) {' }
+        @{ Name = "pending-not-cleared-when-told"
+           Find = 'if ($Told) { $pending = @() }'
+           Replace = '' }
+        @{ Name = "pending-not-in-report"
+           Find = 'if ($r.PSObject.Properties["pending"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "timeout-at-tip-is-unrun"
+           Find = 'if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }'
+           Replace = 'if ($c -eq 124) { return "unrun" }' }
+        @{ Name = "timeout-in-bisect-is-hung"
+           Find = 'if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }'
+           Replace = 'if ($c -eq 124) { return "hung" }' }
+        @{ Name = "hung-counted-as-unrun"
+           Find = 'if ($v -ceq "hung") { $hung += $u; continue }'
+           Replace = 'if ($v -ceq "hung") { $unrun += $u; continue }' }
+        @{ Name = "hung-not-in-report"
+           Find = 'foreach ($u in @($c.hung)) { $lines += ("HUNG "'
+           Replace = 'foreach ($u in @()) { $lines += ("HUNG "' }
+        @{ Name = "process-time-limit-ignored"
+           Find = 'if (-not $p.WaitForExit([math]::Max(1, $TimeoutSeconds) * 1000)) {'
+           Replace = '$p.WaitForExit(); if ($false) {' }
+        @{ Name = "argument-with-space-not-quoted"
+           Find = 'if ($Arg -notmatch ''[\s"]'') { return $Arg }'
+           Replace = 'return $Arg' }
+        @{ Name = "missing-exit-code-read-as-green"
+           Find = 'if ($null -eq $Run.code -or "" + $Run.code -eq "") { return "red" }'
+           Replace = '' }
+        @{ Name = "skip-in-bisect-is-green"
+           Find = 'if ($Verdict -ceq "green" -or $Verdict -ceq "absent") { return $false }'
+           Replace = 'if ($Verdict -ceq "green" -or $Verdict -ceq "absent" -or $Verdict -ceq "skip") { return $false }' }
+        @{ Name = "no-report-reserve"
+           Find = '.AddMinutes(-[math]::Max(0, $ReportReserveMinutes))'
+           Replace = '' }
+        @{ Name = "unnamed-bisect-still-complete"
+           Find = 'if ($unnamed -gt 0) {'
+           Replace = 'if ($false) {' }
+    )
 }
