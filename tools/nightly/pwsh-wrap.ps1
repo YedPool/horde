@@ -6,6 +6,7 @@
 param([Parameter(Mandatory = $true)][string]$Suite, [Parameter(Mandatory = $true)][string]$Tree)
 $pwsh = Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe"
 if (-not (Test-Path -LiteralPath $pwsh)) { Write-Output ("pwsh-wrap: PowerShell 7 is not at " + $pwsh); exit 127 }
+if (-not (Test-Path -LiteralPath $Suite)) { Write-Output ("pwsh-wrap: the suite is not in this commit: " + $Suite); exit 126 }
 Set-Location -LiteralPath $Tree
 & $pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Suite
 exit $LASTEXITCODE

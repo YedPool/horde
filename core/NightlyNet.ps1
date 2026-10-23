@@ -20,6 +20,8 @@
 # EVERYTHING IMPURE IS INJECTED (the clock, git, the test runner, the tell), so test/test-nightly-net.ps1
 # needs no real wait, slot or repository. No Set-StrictMode here: this file is dot-sourced.
 
+. (Join-Path $PSScriptRoot "JsonText.ps1")
+
 function ConvertTo-HordeNightlyText {
     # One line of text safe for a tell: ASCII only, and no double quote, semicolon, angle bracket, backtick,
     # dollar sign or line break. Each is replaced by a character that keeps it readable.
@@ -62,7 +64,7 @@ function Read-HordeNightlyOwed {
     foreach ($l in @($Lines)) {
         if ("" + $l -eq "" -or ("" + $l).Trim() -eq "") { continue }
         $o = $null
-        try { $o = ("" + $l) | ConvertFrom-Json } catch { $o = $null }
+        try { $o = ConvertFrom-HordeJson ("" + $l) } catch { $o = $null }
         if ($null -eq $o -or $o -isnot [pscustomobject]) { $bad++; continue }
         $r = ""; if ($o.PSObject.Properties["repo"]) { $r = "" + $o.repo }
         if ($Repo -ne "" -and $r -ne "" -and $r -ine $Repo) { continue }
@@ -164,7 +166,7 @@ function Get-HordeNightlyGuardsAnswer {
     if ($last -ne "") { $text = $last; if ($text.Length -gt 700) { $text = $text.Substring(0, 700) } }
     if ($ProcessExit -ne 0 -and $ProcessExit -ne 1) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("process exit " + $ProcessExit + " (a horde without the verb answers 2)") } }
     $o = $null
-    if ($last -ne "") { try { $o = $last | ConvertFrom-Json } catch { $o = $null } }
+    if ($last -ne "") { try { $o = ConvertFrom-HordeJson $last } catch { $o = $null } }
     if ($null -eq $o -or $o -isnot [pscustomobject] -or -not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = "no -Json last line to read" } }
     $e = $o.exit
     if ($e -isnot [int] -and $e -isnot [long]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is not a number: " + $text) } }

@@ -75,7 +75,7 @@ Write-Host "--- the bisect: the first merge at which the unit is red ---" -Foreg
 function Run-Bisect {
     # n merges m1..mn; the unit turns red at merge index $Break (1-based); $Flaky answers green at the tip; $Null at a given sha.
     param([int]$N, [int]$Break, [int]$Max = 40, [string]$NullAt = "")
-    $shas = @(1..$N | ForEach-Object { "m" + $_ })
+    $shas = @(); if ($N -gt 0) { $shas = @(1..$N | ForEach-Object { "m" + $_ }) }
     $script:asked = @()
     $isRed = {
         param($sha)
@@ -130,7 +130,8 @@ $a = Get-HordeNightlyGuardsAnswer -ProcessExit 3 -Lines @('{"exit":0}')
 Check ($a.code -eq 2) "any process exit but 0 or 1: could not run"
 
 Write-Host ""
-Write-Host "--- the report ---" -ForegroundColor Cyan$merge = $mg[1]
+Write-Host "--- the report ---" -ForegroundColor Cyan
+$merge = $mg[1]
 $rows = @(
     [pscustomobject]@{ repo = "Y/h"; tip = "abcdef0123456789"; lastTip = "0123456789abcdef"; merges = $mg
         guards = [pscustomobject]@{ state = "RED"; text = "test-host-names red; first merge: 22222222" }
@@ -163,7 +164,7 @@ try {
     [void](Git $origin @("init", "-q", "-b", "main"))
     [System.IO.File]::WriteAllText((Join-Path $origin "f.txt"), "0")
     [void](Git $origin @("add", "f.txt")); [void](Git $origin @("commit", "-q", "-m", "base"))
-    $base = (Git $origin @("rev-parse", "HEAD"))[0]
+    $base = ("" + @(Git $origin @("rev-parse", "HEAD"))[0]).Trim()
     foreach ($n in 1..3) {
         [void](Git $origin @("checkout", "-q", "-b", ("side" + $n)))
         [System.IO.File]::WriteAllText((Join-Path $origin "f.txt"), "" + $n)
@@ -193,6 +194,15 @@ try {
     Check ($text -like "*Merge pull request #101*" -and $text -like "*Merge pull request #103*") "the other two come from git alone"
     Check ($text -like "*units: 2*") "a pytest repo has two units: the whole run and flake8"
     Check (-not (Test-Path -LiteralPath (Join-Path $wr "runs"))) "and -Plan ran nothing: no run folder"
+    # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
+    Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
+    # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
+    Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")
+    $oldPath = $env:PATH
+    try { $env:PATH = $work; $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode all -NodesFile (Join-Path $work "n.txt")); $pc = $LASTEXITCODE } finally { $env:PATH = $oldPath }
+    Check ($pc -eq 71 -and -not (Test-Path -LiteralPath (Join-Path $work "n.txt"))) ("pytest-wrap without python is 71 and writes no nodes file (" + $pc + ")")
 } finally {
     $env:HORDE_HOME = $oldHome
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
