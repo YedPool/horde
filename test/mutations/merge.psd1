@@ -163,7 +163,7 @@
            Find = '$a = Invoke-HordeMergeTool -Tools $Tools -Name "Mail" -With @($message)'
            Replace = '$a = [pscustomobject]@{ ok = $true; detail = "" }' }
         @{ Name = "progress-draft-missing"
-           Find = '& $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title) -GuardsOwed:($check.skipped -eq $true))'
+           Find = '& $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title) -GuardsOwed:($check.skipped -eq $true) -NotQueued:(-not $queued))'
            Replace = '' }
         @{ Name = "ps1-program-not-run-by-powershell"
            Find = 'if ($Program -match ''\.ps1\z'') {'
@@ -241,8 +241,8 @@
            Find = 'headSha = $HeadSha; mergeSha = $MergeSha; firstParent = $FirstParent }'
            Replace = 'headSha = $HeadSha; mergeSha = $MergeSha; firstParent = "" }' }
         @{ Name = "owed-line-appended-over-the-file"
-           Find = '[System.IO.File]::AppendAllText($Path, ($Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))'
-           Replace = '[System.IO.File]::WriteAllText($Path, ($Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))' }
+           Find = '[System.IO.File]::AppendAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))'
+           Replace = '[System.IO.File]::WriteAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))' }
         @{ Name = "nightly-names-the-last-red-merge"
            Find = '$item.lines = @($step.lines); $found = $true; break }'
            Replace = '$item.lines = @($step.lines); $found = $true }' }
@@ -253,7 +253,7 @@
            Find = 'if (-not $read.ok) { $shells += $sh.label;'
            Replace = 'if (-not $read.ok -and $sh.key -ceq "5.1") { $shells += $sh.label;' }
         @{ Name = "nightly-checked-not-marked"
-           Find = '$ap = Add-HordeMergeJsonLine -Path $checkedPath -Line $l'
+           Find = '$ap = Add-HordeMergeLine -Path $checkedPath -Line $l'
            Replace = '$ap = [pscustomobject]@{ ok = $true; detail = "" }' }
         @{ Name = "nightly-checked-merges-run-again"
            Find = 'if ($checked.ContainsKey($e.mergeSha)) { continue }'
@@ -264,11 +264,68 @@
         @{ Name = "nightly-bad-line-ignored"
            Find = 'if ($owed.bad.Count -gt 0) {'
            Replace = 'if ($false) {' }
-        @{ Name = "nightly-unwalkable-merge-skipped"
-           Find = 'if ($h.code -ne 0) { return (& $err ("the merge "'
-           Replace = 'if ($false) { return (& $err ("the merge "' }
+        @{ Name = "nightly-unwalkable-merge-walked-anyway"
+           Find = 'if ($h.code -eq 0) { [void]$walk.Add($e); continue }'
+           Replace = '[void]$walk.Add($e); continue' }
+        @{ Name = "nightly-unwalkable-merge-stops-the-rest"
+           Find = '[void]$skipped.Add([pscustomobject]@{ entry = $e;'
+           Replace = 'return (& $err "a merge is not in the history"); [void]$skipped.Add([pscustomobject]@{ entry = $e;' }
+        @{ Name = "owed-line-base-not-recorded"
+           Find = 'baseRefName = $BaseRef; pr = $Request.pr;'
+           Replace = 'baseRefName = ""; pr = $Request.pr;' }
+        @{ Name = "owed-line-repo-case-kept"
+           Find = 'repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant();'
+           Replace = 'repo = ($Request.owner + "/" + $Request.repo);' }
+        @{ Name = "tell-says-queued-when-it-was-not"
+           Find = 'if ($Check.skipped -eq $true -and $NotQueued) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "progress-says-owed-when-not-queued"
+           Find = 'if ($GuardsOwed -and $NotQueued) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "queue-line-glued-onto-unterminated-line"
+           Find = 'if ($fs.ReadByte() -ne 10) { $prefix = "`n" }'
+           Replace = 'if ($false) { $prefix = "`n" }' }
+        @{ Name = "nightly-guard-list-from-the-tip-only"
+           Find = 'foreach ($g in $baseGuards) {'
+           Replace = 'foreach ($g in @()) {' }
+        @{ Name = "nightly-guard-not-run-counted-red"
+           Find = 'if (-not $read.ok -and -not $read.ran) { return (& $no ('
+           Replace = 'if ($false) { return (& $no (' }
+        @{ Name = "guard-result-always-ran"
+           Find = 'ran = ($Run.code -ne -1);'
+           Replace = 'ran = $true;' }
+        @{ Name = "nightly-red-not-run-again"
+           Find = 'if (-not $read.ok -and $read.ran) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nightly-walk-runs-every-shell"
+           Find = '$step = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys'
+           Replace = '$step = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g' }
+        @{ Name = "nightly-deleted-guard-script-not-blamed"
+           Find = 'if ($step.absent -and $present) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nightly-branch-ignored"
+           Find = 'if ($e.base -ne "") { $b = $e.base }'
+           Replace = '' }
+        @{ Name = "nightly-report-failure-still-marks"
+           Find = 'if (-not $wrote.ok) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nightly-repo-filter-case-sensitive"
+           Find = '$e.repo -cne $Repo.ToLowerInvariant()'
+           Replace = '$e.repo -cne $Repo' }
+        @{ Name = "nightly-damaged-line-fails-the-run"
+           Find = 'if ($unchecked -gt 0 -and -not $anyChecked -and $worst -lt 2) { $worst = 2 }'
+           Replace = 'if ($unchecked -gt 0 -and $worst -lt 2) { $worst = 2 }' }
+        @{ Name = "nightly-queued-twice-walked-twice"
+           Find = 'if ($seen.ContainsKey($v["mergeSha"])) { continue }'
+           Replace = '' }
+        @{ Name = "nightly-report-silent-about-the-machine"
+           Find = '[void]$text.Add("queue: " + $owedPath + " on " + [Environment]::MachineName + " - this machine''s queue only; merges made on another machine are in that machine''s queue and are not covered by this report")'
+           Replace = '' }
+        @{ Name = "nightly-repo-dot-dot-taken"
+           Find = 'return [bool]($m.Success -and $m.Groups[2].Value -cne "." -and $m.Groups[2].Value -cne "..")'
+           Replace = 'return [bool]$m.Success' }
         @{ Name = "nightly-report-not-written"
-           Find = '$wrote = Add-HordeMergeJsonLine -Path $reportPath -Line (($text -join "`n") + "`n")'
+           Find = '$wrote = Add-HordeMergeLine -Path $reportPath -Line (($text -join "`n") + "`n")'
            Replace = '$wrote = [pscustomobject]@{ ok = $true; detail = "" }' }
     )
 }

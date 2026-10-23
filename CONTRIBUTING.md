@@ -386,14 +386,22 @@ its branch can break main when main moved under it").
    every guard in two shells before each merge was a test run, and it held every Orc's daytime
    merge. So `horde merge` takes `-Guards later|now`, default `later`: it skips the combined-tree
    build, the guards and the base-moved re-check, merges, and appends one line
-   (`repo, pr, task, by, at, headSha, mergeSha, firstParent`) to `<HORDE_HOME>\merge\guards-owed.jsonl`;
+   (`repo, baseRefName, pr, task, by, at, headSha, mergeSha, firstParent`) to `<HORDE_HOME>\merge\guards-owed.jsonl`;
    the warchief's message, the analyst's mail and the progress line say the guards are OWED, never
    that they passed. `-Guards now` is the old behaviour (guards first, nothing merged on a red one),
    for a merge someone wants checked first. **`horde merge -RunOwed [-Repo OWNER/REPO] [-Json]`** is
    the daily run: for each repository with unchecked entries it runs `test\guards.txt` in both shells
    on the base tip; for each guard red there it walks the queued merges in order, running only that
    guard (first at the first merge's first parent, as the baseline), and names the first merge that
-   is red - or says "red before today's first queued merge" and names none. The report goes to
+   is red - or says "red before today's first queued merge" and names none. A guard the day's merges
+   dropped from the list (listed at the baseline, gone at the tip) is red too, and the merge that dropped
+   it is named. A merge is walked on the branch it went into (`baseRefName`). A guard that did not run
+   (PowerShell 7 missing, a timeout) is not a red: that branch ends "could not run", its merges stay owed
+   and the run ends 2. A damaged queue line, or a merge missing from its branch, is reported in every run
+   (the report prints the line to add to `guards-checked.jsonl` to give it up) and the rest is still
+   checked. **The queue is per machine**: a merge made on another machine is in that machine's queue,
+   so each machine that merges needs its own run; the report names the machine and the queue file. The
+   report goes to
    `<HORDE_HOME>\merge\nightly\<UTC date>-<owner>-<repo>.txt` and is printed, one line per red
    guard naming the PR, task, lane and merge sha, or "all green over N merges"; each checked merge
    sha is then appended to `guards-checked.jsonl` (`guards-owed.jsonl` is append-only). The named

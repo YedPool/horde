@@ -43,6 +43,9 @@
         @{ Name = "runowed-red-exits-zero"
            Find = 'if ($owedRun.exit -ne 0) { throw ('
            Replace = 'if ($false) { throw (' }
+        @{ Name = "daytime-merge-takes-the-lock"
+           Find = '$needLock = ($RunOwed -or $request.guards -ceq "now")'
+           Replace = '$needLock = $true' }
         @{ Name = "command-default-is-now"
            Find = '[string]$Guards = "later",'
            Replace = '[string]$Guards = "now",' }
