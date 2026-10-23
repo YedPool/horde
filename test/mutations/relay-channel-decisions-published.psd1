@@ -39,6 +39,9 @@
         @{ Name = "the-confirm-time-replaces-the-published-time"
            Find = 'publishedAt = "$($l.publishedAt)"; count = [int]$l.count;'
            Replace = 'publishedAt = "$($l.confirmedAt)"; count = [int]$l.count;' }
+        @{ Name = "the-list-does-not-carry-its-snapshot-id"
+           Find = 'orc = $m.orc; snapshot = $m.snapshot; publishedAt = $m.publishedAt;'
+           Replace = 'orc = $m.orc; publishedAt = $m.publishedAt;' }
         @{ Name = "a-bad-home-pointer-is-thrown"
            Find = '$problem = "the published lists could not be read: " + "$($_.Exception.Message)"'
            Replace = 'throw $_' }

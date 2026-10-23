@@ -287,6 +287,28 @@ try {
     $gpText = $(if ($gp.ok) { $gp.value.text } else { "" })
     Check ($gt.ok -and $gt.value.pressed -ceq "true" -and $gp.ok -and $gp.value.found -and $gpText.Contains("Recommended: next week") -and -not $gpText.Contains("Thrall: published list")) ("choosing that card shows Orc G's list, and only its own (" + ($gpText -replace "\s+", " ") + ")")
     $null = Invoke-Browser @{ cmd = "publishedCard"; name = "All questions"; click = $true }
+    # T-0352: AN ANSWER BOX AND SEND UNDER EVERY ITEM OF A PUBLISHED LIST (the founder, 2026-10-23: the items were shown and he could
+    # answer none). The Thrall's item typed into, a real Enter, a signed envelope of kind answer at the machine, a receipt under the item,
+    # and the same after a reload. The synthetic fleet has NO session for the Thrall's seat (WEZFLEET_ROOT is pinned empty), so the
+    # machine HOLDS the answer (no-session) and posts it nowhere: that is what proves the recipient is resolved there and never guessed.
+    # Sent and Delivered, and the post to the owning session, are test\test-relay-chat-answers.ps1's.
+    $itemText = "Sales queue: forward the contract page, v3?"
+    $ib = Invoke-Browser @{ cmd = "itemBoxes" }
+    Check ($ib.ok -and $ib.value.boxes -ge 1 -and $ib.value.boxes -eq $ib.value.buttons -and $ib.value.boxes -eq $ib.value.items) ("EVERY ITEM DRAWN HAS ITS BOX AND SEND (" + $(if ($ib.ok) { "" + $ib.value.items + " items, " + $ib.value.boxes + " boxes, " + $ib.value.buttons + " buttons" } else { $ib.reason }) + ")")
+    $countBefore = Get-MachineCount
+    $ia = Invoke-Browser @{ cmd = "itemAnswer"; item = $itemText; text = "Yes - forward it today."; via = "enter"; mailbox = $mailbox }
+    Check ($ia.ok -and $ia.value.found -and $ia.value.put -and $ia.value.left -ceq "") ("a real Enter in an item's box sends its words, signed, and empties the box (" + $(if ($ia.ok) { "put " + $ia.value.put + ", left '" + $ia.value.left + "'" } else { $ia.reason }) + ")")
+    $answerEnv = @(Get-MachineEnvelopes -Skip $countBefore)
+    Check ($answerEnv.Count -eq 1 -and $answerEnv[0].value.header.channel -ceq "chat" -and $answerEnv[0].value.header.kind -ceq "answer") ("it is one envelope on the chat channel, kind answer (" + $answerEnv.Count + ")")
+    $postsBefore = @(Get-HordeTestFleetPosts -Folder $fake).Count
+    $run = Invoke-Run -Turns 1
+    $held = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: that Orc has no session running now" }
+    Check ($run.code -eq 0 -and $held.ok -and $held.value.found -and $held.value.text.Contains("You: Yes - forward it today.")) ("the machine resolved the item in fleet.db, found no session for the Thrall's seat, and HELD it; the receipt shows under the item with his words (" + $(if ($held.ok) { ($held.value.text -replace "\s+", " ") } else { $held.reason }) + ")")
+    Check (@(Get-HordeTestFleetPosts -Folder $fake).Count -eq $postsBefore) "and nothing was posted to any session: the answer is held, not sent elsewhere"
+    $null = Invoke-Browser @{ cmd = "reload" }
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $held2 = Invoke-Browser @{ cmd = "itemAnswerState"; item = $itemText; contains = "Held: that Orc has no session running now" }
+    Check ($held2.ok -and $held2.value.found -and $held2.value.text.Contains("You: Yes - forward it today.")) "AFTER A RELOAD the answer and its receipt show again under the item: the receipt carries his words"
     $shot1 = Save-Shot "phone-list"
 
     Write-Host ""
@@ -360,6 +382,8 @@ try {
     Check ($rc.ok -and $rc.value.doc -and $rc.value.mode.Contains("Read only")) ("the recovery code unlocks the horde, said to be read only (" + $(if ($rc.ok) { $rc.value.notice } else { $rc.reason }) + ")")
     $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
+    $rib = Invoke-Browser @{ cmd = "itemBoxes" }
+    Check ($rib.ok -and $rib.value.items -ge 1 -and $rib.value.boxes -eq 0 -and $rib.value.buttons -eq 0) ("and a recovery unlock draws no answer box under the published items (" + $(if ($rib.ok) { "" + $rib.value.items + " items, " + $rib.value.boxes + " boxes" } else { $rib.reason }) + ")")
     $lk = Invoke-Browser @{ cmd = "lock" }
     Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.published -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list - and its Orcs' published lists - and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), " + $lk.value.published + " published box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }

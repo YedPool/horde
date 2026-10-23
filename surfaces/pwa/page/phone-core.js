@@ -150,6 +150,12 @@
 // how many are new. An id and a number, never a word of the log; read back guarded (progressPosition),
 // so a damaged record is no position. The position only ever moves forward.
 //
+// AN ANSWER TO AN ITEM OF A PUBLISHED LIST (T-0352; channels/chat/Answer.ps1, relay/js/protocol.js) is sent like a chat line: kind answer on the
+// chat channel, signed by the passkey or its unlocked session (SESSION_SIGNED), passkey sessions only, bound to the horde and the machine, and
+// naming the list (its lane and the snapshot id the machine sent) and the item (its 1-based place as published) - never a recipient: the
+// machine finds the Orc that owns the list. Only an item of a list this phone holds can be answered. The receipts (kind answer-receipt) are
+// kept in memory like the chat's and carry his words, so itemAnswers() shows the answer and Sent / Delivered again after a reload.
+//
 // THE CARDS (channels/cards) come through the same mailbox and the same refresh, machine to phone only:
 // one whole snapshot per machine, of which the session keeps the newest it opened (by its envelope's seq),
 // in memory only. THE FOUNDER RUNS TWO MACHINES, and each is its own pairing here, opening only its own

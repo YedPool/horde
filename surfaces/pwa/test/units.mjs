@@ -1932,6 +1932,13 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
     buttons[2].h.click({ detail: 1 });
     await new Promise((r) => setTimeout(r, 5));
     check(sentTo.length === 2 && sentTo[1][3] === "Third.", "the button sends once on pointerdown, and its click after it sends nothing more", JSON.stringify(sentTo));
+    // A draft typed survives a redraw: the box is refilled from the page's draft, and typing reports its words to it.
+    drafts.set(SNAP + "/1", "half-typed");
+    const redrawn = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: ans(true) }).flatMap((n) => walk(n)).filter((n) => n.tag === "textarea");
+    check(redrawn[0].value === "half-typed" && redrawn[1].value === "", "a draw of the lists refills a box from the page's draft: his half-typed words are not lost");
+    redrawn[1].value = "typing";
+    redrawn[1].h.input();
+    check(drafts.get(SNAP + "/2") === "typing", "and typing in a box reports its words to the page's draft");
     // A refused send leaves his words in the box and says why under the item.
     const failing = { ...ans(true), send: async () => ({ ok: false, reason: "Not sent: the relay would not take it." }) };
     const fnodes = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: failing }).flatMap((n) => walk(n));

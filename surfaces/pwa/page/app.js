@@ -30,6 +30,10 @@
 // Enter sends, Shift+Enter or the New line key adds a line - over the soft keyboard. A line goes only
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
+// EVERY ITEM OF EVERY PUBLISHED LIST HAS ITS OWN ANSWER BOX AND SEND (T-0352; published-lists.js, drawPublishedLists, answersFor): the
+// decisions page showed each Orc's published items and gave him no way to answer any that carries no question number. The box has
+// the chat composer's keys; his words are kept per item (answerDrafts) while a redraw rebuilds the lists under his thumb, and under the
+// item stand what he sent and the PC's receipt in the app's own sentence (Sent, then Delivered), which survives a reload.
 // THE CHAT OPENS AT ITS NEWEST MESSAGE (the founder, 2026-10-15) and keeps his place while he reads back,
 // with Jump to latest while he is away from the bottom: chat-scroll.js has the rule and why it opened at
 // the top or in the middle before.

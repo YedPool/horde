@@ -126,6 +126,11 @@
 #   refused  for good, with the code above;
 #   retry    the Thrall, the messenger or this machine could not say now: the record comes again.
 #
+# AN ANSWER TO AN ITEM OF A PUBLISHED LIST (kind answer; Answer.ps1, T-0352) comes in on this channel too, signed as a line is, and goes to
+# the session that owns that list - the Thrall's or an Orc's, resolved here, never named by the phone - and never to the Thrall in its
+# place. Its receipts (kind answer-receipt) come back with his words, are made DELIVERED by the same TAKEN rule (Taken.ps1's marks and
+# decision, in Answer.ps1's own awaiting list), and are shown by the phone under the item, not in the chat.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
@@ -142,6 +147,7 @@ foreach ($chatAdapterFile in @(Get-HordeConversationAdapterFiles)) {
 }
 . (Join-Path $PSScriptRoot "Photo.ps1")
 . (Join-Path $PSScriptRoot "Taken.ps1")
+. (Join-Path $PSScriptRoot "Answer.ps1")
 . (Join-Path $PSScriptRoot "Pointer.ps1")
 foreach ($chatMessengerFile in @(Get-HordeMessengerFiles)) {
     if (@(Get-HordeMessengerNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $chatMessengerFile))) { . $chatMessengerFile }
@@ -548,11 +554,15 @@ function Invoke-HordeChatChannelTick {
     $taken = [pscustomobject]@{ lines = @(); failed = $false }
     try { $taken = Invoke-HordeChatTakenTick -Context $Context -Mine $m.mine -Settings $set.value }
     catch { $taken = [pscustomobject]@{ lines = @("lines awaiting the Thrall failed: " + $_.Exception.Message); failed = $true } }
+    # THE ANSWERS TO PUBLISHED ITEMS WAITING TO BE TAKEN BY THEIR ORC'S SESSION (Answer.ps1): asked about, delivered or alarmed.
+    $answers = [pscustomobject]@{ lines = @(); failed = $false }
+    try { $answers = Invoke-HordeChatAnswerTick -Context $Context -Mine $m.mine -Settings $set.value }
+    catch { $answers = [pscustomobject]@{ lines = @("answers awaiting a session failed: " + $_.Exception.Message); failed = $true } }
     $photo = @()
     try { $photo = @(Invoke-HordeChatPhotoTick -Context $Context -Mine $m.mine -Settings $set.value) }
     catch { $photo = @("photos failed: " + $_.Exception.Message) }
-    if ($photo.Count -eq 0 -and @($taken.lines).Count -eq 0) { return $t }
-    return [pscustomobject]@{ lines = @(@($t.lines) + @($taken.lines) + $photo); failed = ([bool]$t.failed -or [bool]$taken.failed) }
+    if ($photo.Count -eq 0 -and @($taken.lines).Count -eq 0 -and @($answers.lines).Count -eq 0) { return $t }
+    return [pscustomobject]@{ lines = @(@($t.lines) + @($taken.lines) + @($answers.lines) + $photo); failed = ([bool]$t.failed -or [bool]$taken.failed -or [bool]$answers.failed) }
 }
 
 function Invoke-HordeChatChannelTurnsTick {
@@ -708,6 +718,8 @@ function Test-HordeChatChannelGlance {
     # A LINE WAITING TO BE TAKEN THAT IS DUE TO BE ASKED ABOUT is a yes (Taken.ps1): the Tick asks, there
     # and then, and the alarm is not held back until the watch ends. Local only: a mark and a clock.
     if ($mine.loaded -and (Test-HordeChatTakenDue -Mine $mine)) { return $true }
+    # AN ANSWER TO A PUBLISHED ITEM WAITING FOR ITS SESSION that is due to be asked about is a yes too (Answer.ps1).
+    if (Test-HordeChatAnswerDue -Mine $mine) { return $true }
     if (-not $mine.loaded -or -not $mine.ContainsKey("source") -or $null -eq $mine["source"]) { return $false }
     $d = $mine.durable
     if ($null -eq $d.cursor -or @($d.pending).Count -gt 0) { return $false }
@@ -783,10 +795,12 @@ function Send-HordeChatChannelReceipt {
 }
 
 function Invoke-HordeChatChannelAccept {
-    # One opened line, to the Thrall (IN, in the header), or one photo's manifest (Photo.ps1). { outcome;
+    # One opened line, to the Thrall (IN, in the header), one photo's manifest (Photo.ps1), or one answer to an item of a
+    # published list, to the Orc that owns the list (Answer.ps1). { outcome;
     # reason }.
     param($Context, $Item)
     if ("$($Item.kind)" -ceq "photo") { return (Invoke-HordeChatPhotoAccept -Context $Context -Item $Item) }
+    if ("$($Item.kind)" -ceq "answer") { return (Invoke-HordeChatAnswerAccept -Context $Context -Item $Item) }
     $r = Read-HordeChatChannelLine -Body $Item.body
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = $r.reason } }
     $line = $r.value
@@ -889,7 +903,7 @@ function Invoke-HordeChatChannelAccept {
     }
 }
 
-$null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name "chat" -Kinds @("line", "photo") -Senders "founder" `
+$null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name "chat" -Kinds @("line", "photo", "answer") -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeChatChannelAccept -Context $Context -Item $Item) } `
     -Tick { param($Context) return (Invoke-HordeChatChannelTick -Context $Context) } `
     -Glance { param($Context) return (Test-HordeChatChannelGlance -Context $Context) }
