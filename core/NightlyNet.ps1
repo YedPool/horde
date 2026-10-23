@@ -193,11 +193,14 @@ function Get-HordeNightlyVerdict {
 
 function Get-HordeNightlyStoredVerdict {
     # The verdict to keep in state.json for a unit: -Verdict is tonight's, -Previous is what is stored ("" for none).
-    # green and red replace; a skip carries a stored green or red forward (a skip says nothing, so it must not clear a
-    # red, T-0331 N3); anything else (unrun, absent) changes nothing. Returns "" for no change.
+    # green and red replace; anything else (unrun, absent) changes nothing. Returns "" for no change.
+    # A SKIP carries a stored RED forward (a skip says nothing, so it must not clear a red, T-0331 N3) but NEVER a
+    # stored green: the tip moves on over a skip, so a green kept across it would make the next red "newly red" and
+    # bisect only the latest day's merges, naming an innocent one when the break came in a skipped day (review of
+    # PR 380, finding 1). Stored "skip" is no verdict, so that red is reported with no merge named.
     param([string]$Verdict, [string]$Previous = "")
     if ($Verdict -ceq "green" -or $Verdict -ceq "red") { return $Verdict }
-    if ($Verdict -ceq "skip") { if ($Previous -ceq "green" -or $Previous -ceq "red") { return "" } return "skip" }
+    if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }
     return ""
 }
 

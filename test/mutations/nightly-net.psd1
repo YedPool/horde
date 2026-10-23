@@ -84,5 +84,12 @@
            Replace = '    return [pscustomobject]@{ code = 0; state = "green"; text = ("the -Json exit field is " + $e' }
         @{ Name = "guards-text-exit-field-accepted"
            Find = 'if ($e -isnot [int] -and $e -isnot [long]) {'
-           Replace = 'if ($false) {' }    )
+           Replace = 'if ($false) {' }
+        @{ Name = "skip-keeps-a-stored-green"
+           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red" -or $Previous -ceq "green") { return "" } return "skip" }' }
+        @{ Name = "skip-clears-a-stored-red"
+           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip") { return "skip" }' }
+    )
 }
