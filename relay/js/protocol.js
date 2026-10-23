@@ -997,6 +997,12 @@ export const CHAT_WORDS = {
   }
 };
 export const CHAT_SENDING = "Sending...";
+// What the machine names as a receipt's session when it knows none (channels/chat/Taken.ps1, HordeChatTakenNoSession: a
+// mark written before it carried the session). It passes the session rule, and the phone takes it for "none".
+export const CHAT_NO_SESSION = "unknown";
+// What a line shows when a receipt carries no words and the phone holds none of its own (it was reloaded and the
+// relay trimmed the line's receipts): fixed words, so the bubble is never empty beside its status sentence.
+export const CHAT_NO_WORDS = "(the words of this line could not be read back)";
 // founder: a line of his that the MACHINE found delivered to the Thrall word for word (channels/chat,
 // A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN); it always names that line.
 // marker: a wezfleet pointer or relay line the machine hid (channels/chat/Pointer.ps1); it holds no words, and
@@ -1102,9 +1108,12 @@ export function chatTimeline({ turns = [], receipts = [], sent = [], photos = []
   for (const r of receipts) {
     const had = lines.get(r.messageId);
     if (had && had.seq > r.seq) continue;
-    // The receipt's words are the words posted: what the line shows, whatever the phone kept.
+    // The receipt's words are the words posted: what the line shows, whatever the phone kept. A receipt that carries
+    // none (the machine could not read the line's record back, channels/chat/Taken.ps1) keeps the words held.
     const said = r.sentAt || (had ? had.said : 0);
-    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+    // A receipt that names no session (CHAT_NO_SESSION) keeps the one the line holds.
+    const session = r.session !== CHAT_NO_SESSION || !had ? r.session : had.session;
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text !== "" ? r.text : (had ? had.text : CHAT_NO_WORDS), at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
   }
   const items = [];
   for (const [id, g] of byId) {

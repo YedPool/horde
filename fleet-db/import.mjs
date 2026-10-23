@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { inWrite } from './store.mjs';
 import { appendHistory, newId } from './write.mjs';
+import { ensureOrcRow } from './orc-row.mjs';
 import { RANKS, TASK_EVENT_KINDS, CHANGELOG_KINDS } from './schema.mjs';
 import { canonical } from './ids.mjs';
 
@@ -309,19 +310,13 @@ function stepOrcs(ctx, data) {
   const cards = all.filter((c) => newest.get(c.orc) === c);
   ctx.cards = cards;
   ctx.cardOrc = new Map(); // card -> orc id
-  const find = db.prepare('SELECT id FROM orc WHERE lane_dir = ? OR letter = ? ORDER BY letter = ? DESC LIMIT 1');
-  const findThrall = db.prepare("SELECT id FROM orc WHERE rank = 'thrall' AND retired_at IS NULL");
   for (const c of cards) {
-    // An existing row is kept, by lane folder or by letter: never a second row for the same Orc.
-    const existing = (c.isThrall ? findThrall.get() : null) ?? find.get(c.folder, c.orc, c.orc);
-    if (existing) { rep.count('orc', false); ctx.cardOrc.set(c, existing.id); continue; }
-    let name = c.lane === '' ? c.folder : c.lane;
-    if (name.length > 120) { rep.unlink('cards', 'lane name longer than 120 characters (cut)', c.folder); name = name.slice(0, 120); }
-    const id = newId(c.mtime);
-    db.prepare('INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, c.orc, c.folder, name, c.isThrall ? 'thrall' : 'orc', c.mtime);
-    rep.count('orc', true);
-    ctx.cardOrc.set(c, id);
+    // An existing row is kept, by lane folder or by letter: never a second row for the same Orc (orc-row.mjs, the
+    // one rule, shared with `horde status set`).
+    const r = ensureOrcRow(db, { folder: c.folder, letter: c.orc, lane: c.lane, isThrall: c.isThrall, createdAt: c.mtime });
+    if (r.cut) rep.unlink('cards', 'lane name longer than 120 characters (cut)', c.folder);
+    rep.count('orc', r.added);
+    ctx.cardOrc.set(c, r.id);
   }
   loadOrcMaps(ctx);
 }
@@ -372,7 +367,12 @@ function sessionOrc(ctx, rec, rank, rep) {
   return id;
 }
 
+// The kind a registry record names (written by wezspawn and the seats): the three ranks a record can be.
+// RANKS (schema.mjs) covers all three, so session.rank takes each as it is.
+const RECORD_KINDS = ['thrall', 'orc', 'warg'];
+
 function rankOf(rec) {
+  if (RECORD_KINDS.includes(rec.kind)) return rec.kind;
   if (RANKS.includes(rec.rank)) return rec.rank;
   if (rec.role === 'master') return 'thrall';
   if (rec.role === 'orchestrator') return 'orc';
@@ -401,15 +401,25 @@ function stepSessions(ctx, data) {
   const order = [...rows.values()].sort((a, b) => b.last - a.last || (a.id < b.id ? -1 : 1));
   const done = new Set();
   const visiting = new Set();
-  const exists = db.prepare('SELECT 1 FROM session WHERE id = ?');
+  const exists = db.prepare('SELECT rank, orc_id FROM session WHERE id = ?');
   const seat = db.prepare("SELECT id FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
   // SEATS ARE DECIDED BEFORE ANY INSERT, freshest session first: the schema allows one live seat per Orc
   // and PC, and the freshest session must hold it. Inserting a parent early (for its child) never claims
   // one, because the claim was made here, by freshness, not by the order the rows happen to be written in.
   const claimed = new Set();
   for (const row of order) {
-    if (exists.get(row.id)) continue;
     const rec = row.rec;
+    // A record's kind is read into rank when the session is new. A row already there keeps its rank; a kind
+    // that disagrees is reported, never written over it. A kind that is none of the three is reported too.
+    if (rec.kind !== undefined && rec.kind !== null && !RECORD_KINDS.includes(rec.kind)) rep.unlink('registry', 'kind is not thrall, orc or warg (the older rule decides the rank)', row.id);
+    const have = exists.get(row.id);
+    // A STUB (rank unknown, no Orc) is what horde work start writes for a session the importer has not seen
+    // yet: the record upgrades it, and is not a disagreement with it.
+    const stub = have !== undefined && have.rank === 'unknown' && have.orc_id === null;
+    if (have && !stub) {
+      if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink('registry', 'kind ' + rec.kind + ' disagrees with the stored rank ' + have.rank + ' (rank kept)', row.id);
+      continue;
+    }
     row.rank = rankOf(rec);
     row.orcId = sessionOrc(ctx, rec, row.rank, rep);
     if ((row.rank === 'orc' || row.rank === 'thrall') && row.orcId === null) {
@@ -427,6 +437,11 @@ function stepSessions(ctx, data) {
         rep.unlink('registry', 'a second live seat for one Orc (rank unknown)', row.id);
         row.rank = 'unknown';
       } else claimed.add(row.orcId);
+    }
+    if (stub && (row.rank !== 'unknown' || row.orcId !== null)) {
+      db.prepare('UPDATE session SET rank = ?, orc_id = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?').run(row.rank, row.orcId, row.retiredAt, row.id);
+      // The units this session spawned before the importer knew its Orc take it now (orc_id is not identity).
+      if (row.orcId !== null) db.prepare('UPDATE work_unit SET orc_id = ? WHERE orc_id IS NULL AND parent_session_id = ?').run(row.orcId, row.id);
     }
   }
   const link = (child, field, parentId) => {

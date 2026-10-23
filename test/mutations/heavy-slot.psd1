@@ -10,17 +10,20 @@
            Find = '    if ($held) { $mutex.ReleaseMutex() }'
            Replace = '    if ($false) { $mutex.ReleaseMutex() }' }
         @{ Name = "slot-waited-for-ever"
-           Find = 'try { $script:held = $mutex.WaitOne([int][math]::Min($slice, (& $left) * 1000)) }'
-           Replace = 'try { $script:held = $mutex.WaitOne() }' }
+           Find = 'try { $script:held = $script:mutex.WaitOne($ms) }'
+           Replace = 'try { $script:held = $script:mutex.WaitOne() }' }
         @{ Name = "killed-holder-run-not-waited-for"
            Find = '    if ($null -ne $orphan) {'
            Replace = '    if ($false) {' }
         @{ Name = "reused-id-taken-for-the-run"
            Find = 'try { if ($p.StartTime.ToUniversalTime().Ticks -ne $ticks) { return $null } } catch { return $null }'
            Replace = 'try { $null = $p.StartTime } catch { return $null }' }
-        @{ Name = "memory-not-waited-for"
-           Find = '    while ((Get-HordeHeavySlotFreeGB) -lt $MinFreeGB) {'
-           Replace = '    while ($false) {' }
+        @{ Name = "memory-given-up-in-the-wrong-words"
+           Find = '" GB of free memory (now "'
+           Replace = '" GB of memory (now "' }
+        @{ Name = "idle-timeout-not-coded"
+           Find = 'if ($got.blocker -ceq "idle") { $script:code = 128;'
+           Replace = 'if ($got.blocker -ceq "idle") { $script:code = 125;' }
         @{ Name = "job-does-not-kill-on-close"
            Find = 'l.basic.flags = KILL_ON_JOB_CLOSE;'
            Replace = 'l.basic.flags = 0;' }

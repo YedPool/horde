@@ -429,7 +429,7 @@ test('migration 5 on a schema 4 file: old snapshots read confirmed_at = publishe
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const live = { ...db.prepare('SELECT * FROM decisions_live').get() };
   assert.deepEqual(Object.keys(live), ['id', 'orc_id', 'published_at', 'by_session_id', 'item_count', 'sha256', 'confirmed_at']);
   assert.deepEqual([live.id, live.published_at, live.confirmed_at], [snap, T0 + 7, T0 + 7]);

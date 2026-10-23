@@ -278,6 +278,32 @@ Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -Re
 Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" }) "the expected kind cannot be left out"
 
 Write-Host ""
+Write-Host "--- Unprotect -Reread: the sender is not judged again, everything else still is (T-0340, S-b) ---" -ForegroundColor Cyan
+# -Reread is for a record this machine opened and accepted once (channels/chat/Taken.ps1). It skips the
+# sender; it must NOT skip the envelope's parts, the journal's verdict, the channel, the kind or the AEAD.
+$noSenders = @{}
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "snapshot" -Reread
+Check ($u.ok -and $utf8.GetString($u.value) -ceq "merge PR 1605?") "CONTROL: -Reread opens an envelope with no trusted sender at all (the sender was judged when it was accepted)"
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "snapshot"
+Check (-not $u.ok -and $u.reason.Contains("not one this machine trusts")) ("and the same call WITHOUT -Reread refuses it (" + $u.reason + ")")
+foreach ($c in $cases) {
+    $u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys $keys -Replay $c.verdict -Channel "decisions" -Kind "snapshot" -Reread
+    Check (-not $u.ok -and $null -eq $u.value -and $u.reason.Contains($c.want)) ("-Reread, " + $c.what + ": not opened (" + $u.reason + ")")
+}
+$u = Unprotect-HordeRelayEnvelope -Envelope $c1 -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $c1.header) -Channel "decisions" -Kind "snapshot" -Reread
+Check (-not $u.ok -and $u.reason.Contains("do not match its signed text")) ("-Reread, a header changed after Read (seq 41 to 99): not opened (" + $u.reason + ")")
+$u = Unprotect-HordeRelayEnvelope -Envelope $c2 -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $c2.header) -Channel "decisions" -Kind "snapshot" -Reread
+Check (-not $u.ok -and $u.reason.Contains("do not match its signed text")) "-Reread, a ciphertext swapped after Read: not opened"
+$u = Unprotect-HordeRelayEnvelope -Envelope $c3 -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $c3.header) -Channel "decisions" -Kind "snapshot" -Reread
+Check (-not $u.ok -and $u.reason.Contains("do not match its signed text")) "-Reread, recipients swapped after Read: not opened"
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "chat" -Kind "snapshot" -Reread
+Check (-not $u.ok -and $u.reason.Contains("channel")) ("-Reread, another channel: not opened (" + $u.reason + ")")
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "answer" -Reread
+Check (-not $u.ok -and $u.reason.Contains("kind")) ("-Reread, another kind: not opened (" + $u.reason + ")")
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $noSenders -RecipientKeys @{} -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "snapshot" -Reread
+Check (-not $u.ok) "-Reread, no key of this machine: not opened"
+
+Write-Host ""
 Write-Host "--- a high-S twin of a machine's signature is refused (one ES256 spelling) ---" -ForegroundColor Cyan
 Add-Type -AssemblyName System.Numerics
 $nOrder = [System.Numerics.BigInteger]::Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", "AllowHexSpecifier")
