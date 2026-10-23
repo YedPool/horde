@@ -176,6 +176,68 @@ function Get-HordeNightlyGuardsAnswer {
     return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is " + $e + ": " + $text) }
 }
 
+function Get-HordeNightlyVerdict {
+    # What a slot run's exit means for a suite: green 0, skip 3 (the suite skipped itself), absent 126 (the suite is not in
+    # this commit), UNRUN when the gate never had the slot, the memory or the night (125, 127, 128, 71), the run was cut
+    # off by STOP, or the run timed out (gate exit 124: a suite that ran past its limit said nothing, so it is never
+    # red and a bisect never blames the first merge for it, T-0331 N2); red anything else.
+    param($Run)
+    if ($Run.timedOut) { return "unrun" }
+    $c = [int]$Run.code
+    if ($c -eq 0) { return "green" }
+    if ($c -eq 3) { return "skip" }
+    if ($c -eq 126) { return "absent" }
+    if ($c -eq 124 -or $c -eq 125 -or $c -eq 127 -or $c -eq 128 -or $c -eq 71) { return "unrun" }
+    return "red"
+}
+
+function Get-HordeNightlyStoredVerdict {
+    # The verdict to keep in state.json for a unit: -Verdict is tonight's, -Previous is what is stored ("" for none).
+    # green and red replace; a skip carries a stored green or red forward (a skip says nothing, so it must not clear a
+    # red, T-0331 N3); anything else (unrun, absent) changes nothing. Returns "" for no change.
+    param([string]$Verdict, [string]$Previous = "")
+    if ($Verdict -ceq "green" -or $Verdict -ceq "red") { return $Verdict }
+    if ($Verdict -ceq "skip") { if ($Previous -ceq "green" -or $Previous -ceq "red") { return "" } return "skip" }
+    return ""
+}
+
+function Invoke-HordeNightlyTell {
+    # Tell the target the report in -File: 0 told, 3 not told (no program, a throw, a non-zero exit). The program's
+    # own output is swallowed: left loose it would join the return value and turn "exit (this)" into exit 0 (T-0331 N1).
+    # -Say is a scriptblock taking one line.
+    param([string]$Program, [string]$Target, [string]$File, [scriptblock]$Say = { param($l) }, [switch]$NoTell)
+    if ($NoTell) { return 0 }
+    $code = 3
+    try {
+        if ($null -eq (Get-Command $Program -ErrorAction SilentlyContinue)) { & $Say ("the tell program '" + $Program + "' is not on the PATH, the report is at " + $File); return 3 }
+        $null = & $Program tell $Target -Kind report -MessageFile $File
+        $code = $LASTEXITCODE
+    } catch { & $Say ("the tell to " + $Target + " threw: " + $_.Exception.Message); return 3 }
+    if ($code -ne 0) { & $Say ("the tell to " + $Target + " failed with exit " + $code + ", the report is at " + $File); return 3 }
+    & $Say ("report sent to " + $Target)
+    return 0
+}
+
+function Get-HordeNightlyHeadlineStatus {
+    # COMPLETE, or INCOMPLETE with why: units not run, an incomplete repo, guards that did not run (T-0331 N4/N5).
+    param([object[]]$Repos)
+    $why = @()
+    $unrun = 0; $inc = @(); $gbad = @(); $gred = @()
+    foreach ($r in @($Repos)) {
+        $unrun += [int]$r.unrunCount
+        if ("" + $r.incomplete -ne "") { $inc += $r.repo }
+        $gs = "" + $r.guards.state
+        if ($gs -ceq "RED") { $gred += $r.repo }
+        elseif ($gs -cne "green" -and $gs -notlike "no repo-wide guard*") { $gbad += $r.repo }
+    }
+    if ($inc.Count -gt 0) { $why += ("the night did not finish in " + ($inc -join ", ")) }
+    if ($unrun -gt 0) { $why += ("" + $unrun + " units not run") }
+    if ($gbad.Count -gt 0) { $why += ("guards could not run or did not run in " + ($gbad -join ", ")) }
+    $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
+    if ($gred.Count -gt 0) { $t += " GUARDS RED in " + ($gred -join ", ") + "." }
+    return $t
+}
+
 function Format-HordeNightlySha {
     # The first 8 characters of a sha, or all of a shorter one.
     param($Sha)
@@ -202,10 +264,8 @@ function New-HordeNightlyReport {
     # where culprits is a list of { unit; state; sha; merge; runs; between }. Returns the text, every line sanitized.
     param([string]$Date, [object[]]$Repos)
     $lines = @()
-    $reds = 0
-    foreach ($r in @($Repos)) { $reds += @($r.compare.newlyRed).Count + @($r.compare.newRed).Count + @($r.compare.stillRed).Count }
     $newly = 0; foreach ($r in @($Repos)) { $newly += @($r.compare.newlyRed).Count }
-    $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos.")
+    $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos. " + (Get-HordeNightlyHeadlineStatus -Repos $Repos))
     foreach ($r in @($Repos)) {
         $lines += ""
         $tipShort = Format-HordeNightlySha $r.tip
