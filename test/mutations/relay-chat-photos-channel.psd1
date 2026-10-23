@@ -13,8 +13,8 @@
            Find = '$(if ($PhotoWindowMs -gt 0) { '',"photoWindowMs":'' + $PhotoWindowMs } else { '''' })'
            Replace = "''" }
         @{ Name = "chat-photo-kind-not-taken"
-           Find = '-Name "chat" -Kinds @("line", "photo") -Senders "founder"'
-           Replace = '-Name "chat" -Kinds @("line") -Senders "founder"' }
+           Find = '-Name "chat" -Kinds @("line", "photo", "answer") -Senders "founder"'
+           Replace = '-Name "chat" -Kinds @("line", "answer") -Senders "founder"' }
         @{ Name = "chat-photo-manifest-taken-as-a-line"
            Find = '    if ("$($Item.kind)" -ceq "photo") { return (Invoke-HordeChatPhotoAccept -Context $Context -Item $Item) }'
            Replace = '' }

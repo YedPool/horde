@@ -10,7 +10,7 @@
            Find = 'if (!list || !list.items.some((it) => it.position === index)) throw fail('
            Replace = 'if (false) throw fail(' }
         @{ Name = "a-recovery-unlock-can-answer"
-           Find = 'if (s.mode !== "passkey") { throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer."); }'
+           Find = 'if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer an item.");'
            Replace = '' }
         @{ Name = "other-words-under-one-answer-id-are-sent"
            Find = 'if (s.chat.itemSent.some((x) => x.messageId === messageId && (x.text !== text || x.snapshot !== snapshot || x.index !== index))) throw fail('

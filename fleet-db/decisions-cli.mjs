@@ -151,7 +151,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         else { err('usage: decisions-cli.mjs published-item --snapshot ID --position N'); return 1; }
       }
       if (snapshot === null || position === null) { err('usage: decisions-cli.mjs published-item --snapshot ID --position N'); return 1; }
-      if (!fs.existsSync(file)) throw refuse('fleet.db does not exist yet at ' + file + '; run horde db init');
+      if (!fs.existsSync(file)) { throw refuse('fleet.db does not exist yet at ' + file + '; run horde db init'); }
       db = openStore(file, { readOnly: true });
       out(ascii(JSON.stringify(readPublishedItem(db, snapshot, position))));
       return 0;

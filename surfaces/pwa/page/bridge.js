@@ -333,7 +333,8 @@ export function createBridge(phone, options = {}) {
     // showing Sending until the PC's receipt says Sent and then Delivered.
     "answer-item": async (a) => {
       try {
-        const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
+        const given = String(a.id || "");
+        const id = /^[0-9a-f]{32}$/.test(given) ? given : newLineId();
         await phone.answerItem(picked, { lane: String(a.lane || ""), snapshot: String(a.snapshot || ""), index: Number(a.index), text: String(a.text || ""), messageId: id });
         if (view) view = { ...view, itemAnswers: phone.itemAnswers(picked) };
         emit("list-changed", listRecord());

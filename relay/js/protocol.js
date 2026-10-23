@@ -1367,7 +1367,8 @@ export function readItemAnswerReceipt(bodyBytes, horde, machine) {
   if (typeof b.lane !== "string" || !PUBLISHED_LANE.test(b.lane) || typeof b.snapshot !== "string" || !PUBLISHED_SNAPSHOT.test(b.snapshot) || !Number.isSafeInteger(b.index) || b.index < 1 || b.index > ITEM_ANSWER_MOST_INDEX) return no("the answer receipt names no item");
   if (!Object.prototype.hasOwnProperty.call(ITEM_ANSWER_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(ITEM_ANSWER_WORDS[b.status], b.code)) return no("the answer receipt's status or code is not one this phone knows");
   if (typeof b.text !== "string") return no("the answer receipt has no words");
-  return { ok: true, reason: "", value: { messageId: b.messageId, lane: b.lane, snapshot: b.snapshot, index: b.index, status: b.status, code: b.code, text: b.text, sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };
+  const at = Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0;
+  return { ok: true, reason: "", value: { messageId: b.messageId, lane: b.lane, snapshot: b.snapshot, index: b.index, status: b.status, code: b.code, text: b.text, sentAt: at } };
 }
 
 // The answers of the published lists as the phone shows them: sent = this session's own sends { messageId, lane, snapshot, index, text,

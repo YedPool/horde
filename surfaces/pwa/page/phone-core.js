@@ -1034,8 +1034,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      if (s.mode === "read-only") { throw fail(NO_PRF); }
-      if (s.mode !== "passkey") { throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer."); }
+      if (s.mode === "read-only") throw fail(NO_PRF);
+      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer an item.");
       if (typeof text !== "string" || !text.trim()) throw fail("There is nothing to send.");
       const lists = s.view && Array.isArray(s.view.published) ? s.view.published : [];
       const list = lists.find((l) => l.lane === lane && l.snapshot === snapshot);
