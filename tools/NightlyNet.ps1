@@ -146,26 +146,27 @@ function Invoke-NightlySlot {
 }
 
 function Get-NightlyVerdict {
-    # See Get-HordeNightlyVerdict (core): 124 is a timeout and is unrun, never red.
-    param($Run)
-    return (Get-HordeNightlyVerdict $Run)
+    # See Get-HordeNightlyVerdict (core): gate exit 124 is hung at the tip (-AtTip), unrun in a bisect, never red.
+    param($Run, [switch]$AtTip)
+    return (Get-HordeNightlyVerdict $Run -AtTip:$AtTip)
 }
 
 function Invoke-NightlyUnit {
     # Run one unit at the checked-out tree: unit ids are "<suite rel path>|ps51", "<suite rel path>|pwsh7",
-    # "pytest-node|<node id>" and "flake8-critical". Returns the verdict word of Get-NightlyVerdict ("red" included).
-    param($Ctx, [string]$Unit, [string]$Tag)
+    # "pytest-node|<node id>" and "flake8-critical". Returns the verdict word of Get-NightlyVerdict ("red" included);
+    # -AtTip: this is the night's full run at the tip, not a bisect step.
+    param($Ctx, [string]$Unit, [string]$Tag, [switch]$AtTip)
     $tree = $Ctx.tree
     if ($Ctx.kind -ceq "horde") {
         $rel, $sh = $Unit -split '\|', 2
         if ($sh -ceq "pwsh7") {
             $abs = Join-Path $tree ($rel -replace '/', '\')
-            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag))
+            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag) -AtTip:$AtTip)
         }
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag))
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag) -AtTip:$AtTip)
     }
     if ($Unit -ceq "flake8-critical") {
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag))
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag) -AtTip:$AtTip)
     }
     $node = ($Unit -split '\|', 2)[1]
     $nf = Join-Path $RunDir (($Tag -replace '[^A-Za-z0-9._-]', '_') + ".nodes")
@@ -173,7 +174,7 @@ function Invoke-NightlyUnit {
     $r = Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "nodes", "-NodesFile", $nf) -Tag $Tag
     # pytest 4 (usage error: the file is not there) and 5 (nothing collected): the test is not in this commit.
     if (-not $r.timedOut -and ($r.code -eq 4 -or $r.code -eq 5)) { return "absent" }
-    return (Get-NightlyVerdict $r)
+    return (Get-NightlyVerdict $r -AtTip:$AtTip)
 }
 
 function Read-NightlyState {
@@ -293,7 +294,7 @@ function Invoke-NightlyPhaseOne {
             $Ctx.verdicts["pytest-all"] = "green"
             continue
         }
-        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u)
+        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip
         Say ($Ctx.repo + " " + $u + " -> " + $v)
         if ($v -ceq "absent") { continue }
         $Ctx.verdicts[$u] = $v

@@ -154,7 +154,21 @@ Check ($rep -like "*1 newly red across 2 repos*") "the headline counts newly red
 Write-Host ""
 Write-Host "--- follow-ups N1 to N4: the tell's exit, a timeout is unrun, a skip keeps a red, the headline says incomplete ---" -ForegroundColor Cyan
 function Run-V { param([int]$Code, [bool]$TimedOut = $false) return (Get-HordeNightlyVerdict ([pscustomobject]@{ code = $Code; timedOut = $TimedOut })) }
-Check ((Run-V 124) -ceq "unrun") "N2: gate exit 124 (a timeout) is unrun, never red"
+Check ((Run-V 124) -ceq "unrun") "N2: gate exit 124 (a timeout) inside a bisect is unrun, never red"
+# R3 (review of PR 380, finding 3): at the tip a timeout is a finding, HUNG, not unrun forever.
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 124; timedOut = $false }) -AtTip) -ceq "hung") "R3: gate exit 124 at the tip is hung"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 124; timedOut = $true }) -AtTip) -ceq "unrun") "R3: a run the night itself cut off is still unrun at the tip"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = 1; timedOut = $false }) -AtTip) -ceq "red" -and (Get-HordeNightlyVerdict ([pscustomobject]@{ code = 125; timedOut = $false }) -AtTip) -ceq "unrun") "R3: the other exits mean the same at the tip"
+$hc = Compare-HordeNightlyVerdicts -Now @{ "h|ps51" = "hung"; "g|ps51" = "green" } -Last @{ "h|ps51" = "green"; "g|ps51" = "green" }
+Check ((($hc.hung -join ",") -ceq "h|ps51") -and @($hc.newlyRed).Count -eq 0 -and @($hc.unrun).Count -eq 0) "R3: a hung unit is its own finding: not unrun, and not newly red (never bisected)"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "hung" -Previous "green") -ceq "hung") "R3: hung is stored"
+$sh = Update-HordeNightlyState -State @{ lastTip = "old"; units = @{ "h|ps51" = "green" } } -Verdicts @{ "h|ps51" = "hung" } -Tip "new" -Complete $true -Told $true
+Check ($sh.lastTip -ceq "new" -and $sh.units["h|ps51"] -ceq "hung") "R3: a night with a hung unit still moves the tip"
+$hrow = [pscustomobject]@{ repo = "Y/h"; tip = "abcdef01"; lastTip = "01234567"; merges = @(); guards = [pscustomobject]@{ state = "green"; text = "" }; suiteCount = 2; unrunCount = 0
+    compare = $hc; culprits = @(); notes = @(); incomplete = "" }
+$hrep = New-HordeNightlyReport -Date "2026-10-22" -Repos @($hrow)
+Check ($hrep -like "*HUNG h|ps51 ran past its time limit at the tip*") "R3: the report names the hung unit"
+Check ((($hrep -split "`n")[0]) -like "*HUNG: 1 units ran past their time limit*") "R3: and the headline counts it"
 Check ((Run-V 0) -ceq "green" -and (Run-V 3) -ceq "skip" -and (Run-V 126) -ceq "absent" -and (Run-V 1) -ceq "red" -and (Run-V 125) -ceq "unrun" -and (Run-V 0 $true) -ceq "unrun") "the other exits keep their meaning"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "red") -ceq "") "N3: a skip does not clear a stored red"
 Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "green") -ceq "skip") "R1: a skip does NOT keep a stored green (it is stored as skip)"

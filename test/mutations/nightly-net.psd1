@@ -109,5 +109,17 @@
         @{ Name = "pending-not-in-report"
            Find = 'if ($r.PSObject.Properties["pending"]) {'
            Replace = 'if ($false) {' }
+        @{ Name = "timeout-at-tip-is-unrun"
+           Find = 'if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }'
+           Replace = 'if ($c -eq 124) { return "unrun" }' }
+        @{ Name = "timeout-in-bisect-is-hung"
+           Find = 'if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }'
+           Replace = 'if ($c -eq 124) { return "hung" }' }
+        @{ Name = "hung-counted-as-unrun"
+           Find = 'if ($v -ceq "hung") { $hung += $u; continue }'
+           Replace = 'if ($v -ceq "hung") { $unrun += $u; continue }' }
+        @{ Name = "hung-not-in-report"
+           Find = 'foreach ($u in @($c.hung)) { $lines += ("HUNG "'
+           Replace = 'foreach ($u in @()) { $lines += ("HUNG "' }
     )
 }

@@ -107,20 +107,22 @@ function Get-HordeNightlyMerges {
 }
 
 function Compare-HordeNightlyVerdicts {
-    # Now against last night, per unit. -Now: unit -> "green" | "red" | "skip" | "unrun". -Last: unit -> "green" | "red" | ...
-    # Answer: { newlyRed; stillRed; newRed; fixed; unrun } as sorted unit names. unrun (the slot was never had,
-    # or the night ran out) says nothing either way and leaves the old verdict to stand.
+    # Now against last night, per unit. -Now: unit -> "green" | "red" | "skip" | "unrun" | "hung". -Last: unit -> "green" | "red" | ...
+    # Answer: { newlyRed; stillRed; newRed; fixed; unrun; hung } as sorted unit names. unrun (the slot was never had,
+    # or the night ran out) says nothing either way and leaves the old verdict to stand. hung (it ran past its limit at
+    # the tip) is a finding of its own: reported every night it hangs, never bisected.
     param($Now, $Last)
-    $newly = @(); $still = @(); $new = @(); $fixed = @(); $unrun = @()
+    $newly = @(); $still = @(); $new = @(); $fixed = @(); $unrun = @(); $hung = @()
     foreach ($u in (@($Now.Keys) | Sort-Object)) {
         $v = "" + $Now[$u]
         $was = ""; if ($Last.ContainsKey($u)) { $was = "" + $Last[$u] }
         if ($v -ceq "unrun") { $unrun += $u; continue }
+        if ($v -ceq "hung") { $hung += $u; continue }
         if ($v -ceq "red") {
             if ($was -ceq "green") { $newly += $u } elseif ($was -ceq "red") { $still += $u } else { $new += $u }
         } elseif ($v -ceq "green" -and $was -ceq "red") { $fixed += $u }
     }
-    return [pscustomobject]@{ newlyRed = @($newly); stillRed = @($still); newRed = @($new); fixed = @($fixed); unrun = @($unrun) }
+    return [pscustomobject]@{ newlyRed = @($newly); stillRed = @($still); newRed = @($new); fixed = @($fixed); unrun = @($unrun); hung = @($hung) }
 }
 
 function Find-HordeNightlyCulprit {
@@ -178,28 +180,31 @@ function Get-HordeNightlyGuardsAnswer {
 
 function Get-HordeNightlyVerdict {
     # What a slot run's exit means for a suite: green 0, skip 3 (the suite skipped itself), absent 126 (the suite is not in
-    # this commit), UNRUN when the gate never had the slot, the memory or the night (125, 127, 128, 71), the run was cut
-    # off by STOP, or the run timed out (gate exit 124: a suite that ran past its limit said nothing, so it is never
-    # red and a bisect never blames the first merge for it, T-0331 N2); red anything else.
-    param($Run)
+    # this commit), UNRUN when the gate never had the slot, the memory or the night (125, 127, 128, 71), or the run was
+    # cut off by STOP or by the night's own limit (timedOut); red anything else.
+    # GATE EXIT 124, the suite ran past its limit: inside a bisect it is UNRUN, so a slow box never blames a merge
+    # (T-0331 N2). At the TIP (-AtTip) it is HUNG, a finding reported as such: as unrun it held the tip back every night
+    # a suite hangs, so the merge range grew without end and the hang was never reported (review of PR 380, finding 3).
+    param($Run, [switch]$AtTip)
     if ($Run.timedOut) { return "unrun" }
     $c = [int]$Run.code
     if ($c -eq 0) { return "green" }
     if ($c -eq 3) { return "skip" }
     if ($c -eq 126) { return "absent" }
-    if ($c -eq 124 -or $c -eq 125 -or $c -eq 127 -or $c -eq 128 -or $c -eq 71) { return "unrun" }
+    if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }
+    if ($c -eq 125 -or $c -eq 127 -or $c -eq 128 -or $c -eq 71) { return "unrun" }
     return "red"
 }
 
 function Get-HordeNightlyStoredVerdict {
     # The verdict to keep in state.json for a unit: -Verdict is tonight's, -Previous is what is stored ("" for none).
-    # green and red replace; anything else (unrun, absent) changes nothing. Returns "" for no change.
+    # green, red and hung replace; anything else (unrun, absent) changes nothing. Returns "" for no change.
     # A SKIP carries a stored RED forward (a skip says nothing, so it must not clear a red, T-0331 N3) but NEVER a
     # stored green: the tip moves on over a skip, so a green kept across it would make the next red "newly red" and
     # bisect only the latest day's merges, naming an innocent one when the break came in a skipped day (review of
     # PR 380, finding 1). Stored "skip" is no verdict, so that red is reported with no merge named.
     param([string]$Verdict, [string]$Previous = "")
-    if ($Verdict -ceq "green" -or $Verdict -ceq "red") { return $Verdict }
+    if ($Verdict -ceq "green" -or $Verdict -ceq "red" -or $Verdict -ceq "hung") { return $Verdict }
     if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }
     return ""
 }
@@ -256,6 +261,7 @@ function Get-HordeNightlyFindingLines {
         else { $lines += ("RED " + $k.unit + " bisect inconclusive (a run did not happen): " + $k.state) }
     }
     $c = $Row.compare
+    if ($c.PSObject.Properties["hung"]) { foreach ($u in @($c.hung)) { $lines += ("HUNG " + $u + " ran past its time limit at the tip: no merge named (a bisect cannot tell a slow box from a hang)") } }
     foreach ($u in @($c.newRed | Select-Object -First 15)) { $lines += ("red, no verdict last night: " + $u) }
     if (@($c.newRed).Count -gt 15) { $lines += ("red, no verdict last night: and " + (@($c.newRed).Count - 15) + " more") }
     return @($lines | ForEach-Object { ConvertTo-HordeNightlyText $_ })
@@ -295,9 +301,10 @@ function Get-HordeNightlyHeadlineStatus {
     # COMPLETE, or INCOMPLETE with why: units not run, an incomplete repo, guards that did not run (T-0331 N4/N5).
     param([object[]]$Repos)
     $why = @()
-    $unrun = 0; $inc = @(); $gbad = @(); $gred = @()
+    $unrun = 0; $inc = @(); $gbad = @(); $gred = @(); $hung = 0
     foreach ($r in @($Repos)) {
         $unrun += [int]$r.unrunCount
+        if ($r.compare.PSObject.Properties["hung"]) { $hung += @($r.compare.hung).Count }
         if ("" + $r.incomplete -ne "") { $inc += $r.repo }
         $gs = "" + $r.guards.state
         if ($gs -ceq "RED") { $gred += $r.repo }
@@ -308,6 +315,7 @@ function Get-HordeNightlyHeadlineStatus {
     if ($gbad.Count -gt 0) { $why += ("guards could not run or did not run in " + ($gbad -join ", ")) }
     $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
     if ($gred.Count -gt 0) { $t += " GUARDS RED in " + ($gred -join ", ") + "." }
+    if ($hung -gt 0) { $t += " HUNG: " + $hung + " units ran past their time limit." }
     return $t
 }
 
