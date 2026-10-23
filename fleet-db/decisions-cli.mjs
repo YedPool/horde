@@ -1,6 +1,7 @@
 // The decisions lists as `horde decisions publish` and `horde decisions published` use them:
 //   node decisions-cli.mjs publish <input.json>           publish one Orc's whole live list
 //   node decisions-cli.mjs published [--orc X] [--json]   read the live lists back from the views
+//   node decisions-cli.mjs published-item --snapshot ID --position N   one item of ANY snapshot, live or archived (T-0352)
 // Run by decisions/Publish.ps1. Exit codes: 0 done, 1 refused or failed, 2 no home.
 //
 // WHO PUBLISHES IS NOT DECIDED HERE: the PowerShell side proves the calling session and hands in its Orc
@@ -12,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { publishDecisions } from './write.mjs';
 
-export const VERBS = ['publish', 'published'];
+export const VERBS = ['publish', 'published', 'published-item'];
+const SNAPSHOT_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 const INPUT_KEYS = ['who', 'sessionId', 'items'];
 const WHO_KEYS = ['letter', 'thrall'];
@@ -93,6 +95,22 @@ export function readPublished(db, letter = null) {
   }));
 }
 
+// ONE ITEM OF ONE SNAPSHOT, for the founder's answer to it (T-0352; channels/chat/Answer.ps1). The phone names a snapshot id and a
+// 1-based position it was shown; the machine finds out here whose list that was and what the item said, from the archive as well as the
+// live view, so an answer to an item of a list since replaced still reaches the Orc that published it. A snapshot or position that never
+// existed is { found: false } with the reason, never a guess. live says whether the snapshot is still its Orc's newest list; retired
+// whether the Orc has been retired. Read-only: the store is opened read-only.
+export function readPublishedItem(db, snapshot, position) {
+  if (typeof snapshot !== 'string' || !SNAPSHOT_ID.test(snapshot)) return { found: false, reason: 'the snapshot id is not one' };
+  if (!Number.isSafeInteger(position) || position < 1) return { found: false, reason: 'the position is not a whole number from 1' };
+  const s = db.prepare(`SELECT s.id, s.item_count, o.letter, o.rank, o.retired_at FROM decisions_snapshot s JOIN orc o ON o.id = s.orc_id WHERE s.id = ?`).get(snapshot);
+  if (!s) return { found: false, reason: 'no such list was ever published' };
+  const it = db.prepare('SELECT text FROM decisions_snapshot_item WHERE snapshot_id = ? AND position = ?').get(snapshot, position);
+  if (!it) return { found: false, reason: 'that list has no item ' + position };
+  const live = db.prepare('SELECT 1 AS yes FROM decisions_live WHERE id = ?').get(snapshot);
+  return { found: true, orc: s.letter, rank: s.rank, retired: s.retired_at !== null, live: Boolean(live), count: s.item_count, text: it.text };
+}
+
 function ascii(json) {
   return json.replace(/[^\x20-\x7E]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 }
@@ -104,7 +122,7 @@ function plural(n) {
 export function main(argv, env = process.env, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n')) {
   const verb = argv[0];
   if (!VERBS.includes(verb)) {
-    err('usage: decisions-cli.mjs publish <input.json> | published [--orc X] [--json]');
+    err('usage: decisions-cli.mjs publish <input.json> | published [--orc X] [--json] | published-item --snapshot ID --position N');
     return 1;
   }
   let file;
@@ -122,6 +140,20 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
       db = openStore(file);
       const r = publishFromInput(db, input);
       out(r.unchanged ? 'unchanged, confirmed ' + new Date(r.confirmedAt).toISOString() + ' (snapshot ' + r.id + ')' : 'published ' + plural(r.count) + ' (snapshot ' + r.id + ')');
+      return 0;
+    }
+    if (verb === 'published-item') {
+      let snapshot = null;
+      let position = null;
+      for (let i = 1; i < argv.length; i += 2) {
+        if (argv[i] === '--snapshot' && i + 1 < argv.length) snapshot = argv[i + 1];
+        else if (argv[i] === '--position' && i + 1 < argv.length && /^[0-9]{1,6}$/.test(argv[i + 1])) position = Number(argv[i + 1]);
+        else { err('usage: decisions-cli.mjs published-item --snapshot ID --position N'); return 1; }
+      }
+      if (snapshot === null || position === null) { err('usage: decisions-cli.mjs published-item --snapshot ID --position N'); return 1; }
+      if (!fs.existsSync(file)) throw refuse('fleet.db does not exist yet at ' + file + '; run horde db init');
+      db = openStore(file, { readOnly: true });
+      out(ascii(JSON.stringify(readPublishedItem(db, snapshot, position))));
       return 0;
     }
     let letter = null;

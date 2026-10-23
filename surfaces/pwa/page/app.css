@@ -186,6 +186,15 @@ button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: va
 .pl-list .pl-note { padding: 4px 0; }
 .pl-item { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .pl-rec { font-size: var(--small-px); line-height: var(--small-line-px); }
+/* THE ANSWER UNDER AN ITEM (T-0352): the box and Send are the chat composer's, smaller; the receipt is one plain sentence. */
+.pl-answer { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.pl-said-text { white-space: pre-wrap; font-size: var(--small-px); line-height: var(--small-line-px); }
+.pl-receipt { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.pl-held, .pl-refused { color: var(--bad, #b3261e); }
+.pl-box { display: block; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; font: inherit; resize: none; max-height: 40vh; box-sizing: border-box; }
+.pl-send { align-self: flex-end; min-height: 40px; padding: 0 16px; }
+.pl-problem { color: var(--bad, #b3261e); font-size: var(--small-px); }
+.pl-problem:empty { display: none; }
 /* THE FOLLOW SWITCH, in a card's one slot (lane-card.js): what the machine holds, and a word while a change is on its way. */
 .follow { display: inline-block; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; font-weight: 600; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); cursor: pointer; }
 .follow[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }

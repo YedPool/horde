@@ -241,7 +241,7 @@ function docOf(id) {
     // minutes for the PC, and an update meanwhile loses only the button's pending mark, never his words.
     rank: (number, which, level, rankId) => bridge.request("rank", { number, which, level, id: rankId })
   });
-  docs[id] = { box, cards, pub, doc, kinds: false, storage, value: null };
+  docs[id] = { box, cards, pub, doc, kinds: false, storage, value: null, mode: "", itemAnswers: new Map() };
   return docs[id];
 }
 // The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
@@ -259,10 +259,42 @@ const laneOfQuestion = (q) => window.HordeDecisionsDocument.lanes.laneOf(q);
 function drawPublishedLists(id) {
   const d = docs[id];
   if (!d) return;
+  // A draw rebuilds every box, so the one he is typing in is found again by its key after it (his words are kept in answerDrafts as he types).
+  const active = document.activeElement;
+  const typing = active && d.pub.contains(active) && active.getAttribute ? active.getAttribute("data-answer-key") : null;
+  const caret = typing ? [active.selectionStart, active.selectionEnd] : null;
   while (d.pub.firstChild) d.pub.removeChild(d.pub.firstChild);
   const v = d.value;
   if (!v) return;
-  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime })) d.pub.appendChild(node);
+  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime, answers: answersFor(id, d) })) d.pub.appendChild(node);
+  if (typing) {
+    for (const t of d.pub.querySelectorAll("textarea.pl-box")) {
+      if (t.getAttribute("data-answer-key") !== typing) continue;
+      t.focus();
+      try { t.setSelectionRange(caret[0], caret[1]); } catch (e) { /* a field that takes no selection keeps its caret */ }
+    }
+  }
+}
+// THE ANSWER BOX UNDER EVERY ITEM OF A PUBLISHED LIST (T-0352; published-lists.js): his words per item are kept here while he types - a draw
+// of the lists must not take them - and each has the page's id until sent, so the same words sent again are one answer, posted once (as the chat composer's draftId).
+// canSend: a passkey session only, as a question's box and the chat's.
+const answerDrafts = new Map();
+function answersFor(id, d) {
+  const slot = (key) => { const k = id + "|" + key; if (!answerDrafts.has(k)) answerDrafts.set(k, { text: "", id: "", tried: "" }); return answerDrafts.get(k); };
+  return {
+    canSend: d.mode === "passkey",
+    viewOf: (key) => d.itemAnswers.get(key) || [],
+    draftOf: (key) => slot(key).text,
+    onDraft: (key, text) => { const x = slot(key); x.text = text; if (!text) x.id = ""; },
+    send: async (list, it, text) => {
+      const x = slot(list.snapshot + "/" + it.position);
+      if (!x.id || text !== x.tried) x.id = newDraftId();
+      x.tried = text;
+      const r = await bridge.request("answer-item", { lane: list.lane, snapshot: list.snapshot, index: it.position, text, id: x.id });
+      if (r.ok) { x.text = ""; x.id = ""; x.tried = ""; }
+      return r;
+    }
+  };
 }
 function showCounts() {
   const d = current && docs[current];
@@ -342,6 +374,8 @@ function render(h, rec) {
   // item is drawn once, as that question (published-lists.js). A read that failed keeps the lists drawn, as it keeps the questions; the draw is the document's (onDraw).
   const known = rec && rec.state === "known" && rec.value;
   if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
+  d.mode = h.mode;
+  d.itemAnswers = new Map(known && Array.isArray(rec.value.itemAnswers) ? rec.value.itemAnswers : []);
   const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
   const did = d.doc.setList(shown);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn

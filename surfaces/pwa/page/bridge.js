@@ -46,6 +46,9 @@
 //   chat-photo {bytes, id, resendOf?}  one photo to the Thrall's machine, already shrunk to a JPEG by the page
 //                         (photo.js): signed once by the passkey and sent in parts (phone-core.js,
 //                         sendPhoto): { ok, id, parts } or { ok: false, reason }; id the photo's (32 hex)
+//   answer-item {lane, snapshot, index, text, id}  one answer to an item of a published list, signed and sent
+//                         (phone-core.js, answerItem): { ok, id } or { ok: false, reason }; the receipts come back in the
+//                         list record's itemAnswers
 //   chat-send {text, id}  one line to the Thrall, signed and sent: { ok } or { ok: false, reason }; id is
 //                         the page's id for the words (32 hex), so the same words sent again are one line
 //   progress {of}         the picked horde's progress log: { state, value } as phone-core's progress
@@ -104,7 +107,7 @@ const RANK_WAIT_MS = 10 * 60 * 1000;
 const RANK_REFUSED = "The PC refused this change (it may be older than a change made since, or the question has left your list). Nothing was changed.";
 const RANK_NEEDS_PASSKEY = "Not changed: your PC asks for your passkey for this question. Tap it again and confirm with your passkey.";
 const RANK_UNCONFIRMED = "Not confirmed by the PC yet: it shows the new level once the PC has made the change. Tap again to send it again.";
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "chat-photo", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "answer-item", "chat-photo", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -160,7 +163,7 @@ export function createBridge(phone, options = {}) {
     if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };
     // notShown: the one line for what the snapshot on screen leaves out, "" for nothing (phone-core.js).
     // It is a member the document does not read (list.js): the page shows it above the list (app.js).
-    return { state: "known", reason: "", value: { outcome: "done", questions: withAnswers(view.questions, answers), notShown: typeof view.notShown === "string" ? view.notShown : "", published: Array.isArray(view.published) ? view.published : null, counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
+    return { state: "known", reason: "", value: { outcome: "done", questions: withAnswers(view.questions, answers), notShown: typeof view.notShown === "string" ? view.notShown : "", published: Array.isArray(view.published) ? view.published : null, itemAnswers: Array.isArray(view.itemAnswers) ? view.itemAnswers : [], counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
   }
   async function chatRecord() {
     if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
@@ -325,6 +328,17 @@ export function createBridge(phone, options = {}) {
         emit("chat-changed", await chatRecord());
         return { ok: true, id: photoId, parts: sent.parts };
       } catch (e) { emit("chat-changed", await chatRecord()); return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+    },
+    // One answer to an item of a published list, signed and sent: { ok, id } or { ok: false, reason }. The lists redraw at once, the item
+    // showing Sending until the PC's receipt says Sent and then Delivered.
+    "answer-item": async (a) => {
+      try {
+        const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
+        await phone.answerItem(picked, { lane: String(a.lane || ""), snapshot: String(a.snapshot || ""), index: Number(a.index), text: String(a.text || ""), messageId: id });
+        if (view) view = { ...view, itemAnswers: phone.itemAnswers(picked) };
+        emit("list-changed", listRecord());
+        return { ok: true, id };
+      } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
     "chat-send": async (a) => {
       try {

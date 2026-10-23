@@ -1893,6 +1893,158 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const more = PL.renderPublishedLists(fake, PL.publishedView(P.readPublishedLists([{ ...thrall, more: 3 }]), [], "thrall"), {});
   check(text(more[0]).indexOf("3 more items are shown at the machine only.") >= 0, "items the machine left out for size are counted and said");
 
+  // T-0352: EVERY ITEM OF EVERY PUBLISHED LIST HAS AN ANSWER BOX AND A SEND BUTTON (the founder, 2026-10-23: since PR 365 the
+  // page only SHOWED the items; most carry no question number, so there was nothing he could answer). The first check was written
+  // first and failed on main: the drawing held no textarea and no button.
+  {
+    const SNAP = "01JAAAAAAAAAAAAAAAAAAAAAAA";
+    const handlers = () => { const h = {}; return { h, addEventListener(n, f) { h[n] = f; } }; };
+    const anode = (tag) => ({ tag, className: "", textContent: "", attrs: {}, kids: [], value: "", rows: 0, type: "", ...handlers(), appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; } });
+    const afake = { createElement: anode, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+    const walk = (n, out = []) => { out.push(n); for (const k of n.kids || []) walk(k, out); return out; };
+    const lists = P.readPublishedLists([{ ...thrall, snapshot: SNAP, items: [item("Sales queue?"), item("Plain two"), item("Linked", { question: 9 })], count: 3 }]);
+    const sentTo = [];
+    const drafts = new Map();
+    const ans = (canSend, views = {}) => ({ canSend, viewOf: (k) => views[k] || [], draftOf: (k) => drafts.get(k) || "", onDraft: (k, x) => drafts.set(k, x), send: async (l, it, x) => { sentTo.push([l.lane, l.snapshot, it.position, x]); return { ok: true }; } });
+    const nodes = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { fmt: (ms) => "T" + ms, answers: ans(true) }).flatMap((n) => walk(n));
+    check(nodes.filter((n) => n.tag === "textarea").length === 3 && nodes.filter((n) => n.tag === "button").length === 3, "REPRO T-0352: every item drawn in a published list has its own answer box and Send button (3 items, none of which is an open question)", "textareas " + nodes.filter((n) => n.tag === "textarea").length + ", buttons " + nodes.filter((n) => n.tag === "button").length);
+    // The boxes are keyed by the list's snapshot and the item's place AS PUBLISHED: an item hidden because it links an open question leaves the others where they were.
+    const open9 = PL.publishedView(lists, [question(9, "Nine?")], "thrall");
+    const keys = PL.renderPublishedLists(afake, open9, { answers: ans(true) }).flatMap((n) => walk(n)).filter((n) => n.tag === "textarea").map((n) => n.attrs["data-answer-key"]);
+    check(keys.join(",") === SNAP + "/1," + SNAP + "/2", "an item that links an open question is not drawn here (its question has its own box), and the others keep their places 1 and 2", keys.join(","));
+    // Enter sends, Shift+Enter does not; the words go with the list's lane and snapshot and the item's place.
+    const boxes = nodes.filter((n) => n.tag === "textarea");
+    boxes[1].value = "Do this one.";
+    let prevented = 0;
+    boxes[1].h.keydown({ key: "Enter", shiftKey: true, ctrlKey: false, altKey: false, isComposing: false, preventDefault() { prevented++; } });
+    check(sentTo.length === 0 && prevented === 0, "Shift+Enter adds a line and sends nothing");
+    boxes[1].h.keydown({ key: "Enter", shiftKey: false, ctrlKey: false, altKey: false, isComposing: false, preventDefault() { prevented++; } });
+    await new Promise((r) => setTimeout(r, 5));
+    check(sentTo.length === 1 && sentTo[0].join("|") === "thrall|" + SNAP + "|2|Do this one." && prevented === 1 && boxes[1].value === "", "Enter sends the words for item 2 of the Thrall's list and empties the box", JSON.stringify(sentTo));
+    boxes[0].value = "   ";
+    boxes[0].h.keydown({ key: "Enter", shiftKey: false, ctrlKey: false, altKey: false, isComposing: false, preventDefault() {} });
+    await new Promise((r) => setTimeout(r, 5));
+    check(sentTo.length === 1, "a box with only blanks sends nothing");
+    // The Send button acts on pointerdown (the soft keyboard stays up), and a click from the keyboard (detail 0) acts too; a mouse click after the pointerdown does not send twice.
+    boxes[2].value = "Third.";
+    const buttons = nodes.filter((n) => n.tag === "button");
+    buttons[2].h.pointerdown({ preventDefault() {} });
+    buttons[2].h.click({ detail: 1 });
+    await new Promise((r) => setTimeout(r, 5));
+    check(sentTo.length === 2 && sentTo[1][3] === "Third.", "the button sends once on pointerdown, and its click after it sends nothing more", JSON.stringify(sentTo));
+    // A refused send leaves his words in the box and says why under the item.
+    const failing = { ...ans(true), send: async () => ({ ok: false, reason: "Not sent: the relay would not take it." }) };
+    const fnodes = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: failing }).flatMap((n) => walk(n));
+    const fbox = fnodes.find((n) => n.tag === "textarea");
+    fbox.value = "Keep me";
+    fbox.h.keydown({ key: "Enter", shiftKey: false, ctrlKey: false, altKey: false, isComposing: false, preventDefault() {} });
+    await new Promise((r) => setTimeout(r, 5));
+    check(fbox.value === "Keep me" && fnodes.some((n) => n.className === "pl-problem" && n.textContent === "Not sent: the relay would not take it."), "a refused send keeps his words in the box and says why");
+    // READ ONLY (a recovery unlock, a passkey with no PRF): no box and no button, as for a question - the answers already sent still show with their receipts.
+    const sentBefore = { [SNAP + "/1"]: [{ messageId: "a".repeat(32), text: "Earlier words", at: 1, status: "accepted", code: "delivered", words: P.ITEM_ANSWER_WORDS.accepted.delivered }] };
+    const ro = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: ans(false, sentBefore) }).flatMap((n) => walk(n));
+    check(ro.filter((n) => n.tag === "textarea" || n.tag === "button").length === 0, "READ ONLY: no answer box and no Send button");
+    check(ro.some((n) => n.textContent === "You: Earlier words") && ro.some((n) => n.textContent === "Delivered: the Orc's session took it." && n.className === "pl-receipt pl-accepted"), "but the answer already sent shows, with its receipt's one sentence");
+    // A list from a machine older than the member has no id: it can be read and not answered, and says so.
+    const oldList = P.readPublishedLists([{ ...thrall, items: [item("Old machine item")], count: 1 }]);
+    const on = PL.renderPublishedLists(afake, PL.publishedView(oldList, [], "thrall"), { answers: ans(true) }).flatMap((n) => walk(n));
+    check(oldList[0].snapshot === "" && on.filter((n) => n.tag === "textarea").length === 0 && on.some((n) => (n.textContent || "").indexOf("needs a Horde update") >= 0), "a list with no snapshot id draws no box and says the machine needs an update");
+    // Without the answers option nothing is added (the document's other callers).
+    check(PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), {}).flatMap((n) => walk(n)).filter((n) => n.tag === "textarea").length === 0, "without the answers option no box is drawn");
+    // Text is text: his words and the receipt are set as text.
+    const evil = { [SNAP + "/1"]: [{ messageId: "b".repeat(32), text: "<img src=x onerror=1>", at: 1, status: "sending", code: "", words: "Sending..." }] };
+    const en = PL.renderPublishedLists(afake, PL.publishedView(lists, [], "thrall"), { answers: ans(true, evil) }).flatMap((n) => walk(n));
+    check(en.some((n) => n.textContent === "You: <img src=x onerror=1>"), "his words under an item are set as text, never as markup");
+  }
+
+  // THE WIRE (relay/js/protocol.js): the body the machine reads strictly, the receipt the phone shows in its own words.
+  {
+    const ok = { messageId: "c".repeat(32), horde: "work", machine: "d".repeat(32), lane: "thrall", snapshot: "01JAAAAAAAAAAAAAAAAAAAAAAA", index: 3, text: "Yes - do it." };
+    const body = P.publishedItemAnswerBody(ok);
+    const back = P.readPublishedItemAnswerBody(body);
+    check(back.ok && back.value.index === 3 && back.value.lane === "thrall" && back.value.text === "Yes - do it.", "an answer body round-trips through the strict reader");
+    const bad = (o) => { try { P.publishedItemAnswerBody({ ...ok, ...o }); return false; } catch (x) { return true; } };
+    check(bad({ messageId: "x" }) && bad({ horde: "Work!" }) && bad({ machine: "z" }) && bad({ lane: "<b>" }) && bad({ lane: "e" }) && bad({ snapshot: "short" }) && bad({ snapshot: "01JAAAAAAAAAAAAAAAAAAAAAAI" }) && bad({ index: 0 }) && bad({ index: 1.5 }) && bad({ index: 100001 }) && bad({ text: 5 }), "a body with a bad id, horde, machine, lane, snapshot, index or text is refused before anything is signed");
+    const extra = P.utf8(JSON.stringify({ v: 1, ...ok, to: "Z" }));
+    const missing = P.utf8(JSON.stringify({ v: 1, messageId: ok.messageId, horde: ok.horde, machine: ok.machine, lane: ok.lane, snapshot: ok.snapshot, text: ok.text }));
+    check(!P.readPublishedItemAnswerBody(extra).ok && !P.readPublishedItemAnswerBody(missing).ok && !P.readPublishedItemAnswerBody(P.utf8(JSON.stringify({ ...ok, v: 2 }))).ok && !P.readPublishedItemAnswerBody(P.utf8("[]")).ok, "the strict reader refuses a member added (a recipient the phone must never name), a member missing, another version and a non-object");
+    const rc = (o) => P.utf8(JSON.stringify({ v: 1, kind: "chat-answer-receipt", horde: "work", machine: "d".repeat(32), messageId: ok.messageId, lane: "thrall", snapshot: ok.snapshot, index: 3, status: "accepted", code: "delivered", sentAt: 5, text: "Yes - do it.", ...o }));
+    const got = P.readItemAnswerReceipt(rc({}), "work", "d".repeat(32));
+    check(got.ok && got.value.status === "accepted" && got.value.code === "delivered" && got.value.text === "Yes - do it." && got.value.sentAt === 5, "a good receipt is read, with his words and the time he sent them");
+    check(!P.readItemAnswerReceipt(rc({ code: "your-account-expired" }), "work", "d".repeat(32)).ok && !P.readItemAnswerReceipt(rc({ status: "held", code: "delivered" }), "work", "d".repeat(32)).ok && !P.readItemAnswerReceipt(rc({}), "other", "d".repeat(32)).ok && !P.readItemAnswerReceipt(rc({ kind: "chat-receipt" }), "work", "d".repeat(32)).ok && !P.readItemAnswerReceipt(rc({ index: 0 }), "work", "d".repeat(32)).ok && !P.readItemAnswerReceipt(rc({ lane: "z" }), "work", "d".repeat(32)).ok, "a receipt with a code off the list, a code of another status, another horde, another kind or no item is refused: no word of the machine's reaches the screen");
+    const r1 = { messageId: "1".repeat(32), lane: "thrall", snapshot: ok.snapshot, index: 3, text: "posted", sentAt: 10 };
+    const view = P.itemAnswerView({ sent: [{ ...r1, text: "typed", at: 10 }, { messageId: "2".repeat(32), lane: "thrall", snapshot: ok.snapshot, index: 3, text: "later", at: 20 }],
+      receipts: [{ ...r1, status: "accepted", code: "queued", seq: 4, ts: 11 }, { ...r1, status: "accepted", code: "delivered", seq: 6, ts: 12 }, { ...r1, status: "accepted", code: "queued", seq: 5, ts: 11 }] });
+    const mine = view.get(ok.snapshot + "/3");
+    check(mine.length === 2 && mine[0].words === P.ITEM_ANSWER_WORDS.accepted.delivered && mine[0].text === "posted" && mine[1].words === P.ITEM_ANSWER_SENDING, "an answer shows Sending until a receipt names it, then the newest receipt's sentence (a late older one does not win), his words as posted", JSON.stringify(mine));
+    const reload = P.itemAnswerView({ sent: [], receipts: [{ messageId: "3".repeat(32), lane: "B", snapshot: ok.snapshot, index: 1, status: "held", code: "no-session", text: "after a reload", sentAt: 7, seq: 1, ts: 8 }] });
+    check(reload.get(ok.snapshot + "/1")[0].text === "after a reload" && reload.get(ok.snapshot + "/1")[0].words === P.ITEM_ANSWER_WORDS.held["no-session"], "after a reload the answer and its receipt show from the receipt alone, which carries his words");
+    const blank = { recommendation: null, importance: null, blocks: null, question: null };
+    const read = P.readPublishedLists([{ lane: "B", orc: "B", snapshot: "01JBBBBBBBBBBBBBBBBBBBBBBB", publishedAt: "2026-10-21T17:01:31.698Z", count: 3, more: 0, items: [{ text: "ok", ...blank }, { text: "", ...blank }, { text: "third", ...blank }] }, { lane: "C", orc: "C", snapshot: "nope", publishedAt: "2026-10-21T17:01:31.698Z", count: 1, more: 0, items: [{ text: "c", ...blank }] }]);
+    check(read[0].snapshot === "01JBBBBBBBBBBBBBBBBBBBBBBB" && read[0].items.map((i) => i.position).join(",") === "1,3" && read[1].snapshot === "", "a published list is read with its snapshot id (or none) and each item with its place as published - an item dropped in the reading leaves the others at their places");
+  }
+
+  // THE PHONE (phone-core.js answerItem, bridge.js answer-item): signed like a chat line, bound to the list and the item, never from a read-only session; the receipt comes back in the list record.
+  {
+    const SNAP = "01JAAAAAAAAAAAAAAAAAAAAAAA";
+    const lst = { lane: "thrall", orc: "M", snapshot: SNAP, publishedAt: T1, count: 2, more: 0, items: [item("Sales queue?"), item("Notifications?")] };
+    const t = R.memoryTransport();
+    const m = await newMachine("work");
+    const a = await pairedApp(t, m);
+    const bridge = createBridge(a.phone, { loadKinds: async () => ({}) });
+    await bridge.request("pick", { id: a.paired.id });
+    await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")], { published: [lst] });
+    await bridge.request("refresh");
+    const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+    const refusedWhy = await throwsAsync(async () => a.phone.answerItem(a.paired.id, { lane: "thrall", snapshot: SNAP, index: 3, text: "x", messageId: P.hex(P.randomBytes(16)) }));
+    check(refusedWhy.indexOf("not in a list this phone holds") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer to an item the phone's lists do not hold is refused before anything is signed", refusedWhy);
+    const otherSnap = await throwsAsync(async () => a.phone.answerItem(a.paired.id, { lane: "thrall", snapshot: "01JCCCCCCCCCCCCCCCCCCCCCCC", index: 1, text: "x", messageId: P.hex(P.randomBytes(16)) }));
+    check(otherSnap.indexOf("not in a list this phone holds") >= 0, "and so is one naming a snapshot it does not hold");
+    const wrongLane = await throwsAsync(async () => a.phone.answerItem(a.paired.id, { lane: "B", snapshot: SNAP, index: 1, text: "x", messageId: P.hex(P.randomBytes(16)) }));
+    check(wrongLane.indexOf("not in a list this phone holds") >= 0, "and so is one naming another lane than the list's");
+    const mid = P.hex(P.randomBytes(16));
+    const r = await bridge.request("answer-item", { lane: "thrall", snapshot: SNAP, index: 2, text: "Go with the second.", id: mid });
+    const items = (await t.get(m.mailbox, 0, 256)).value.items;
+    const opened = await machineOpens(m, items[items.length - 1].text);
+    check(r.ok === true && r.id === mid && opened.header.channel === "chat" && opened.header.kind === "answer" && opened.sig.alg === "webauthn.get", "an answer is an envelope on chat, kind answer, signed by the passkey", JSON.stringify(r));
+    check(JSON.stringify(opened.body) === JSON.stringify({ v: 1, messageId: mid, horde: "work", machine: m.keyId, lane: "thrall", snapshot: SNAP, index: 2, text: "Go with the second." }), "its body names the horde, the machine, the list's lane and snapshot, the item's place and his words - and no recipient", JSON.stringify(opened.body));
+    let rec = await bridge.request("list");
+    const sending = new Map(rec.value.itemAnswers).get(SNAP + "/2");
+    check(sending && sending.length === 1 && sending[0].words === P.ITEM_ANSWER_SENDING && sending[0].text === "Go with the second.", "the list record carries the answer as Sending until the PC's receipt");
+    const receiptBodyOf = (code, status = "accepted", text = "Go with the second.") => P.utf8(JSON.stringify({ v: 1, kind: "chat-answer-receipt", horde: "work", machine: m.keyId, messageId: mid, lane: "thrall", snapshot: SNAP, index: 2, status, code, sentAt: opened.header.ts, text }));
+    await sendChat(t, m, a.phoneKey, receiptBodyOf("queued"), "answer-receipt");
+    await bridge.request("refresh");
+    rec = await bridge.request("list");
+    check(new Map(rec.value.itemAnswers).get(SNAP + "/2")[0].words === P.ITEM_ANSWER_WORDS.accepted.queued, "the receipt Sent shows in the phone's own sentence");
+    check((await a.phone.chat(a.paired.id)).items.length === 0, "and a receipt for an item answer is never a line in the chat");
+    await sendChat(t, m, a.phoneKey, receiptBodyOf("delivered"), "answer-receipt");
+    await bridge.request("refresh");
+    // A reload: another phone object over the same store holds no sent answers, and the receipts alone show his words and the state.
+    const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
+    await b.unlock(a.paired.id);
+    await b.refresh(a.paired.id);
+    const after = new Map(b.itemAnswers(a.paired.id)).get(SNAP + "/2");
+    check(after && after.length === 1 && after[0].text === "Go with the second." && after[0].words === P.ITEM_ANSWER_WORDS.accepted.delivered, "after a reload the answer and Delivered show from the receipts alone", JSON.stringify(after));
+    // The same id with other words is refused.
+    const edited = await throwsAsync(async () => a.phone.answerItem(a.paired.id, { lane: "thrall", snapshot: SNAP, index: 2, text: "Go with the first.", messageId: mid }));
+    check(edited.indexOf("other words") >= 0, "other words under an answer id already sent are refused");
+    // Read only: the recovery code reads and never writes.
+    b.lock(a.paired.id);
+    await b.recover(a.paired.id, a.paired.recoveryCode);
+    await b.refresh(a.paired.id);
+    const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+    const viaCode = await throwsAsync(async () => b.answerItem(a.paired.id, { lane: "thrall", snapshot: SNAP, index: 1, text: "from recovery", messageId: P.hex(P.randomBytes(16)) }));
+    check(viaCode.indexOf("recovery code") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore, "unlocked by the recovery code, an answer is refused in words and nothing is put", viaCode);
+    const t2 = R.memoryTransport();
+    const a2 = await pairedApp(t2, m, { prf: false });
+    await sendSnapshot(t2, m, [a2.phoneKey], [question(1, "One?")], { published: [lst] });
+    await a2.phone.refresh(a2.paired.id);
+    const noPrf = await throwsAsync(async () => a2.phone.answerItem(a2.paired.id, { lane: "thrall", snapshot: SNAP, index: 1, text: "no prf", messageId: P.hex(P.randomBytes(16)) }));
+    check(noPrf.indexOf("gives no PRF") >= 0, "a passkey with no PRF is refused in words, nothing put", noPrf);
+    const dump = JSON.stringify(await a.store.list(""));
+    check(dump.indexOf("Go with the second") < 0, "nothing of his words is in the store");
+  }
+
   // M1 (review of PR 365): AN ORC THAT PUBLISHED HAS A CARD, with no question to answer and no status card.
   {
     const dnode = (tag) => ({ tag, className: "", textContent: "", attrs: {}, kids: [], appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener() {} });

@@ -34,7 +34,11 @@ on the phone.** What reaches it:
   add`), with his answers sent back signed by his phone. An Orc that needs him asks here. Each Orc's
   published list (`horde decisions publish`) is on the same page, in that Orc's lane beside its
   questions (an Orc with a list and no question has its own card), with when it was published and last
-  checked (to the half hour): publish yours every turn.
+  checked (to the half hour): publish yours every turn. **Under every item of a published list is an
+  answer box and Send**: his words are sent signed from the phone and delivered to YOUR session (the Orc
+  that owns the list), as "FOUNDER ANSWER from the phone ... to your published list item N", with a
+  Sent / Delivered line under the item on his phone. Treat it as an answer to that item; a question
+  you want a ruling on still goes through `horde decisions add`.
 - **Progress** (`channels/progress`): the fleet's progress log, the analyst's changelog. Work worth
   his attention is written there.
 - **Notices** (`horde notify -Text "<one line>"`): a line from any session, sent to his phone's
