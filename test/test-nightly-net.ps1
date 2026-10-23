@@ -152,6 +152,47 @@ Check ($rep -like "*INCOMPLETE: the night ran out*") "an incomplete night says s
 Check ($rep -like "*1 newly red across 2 repos*") "the headline counts newly red"
 
 Write-Host ""
+Write-Host "--- follow-ups N1 to N4: the tell's exit, a timeout is unrun, a skip keeps a red, the headline says incomplete ---" -ForegroundColor Cyan
+function Run-V { param([int]$Code, [bool]$TimedOut = $false) return (Get-HordeNightlyVerdict ([pscustomobject]@{ code = $Code; timedOut = $TimedOut })) }
+Check ((Run-V 124) -ceq "unrun") "N2: gate exit 124 (a timeout) is unrun, never red"
+Check ((Run-V 0) -ceq "green" -and (Run-V 3) -ceq "skip" -and (Run-V 126) -ceq "absent" -and (Run-V 1) -ceq "red" -and (Run-V 125) -ceq "unrun" -and (Run-V 0 $true) -ceq "unrun") "the other exits keep their meaning"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "red") -ceq "") "N3: a skip does not clear a stored red"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "green") -ceq "") "N3: nor a stored green"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skip" -Previous "") -ceq "skip") "a skip with nothing stored is stored"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "red" -Previous "green") -ceq "red" -and (Get-HordeNightlyStoredVerdict -Verdict "green" -Previous "red") -ceq "green") "green and red replace"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "unrun" -Previous "red") -ceq "" -and (Get-HordeNightlyStoredVerdict -Verdict "absent" -Previous "red") -ceq "") "unrun and absent change nothing"
+$okRow = [pscustomobject]@{ repo = "Y/h"; tip = "abcdef01"; lastTip = "01234567"; merges = @(); guards = [pscustomobject]@{ state = "green"; text = "" }; suiteCount = 5; unrunCount = 0
+    compare = [pscustomobject]@{ newlyRed = @(); stillRed = @(); newRed = @(); fixed = @(); unrun = @() }; culprits = @(); notes = @(); incomplete = "" }
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($okRow)) -split "`n" | Select-Object -First 1
+Check ($h -like "*0 newly red*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") ("N4: a whole green night says COMPLETE (" + $h + ")")
+$badRow = $okRow.PSObject.Copy(); $badRow.unrunCount = 7; $badRow.guards = [pscustomobject]@{ state = "could not run"; text = "" }; $badRow.incomplete = "the night ran out"
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($badRow)) -split "`n" | Select-Object -First 1
+Check ($h -like "*INCOMPLETE*7 units not run*guards could not run*") ("N4: the headline itself says incomplete, units not run and guards could not run (" + $h + ")")
+$g2 = $okRow.PSObject.Copy(); $g2.guards = [pscustomobject]@{ state = "not run (no slot or no night)"; text = "" }
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($g2)) -split "`n" | Select-Object -First 1
+Check ($h -like "*INCOMPLETE*guards*") "N5: guards that did not run make the headline incomplete"
+$g3 = $okRow.PSObject.Copy(); $g3.guards = [pscustomobject]@{ state = "RED"; text = "x" }
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($g3)) -split "`n" | Select-Object -First 1
+Check ($h -like "*GUARDS RED*") "red guards are in the headline"
+# N1: a tell that prints and then fails must be exit 3, and one that prints and succeeds 0.
+$tdir = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-nightly-tell-" + [guid]::NewGuid().ToString("N"))
+try {
+    [void][System.IO.Directory]::CreateDirectory($tdir)
+    $failCmd = Join-Path $tdir "tellfail.cmd"; $okCmd = Join-Path $tdir "tellok.cmd"
+    [System.IO.File]::WriteAllText($failCmd, "@echo off`r`necho noisy output`r`nexit /b 5`r`n")
+    [System.IO.File]::WriteAllText($okCmd, "@echo off`r`necho noisy output`r`nexit /b 0`r`n")
+    $said = @()
+    $r = Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) $script:said += $l }
+    Check (@($r).Count -eq 1 -and $r -eq 3) ("N1: a failing tell that prints is exactly one value, 3 (" + (@($r) -join "/") + ")")
+    Check ($said.Count -gt 0 -and $said[0] -like "*failed with exit 5*") "and says so"
+    $r = Invoke-HordeNightlyTell -Program $okCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) }
+    Check (@($r).Count -eq 1 -and $r -eq 0) "N1: a tell that prints and succeeds is exactly 0"
+    $r = Invoke-HordeNightlyTell -Program (Join-Path $tdir "nothere") -Target "M" -File "x" -Say { param($l) }
+    Check ($r -eq 3) "a missing tell program is 3"
+    Check ((Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File "x" -NoTell) -eq 0) "-NoTell is 0"
+} finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
+
+Write-Host ""
 Write-Host "--- the tool, with -Plan: a throwaway repository, nothing run ---" -ForegroundColor Cyan
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-nightly-test-" + [guid]::NewGuid().ToString("N"))
 $oldHome = $env:HORDE_HOME

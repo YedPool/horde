@@ -50,6 +50,8 @@ param(
     [switch]$NoTell
 )
 $ErrorActionPreference = "Stop"
+# A git credential prompt must fail the clone, not hang the night (T-0331 N8).
+$env:GIT_TERMINAL_PROMPT = "0"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\NightlyNet.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 
@@ -141,16 +143,9 @@ function Invoke-NightlySlot {
 }
 
 function Get-NightlyVerdict {
-    # What a slot run's exit means for a suite: green 0; skip 3 (the suite skipped itself); unrun when the gate never
-    # had the slot, the memory or the night (125, 127, 128) or the run was cut off by STOP; absent 126 (the suite
-    # is not in this commit); red anything else, a timeout included.
+    # See Get-HordeNightlyVerdict (core): 124 is a timeout and is unrun, never red.
     param($Run)
-    if ($Run.timedOut) { return "unrun" }
-    if ($Run.code -eq 0) { return "green" }
-    if ($Run.code -eq 3) { return "skip" }
-    if ($Run.code -eq 126) { return "absent" }
-    if ($Run.code -eq 125 -or $Run.code -eq 127 -or $Run.code -eq 128 -or $Run.code -eq 71) { return "unrun" }
-    return "red"
+    return (Get-HordeNightlyVerdict $Run)
 }
 
 function Invoke-NightlyUnit {
@@ -357,7 +352,9 @@ function Save-NightlyState {
     param($Ctx)
     foreach ($k in @($Ctx.verdicts.Keys)) {
         $v = $Ctx.verdicts[$k]
-        if ($v -ceq "green" -or $v -ceq "red" -or $v -ceq "skip") { $Ctx.state.units[$k] = $v }
+        $prev = ""; if ($Ctx.state.units.ContainsKey($k)) { $prev = "" + $Ctx.state.units[$k] }
+        $keep = Get-HordeNightlyStoredVerdict -Verdict $v -Previous $prev
+        if ($keep -ne "") { $Ctx.state.units[$k] = $keep }
     }
     if ($Ctx.kind -ceq "pytest" -and $Ctx.verdicts.ContainsKey("pytest-all")) {
         # The red list is what the whole run said: a node that passed is gone from it.
@@ -368,8 +365,6 @@ function Save-NightlyState {
 }
 
 # ---------------------------------------------------------------- the run
-[void][System.IO.Directory]::CreateDirectory($WorkRoot)
-[void][System.IO.Directory]::CreateDirectory($ReportDir)
 $now = Get-Date
 $cutoff = Get-HordeNightlyDeadline -Now $now
 $inWindow = Test-HordeNightlyWindow -Now $now
@@ -377,28 +372,23 @@ Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "
 if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06:30): nothing run"; exit 4 }
 
 function Send-NightlyReport {
-    # Tell M (a failed tell, or no wezfleet at all, is exit 3: the report stays in the report folder). Returns the exit code.
+    # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
-    if ($NoTell) { return 0 }
-    $code = 3
-    try {
-        if ($null -eq (Get-Command $TellProgram -ErrorAction SilentlyContinue)) { Say ("the tell program '" + $TellProgram + "' is not on the PATH; the report is at " + $File); return 3 }
-        & $TellProgram tell $Target -Kind report -MessageFile $File
-        $code = $LASTEXITCODE
-    } catch { Say ("the tell to " + $Target + " threw: " + $_.Exception.Message); return 3 }
-    if ($code -ne 0) { Say ("the tell to " + $Target + " failed with exit " + $code + "; the report is at " + $File); return 3 }
-    Say ("report sent to " + $Target)
-    return 0
+    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -Say { param($l) Say $l })
 }
 
-$mutex = New-Object System.Threading.Mutex($false, "Global\HordeNightlyNet")
+$mutex = $null
 $held = $false
-if (-not $Plan) {
+try {
+    # Inside the try (T-0331 N7): a failure here is a FAILED night told to M, not a silent one.
+    [void][System.IO.Directory]::CreateDirectory($WorkRoot)
+    [void][System.IO.Directory]::CreateDirectory($ReportDir)
+    $mutex = New-Object System.Threading.Mutex($false, "Global\HordeNightlyNet")
+    if (-not $Plan) {
     # A killed run can leave the mutex abandoned: WaitOne then throws, and the mutex is ours.
     try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
     if (-not $held) { Say "another nightly run holds the mutex; exiting"; exit 0 }
-}
-try {
+    }
     $ctxs = @()
     foreach ($spec in $Repos) { $ctxs += (New-NightlyContext $spec) }
     if ($Plan) {
@@ -413,7 +403,6 @@ try {
     $suiteCutoff = $cutoff.AddMinutes(-$BisectReserveMinutes)
     foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff; Complete-NightlyCompare $c }
     foreach ($c in $ctxs) { Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff }
-    foreach ($c in $ctxs) { Save-NightlyState $c }
 
     $repoRows = @()
     foreach ($c in $ctxs) {
@@ -425,7 +414,11 @@ try {
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
     Say ("report written: " + $file)
-    exit (Send-NightlyReport $file)
+    # State moves only after the tell succeeded: a report M never got must not turn tonight's reds into "still red" (T-0331 N6).
+    $told = Send-NightlyReport $file
+    if ($told -eq 0) { foreach ($c in $ctxs) { Save-NightlyState $c } }
+    else { Say "state NOT saved: the report was not told, so tomorrow reports these reds again" }
+    exit $told
 } catch {
     # A failed night must never be silent: one plain line to M, and the same line in the report folder.
     $why = ConvertTo-HordeNightlyText ("" + $_.Exception.Message)
@@ -434,9 +427,9 @@ try {
     if (-not $Plan) {
         $body = "NIGHTLY NET " + $Date + ": FAILED, the night did not complete and tonight's tests say nothing. Error: " + $why + ". Log: " + $LogFile
         $file = Join-Path $ReportDir ($Date + "-FAILED.txt")
-        try { [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n"); [void](Send-NightlyReport $file) } catch { Say ("could not report the failure: " + $_.Exception.Message) }
+        try { [void][System.IO.Directory]::CreateDirectory($ReportDir); [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n"); [void](Send-NightlyReport $file) } catch { Say ("could not report the failure: " + $_.Exception.Message) }
     }
     exit 1
 } finally {
-    if ($held) { try { $mutex.ReleaseMutex() } catch { } }
+    if ($held -and $null -ne $mutex) { try { $mutex.ReleaseMutex() } catch { } }
 }
