@@ -206,9 +206,9 @@ try {
     [System.IO.File]::WriteAllText($failCmd, "@echo off`r`necho noisy output`r`nexit /b 5`r`n")
     [System.IO.File]::WriteAllText($okCmd, "@echo off`r`necho noisy output`r`nexit /b 0`r`n")
     $said = @()
-    $r = Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) $script:said += $l }
+    $r = Invoke-HordeNightlyTell -Program $failCmd -Target "M" -File (Join-Path $tdir "r.txt") -RetrySeconds 0 -Say { param($l) $script:said += $l }
     Check (@($r).Count -eq 1 -and $r -eq 3) ("N1: a failing tell that prints is exactly one value, 3 (" + (@($r) -join "/") + ")")
-    Check ($said.Count -gt 0 -and $said[0] -like "*failed with exit 5*") "and says so"
+    Check (@($said | Where-Object { $_ -like "*failed with exit 5*" }).Count -gt 0) "and says so"
     $r = Invoke-HordeNightlyTell -Program $okCmd -Target "M" -File (Join-Path $tdir "r.txt") -Say { param($l) }
     Check (@($r).Count -eq 1 -and $r -eq 0) "N1: a tell that prints and succeeds is exactly 0"
     $r = Invoke-HordeNightlyTell -Program (Join-Path $tdir "nothere") -Target "M" -File "x" -Say { param($l) }
@@ -219,7 +219,7 @@ try {
         # A tell program that counts its calls in calls.txt and answers the codes of -Codes in turn (the last one after).
         param([string]$Name, [int[]]$Codes)
         $d = Join-Path $tdir $Name; [void][System.IO.Directory]::CreateDirectory($d)
-        $b = "@echo off`r`necho call>>`"%~dp0calls.txt`"`r`nfor /f %%c in ('find /c /v `"`" ^< `"%~dp0calls.txt`"') do set n=%%c`r`necho stub said mail id abc123`r`n"
+        $b = "@echo off`r`necho call>>`"%~dp0calls.txt`"`r`nset n=0`r`nfor /f `"usebackq delims=`" %%l in (`"%~dp0calls.txt`") do set /a n+=1`r`necho stub said mail id abc123`r`n"
         for ($i = 0; $i -lt $Codes.Count - 1; $i++) { $b += ("if %n%==" + ($i + 1) + " exit /b " + $Codes[$i] + "`r`n") }
         $b += ("exit /b " + $Codes[$Codes.Count - 1] + "`r`n")
         $f = Join-Path $d "tell.cmd"; [System.IO.File]::WriteAllText($f, $b); return $f
@@ -239,6 +239,20 @@ try {
     $s3 = New-TellStub "always-busy" @(3)
     $r = Invoke-HordeNightlyTell -Program $s3 -Target "M" -File "x" -Tries 3 -RetrySeconds 0 -Say { param($l) }
     Check ($r -eq 3 -and (Calls $s3) -eq 3) ("R2: a tell that never gets through gives up after 3 tries, not told (" + $r + ", " + (Calls $s3) + " calls)")
+    # R4 (review of PR 380, finding 4): a program that hangs is ended at its time limit, by its PID.
+    $hang = Join-Path $tdir "hang.cmd"
+    [System.IO.File]::WriteAllText($hang, "@echo off`r`nping -n 60 127.0.0.1 >nul`r`nexit /b 0`r`n")
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $pr = Invoke-HordeNightlyProcess -FilePath $hang -TimeoutSeconds 2
+    Check ($pr.timedOut -eq $true -and $null -eq $pr.code -and $clock.Elapsed.TotalSeconds -lt 30) ("R4: a process past its time limit is ended and says timed out (" + [int]$clock.Elapsed.TotalSeconds + " s)")
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-HordeNightlyTell -Program $hang -Target "M" -File "x" -Tries 1 -TimeoutSeconds 2 -Say { param($l) }
+    Check ($r -eq 3 -and $clock.Elapsed.TotalSeconds -lt 30) ("R4: a tell that hangs is not told, and does not hang the night (" + [int]$clock.Elapsed.TotalSeconds + " s)")
+    $echo = Join-Path $tdir "echo args.cmd"
+    [System.IO.File]::WriteAllText($echo, "@echo off`r`necho [%~1] [%~2] [%~3]`r`nexit /b 7`r`n")
+    $pr = Invoke-HordeNightlyProcess -FilePath $echo -ArgumentList @("a b", "c", "C:\dir with space\f.txt") -TimeoutSeconds 30
+    Check ($pr.code -eq 7 -and $pr.timedOut -eq $false -and (($pr.lines -join "|") -ceq "[a b] [c] [C:\dir with space\f.txt]")) ("R4: arguments with spaces arrive whole, and the exit code is read (" + ($pr.lines -join "|") + ", " + $pr.code + ")")
+    Check ((Format-HordeNightlyArgument "plain") -ceq "plain" -and (Format-HordeNightlyArgument "") -ceq '""' -and (Format-HordeNightlyArgument 'a"b') -ceq '"a\"b"' -and (Format-HordeNightlyArgument "x y\") -ceq '"x y\\"') "R4: command-line quoting"
     Check ((Get-HordeNightlyTellOutcome $null) -ceq "retry" -and (Get-HordeNightlyTellOutcome 0) -ceq "told" -and (Get-HordeNightlyTellOutcome 6) -ceq "told" -and (Get-HordeNightlyTellOutcome 2) -ceq "unconfirmed" -and (Get-HordeNightlyTellOutcome 5) -ceq "retry") "R2: the tell outcomes"
 } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
 
@@ -319,6 +333,22 @@ try {
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
+    # R4 (review of PR 380, finding 4): a lock held at the start (a wedged earlier run) tells M and exits 5, never a
+    # silent exit 0. The tell is a stub that records what it was given and what it inherited.
+    $stubDir = Join-Path $work "stub"; [void][System.IO.Directory]::CreateDirectory($stubDir)
+    $stub = Join-Path $stubDir "tell.cmd"; $rec = Join-Path $stubDir "rec.txt"
+    [System.IO.File]::WriteAllText($stub, "@echo off`r`necho GCM=%GCM_INTERACTIVE% PROMPT=%GIT_TERMINAL_PROMPT% %*>>`"%~dp0rec.txt`"`r`nexit /b 0`r`n")
+    $mname = "Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")
+    $lock = New-Object System.Threading.Mutex($true, $mname)
+    try {
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-10-22T23:00:00" -MutexName $mname -WorkRoot (Join-Path $work "wr-busy") -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+        $bc = $LASTEXITCODE
+    } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+    $rt = $(if (Test-Path -LiteralPath $rec) { [System.IO.File]::ReadAllText($rec) } else { "" })
+    Check ($bc -eq 5) ("R4: a held lock ends exit 5, not 0 (" + $bc + ")")
+    $bm = [regex]::Match($rt, '-MessageFile "?([^"\r\n]+?)"?\s*$', "Multiline")
+    Check ($bm.Success -and $rt -like "*tell M -Kind report*" -and (Test-Path -LiteralPath $bm.Groups[1].Value) -and ([System.IO.File]::ReadAllText($bm.Groups[1].Value) -like "*NOT RUN, another nightly run still holds the lock*")) ("R4: and M is told the night did not run (" + $rt.Trim() + ")")
+    Check ($rt -like "*GCM=never PROMPT=0*") "R4: the night runs with no git credential prompt of either kind (GCM_INTERACTIVE=never, GIT_TERMINAL_PROMPT=0)"
     # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
     Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")

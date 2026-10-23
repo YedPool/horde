@@ -121,5 +121,11 @@
         @{ Name = "hung-not-in-report"
            Find = 'foreach ($u in @($c.hung)) { $lines += ("HUNG "'
            Replace = 'foreach ($u in @()) { $lines += ("HUNG "' }
+        @{ Name = "process-time-limit-ignored"
+           Find = 'if (-not $p.WaitForExit([math]::Max(1, $TimeoutSeconds) * 1000)) {'
+           Replace = '$p.WaitForExit(); if ($false) {' }
+        @{ Name = "argument-with-space-not-quoted"
+           Find = 'if ($Arg -notmatch ''[\s"]'') { return $Arg }'
+           Replace = 'return $Arg' }
     )
 }

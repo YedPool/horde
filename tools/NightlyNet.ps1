@@ -31,7 +31,7 @@
 # short night widens tomorrow's range instead of losing a merge. It is saved whether or not the tell got through;
 # findings M was not told stay pending in state.json and every report re-lists them until one is told.
 #
-# Exit: 0 reported, 3 the tell failed (the report is in the report folder, its findings pending in state.json), 4 outside
+# Exit: 0 reported, 5 another run holds the lock (M is told), 3 the tell failed (the report is in the report folder, its findings pending in state.json), 4 outside
 # the night window, 1 an error (or a state that could not be saved).
 # -Plan runs nothing: it prints the window, the repos, the merges since the last run and the units it would run.
 # Windows PowerShell 5.1. ASCII only.
@@ -49,12 +49,18 @@ param(
     [int]$BisectReserveMinutes = 90,
     [int]$MaxBisectRuns = 40,
     [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
+    [ValidateRange(30, 3600)][int]$GitSeconds = 900,
+    [string]$MutexName = "Global\HordeNightlyNet",
+    [string]$AtTime = "",
     [switch]$Plan,
     [switch]$NoTell
 )
 $ErrorActionPreference = "Stop"
-# A git credential prompt must fail the clone, not hang the night (T-0331 N8).
+# A git credential prompt must fail the clone, not hang the night (T-0331 N8): GIT_TERMINAL_PROMPT stops git's own
+# prompt, and GCM_INTERACTIVE stops Git Credential Manager's window, which the first alone does not (review of PR 380,
+# finding 4: the pytest repo is private, and an expired token could open a dialog in the task's session and wait).
 $env:GIT_TERMINAL_PROMPT = "0"
+$env:GCM_INTERACTIVE = "never"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\NightlyNet.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 
@@ -66,7 +72,10 @@ if ($HordeScript -eq "") { $HordeScript = Join-Path (Split-Path -Parent $PSScrip
 $HeavySlot = Join-Path $PSScriptRoot "HeavySlot.ps1"
 $WrapDir = Join-Path $PSScriptRoot "nightly"
 $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$Date = (Get-Date).ToString("yyyy-MM-dd")
+# -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
+# any run outside the night.
+$now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
+$Date = $now.ToString("yyyy-MM-dd")
 $ReportDir = Join-Path $WorkRoot "reports"
 $RunDir = Join-Path (Join-Path $WorkRoot "runs") (Get-Date).ToString("yyyyMMdd-HHmmss")
 $LogFile = Join-Path $WorkRoot "nightly.log"
@@ -97,6 +106,15 @@ function Invoke-NightlyGit {
     $code = $LASTEXITCODE
     if ($code -ne 0 -and -not $AllowFail) { throw ("git " + ($GitArgs -join " ") + " failed with exit " + $code) }
     return @($o | ForEach-Object { "" + $_ })
+}
+
+function Invoke-NightlyNetGit {
+    # clone and fetch reach the network: each is time-boxed (-GitSeconds) and may never prompt (review of PR 380, finding 4).
+    param([string[]]$GitArgs, [string]$What)
+    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $r = Invoke-HordeNightlyProcess -FilePath $git -ArgumentList (@("-c", "credential.interactive=never") + @($GitArgs)) -TimeoutSeconds $GitSeconds
+    if ($r.timedOut) { throw ($What + " ran past " + $GitSeconds + " s and was ended") }
+    if ($r.code -ne 0) { throw ($What + " failed with exit " + $r.code) }
 }
 
 function Test-NightlyMayStart {
@@ -209,9 +227,9 @@ function New-NightlyContext {
     $dir = Join-Path $WorkRoot ($repo -replace '/', '__')
     $tree = Join-Path $dir "tree"
     [void][System.IO.Directory]::CreateDirectory($dir)
-    if (-not (Test-Path -LiteralPath (Join-Path $tree ".git"))) { & git.exe -c core.longpaths=true clone -q ("https://github.com/" + $repo + ".git") $tree; if ($LASTEXITCODE -ne 0) { throw ("git clone of " + $repo + " failed") } }
+    if (-not (Test-Path -LiteralPath (Join-Path $tree ".git"))) { Invoke-NightlyNetGit -GitArgs @("-c", "core.longpaths=true", "clone", "-q", ("https://github.com/" + $repo + ".git"), $tree) -What ("git clone of " + $repo) }
     [void](Invoke-NightlyGit $tree @("config", "core.longpaths", "true"))
-    [void](Invoke-NightlyGit $tree @("fetch", "--quiet", "origin"))
+    Invoke-NightlyNetGit -GitArgs @("-C", $tree, "fetch", "--quiet", "origin") -What ("git fetch of " + $repo)
     [void](Invoke-NightlyGit $tree @("checkout", "--quiet", "--detach", ("origin/" + $branch)))
     [void](Invoke-NightlyGit $tree @("reset", "--hard", "--quiet", ("origin/" + $branch)))
     [void](Invoke-NightlyGit $tree @("clean", "-fdq"))
@@ -361,7 +379,6 @@ function Save-NightlyState {
 }
 
 # ---------------------------------------------------------------- the run
-$now = Get-Date
 $cutoff = Get-HordeNightlyDeadline -Now $now
 $inWindow = Test-HordeNightlyWindow -Now $now
 Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
@@ -370,7 +387,7 @@ if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06
 function Send-NightlyReport {
     # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
-    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -Say { param($l) Say $l })
+    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -TimeoutSeconds 300 -Say { param($l) Say $l })
 }
 
 $mutex = $null
@@ -379,11 +396,19 @@ try {
     # Inside the try (T-0331 N7): a failure here is a FAILED night told to M, not a silent one.
     [void][System.IO.Directory]::CreateDirectory($WorkRoot)
     [void][System.IO.Directory]::CreateDirectory($ReportDir)
-    $mutex = New-Object System.Threading.Mutex($false, "Global\HordeNightlyNet")
+    $mutex = New-Object System.Threading.Mutex($false, $MutexName)
     if (-not $Plan) {
     # A killed run can leave the mutex abandoned: WaitOne then throws, and the mutex is ours.
     try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
-    if (-not $held) { Say "another nightly run holds the mutex; exiting"; exit 0 }
+    if (-not $held) {
+        # Never a silent night (review of PR 380, finding 4): a run wedged from an earlier night holds the lock, and
+        # every night after it would end here with exit 0 and a log line nobody reads. M hears it, and it exits 5.
+        Say "another nightly run holds the lock: tonight runs nothing"
+        $busy = Join-Path $ReportDir ($Date + "-BUSY.txt")
+        [System.IO.File]::WriteAllText($busy, (ConvertTo-HordeNightlyText ("NIGHTLY NET " + $Date + ": NOT RUN, another nightly run still holds the lock (a run from an earlier night may be wedged). Log: " + $LogFile)) + "`n")
+        [void](Send-NightlyReport $busy)
+        exit 5
+    }
     }
     $ctxs = @()
     foreach ($spec in $Repos) { $ctxs += (New-NightlyContext $spec) }

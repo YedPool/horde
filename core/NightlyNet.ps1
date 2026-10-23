@@ -209,6 +209,44 @@ function Get-HordeNightlyStoredVerdict {
     return ""
 }
 
+function Format-HordeNightlyArgument {
+    # One argument for a Windows command line (CommandLineToArgvW rules): bare when it holds no space or double quote,
+    # otherwise quoted, with backslashes before a quote and at the end doubled.
+    param([string]$Arg)
+    if ($Arg -eq "") { return '""' }
+    if ($Arg -notmatch '[\s"]') { return $Arg }
+    $q = [regex]::Replace($Arg, '(\\*)"', { param($m) $m.Groups[1].Value + $m.Groups[1].Value + '\"' })
+    $q = [regex]::Replace($q, '(\\+)$', { param($m) $m.Groups[1].Value + $m.Groups[1].Value })
+    return ('"' + $q + '"')
+}
+
+function Invoke-HordeNightlyProcess {
+    # Run a program with a TIME LIMIT (review of PR 380, finding 4: clone, fetch and the tell had none, and a wedged
+    # one kept the night's lock, so every following night exited at the lock). A hidden child, its output and error
+    # collected from files; past -TimeoutSeconds the child and the tree under it are ended BY ITS PID, never by name.
+    # A .ps1 is run by this shell's own executable. { code ($null when it timed out or none was read); timedOut; lines }.
+    param([string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSeconds = 300)
+    $argv = @($ArgumentList)
+    if ($FilePath -like "*.ps1") { $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $argv; $FilePath = (Get-Process -Id $PID).Path }
+    $base = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-nightly-proc-" + [guid]::NewGuid().ToString("N"))
+    $outF = $base + ".out"; $errF = $base + ".err"
+    $line = (@($argv | ForEach-Object { Format-HordeNightlyArgument ("" + $_) })) -join " "
+    $sp = @{ FilePath = $FilePath; PassThru = $true; WindowStyle = "Hidden"; RedirectStandardOutput = $outF; RedirectStandardError = $errF }
+    if ($line -ne "") { $sp["ArgumentList"] = $line }
+    $code = $null; $timedOut = $false; $lines = @()
+    try {
+        $p = Start-Process @sp
+        $null = $p.Handle
+        if (-not $p.WaitForExit([math]::Max(1, $TimeoutSeconds) * 1000)) {
+            $timedOut = $true
+            & taskkill.exe /PID $p.Id /T /F | Out-Null
+            [void]$p.WaitForExit(10000)
+        } else { $p.WaitForExit(); $code = $p.ExitCode }
+        foreach ($f in @($outF, $errF)) { if (Test-Path -LiteralPath $f) { $lines += @(Get-Content -LiteralPath $f | ForEach-Object { "" + $_ }) } }
+    } finally { Remove-Item -LiteralPath $outF, $errF -Force -ErrorAction SilentlyContinue }
+    return [pscustomobject]@{ code = $code; timedOut = $timedOut; lines = @($lines) }
+}
+
 function Get-HordeNightlyTellOutcome {
     # What the tell program's exit means: "told", "unconfirmed" or "retry" (review of PR 380, finding 2). Its exit codes:
     # 0 delivered and 6 posted to the target's mailbox, handed over at its next turn end ("delayed, NOT lost ... DO NOT
@@ -228,15 +266,18 @@ function Invoke-HordeNightlyTell {
     # -Tries tries, -RetrySeconds apart). Returns exactly one int: the program's output is collected, never left loose
     # (left loose it would join the return value, T-0331 N1), and each line of it goes to -Say, so the log keeps the
     # program's reason and mail id (review of PR 380, finding 7). -Say is a scriptblock taking one line.
-    param([string]$Program, [string]$Target, [string]$File, [scriptblock]$Say = { param($l) }, [switch]$NoTell, [int]$Tries = 3, [int]$RetrySeconds = 120)
+    # Each try is time-boxed (-TimeoutSeconds, Invoke-HordeNightlyProcess): a tell that hangs is a failed try.
+    param([string]$Program, [string]$Target, [string]$File, [scriptblock]$Say = { param($l) }, [switch]$NoTell, [int]$Tries = 3, [int]$RetrySeconds = 120, [int]$TimeoutSeconds = 300)
     if ($NoTell) { return 0 }
-    if ($null -eq (Get-Command $Program -ErrorAction SilentlyContinue)) { & $Say ("the tell program '" + $Program + "' is not on the PATH, the report is at " + $File); return 3 }
+    $cmd = Get-Command $Program -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $cmd) { & $Say ("the tell program '" + $Program + "' is not on the PATH, the report is at " + $File); return 3 }
     for ($try = 1; $try -le [math]::Max(1, $Tries); $try++) {
         $code = $null
         try {
-            $out = @(& $Program tell $Target -Kind report -MessageFile $File)
-            $code = $LASTEXITCODE
-            foreach ($l in $out) { $t = ConvertTo-HordeNightlyText ("" + $l); if ($t -ne "") { & $Say ("tell: " + $t) } }
+            $run = Invoke-HordeNightlyProcess -FilePath $cmd.Source -ArgumentList @("tell", $Target, "-Kind", "report", "-MessageFile", $File) -TimeoutSeconds $TimeoutSeconds
+            $code = $run.code
+            foreach ($l in @($run.lines)) { $t = ConvertTo-HordeNightlyText ("" + $l); if ($t -ne "") { & $Say ("tell: " + $t) } }
+            if ($run.timedOut) { & $Say ("the tell to " + $Target + " ran past " + $TimeoutSeconds + " s and was ended") }
         } catch { & $Say ("the tell to " + $Target + " threw: " + $_.Exception.Message) }
         $what = Get-HordeNightlyTellOutcome $code
         if ($what -ceq "told") { & $Say ("report sent to " + $Target + " (exit " + $code + ")"); return 0 }
