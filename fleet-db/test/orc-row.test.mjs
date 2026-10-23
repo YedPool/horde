@@ -150,6 +150,19 @@ test('a database of a newer schema is refused cleanly (exit 1) and left alone', 
   check.close();
 });
 
+test('a database of an older schema is refused (exit 1, run horde db init) and never migrated from here', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'fleet.db');
+  new DatabaseSync(file).close(); // a file at version 0: older than the code
+  const r = ensure({ HORDE_HOME: dir, HORDE_ORC_BUSY_MS: '300' }, 'old-lane', 'O', 'old lane');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /needs migrating; run horde db init/);
+  const check = new DatabaseSync(file, { readOnly: true });
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 0);
+  assert.equal(check.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'orc'").get().n, 0);
+  check.close();
+});
+
 test('no fleet.db yet (exit 4) and no home (exit 2) are refusals; the database is never made here', () => {
   const dir = tempDir();
   const r = ensure({ HORDE_HOME: dir }, 'a-lane', 'A', 'a lane');

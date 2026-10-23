@@ -149,10 +149,8 @@ function Invoke-HordeStatusOrcRow {
         if ($resolved.source -eq "default") { return [pscustomobject]@{ state = "skipped"; reason = "no Horde home (set HORDE_HOME, or horde home set -Path <folder>)" } }
         $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $node) { return [pscustomobject]@{ state = "skipped"; reason = "node is not installed (fleet.db needs Node.js 24 or later)" } }
-        $major = 0
-        $ver = "" + (& $node.Source --version)
-        if ($ver -match '^v(\d+)\.') { $major = [int]$Matches[1] }
-        if ($major -lt 24) { return [pscustomobject]@{ state = "skipped"; reason = ("fleet.db needs Node.js 24 or later, and this machine has " + $ver.Trim()) } }
+        # No separate `node --version` probe: it would run outside the 20 s net below. A node too old for fleet.db
+        # fails orc-cli.mjs on its first import, and that comes back here as a skip like any other refusal.
         $leaf = Split-Path -Leaf ([System.IO.Path]::GetFullPath($Folder).TrimEnd("\", "/"))
         # The lane text goes in a quoted argument: a double quote or a backslash in it would end the argument early under
         # Windows PowerShell 5.1's quoting, so each becomes an apostrophe (the row's name is a label, not the card).
@@ -175,8 +173,10 @@ function Invoke-HordeStatusOrcRow {
             $p.WaitForExit()
             $said = ("" + $outTask.Result).Trim()
             if ($p.ExitCode -eq 0 -and ($said -ceq "added" -or $said -ceq "kept")) { return [pscustomobject]@{ state = $said; reason = "" } }
-            $why = (("" + $errTask.Result) -split "\r?\n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1)
-            if (-not $why) { $why = "the row command stopped with exit code " + $p.ExitCode }
+            # orc-cli.mjs says its reason on a line of its own ("fleet.db..." or "refused..."); a node crash or warning
+            # printed around it is not the reason, so only such a line is taken.
+            $why = (("" + $errTask.Result) -split "\r?\n" | Where-Object { $_ -match '^(fleet\.db|refused)' } | Select-Object -Last 1)
+            if (-not $why) { $why = "the row command stopped with exit code " + $p.ExitCode + " (fleet.db needs Node.js 24 or later)" }
             return [pscustomobject]@{ state = "skipped"; reason = ("" + $why).Trim() }
         } finally { $p.Dispose() }
     } catch {

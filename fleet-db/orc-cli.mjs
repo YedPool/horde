@@ -63,6 +63,15 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
   const busyMs = /^\d+$/.test(env.HORDE_ORC_BUSY_MS ?? '') ? Number(env.HORDE_ORC_BUSY_MS) : BUSY_MS_DEFAULT;
   let db;
   try {
+    // Opened read-only first, which refuses a fleet.db older or newer than this code: a migration is never run from
+    // inside a status set (its 3 s lock wait and its caller's 20 s net are not for that); `horde db init` owns it.
+    try {
+      openStore(file, { readOnly: true, busyMs }).close();
+    } catch (e) {
+      if (isBusy(e)) throw e;
+      err('fleet.db: ' + ascii(String(e.message).replace('open it for writing once', 'run horde db init')));
+      return 1;
+    }
     db = openStore(file, { busyMs });
     const r = inWrite(db, () => ensureOrcRow(db, {
       folder: flags['--folder'], letter: flags['--letter'], lane: flags['--lane'], isThrall: flags['--thrall'] === true, createdAt: Date.now(),
