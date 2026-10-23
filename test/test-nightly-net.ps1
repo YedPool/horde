@@ -257,6 +257,26 @@ try {
 } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
+Write-Host "--- R5: a missing exit code, a skip in a bisect, the report reserve, an unnamed bisect in the headline ---" -ForegroundColor Cyan
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false })) -ceq "red") "R5: a run with no exit code is red, never green"
+Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false }) -AtTip) -ceq "red") "R5: at the tip too"
+Check ($null -eq (ConvertTo-HordeNightlyBisectAnswer "skip")) "R5: a skip in a bisect is unknown, not green"
+Check ((ConvertTo-HordeNightlyBisectAnswer "red") -eq $true -and (ConvertTo-HordeNightlyBisectAnswer "green") -eq $false -and (ConvertTo-HordeNightlyBisectAnswer "absent") -eq $false -and $null -eq (ConvertTo-HordeNightlyBisectAnswer "unrun")) "R5: red, green, absent and unrun keep their bisect meaning"
+$skipAt = { param($sha) $v = $(if ($sha -ceq "m4") { "skip" } elseif ([int]($sha.Substring(1)) -ge 6) { "red" } else { "green" }); return (ConvertTo-HordeNightlyBisectAnswer $v) }
+$r = Find-HordeNightlyCulprit -Merges @(1..8 | ForEach-Object { "m" + $_ }) -IsRed $skipAt
+Check ($r.state -ceq "inconclusive") ("R5: a bisect that meets a skip stops inconclusive instead of naming a merge past it (" + $r.state + " " + $r.sha + ")")
+Check ((Get-HordeNightlyRunCutoff -Now (Dt "23:00")) -eq ([datetime]"2026-10-23 06:15")) "R5: runs end at 06:15, 15 minutes kept for the report and the tell"
+Check ((Get-HordeNightlyRunCutoff -Now (Dt "02:00") -ReportReserveMinutes 0) -eq ([datetime]"2026-10-22 06:30")) "R5: with no reserve, 06:30"
+foreach ($st in @("capped", "inconclusive", "flaky")) {
+    $ur = $okRow.PSObject.Copy(); $ur.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = $st; sha = ""; merge = $null; runs = 2; between = @("", "abcdef01") })
+    $h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($ur)) -split "`n" | Select-Object -First 1
+    Check ($h -like "*INCOMPLETE*1 bisects named no merge*") ("R5: a " + $st + " bisect makes the headline INCOMPLETE (" + $h + ")")
+}
+$fr = $okRow.PSObject.Copy(); $fr.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "found"; sha = $merge.sha; merge = $merge; runs = 3; between = @("", $merge.sha) })
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($fr)) -split "`n" | Select-Object -First 1
+Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") "R5: a bisect that named its merge leaves the night COMPLETE"
+
+Write-Host ""
 Write-Host "--- R2: the state is always saved, and what M was not told stays pending until a tell gets through ---" -ForegroundColor Cyan
 $emptyCmp = [pscustomobject]@{ newlyRed = @(); stillRed = @(); newRed = @(); fixed = @(); unrun = @() }
 $s0 = @{ lastTip = "aaaa"; units = @{ "x|ps51" = "green"; "y|ps51" = "green" } }
@@ -349,6 +369,23 @@ try {
     $bm = [regex]::Match($rt, '-MessageFile "?([^"\r\n]+?)"?\s*$', "Multiline")
     Check ($bm.Success -and $rt -like "*tell M -Kind report*" -and (Test-Path -LiteralPath $bm.Groups[1].Value) -and ([System.IO.File]::ReadAllText($bm.Groups[1].Value) -like "*NOT RUN, another nightly run still holds the lock*")) ("R4: and M is told the night did not run (" + $rt.Trim() + ")")
     Check ($rt -like "*GCM=never PROMPT=0*") "R4: the night runs with no git credential prompt of either kind (GCM_INTERACTIVE=never, GIT_TERMINAL_PROMPT=0)"
+    # R5 (review of PR 380, finding 6): a work folder that cannot be made still ends in a FAILED line told to M, written
+    # under the temp path, and the first log line is kept there. The child's temp path is pointed into this test's folder.
+    $blocker = Join-Path $work "a-file"; [System.IO.File]::WriteAllText($blocker, "x")
+    $tmpDir = Join-Path $work "tmp"; [void][System.IO.Directory]::CreateDirectory($tmpDir)
+    if (Test-Path -LiteralPath $rec) { Remove-Item -LiteralPath $rec -Force }
+    $oldTmp = $env:TMP; $oldTemp = $env:TEMP
+    try {
+        $env:TMP = $tmpDir; $env:TEMP = $tmpDir
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-10-22T23:00:00" -MutexName ($mname + "-b") -WorkRoot (Join-Path $blocker "wr") -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+        $fc = $LASTEXITCODE
+    } finally { $env:TMP = $oldTmp; $env:TEMP = $oldTemp }
+    $rt = $(if (Test-Path -LiteralPath $rec) { [System.IO.File]::ReadAllText($rec) } else { "" })
+    $fb = Join-Path $tmpDir "horde-nightly-fallback"
+    Check ($fc -eq 1) ("R5: a work folder that cannot be made ends exit 1 (" + $fc + ")")
+    Check ($rt -like ("*" + $fb + "*2026-10-22-FAILED.txt*") -and ([System.IO.File]::ReadAllText((Join-Path $fb "2026-10-22-FAILED.txt")) -like "*FAILED*could not be made*")) ("R5: and M is still told, from the temp path (" + $rt.Trim() + ")")
+    $fl = Join-Path $fb "nightly.log"
+    Check ((Test-Path -LiteralPath $fl) -and ([System.IO.File]::ReadAllText($fl) -like "*nightly net 2026-10-22: window open*")) "R5: the first log line is kept, in the fallback folder"
     # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
     Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")

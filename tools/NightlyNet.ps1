@@ -12,7 +12,8 @@
 # merge behind each NEW red. core/NightlyNet.ps1 holds what it decides (and is tested); this file is what it does.
 #
 # THE NIGHT. It starts at 22:00 or later and everything is over by 06:30 (a run is never started if it could
-# end after that); started outside the window it refuses with exit 4 and runs nothing. Every run goes through
+# end after 06:15, which leaves -ReportReserveMinutes for the report and the tell); started outside the window it refuses
+# with exit 4 and runs nothing. Every run goes through
 # tools/HeavySlot.ps1 in slot runs of -RunSeconds (at most 1800) and a SHORT -SlotWaitSeconds (default 900: a
 # lane that waits is said unrun, it never queues for hours, 2026-10-22), so the slot is free between runs. HeavySlot
 # itself waits for idle-or-night, which holds all night. THIS FILE REGISTERS NOTHING: whoever owns the
@@ -48,6 +49,7 @@ param(
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [int]$BisectReserveMinutes = 90,
     [int]$MaxBisectRuns = 40,
+    [ValidateRange(0, 120)][int]$ReportReserveMinutes = 15,
     [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
     [ValidateRange(30, 3600)][int]$GitSeconds = 900,
     [string]$MutexName = "Global\HordeNightlyNet",
@@ -355,8 +357,7 @@ function Invoke-NightlyBisect {
                 [void](Invoke-NightlyGit $Ctx.tree @("clean", "-fdq"))
             } catch { Say ("bisect checkout of " + $sha + " failed: " + $_.Exception.Message); return $null }
             $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag (($Ctx.repo -replace '/', '_') + "-bisect-" + $sha.Substring(0, 8) + "-" + $u)
-            $res = $null
-            if ($v -ceq "red") { $res = $true } elseif ($v -ceq "green" -or $v -ceq "skip" -or $v -ceq "absent") { $res = $false }
+            $res = ConvertTo-HordeNightlyBisectAnswer $v
             $memo[$key] = $res
             return $res
         }
@@ -379,7 +380,20 @@ function Save-NightlyState {
 }
 
 # ---------------------------------------------------------------- the run
-$cutoff = Get-HordeNightlyDeadline -Now $now
+# THE WORK FOLDER FIRST, before the first log line (review of PR 380, finding 6: Say ran before it existed, so a fresh
+# box lost the window line). If it cannot be made (a bad -WorkRoot, an ACL, a full disk) the log and the report go to a
+# folder under the temp path instead, and the run fails below through the catch, which tells M from there.
+$setupError = ""
+try { [void][System.IO.Directory]::CreateDirectory($WorkRoot); [void][System.IO.Directory]::CreateDirectory($ReportDir) }
+catch {
+    $setupError = "the work folder " + $WorkRoot + " could not be made: " + $_.Exception.Message
+    $fallback = Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"
+    try { [void][System.IO.Directory]::CreateDirectory($fallback) } catch { }
+    $LogFile = Join-Path $fallback "nightly.log"
+    $ReportDir = $fallback
+}
+# Runs end -ReportReserveMinutes (15) before 06:30, so the report, the tell and the save are done by then.
+$cutoff = Get-HordeNightlyRunCutoff -Now $now -ReportReserveMinutes $ReportReserveMinutes
 $inWindow = Test-HordeNightlyWindow -Now $now
 Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
 if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06:30): nothing run"; exit 4 }
@@ -394,8 +408,7 @@ $mutex = $null
 $held = $false
 try {
     # Inside the try (T-0331 N7): a failure here is a FAILED night told to M, not a silent one.
-    [void][System.IO.Directory]::CreateDirectory($WorkRoot)
-    [void][System.IO.Directory]::CreateDirectory($ReportDir)
+    if ($setupError -ne "") { throw $setupError }
     $mutex = New-Object System.Threading.Mutex($false, $MutexName)
     if (-not $Plan) {
     # A killed run can leave the mutex abandoned: WaitOne then throws, and the mutex is ours.
@@ -456,8 +469,17 @@ try {
     Say ("the nightly net FAILED: " + $why)
     if (-not $Plan) {
         $body = "NIGHTLY NET " + $Date + ": FAILED, the night did not complete and tonight's tests say nothing. Error: " + $why + ". Log: " + $LogFile
-        $file = Join-Path $ReportDir ($Date + "-FAILED.txt")
-        try { [void][System.IO.Directory]::CreateDirectory($ReportDir); [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n"); [void](Send-NightlyReport $file) } catch { Say ("could not report the failure: " + $_.Exception.Message) }
+        # The report folder may be what failed: the temp path is the second place to write the line M is told.
+        $sent = $false
+        foreach ($dir in @($ReportDir, (Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"))) {
+            try {
+                [void][System.IO.Directory]::CreateDirectory($dir)
+                $file = Join-Path $dir ($Date + "-FAILED.txt")
+                [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n")
+                [void](Send-NightlyReport $file); $sent = $true; break
+            } catch { Say ("could not report the failure from " + $dir + ": " + $_.Exception.Message) }
+        }
+        if (-not $sent) { Say "M was not told of the failure" }
     }
     exit 1
 } finally {

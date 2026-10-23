@@ -127,5 +127,17 @@
         @{ Name = "argument-with-space-not-quoted"
            Find = 'if ($Arg -notmatch ''[\s"]'') { return $Arg }'
            Replace = 'return $Arg' }
+        @{ Name = "missing-exit-code-read-as-green"
+           Find = 'if ($null -eq $Run.code -or "" + $Run.code -eq "") { return "red" }'
+           Replace = '' }
+        @{ Name = "skip-in-bisect-is-green"
+           Find = 'if ($Verdict -ceq "green" -or $Verdict -ceq "absent") { return $false }'
+           Replace = 'if ($Verdict -ceq "green" -or $Verdict -ceq "absent" -or $Verdict -ceq "skip") { return $false }' }
+        @{ Name = "no-report-reserve"
+           Find = '.AddMinutes(-[math]::Max(0, $ReportReserveMinutes))'
+           Replace = '' }
+        @{ Name = "unnamed-bisect-still-complete"
+           Find = 'if ($unnamed -gt 0) {'
+           Replace = 'if ($false) {' }
     )
 }

@@ -49,6 +49,25 @@ function Get-HordeNightlyDeadline {
     return $today.AddDays(1)
 }
 
+function Get-HordeNightlyRunCutoff {
+    # The time every RUN must be over by: the night's deadline less -ReportReserveMinutes (15), which are kept for the
+    # report, the tell (with its retries) and the save. Runs used to end exactly at 06:30, so a task stopped at its
+    # 06:30 limit could die before the tell, a silent night (review of PR 380, finding 10).
+    param([datetime]$Now, [int]$ReportReserveMinutes = 15, [int]$EndHour = 6, [int]$EndMinute = 30)
+    return (Get-HordeNightlyDeadline -Now $Now -EndHour $EndHour -EndMinute $EndMinute).AddMinutes(-[math]::Max(0, $ReportReserveMinutes))
+}
+
+function ConvertTo-HordeNightlyBisectAnswer {
+    # A unit's verdict at one bisect step as Find-HordeNightlyCulprit's answer: $true red, $false green or absent (the
+    # suite is not in that commit yet), $null anything else, so the search stops inconclusive. A SKIP is $null: the
+    # suite said nothing at that commit, and taking it as green moved the search past it to a later, innocent merge
+    # (review of PR 380, finding 9).
+    param([string]$Verdict)
+    if ($Verdict -ceq "red") { return $true }
+    if ($Verdict -ceq "green" -or $Verdict -ceq "absent") { return $false }
+    return $null
+}
+
 function Test-HordeNightlyMayStartRun {
     # May a slot run of up to RunSeconds start now and still be over by the cutoff? A run is killed at its
     # own limit, so the worst case is Now plus RunSeconds.
@@ -185,8 +204,10 @@ function Get-HordeNightlyVerdict {
     # GATE EXIT 124, the suite ran past its limit: inside a bisect it is UNRUN, so a slow box never blames a merge
     # (T-0331 N2). At the TIP (-AtTip) it is HUNG, a finding reported as such: as unrun it held the tip back every night
     # a suite hangs, so the merge range grew without end and the hang was never reported (review of PR 380, finding 3).
+    # A run with NO exit code is red: [int]$null is 0, which read it as green (review of PR 380, finding 5).
     param($Run, [switch]$AtTip)
     if ($Run.timedOut) { return "unrun" }
+    if ($null -eq $Run.code -or "" + $Run.code -eq "") { return "red" }
     $c = [int]$Run.code
     if ($c -eq 0) { return "green" }
     if ($c -eq 3) { return "skip" }
@@ -339,11 +360,13 @@ function Update-HordeNightlyState {
 }
 
 function Get-HordeNightlyHeadlineStatus {
-    # COMPLETE, or INCOMPLETE with why: units not run, an incomplete repo, guards that did not run (T-0331 N4/N5).
+    # COMPLETE, or INCOMPLETE with why: units not run, an incomplete repo, guards that did not run (T-0331 N4/N5), a
+    # bisect that named no merge.
     param([object[]]$Repos)
     $why = @()
-    $unrun = 0; $inc = @(); $gbad = @(); $gred = @(); $hung = 0
+    $unrun = 0; $inc = @(); $gbad = @(); $gred = @(); $hung = 0; $unnamed = 0
     foreach ($r in @($Repos)) {
+        if ($r.PSObject.Properties["culprits"]) { $unnamed += @(@($r.culprits) | Where-Object { @("capped", "inconclusive", "flaky") -ccontains ("" + $_.state) }).Count }
         $unrun += [int]$r.unrunCount
         if ($r.compare.PSObject.Properties["hung"]) { $hung += @($r.compare.hung).Count }
         if ("" + $r.incomplete -ne "") { $inc += $r.repo }
@@ -354,6 +377,9 @@ function Get-HordeNightlyHeadlineStatus {
     if ($inc.Count -gt 0) { $why += ("the night did not finish in " + ($inc -join ", ")) }
     if ($unrun -gt 0) { $why += ("" + $unrun + " units not run") }
     if ($gbad.Count -gt 0) { $why += ("guards could not run or did not run in " + ($gbad -join ", ")) }
+    # A newly red unit whose bisect named no merge (capped, inconclusive or flaky) is not a finished answer: COMPLETE
+    # read as every new red has a name (review of PR 380, finding 11).
+    if ($unnamed -gt 0) { $why += ("" + $unnamed + " bisects named no merge (capped, inconclusive or flaky)") }
     $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
     if ($gred.Count -gt 0) { $t += " GUARDS RED in " + ($gred -join ", ") + "." }
     if ($hung -gt 0) { $t += " HUNG: " + $hung + " units ran past their time limit." }
