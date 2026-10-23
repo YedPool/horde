@@ -55,5 +55,11 @@
         @{ Name = "bom-not-stripped-from-registry"
            Find = 'return JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));'
            Replace = 'return JSON.parse(readFileSync(file, "utf8"));' }
+        @{ Name = "clear-ends-the-unit"
+           Find = 'if (typeof input.reason === "string" && CONTINUING_END_REASONS.includes(input.reason.toLowerCase())) return;'
+           Replace = 'void 0;' }
+        @{ Name = "marker-matches-prose"
+           Find = '/^\s*(?:work[-_ ]?type|work)\s*[:=]\s*([a-z]+)\s*$/i.exec(line)'
+           Replace = '/(?:work[-_ ]?type|work)\s*[:=]\s*([a-z]+)/i.exec(line)' }
     )
 }

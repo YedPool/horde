@@ -97,8 +97,8 @@ export function taskOf(brief) {
 export function workTypeOf(brief, agentType) {
   if (typeof brief === "string") {
     for (const line of brief.split(/\r?\n/).filter((l) => l.trim() !== "").slice(0, 3)) {
-      const m = /\bwork[-_ ]?type\s*[:=]\s*([a-z]+)|\bwork\s*[:=]\s*([a-z]+)/i.exec(line);
-      const t = m ? (m[1] || m[2]).toLowerCase() : null;
+      const m = /^\s*(?:work[-_ ]?type|work)\s*[:=]\s*([a-z]+)\s*$/i.exec(line);
+      const t = m ? m[1].toLowerCase() : null;
       if (t !== null && WORK_TYPES.includes(t)) return t;
     }
   }
@@ -214,7 +214,13 @@ async function onAgent(input, stopping) {
   if (stopping) await runWork(["end", "--parent-session", parent, "--agent-id", agentId, "--outcome", "done"]);
 }
 
+// SessionEnd reasons that are NOT the end of the work: /clear and a resume-switch end the OLD session id while
+// the Warg carries on under a new one. The real ends are prompt_input_exit, logout, bypass_permissions_disabled, other
+// (and a payload with no reason at all).
+const CONTINUING_END_REASONS = ["clear", "resume"];
+
 async function onSessionEnd(input) {
+  if (typeof input.reason === "string" && CONTINUING_END_REASONS.includes(input.reason.toLowerCase())) return;
   const sid = typeof input.session_id === "string" ? input.session_id.toLowerCase() : "";
   if (!UUID.test(sid)) return;
   let rec;

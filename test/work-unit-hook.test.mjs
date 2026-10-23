@@ -132,6 +132,8 @@ test('work type: only an explicit marker sets it; words like review in the brief
   assert.equal(units(w)[0].work_type, 'other');
   assert.equal(workTypeOf('x\ny\nwork-type: monitor', 'general-purpose'), 'monitor');
   assert.equal(workTypeOf('x\ny\nz\nwork: build', 'general-purpose'), 'other', 'a marker on the fourth line is not read');
+  assert.equal(workTypeOf('Do the work: build the thing', 'general-purpose'), 'other', 'prose is not a marker');
+  assert.equal(workTypeOf('  Work: Review  ', 'general-purpose'), 'review', 'a line that is only the marker is read');
   assert.equal(workTypeOf('work: nonsense', 'general-purpose'), 'other');
   assert.equal(workTypeOf('hello', 'Explore'), 'research');
   assert.equal(workTypeOf(null, 'Plan'), 'research');
@@ -226,6 +228,17 @@ test('SessionEnd of a warg (a fleet record with a parent and no role) ends its w
   quiet(run(w, { hook_event_name: 'SessionEnd', session_id: WARG, reason: 'other' }));
   const u = units(w).find((x) => x.kind === 'warg');
   assert.equal(u.outcome, 'done');
+});
+
+test('SessionEnd with reason clear or resume leaves the warg unit running; a real end reason ends it', () => {
+  const w = world();
+  seedWarg(w);
+  putRegistry(w, WARG, { origin: 'fleet', parent: PARENT, owner: 'F' });
+  quiet(run(w, { hook_event_name: 'SessionEnd', session_id: WARG, reason: 'clear' }));
+  quiet(run(w, { hook_event_name: 'SessionEnd', session_id: WARG, reason: 'resume' }));
+  assert.equal(units(w).find((x) => x.kind === 'warg').outcome, 'running');
+  quiet(run(w, { hook_event_name: 'SessionEnd', session_id: WARG, reason: 'prompt_input_exit' }));
+  assert.equal(units(w).find((x) => x.kind === 'warg').outcome, 'done');
 });
 
 test('SessionEnd of an Orc, an unregistered session or a stray record ends nothing', () => {
