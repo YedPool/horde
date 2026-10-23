@@ -51,5 +51,14 @@
         @{ Name = "readback-skipped-last-good-from-bad"
            Find = 'Write-HordeStatusFileAtomic -Path $target -Bytes $bytes'
            Replace = 'Write-HordeStatusFileAtomic -Path $target -Bytes ([System.Text.Encoding]::ASCII.GetBytes("junk"))' }
+        @{ Name = "row-no-home-goes-on"
+           Find = 'if ($resolved.source -eq "default") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "row-thrall-folder-not-detected"
+           Find = 'if ($leaf -ceq "thrall") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "row-made-for-wrong-orc"
+           Find = 'orc = $back.orc; lane = $back.lane }'
+           Replace = 'orc = "Z"; lane = $back.lane }' }
     )
 }
