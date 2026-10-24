@@ -11,11 +11,26 @@
            Find = '        if (-not $idle.allowed) {'
            Replace = '        if ($false) {' }
         @{ Name = "floor-not-rechecked-after-the-take"
-           Find = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB) {'
-           Replace = 'if ($idleNow.allowed) {' }
+           Find = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB -and $commitNow -ge $MinCommitHeadroomGB) {'
+           Replace = 'if ($idleNow.allowed -and $commitNow -ge $MinCommitHeadroomGB) {' }
         @{ Name = "idle-not-rechecked-after-the-take"
-           Find = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB) {'
-           Replace = 'if ($freeNow -ge $MinFreeGB) {' }
+           Find = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB -and $commitNow -ge $MinCommitHeadroomGB) {'
+           Replace = 'if ($freeNow -ge $MinFreeGB -and $commitNow -ge $MinCommitHeadroomGB) {' }
+        @{ Name = "commit-not-rechecked-after-the-take"
+           Find = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB -and $commitNow -ge $MinCommitHeadroomGB) {'
+           Replace = 'if ($idleNow.allowed -and $freeNow -ge $MinFreeGB) {' }
+        @{ Name = "commit-not-waited-for-before-the-slot"
+           Find = '} elseif ($useCommit -and ($commit = [double](& $GetCommitHeadroomGB)) -lt $MinCommitHeadroomGB) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "commit-asked-when-off"
+           Find = '$useCommit = ($MinCommitHeadroomGB -gt 0)'
+           Replace = '$useCommit = ($null -ne $GetCommitHeadroomGB)' }
+        @{ Name = "holders-smallest-first"
+           Find = '@{ Expression = { $_.bytes }; Descending = $true }'
+           Replace = '@{ Expression = { $_.bytes }; Descending = $false }' }
+        @{ Name = "holders-not-grouped"
+           Find = '        $groups[$n].count++'
+           Replace = '        $groups[$n].count = 1' }
         @{ Name = "slot-kept-when-the-floor-failed"
            Find = '                & $ReleaseSlot'
            Replace = '                $null = 1' }

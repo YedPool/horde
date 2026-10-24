@@ -75,6 +75,62 @@ function Test-HordeNightlyMayStartRun {
     return ($Now.AddSeconds($RunSeconds) -le $Cutoff)
 }
 
+function Test-HordeNightlyMemoryGiveUp {
+    # Did this gate give up waiting for memory (free memory, or commit headroom)? Its own words say so
+    # (tools/HeavySlot.ps1); exit 125 alone does not, as 125 is also a slot that was not had.
+    param([string]$Gate)
+    return (("" + $Gate) -match 'heavy-slot: gave up after \d+ s waiting for [0-9.]+ GB of (free memory|commit headroom)')
+}
+
+function Update-HordeNightlyMemoryShort {
+    # FAIL FAST (2026-10-24). On the night of 2026-10-23 every gate waited the full 900 s for memory the box never
+    # had, so only 25 units were even tried and the second repo never got a turn. After one memory give-up the
+    # night is SHORT ON MEMORY and later gates wait only the short wait; the first gate that gets its memory (its
+    # "heavy-slot: running" line) ends that, and the normal wait returns. Any other gate leaves it as it was.
+    param([bool]$Short, [string]$Gate)
+    if (Test-HordeNightlyMemoryGiveUp -Gate $Gate) { return $true }
+    if (("" + $Gate) -match '(?m)^heavy-slot: running ') { return $false }
+    return $Short
+}
+
+function Get-HordeNightlySlotWait {
+    # The slot wait in force: -Short while the night is short on memory (never longer than -Normal), else -Normal.
+    param([bool]$MemoryShort, [int]$Normal, [int]$Short)
+    if ($MemoryShort) { return [math]::Min($Normal, $Short) }
+    return $Normal
+}
+
+function Read-HordeNightlyMemoryHolders {
+    # The memory holders a gate listed when it gave up (core/HeavySlotAcquire.ps1 Get-HordeHeavySlotMemoryHolders):
+    # [{ name; count; gb }], in the gate's order (largest first).
+    param([string]$Gate)
+    $out = @()
+    foreach ($m in [regex]::Matches(("" + $Gate), '(?m)^heavy-slot: memory held by (.+?), (\d+) processes, ([0-9.]+) GB\s*$')) {
+        $out += [pscustomobject]@{ name = $m.Groups[1].Value; count = [int]$m.Groups[2].Value; gb = [double]::Parse($m.Groups[3].Value, [System.Globalization.CultureInfo]::InvariantCulture) }
+    }
+    return @($out)
+}
+
+function Get-HordeNightlyRepoOrder {
+    # THE ORDER THE REPOS RUN IN (2026-10-24): fewest units first, ties in the order given. On the night of
+    # 2026-10-23 horde (484 units) ran first and the pytest repo (2 units) never got a turn. A small repo first
+    # costs the big one at most its few runs; the big one first can take the whole night. -Counts are the units
+    # per repo in -Repos order; the answer is their indexes in run order.
+    param([int[]]$Counts)
+    $c = @($Counts)
+    $idx = @(0..($c.Count - 1) | Where-Object { $c.Count -gt 0 })
+    return @($idx | Sort-Object -Property @{ Expression = { $c[$_] } }, @{ Expression = { $_ } })
+}
+
+function Get-HordeNightlyRunCount {
+    # How many units RAN: every verdict but unrun. A gate that exits 125, 127, 128 or 71 ran nothing, and on the
+    # night of 2026-10-23 the report said "units run: 24" when all 24 had exited 125 (it counted every verdict).
+    param($Verdicts)
+    $n = 0
+    foreach ($k in @($Verdicts.Keys)) { if (("" + $Verdicts[$k]) -cne "unrun") { $n++ } }
+    return $n
+}
+
 function Read-HordeNightlyOwed {
     # The lines of guards-owed.jsonl for one repo: { entries; bad } - entries are objects with mergeSha, pr,
     # task, by, at, firstParent...; bad counts lines that were not JSON objects (skipped, said in the report).
@@ -411,10 +467,17 @@ function New-HordeNightlyReport {
     #   { repo; tip; lastTip; merges (list); guards = { state; text }; suiteCount; unrunCount; compare; culprits; notes; incomplete;
     #     pending (optional: findings of earlier nights whose tell failed) }
     # where culprits is a list of { unit; state; sha; merge; runs; between }. Returns the text, every line sanitized.
-    param([string]$Date, [object[]]$Repos)
+    # -Memory (optional): { giveUps; minFreeGB; minCommitGB; holders = [{ name; count; gb }] } - when a gate gave up
+    # waiting for memory, one line says how often and names the top 3 holders of the last give-up.
+    param([string]$Date, [object[]]$Repos, $Memory = $null)
     $lines = @()
     $newly = 0; foreach ($r in @($Repos)) { $newly += @($r.compare.newlyRed).Count }
     $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos. " + (Get-HordeNightlyHeadlineStatus -Repos $Repos))
+    if ($null -ne $Memory -and [int]$Memory.giveUps -gt 0) {
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $who = @(@($Memory.holders) | Select-Object -First 3 | ForEach-Object { $_.name + " " + $_.count + " processes " + ([double]$_.gb).ToString("0.0", $inv) + " GB" })
+        $lines += ("MEMORY: " + $Memory.giveUps + " slot waits gave up on memory (floor " + $Memory.minFreeGB + " GB free, " + $Memory.minCommitGB + " GB commit headroom). Held by: " + $(if ($who.Count -gt 0) { $who -join ", " } else { "not listed" }) + ".")
+    }
     foreach ($r in @($Repos)) {
         $lines += ""
         $tipShort = Format-HordeNightlySha $r.tip

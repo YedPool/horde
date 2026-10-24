@@ -3,7 +3,8 @@
 # local gate, which holds one lock across every agent on the machine").
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\HeavySlot.ps1 -Script <suite, relative to -Worktree> [-Worktree <path>]
-#       [-ScriptArgs <a>,<b> | -ArgsFile <args.json>] [-Out <log>] [-MinFreeGB 3] [-WaitSeconds 7200] [-RunSeconds 3600]
+#       [-ScriptArgs <a>,<b> | -ArgsFile <args.json>] [-Out <log>] [-MinFreeGB 3] [-MinCommitHeadroomGB 0] [-WaitSeconds 7200]
+#       [-RunSeconds 3600]
 # A RUN STARTS ONLY WHEN THE PC IS IDLE OR IT IS NIGHT (founder rule, 2026-10-22): 10 minutes without keyboard
 # or mouse input, or 22:00 to 07:00 local; core/IdleState.ps1 says what counts, and <HORDE_HOME>\settings\idle.json
 # sets the thresholds. There is no switch to skip it: a suite that must stand clear of the machine's clock points
@@ -32,7 +33,10 @@
 #      (about 2.5 hours on that day). Now it waits, holding nothing, for BOTH idle-or-night and free memory of
 #      at least -MinFreeGB, and only then tries the mutex -SlotName, in short slices so Ctrl+C can break the
 #      wait. It checks both again after taking the slot; if either failed in between it RELEASES the slot
-#      and goes back to waiting. -WaitSeconds bounds all of it together;
+#      and goes back to waiting. -WaitSeconds bounds all of it together. -MinCommitHeadroomGB (default 0, off)
+#      adds a third floor, commit limit less commit charge (2026-10-23: 52.3 of 54.8 GB committed all night).
+#      A wait that gives up on memory or commit lists the 8 largest process groups by working set, so the
+#      log names who holds the memory;
 #   2. A HOLDER THAT WAS KILLED leaves the mutex abandoned, and Windows hands it to the next waiter. Its run
 #      dies with it (step 4's job), but a run of an older gate, or one started some other way, may not. So
 #      the holder keeps a record (-HolderFile: the run's process id, start time and script), and a later
@@ -56,7 +60,7 @@
 # output so a stopped pipeline cannot swallow it.
 #
 # EXIT CODES: the script's own; 124 the run passed -RunSeconds; 125 the slot, a killed holder's run or
-# the memory was not had within -WaitSeconds (nothing was run); 128 the PC was not idle and it was not night within -WaitSeconds (nothing was run, nothing held); 126 the script is not there; 127 an
+# the memory (or the commit headroom) was not had within -WaitSeconds (nothing was run); 128 the PC was not idle and it was not night within -WaitSeconds (nothing was run, nothing held); 126 the script is not there; 127 an
 # error the gate did not plan for. 126 also means the run's arguments were refused (THE RUN'S
 # ARGUMENTS). A suite that itself exits 124 to 127 reads the same: tell them apart by
 # the gate's own words above the closing line.
@@ -70,6 +74,7 @@ param(
     [string]$ArgsFile = "",
     [string]$Out = "",
     [double]$MinFreeGB = 3,
+    [double]$MinCommitHeadroomGB = 0,
     [int]$WaitSeconds = 7200,
     [int]$RunSeconds = 3600,
     [string]$SlotName = "Global\HordeHeavySlot",
@@ -141,6 +146,15 @@ public static class HordeHeavySlotJobV1 {
 }
 
 function Get-HordeHeavySlotFreeGB { return [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2) }
+
+# FreeVirtualMemory is the commit limit less the commit charge, in KB.
+function Get-HordeHeavySlotCommitHeadroomGB { return [math]::Round((Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory / 1MB, 2) }
+
+function Write-HordeHeavySlotHolders {
+    # Who holds the memory, after a wait for it gave up: never fatal, a gate must still close with its line.
+    try { foreach ($l in @(Get-HordeHeavySlotMemoryHolders -Processes @(Get-Process -ErrorAction SilentlyContinue) -Top 8)) { Write-HordeHeavySlotLine $l } }
+    catch { Write-HordeHeavySlotLine ("heavy-slot: the memory holders could not be listed: " + $_.Exception.Message) }
+}
 
 function Write-HordeHeavySlotLine { param([string]$Line) [Console]::Out.WriteLine($Line) }
 
@@ -217,9 +231,10 @@ $main = {
     # checked again after the take; nothing is held while waiting for any of them, and -WaitSeconds
     # bounds the whole. The slot itself is waited for in slices, so Ctrl+C is seen between them: one long
     # WaitOne cannot be broken.
-    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -WaitSeconds $WaitSeconds -SliceMs $slice `
+    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice `
         -GetIdle { Get-HordeIdleState -Config $idleCfg } `
         -GetFreeGB { Get-HordeHeavySlotFreeGB } `
+        -GetCommitHeadroomGB { Get-HordeHeavySlotCommitHeadroomGB } `
         -TrySlot {
             param($ms)
             try { $script:held = $script:mutex.WaitOne($ms) }
@@ -232,7 +247,8 @@ $main = {
         -Say { param($line) Write-HordeHeavySlotLine $line }
     if ($got.state -cne "held") {
         if ($got.blocker -ceq "idle") { $script:code = 128; Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the PC to be idle or for night; nothing was run"); return }
-        if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); return }
+        if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
+        if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")
         return
     }
