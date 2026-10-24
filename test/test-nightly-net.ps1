@@ -308,6 +308,41 @@ $s6b = Update-HordeNightlyState -State $sp -Verdicts @{ "pytest-all" = "green"; 
 Check (-not $s6b.units.ContainsKey("pytest-node|a") -and $s6b.units["pytest-node|b"] -ceq "red") "pytest: a node that is no longer red is gone from the red list"
 
 Write-Host ""
+Write-Host "--- the memory night of 2026-10-23: fail fast, fewest units first, count what ran, name who holds memory ---" -ForegroundColor Cyan
+$gu = "heavy-slot: waiting for the slot`r`nheavy-slot: gave up after 900 s waiting for 4.5 GB of free memory (now 1.1)`; nothing was run`r`nheavy-slot: memory held by alpha, 41 processes, 9.80 GB`r`nheavy-slot: memory held by beta, 12 processes, 7.04 GB`r`nheavy-slot: released exit=125`r`n"
+$gc = "heavy-slot: gave up after 120 s waiting for 2 GB of commit headroom (now 1.5)`; nothing was run`r`nheavy-slot: released exit=125"
+$gs = "heavy-slot: gave up after 120 s waiting for the slot`; nothing was run`r`nheavy-slot: released exit=125"
+$gr = "heavy-slot: waiting for the slot`r`nheavy-slot: running test\test-a.ps1 with 5.2 GB free, output in x`r`nheavy-slot: released exit=0"
+Check (Test-HordeNightlyMemoryGiveUp -Gate $gu) "a give-up on free memory is a memory give-up"
+Check (Test-HordeNightlyMemoryGiveUp -Gate $gc) "so is a give-up on commit headroom"
+Check (-not (Test-HordeNightlyMemoryGiveUp -Gate $gs)) "a give-up on the slot is not (exit 125 alone says nothing about memory)"
+Check ((Update-HordeNightlyMemoryShort -Short $false -Gate $gu) -eq $true) "a memory give-up makes the night short on memory"
+Check ((Update-HordeNightlyMemoryShort -Short $true -Gate $gs) -eq $true) "a slot give-up leaves it short"
+Check ((Update-HordeNightlyMemoryShort -Short $true -Gate $gr) -eq $false) "the first gate that gets its memory and runs ends it"
+Check ((Update-HordeNightlyMemoryShort -Short $false -Gate $gs) -eq $false) "a slot give-up does not start it"
+Check ((Get-HordeNightlySlotWait -MemoryShort $false -Normal 900 -Short 120) -eq 900) "the normal wait when not short"
+Check ((Get-HordeNightlySlotWait -MemoryShort $true -Normal 900 -Short 120) -eq 120) "the short wait when short"
+Check ((Get-HordeNightlySlotWait -MemoryShort $true -Normal 60 -Short 120) -eq 60) "never longer than the normal wait"
+$ho = @(Read-HordeNightlyMemoryHolders -Gate $gu)
+Check ($ho.Count -eq 2 -and $ho[0].name -ceq "alpha" -and $ho[0].count -eq 41 -and $ho[0].gb -eq 9.8 -and $ho[1].name -ceq "beta") ("the holders are read back in the gate's order (" + $ho.Count + ")")
+Check (@(Read-HordeNightlyMemoryHolders -Gate $gs).Count -eq 0) "a gate with none lists none"
+Check ((@(Get-HordeNightlyRepoOrder -Counts @(968, 2)) -join ",") -ceq "1,0") "the 2-unit repo runs before the 968-unit one"
+Check ((@(Get-HordeNightlyRepoOrder -Counts @(5, 5, 1)) -join ",") -ceq "2,0,1") "ties keep the order given"
+Check (@(Get-HordeNightlyRepoOrder -Counts @()).Count -eq 0) "no repos, no order"
+$vv = @{ "a|ps51" = "unrun"; "a|pwsh7" = "unrun"; "b|ps51" = "green"; "c|ps51" = "red"; "d|ps51" = "hung"; "e|ps51" = "skip" }
+Check ((Get-HordeNightlyRunCount -Verdicts $vv) -eq 4) ("units run counts every verdict but unrun (" + (Get-HordeNightlyRunCount -Verdicts $vv) + ")")
+Check ((Get-HordeNightlyRunCount -Verdicts @{ "a|ps51" = "unrun"; "b|ps51" = "unrun" }) -eq 0) "a night where every gate exited 125 ran 0 units"
+$mrow = [pscustomobject]@{ repo = "Y/h"; tip = "abcdef01"; lastTip = ""; merges = @(); guards = [pscustomobject]@{ state = "not run (no slot or no night)"; text = "" }
+    suiteCount = 0; unrunCount = 24; compare = [pscustomobject]@{ newlyRed = @(); stillRed = @(); newRed = @(); fixed = @(); unrun = @() }; culprits = @(); notes = @(); incomplete = "" }
+$mm = [pscustomobject]@{ giveUps = 25; minFreeGB = "4.5"; minCommitGB = "2"; holders = @($ho + @([pscustomobject]@{ name = "gamma"; count = 3; gb = 1.25 }, [pscustomobject]@{ name = "delta"; count = 1; gb = 0.5 })) }
+$mrep = New-HordeNightlyReport -Date "2026-10-23" -Repos @($mrow) -Memory $mm
+Check ($mrep -like "*MEMORY: 25 slot waits gave up on memory (floor 4.5 GB free, 2 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") ("the report names the top 3 holders (" + (@(($mrep -split "`n") | Where-Object { $_ -like "MEMORY*" }) -join "") + ")")
+Check ($mrep -notlike "*delta*") "and only 3"
+Check ($mrep -like "*units run: 0, not run (slot, memory or night ran out): 24*") "the report says 0 units run"
+Check ((New-HordeNightlyReport -Date "d" -Repos @($mrow) -Memory ([pscustomobject]@{ giveUps = 0; minFreeGB = "4.5"; minCommitGB = "2"; holders = @() })) -cnotlike "*MEMORY*") "no memory line on a night with no memory give-up"
+Check ((New-HordeNightlyReport -Date "d" -Repos @($mrow)) -cnotlike "*MEMORY*") "nor when no memory facts are given"
+
+Write-Host ""
 Write-Host "--- the tool, with -Plan: a throwaway repository, nothing run ---" -ForegroundColor Cyan
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-nightly-test-" + [guid]::NewGuid().ToString("N"))
 $oldHome = $env:HORDE_HOME
@@ -350,6 +385,9 @@ try {
     Check ($text -like "*Merge pull request #101*" -and $text -like "*Merge pull request #103*") "the other two come from git alone"
     Check ($text -like "*units: 2*") "a pytest repo has two units: the whole run and flake8"
     Check (-not (Test-Path -LiteralPath (Join-Path $wr "runs"))) "and -Plan ran nothing: no run folder"
+    Check ($text -like "*memory floor 4.5 GB free and 2 GB commit headroom for every unit and the guards*slot wait 900 s, 120 s after a memory give-up*") "-Plan states the one memory floor (default 4.5 GB), the commit floor and both slot waits"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
+    Check ((($o -join "`n") -like "*memory floor 3.25 GB free*")) "-MinFreeGB is the one setting that moves it"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
@@ -386,6 +424,56 @@ try {
     Check ($rt -like ("*" + $fb + "*2026-10-22-FAILED.txt*") -and ([System.IO.File]::ReadAllText((Join-Path $fb "2026-10-22-FAILED.txt")) -like "*FAILED*could not be made*")) ("R5: and M is still told, from the temp path (" + $rt.Trim() + ")")
     $fl = Join-Path $fb "nightly.log"
     Check ((Test-Path -LiteralPath $fl) -and ([System.IO.File]::ReadAllText($fl) -like "*nightly net 2026-10-22: window open*")) "R5: the first log line is kept, in the fallback folder"
+    # A WHOLE NIGHT with a stand-in gate (-HeavySlotScript): no slot, no memory, no suite. The gate records what it was
+    # asked (script, floors, wait) and answers: call 3 runs, every other call gives up on memory. Two repos, the horde
+    # one (4 units and its guards) given FIRST: the pytest repo (2 units) must run first.
+    $hn = Join-Path $work "night"; [void][System.IO.Directory]::CreateDirectory($hn)
+    $gateStub = Join-Path $hn "gate.ps1"
+    [System.IO.File]::WriteAllText($gateStub, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$calls = Join-Path $PSScriptRoot "calls.txt"
+$n = 1; if (Test-Path -LiteralPath $calls) { $n = @(Get-Content -LiteralPath $calls).Count + 1 }
+Add-Content -LiteralPath $calls -Value ($Script + "|" + $MinFreeGB + "|" + $MinCommitHeadroomGB + "|" + $WaitSeconds)
+[System.IO.File]::WriteAllText($Out, "")
+if ($n -eq 3) { Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0 }
+Write-Output ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now 1.1); nothing was run")
+Write-Output "heavy-slot: memory held by alpha, 41 processes, 9.80 GB"
+Write-Output "heavy-slot: memory held by beta, 12 processes, 7.04 GB"
+Write-Output "heavy-slot: memory held by gamma, 3 processes, 1.25 GB"
+Write-Output "heavy-slot: memory held by delta, 1 processes, 0.50 GB"
+Write-Output "heavy-slot: released exit=125"
+exit 125
+'@)
+    $hwr = Join-Path $hn "wr"
+    $horigin = Join-Path $hn "horigin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $horigin "test\lib"))
+    [void](Git $horigin @("init", "-q", "-b", "main"))
+    [System.IO.File]::WriteAllText((Join-Path $horigin "test\lib\SuiteFiles.ps1"), "function Get-HordeSuiteFiles { param([string]`$Root) return @(Get-ChildItem -LiteralPath (Join-Path `$Root 'test') -Filter 'test-*.ps1' | Sort-Object Name) }`r`nfunction Get-HordeMachineBoundSuites { return @() }`r`n")
+    foreach ($t in @("test-a.ps1", "test-b.ps1")) { [System.IO.File]::WriteAllText((Join-Path $horigin ("test\" + $t)), "exit 0`r`n") }
+    [void](Git $horigin @("add", "-A")); [void](Git $horigin @("commit", "-q", "-m", "base"))
+    & git.exe clone -q $horigin (Join-Path $hwr "Fix__Hord\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    & git.exe clone -q $origin (Join-Path $hwr "Fix__Py\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    # Tonight at 23:00 is inside the window, and the real clock is always well before its cutoff.
+    $night = (Get-Date).Date.AddHours(23)
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $hwr -HeavySlotScript $gateStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main,Fix/Py:pytest:main")
+    $nc = $LASTEXITCODE
+    $callsFile = Join-Path $hn "calls.txt"
+    $calls = @(); if (Test-Path -LiteralPath $callsFile) { $calls = @(Get-Content -LiteralPath $callsFile) }
+    Check ($nc -eq 0) ("the night ends exit 0 (" + $nc + ")")
+    Check ($calls.Count -eq 7) ("every unit and the guards went to the gate: 2 + 1 + 4 (" + $calls.Count + ")")
+    $scripts = @($calls | ForEach-Object { ($_ -split '\|')[0] })
+    Check ($calls.Count -ge 3 -and $scripts[0] -ceq "pytest-wrap.ps1" -and $scripts[1] -ceq "pytest-wrap.ps1" -and $scripts[2] -ceq "guards-wrap.ps1") ("the 2-unit repo ran first, though given second (" + ($scripts -join ", ") + ")")
+    Check ($calls.Count -gt 0 -and @($calls | Where-Object { ($_ -split '\|')[1] -cne "4.5" -or ($_ -split '\|')[2] -cne "2" }).Count -eq 0) "every gate, guards included, was given the one floor (4.5 GB) and 2 GB of commit headroom"
+    $waits = @($calls | ForEach-Object { ($_ -split '\|')[3] }) -join ","
+    Check ($waits -ceq "900,120,120,900,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
+    $rf = Join-Path $hwr ("reports\" + $night.ToString("yyyy-MM-dd") + ".txt")
+    $rtext = $(if (Test-Path -LiteralPath $rf) { [System.IO.File]::ReadAllText($rf) } else { "" })
+    Check ($rtext -like "*REPO Fix/Hord*units run: 0, not run (slot, memory or night ran out): 4*") "the horde repo, every unit given up, reports 0 units run"
+    Check ($rtext -like "*REPO Fix/Py*units run: 0,*") "and so does the pytest repo"
+    Check ($rtext -like "*MEMORY: 6 slot waits gave up on memory (floor 4.5 GB free, 2 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") "the report counts the give-ups and names the top 3 holders"
+    Check ($rtext -like "*guards: green*") "the guards that got their memory ran"
+    $nlog = Join-Path $hwr "nightly.log"
+    $ltext = $(if (Test-Path -LiteralPath $nlog) { [System.IO.File]::ReadAllText($nlog) } else { "" })
+    Check ($ltext -like "*gave up on memory: slot waits are 120 s*" -and $ltext -like "*got its memory: slot waits are 900 s again*") "the log says when the wait changes"
     # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
     Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")
@@ -397,4 +485,4 @@ try {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "the nightly net keeps to its window, lists the day's merges, finds newly red units, bisects to one merge, and reports in text a tell can carry"
+Complete-HordeSuite -Success "the nightly net keeps to its window, lists the day's merges, finds newly red units, bisects to one merge, reports in text a tell can carry, and on a short-memory night fails fast, runs the small repo first, counts only what ran and names who holds the memory"

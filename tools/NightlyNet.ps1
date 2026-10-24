@@ -3,6 +3,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\NightlyNet.ps1 [-Repos <spec>,<spec>] [-Plan] [-NoTell]
 #       [-Only <fragments>] [-Limit <n>] [-WorkRoot <dir>] [-HordeScript <horde.ps1>] [-SlotWaitSeconds 900]
 #       [-RunSeconds 1500] [-LongRunSeconds 3600] [-BisectReserveMinutes 90] [-MaxBisectRuns 40] [-Target M]
+#       [-MinFreeGB 4.5] [-MinCommitHeadroomGB 2] [-ShortSlotWaitSeconds 120]
 #   -Repos entries are OWNER/REPO:KIND:BRANCH, KIND horde (PowerShell suites, in both shells, and the repo-wide guards)
 #   or pytest (the whole pytest run, plus the critical flake8 classes). The default is horde first, then the
 #   Orahvision-Universal repo.
@@ -18,6 +19,18 @@
 # lane that waits is said unrun, it never queues for hours, 2026-10-22), so the slot is free between runs. HeavySlot
 # itself waits for idle-or-night, which holds all night. THIS FILE REGISTERS NOTHING: whoever owns the
 # schedule starts it at 22:00 (execution time limit 8.5 hours).
+#
+# MEMORY (2026-10-24, after the night of 2026-10-23 ran 0 of 484 horde units: every gate waited its full 900 s for
+# 4.5 GB free on a box that had 1.1 to 2.5 GB all night):
+#   - ONE floor for every unit and the guards, -MinFreeGB (default 4.5 GB, the founder's 15 percent of this box), so
+#     it changes in one place; plus -MinCommitHeadroomGB (2 GB) of commit limit less commit charge (52.3 of 54.8 GB
+#     was committed that night);
+#   - FAIL FAST: after one gate gives up on memory, later gates wait -ShortSlotWaitSeconds (120) until one gets its
+#     memory, then -SlotWaitSeconds again (core Update-HordeNightlyMemoryShort); the night-start check uses the wait
+#     in force;
+#   - the repos run FEWEST UNITS FIRST (core Get-HordeNightlyRepoOrder), so a small repo is never starved by horde;
+#   - a gate that gives up lists the top 8 process groups by working set in its .gate file, and the report names the
+#     top 3 of the last give-up.
 #
 # EACH REPO, in three phases over all repos (phase 1 may use the night up to 06:30 minus -BisectReserveMinutes):
 #   1. own clone at origin/<branch>; the day's merges (first-parent, since the last run's tip, labelled from
@@ -45,6 +58,10 @@ param(
     [string[]]$Only = @(),
     [int]$Limit = 0,
     [int]$SlotWaitSeconds = 900,
+    [ValidateRange(0, 900)][int]$ShortSlotWaitSeconds = 120,
+    [ValidateRange(0, 64)][double]$MinFreeGB = 4.5,
+    [ValidateRange(0, 64)][double]$MinCommitHeadroomGB = 2,
+    [string]$HeavySlotScript = "",
     [ValidateRange(60, 1800)][int]$RunSeconds = 1500,
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [int]$BisectReserveMinutes = 90,
@@ -71,7 +88,14 @@ $Repos = @($Repos | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() 
 $Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() })
 if ($WorkRoot -eq "") { $WorkRoot = Join-Path (Join-Path $env:LOCALAPPDATA "horde") "nightly" }
 if ($HordeScript -eq "") { $HordeScript = Join-Path (Split-Path -Parent $PSScriptRoot) "horde.ps1" }
-$HeavySlot = Join-Path $PSScriptRoot "HeavySlot.ps1"
+# -HeavySlotScript is for the suite: a stand-in gate, so a whole night can be driven with no real slot or memory.
+$HeavySlot = $(if ($HeavySlotScript -ne "") { $HeavySlotScript } else { Join-Path $PSScriptRoot "HeavySlot.ps1" })
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+# The night's memory state: short on memory after a give-up (core Update-HordeNightlyMemoryShort), how many gates
+# gave up on memory, and the holders the last of them listed.
+$script:MemoryShort = $false
+$script:MemoryGiveUps = 0
+$script:MemoryHolders = @()
 $WrapDir = Join-Path $PSScriptRoot "nightly"
 $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 # -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
@@ -119,10 +143,16 @@ function Invoke-NightlyNetGit {
     if ($r.code -ne 0) { throw ($What + " failed with exit " + $r.code) }
 }
 
+function Get-NightlySlotWait {
+    # The slot wait in force now: the short one while the night is short on memory.
+    return (Get-HordeNightlySlotWait -MemoryShort $script:MemoryShort -Normal $SlotWaitSeconds -Short $ShortSlotWaitSeconds)
+}
+
 function Test-NightlyMayStart {
-    # May a gated run of $Seconds start now and be over by the cutoff? The gate may wait -SlotWaitSeconds for the slot first.
+    # May a gated run of $Seconds start now and be over by the cutoff? The gate may wait for the slot first, for the
+    # wait IN FORCE (Get-NightlySlotWait), not always the long one.
     param([datetime]$Cutoff, [int]$Seconds)
-    return (Test-HordeNightlyMayStartRun -Now (Get-Date) -Cutoff $Cutoff -RunSeconds ($Seconds + $SlotWaitSeconds))
+    return (Test-HordeNightlyMayStartRun -Now (Get-Date) -Cutoff $Cutoff -RunSeconds ($Seconds + (Get-NightlySlotWait)))
 }
 
 function Invoke-NightlySlot {
@@ -135,8 +165,9 @@ function Invoke-NightlySlot {
     $safe = ($Tag -replace '[^A-Za-z0-9._-]', '_')
     $out = Join-Path $RunDir ($safe + ".log")
     $gateOut = Join-Path $RunDir ($safe + ".gate")
+    $wait = Get-NightlySlotWait
     $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + $HeavySlot + '"'), "-Script", ('"' + $Script + '"'), "-Worktree", ('"' + $Worktree + '"'),
-        "-Out", ('"' + $out + '"'), "-MinFreeGB", "4.5", "-WaitSeconds", $SlotWaitSeconds, "-RunSeconds", $Seconds)
+        "-Out", ('"' + $out + '"'), "-MinFreeGB", $MinFreeGB.ToString($Inv), "-MinCommitHeadroomGB", $MinCommitHeadroomGB.ToString($Inv), "-WaitSeconds", $wait, "-RunSeconds", $Seconds)
     if (@($ScriptArgs).Count -gt 0) {
         $af = Join-Path $RunDir ($safe + ".args.json")
         Set-Content -LiteralPath $af -Value (ConvertTo-Json -InputObject @($ScriptArgs)) -Encoding Ascii
@@ -146,7 +177,7 @@ function Invoke-NightlySlot {
     $null = $p.Handle
     try { $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle } catch { }
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    $limit = $SlotWaitSeconds + $Seconds + 300
+    $limit = $wait + $Seconds + 300
     $timedOut = $false
     while (-not $p.WaitForExit(15000)) {
         if ($clock.Elapsed.TotalSeconds -gt $limit -or (Test-Path -LiteralPath $StopFile)) {
@@ -162,6 +193,16 @@ function Invoke-NightlySlot {
         $m = [regex]::Match($gate, 'heavy-slot: released exit=(\d+)')
         if ($m.Success) { $code = [int]$m.Groups[1].Value } else { $code = $p.ExitCode }
     }
+    # Fail fast on memory, and keep who held it (core Update-HordeNightlyMemoryShort, Read-HordeNightlyMemoryHolders).
+    $wasShort = $script:MemoryShort
+    $script:MemoryShort = Update-HordeNightlyMemoryShort -Short $script:MemoryShort -Gate $gate
+    if (Test-HordeNightlyMemoryGiveUp -Gate $gate) {
+        $script:MemoryGiveUps++
+        $h = @(Read-HordeNightlyMemoryHolders -Gate $gate)
+        if ($h.Count -gt 0) { $script:MemoryHolders = $h }
+    }
+    if ($script:MemoryShort -and -not $wasShort) { Say ($Tag + " gave up on memory: slot waits are " + (Get-NightlySlotWait) + " s until a gate gets its memory") }
+    elseif ($wasShort -and -not $script:MemoryShort) { Say ($Tag + " got its memory: slot waits are " + (Get-NightlySlotWait) + " s again") }
     return [pscustomobject]@{ code = $code; timedOut = $timedOut; gate = $gate; out = $out }
 }
 
@@ -425,6 +466,10 @@ try {
     }
     $ctxs = @()
     foreach ($spec in $Repos) { $ctxs += (New-NightlyContext $spec) }
+    # Fewest units first (core Get-HordeNightlyRepoOrder): the night of 2026-10-23 never reached the 2-unit repo.
+    $counts = @($ctxs | ForEach-Object { @(Get-NightlyUnits $_).Count })
+    $ctxs = @(@(Get-HordeNightlyRepoOrder -Counts $counts) | ForEach-Object { $ctxs[$_] })
+    Say ("order: " + (@($ctxs | ForEach-Object { $_.repo }) -join ", ") + "; memory floor " + $MinFreeGB.ToString($Inv) + " GB free and " + $MinCommitHeadroomGB.ToString($Inv) + " GB commit headroom for every unit and the guards; slot wait " + $SlotWaitSeconds + " s, " + $ShortSlotWaitSeconds + " s after a memory give-up")
     if ($Plan) {
         foreach ($c in $ctxs) {
             Write-Host ("PLAN " + $c.repo + " (" + $c.kind + ") tip " + $c.tip.Substring(0, 8) + " last " + $(if ($c.state.lastTip -eq "") { "none" } else { $c.state.lastTip.Substring(0, 8) }) + ": " + @($c.merges).Count + " merges")
@@ -441,10 +486,11 @@ try {
     $repoRows = @()
     foreach ($c in $ctxs) {
         $repoRows += [pscustomobject]@{ repo = $c.repo; tip = $c.tip; lastTip = $c.state.lastTip; merges = $c.merges; guards = $c.guards
-            suiteCount = @($c.verdicts.Keys).Count; unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
+            suiteCount = (Get-HordeNightlyRunCount -Verdicts $c.verdicts); unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
             pending = @($c.state.pending) }
     }
-    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows
+    $memory = [pscustomobject]@{ giveUps = $script:MemoryGiveUps; minFreeGB = $MinFreeGB.ToString($Inv); minCommitGB = $MinCommitHeadroomGB.ToString($Inv); holders = @($script:MemoryHolders) }
+    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")

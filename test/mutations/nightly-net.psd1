@@ -139,5 +139,29 @@
         @{ Name = "unnamed-bisect-still-complete"
            Find = 'if ($unnamed -gt 0) {'
            Replace = 'if ($false) {' }
+        @{ Name = "memory-give-up-not-short"
+           Find = 'if (Test-HordeNightlyMemoryGiveUp -Gate $Gate) { return $true }'
+           Replace = 'if (Test-HordeNightlyMemoryGiveUp -Gate $Gate) { return $Short }' }
+        @{ Name = "short-wait-never-ends"
+           Find = 'heavy-slot: running '') { return $false }'
+           Replace = 'heavy-slot: running '') { return $Short }' }
+        @{ Name = "short-wait-not-used"
+           Find = 'if ($MemoryShort) { return [math]::Min($Normal, $Short) }'
+           Replace = 'if ($false) { return [math]::Min($Normal, $Short) }' }
+        @{ Name = "commit-give-up-not-memory"
+           Find = '(free memory|commit headroom)'
+           Replace = '(free memory)' }
+        @{ Name = "unrun-counted-as-run"
+           Find = 'if (("" + $Verdicts[$k]) -cne "unrun") { $n++ }'
+           Replace = 'if ($true) { $n++ }' }
+        @{ Name = "repos-not-ordered-by-units"
+           Find = '@{ Expression = { $c[$_] } }, '
+           Replace = '' }
+        @{ Name = "memory-line-dropped"
+           Find = 'if ($null -ne $Memory -and [int]$Memory.giveUps -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "holders-not-read"
+           Find = '$out += [pscustomobject]@{ name = $m.Groups[1].Value;'
+           Replace = 'if ($false) { } $null = [pscustomobject]@{ name = $m.Groups[1].Value;' }
     )
 }

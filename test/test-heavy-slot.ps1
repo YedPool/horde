@@ -199,6 +199,17 @@ try {
     $m.WaitForExit()
     Check ($m.ExitCode -eq 125) ("a run that cannot have the memory in 2 s ends with 125 (" + $m.ExitCode + ")")
     Check ((Get-GateText "memory") -match "gave up after 2 s waiting for 1000000 GB of free memory") "it says it gave up waiting for memory"
+    # 2026-10-24: a memory give-up names who holds the memory, up to 8 process groups, before the closing line.
+    $holders = @((Get-GateText "memory") -split "`r?`n" | Where-Object { $_ -match '^heavy-slot: memory held by .+, \d+ processes, [0-9]+\.[0-9]{2} GB$' })
+    Check ($holders.Count -ge 1 -and $holders.Count -le 8) ("it lists the largest process groups by working set, at most 8 (" + $holders.Count + ")")
+    Check ((Get-LastLine "memory") -ceq "heavy-slot: released exit=125") "and still ends with its closing line"
+    # The commit floor (-MinCommitHeadroomGB): no box has a million GB of commit headroom.
+    $m = Start-Gate -Slot $slot -Tag "commit" -Seconds 0 -More @("-WaitSeconds", "2", "-MinCommitHeadroomGB", "1000000")
+    $m.WaitForExit()
+    Check ($m.ExitCode -eq 125) ("a run that cannot have the commit headroom in 2 s ends with 125 (" + $m.ExitCode + ")")
+    Check ((Get-GateText "commit") -match "gave up after 2 s waiting for 1000000 GB of commit headroom") "it says it gave up waiting for commit headroom"
+    Check (@((Get-GateText "commit") -split "`r?`n" | Where-Object { $_ -like "heavy-slot: memory held by *" }).Count -ge 1) "and names who holds the memory"
+    Check ((Get-Times "commit").start -eq 0) "and its run never started"
     # T-0331: a gate that waits for memory holds NOTHING, so another gate runs while it waits.
     $slot = New-Slot
     $m = Start-Gate -Slot $slot -Tag "memwait" -Seconds 0 -MinFreeGB "1000000" -More @("-WaitSeconds", "20")
