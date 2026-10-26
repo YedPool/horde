@@ -40,9 +40,11 @@ git worktree add -b <branch> ../horde-worktrees/<name> origin/main
 ```
 
 - One logical change per commit. One concern per pull request.
-- Merge with `horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane>`: it runs
-  every repo-wide guard (test\guards.txt) on the merge result in both shells, merges with `gh pr merge --merge`, records the ledger event
-  and tells the warchief and the analyst. Never squash.
+- Merge with `horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane>`: it merges with
+  `gh pr merge --merge`, records the ledger event, tells the warchief and the analyst, and queues the merge
+  in `<HORDE_HOME>\merge\guards-owed.jsonl`. Merges do not wait for test runs (founder, 2026-10-22): the
+  repo-wide guards (test\guards.txt) run once at night or at idle, via `horde merge -RunOwed`, which names
+  the merge that broke one; its owner fixes it first thing. `-Guards now` runs them first. Never squash.
 - Never switch branches in a checkout where a suite is running.
 
 ## Before replacing old code, write its knowledge ledger (CONTRIBUTING 5)
@@ -63,8 +65,9 @@ reason.
   `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
   and to a guard added above a mutant. Never merge on it alone.
 - Every guard in `test\guards.txt` (one line per guard; `horde merge` and CI both read it) is in every PR's targeted set:
-  run them on the final head, in a clean tree, before every merge, by any Orc. They read the whole
-  repository, so any PR can break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
+  run them on the final head, in a clean tree, by any Orc - at night or at idle over everything merged that
+  day, not before each merge (CONTRIBUTING 15 rule 10). They read the whole repository, so any PR can
+  break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
 - `surfaces\pwa\test\test-pwa-browser.ps1` is in the targeted set of every PR that touches
   `surfaces/pwa`, `decisions/page` or `test/lib/Browser.ps1`: it is the whole phone app in a real
   browser, and a page or launcher change can break a part its own suites never load (2026-10-15:

@@ -8,6 +8,46 @@
 # files never mentioned the merged step, 9 of 12 never mentioned the guards. A step a command does
 # cannot be forgotten.
 #
+# DAYTIME MODE (T-0347, founder rule of 2026-10-22). Merges do NOT wait for test runs: running every guard
+# in two shells before each merge was a test run, and it held every Orc's daytime merge. So -Guards later
+# (the default) skips steps 3, 4 and 5 below - the combined-tree build, the guards and the base-moved
+# re-check that exists only for them - and everything else stays. After the merge one JSON line is added to
+# <HORDE_HOME>\merge\guards-owed.jsonl: {repo (lower case), baseRefName, pr, task, by, at, headSha, mergeSha,
+# firstParent}; a line without baseRefName (written before it was recorded) went into the default branch. ONE run
+# at night or at idle (horde merge -RunOwed, below) covers everything merged that day, and names WHICH merge
+# turned which guard red; that merge's owner fixes it first thing. The warchief's tell, the analyst's mail
+# and the progress line say the guards are OWED, never that they passed. -Guards now is the old behaviour:
+# the guards run first, on the merge result, and nothing is merged when one is red.
+#
+# THE NIGHTLY RUN (horde merge -RunOwed [-Repo OWNER/REPO] [-Json]; Invoke-HordeMergeRunOwed). For each repo
+# with entries in guards-owed.jsonl whose mergeSha is not in guards-checked.jsonl, and for each branch those
+# merges went into (their baseRefName; the default branch when a line has none): the guard list runs on the
+# branch's current tip, in a scratch checkout of this command's cache, each guard in both shells with the same
+# pass rule as step 4. THE GUARDS RUN ARE THE TIP'S LIST AND THE BASELINE'S (the first queued merge's first
+# parent): a guard listed at the baseline and gone from the tip's list is RED ("dropped from the list"), naming
+# the first queued merge whose list lacks it - the old rule that a PR may add a guard but not drop one.
+# For each guard red at the tip, the entries are walked in merge order, running only that guard in only the
+# shells red at the tip: first at the baseline, then at each mergeSha. A red baseline is "red before today's
+# first queued merge" and names no merge; otherwise the FIRST mergeSha that is red is named (a red that a later
+# merge fixed and another turned red again still names the first: the walk is linear and never bisects, because
+# a red can be fixed again). A red is run once more before it is believed. A guard that DID NOT RUN (the tool
+# answered code -1: PowerShell 7 missing, a timeout) is not a red and names no merge: that branch ends as
+# "could not run", its merges stay owed, and the run ends 2.
+# The report goes to <HORDE_HOME>\merge\nightly\<UTC date>-<owner>-<repo>.txt (a second run on the same UTC
+# date appends to the same file) and is printed; it is written BEFORE each walked entry's mergeSha is appended
+# to guards-checked.jsonl, and a report that could not be written marks nothing. guards-owed.jsonl is
+# append-only and is never edited. A line in it that is damaged, or a merge that is not in its branch's
+# history (a force-push took it), is reported in every run - with the line number, or the line to add to
+# guards-checked.jsonl to give it up - and the rest is still checked; the run ends 2 for them only when nothing
+# at all could be checked. Result 0 all green, 1 any red, 2 could not run (with -Json the last line is a summary
+# whose "exit" is that result; the horde process itself ends 0, or 1 for anything else, because horde's own
+# code 2 means a wrong command line). It does not schedule itself and does not check idle: the nightly
+# scheduler (T-0331) calls it.
+# THE QUEUE IS PER MACHINE: guards-owed.jsonl lives in this machine's Horde home, so a merge made from another
+# machine is in THAT machine's queue and this run does not see it; every report names the machine and the queue
+# file it covered. Only -Guards now and -RunOwed hold the machine's merge lock (they use the work folder); a
+# daytime merge only appends a line, so it never waits for a long nightly run.
+#
 # WHAT IT DOES, IN ORDER, and why each step is where it is:
 #   1. The request is checked (Test-HordeMergeRequest) and the task is looked up in the ledger BEFORE
 #      anything else: the ledger's own merged verb refuses an unknown task, and after the merge that
@@ -15,19 +55,19 @@
 #   2. The pull request is read from GitHub: open, not a draft, mergeable, and no review missing where
 #      the repository requires one (reviewDecision REVIEW_REQUIRED or CHANGES_REQUESTED). An answer of
 #      UNKNOWN is GitHub still working it out; it is asked again a few times, then refused.
-#   3. THE TREE THAT WILL EXIST AFTER THE MERGE is built in a cache repository of this command's own
+#   3. (-Guards now only.) THE TREE THAT WILL EXIST AFTER THE MERGE is built in a cache repository of this command's own
 #      (never the caller's working tree): the base branch and the PR head are fetched, and when the head
 #      does not already contain the base, a throwaway merge commit is made with git merge-tree (CONTRIBUTING
 #      15 rule 2: "mergeable" is not "green"). It is cloned, detached, into a fresh scratch folder whose
 #      origin/<base> is the base as fetched, because test-host-names compares the lists with origin/main.
-#   4. Every repo-wide guard listed in test\guards.txt runs there (CONTRIBUTING 15 rule 9), each in Windows
+#   4. (-Guards now only.) Every repo-wide guard listed in test\guards.txt runs there (CONTRIBUTING 15 rule 9), each in Windows
 #      PowerShell 5.1 AND in PowerShell 7. The list is the checked tree's plus the base's, so a PR may add
 #      a guard but not drop one. A guard passes only on exit 0 AND its
 #      closing banner: a suite with no banner was NOT RUN (rule 7). On a failure the failing lines are
 #      printed and nothing is merged. THE GUARDS RUN ARE THE PR'S OWN COPIES, as they stand in the merge
 #      result: a PR that weakens a guard is checked by the weakened guard. That is the same trust every
 #      suite run on a branch has; a review of the guard's diff, and CI on main, are what catch it.
-#   5. The base is read again. If it moved while the guards ran, the new combination is built and
+#   5. (-Guards now only.) The base is read again. If it moved while the guards ran, the new combination is built and
 #      checked first; after $script:HordeMergeRounds rounds that each saw it move, the command refuses.
 #   6. gh pr merge --merge, never squash or rebase, with --match-head-commit, so a head pushed after the
 #      check is refused by GitHub itself. The base can still move in the seconds between the last read
@@ -47,6 +87,7 @@
 #   Mail    param([string]$Text)                             -> { ok; detail }   the analyst
 #   Wait    param([int]$Seconds)
 #   Say     param([string]$Line)                             each line as it happens
+#   Owed    param([string]$Line)                             -> { ok; detail }   adds one line to guards-owed.jsonl (-Guards later)
 #   LedgerLine  param([string[]]$Arguments)                  -> the exact command, for a person to paste
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
@@ -99,7 +140,7 @@ $script:HordeMergeShaPattern = '\A[0-9a-f]{40}\z'
 function Test-HordeMergeRequest {
     # PURE. { ok; reason; owner; repo; number; pr; task; state; by; on; reason } for what was typed.
     # Every refusal names the value and the shape it must have.
-    param([string]$Pr, [string]$Task, [string]$State, [string]$By, [string]$On = "", [string]$Reason = "")
+    param([string]$Pr, [string]$Task, [string]$State, [string]$By, [string]$On = "", [string]$Reason = "", [string]$Guards = "later")
     $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; why = $Why } }
     $m = [regex]::Match($Pr, $script:HordeMergePrPattern)
     if (-not $m.Success -or $m.Groups[2].Value -ceq "." -or $m.Groups[2].Value -ceq "..") { return (& $no ("'" + $Pr + "' is not a pull request: OWNER/REPO#N, such as YedPool/horde#305")) }
@@ -108,10 +149,11 @@ function Test-HordeMergeRequest {
     if ($By -cnotmatch $script:HordeMergeLanePattern) { return (& $no ("'" + $By + "' is not a lane: one or two capital letters, then digits if any, such as F or C1")) }
     if ($On -ne "" -and $On -cnotmatch $script:HordeMergeOnPattern) { return (& $no ("'" + $On + "' is not who a task waits on: founder, M, lane:X, device or service")) }
     if ($Reason -ne "" -and $Reason -cnotmatch $script:HordeMergeReasonPattern) { return (& $no "the reason is one line of 1 to 300 plain ASCII characters") }
+    if (@("later", "now") -cnotcontains $Guards) { return (& $no ("'" + $Guards + "' is not when the guards run: later (the nightly run, the default) or now (before this merge)")) }
     if ($State -ceq "waiting" -and $On -eq "") { return (& $no "-State waiting needs -On: who or what the task waits on (founder, M, lane:X, device or service)") }
     if ($State -ceq "progress" -and $Reason -eq "") { return (& $no "-State progress needs -Reason: what is left of the task after this merge") }
     return [pscustomobject]@{ ok = $true; why = ""; owner = $m.Groups[1].Value; repo = $m.Groups[2].Value; number = [int]$m.Groups[3].Value
-        pr = $Pr; task = $Task; state = $State; by = $By; on = $On; reason = $Reason }
+        pr = $Pr; task = $Task; state = $State; by = $By; on = $On; reason = $Reason; guards = $Guards }
 }
 
 function Get-HordeMergeLedgerArguments {
@@ -145,10 +187,14 @@ function Format-HordeMergeMessage {
     # pattern (the request) or are shas. Nothing the PR's author wrote - its title or body - is in it,
     # so nothing a remote author shapes is put before an AI session as Horde's own words.
     # -Landed is "" when the merge's first parent is the checked base, else the words that say it is not.
-    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$MergeSha, [Parameter(Mandatory = $true)]$Check, [string]$Landed = "")
+    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$MergeSha, [Parameter(Mandatory = $true)]$Check, [string]$Landed = "", [switch]$NotQueued, [string]$HandLine = "")
     $state = "Task " + $Request.task + " is now " + $Request.state
     if ("" + $Request.on -ne "") { $state += ", waiting on " + $Request.on }
     if ("" + $Request.reason -ne "") { $state += "; left: " + $Request.reason }
+    # S1 of the review of PR 375: the text must not say "queued" when queueing failed, or the receivers conclude
+    # the nightly run covers a merge that is not in the file.
+    if ($Check.skipped -eq $true -and $NotQueued) { return ("HORDE MERGE: " + $Request.by + " merged " + $Request.pr + " as " + $MergeSha + "." + "`n" + $state + ".`nGuards NOT RUN and merge NOT QUEUED: it is not in guards-owed.jsonl, so the nightly run will NOT cover it until this line is added there by hand: " + $HandLine) }
+    if ($Check.skipped -eq $true) { return ("HORDE MERGE: " + $Request.by + " merged " + $Request.pr + " as " + $MergeSha + "." + "`n" + $state + ".`nGuards NOT RUN: owed to the nightly run (queued in guards-owed.jsonl), not checked before this merge.") }
     $checked = "Guards green on " + $Check.base.Substring(0, 8) + " + " + $Check.head.Substring(0, 8)
     if ($Check.merged) { $checked += " (checked as their merge, " + $Check.commit.Substring(0, 8) + ")" }
     if ($Landed -ne "") { $checked = "NOT CHECKED: " + $Landed + ". The guards were green on " + $Check.base.Substring(0, 8) + " + " + $Check.head.Substring(0, 8) + " only" }
@@ -158,13 +204,15 @@ function Format-HordeMergeMessage {
 function Format-HordeMergeProgress {
     # PURE. The one-line progress draft. The title is the PR author's text: it is cut to plain ASCII and
     # 100 characters, and this line is printed for the session to read, never sent anywhere.
-    param([Parameter(Mandatory = $true)]$Request, [AllowEmptyString()][string]$Title)
+    param([Parameter(Mandatory = $true)]$Request, [AllowEmptyString()][string]$Title, [switch]$GuardsOwed, [switch]$NotQueued)
     $t = ($Title -replace '[^\x20-\x7E]', '?').Trim()
     if ($t.Length -gt 100) { $t = $t.Substring(0, 97) + "..." }
     $line = "progress draft: " + $Request.by + " merged " + $Request.pr
     if ($t -ne "") { $line += " - " + $t }
     $line += " (" + $Request.task + ", now " + $Request.state
     if ("" + $Request.on -ne "") { $line += " on " + $Request.on }
+    if ($GuardsOwed -and $NotQueued) { $line += "; guards NOT RUN and NOT QUEUED for the nightly run" }
+    elseif ($GuardsOwed) { $line += "; guards owed to the nightly run" }
     return ($line + ")")
 }
 
@@ -176,14 +224,17 @@ function Read-HordeMergeGuardResult {
     $banner = @($all | Where-Object { $_ -cmatch '\A==== .+ ====\s*\z' })
     $failedBanner = @($banner | Where-Object { $_ -cmatch 'FAILURE' })
     $ok = ($Run.code -eq 0 -and $banner.Count -gt 0 -and $failedBanner.Count -eq 0)
-    if ($ok) { return [pscustomobject]@{ ok = $true; lines = @() } }
+    if ($ok) { return [pscustomobject]@{ ok = $true; ran = $true; lines = @() } }
     $bad = @($all | Where-Object { $_ -cmatch '\[(FAIL|ERROR)\]' })
     if ($bad.Count -eq 0) { $bad = @($all | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 10) }
     $why = "exit " + $Run.code
     if ($banner.Count -eq 0) { $why += ", and no closing banner: it did not run to its end, so it counts as NOT RUN" }
     $shown = @($bad | Select-Object -First $script:HordeMergeFailLines)
     if ($bad.Count -gt $shown.Count) { $shown += ("... and " + ($bad.Count - $shown.Count) + " more") }
-    return [pscustomobject]@{ ok = $false; lines = @(@($why) + $shown) }
+    # ran is false only for code -1: the program could not start, was stopped past its time, or the tool threw (PowerShell 7
+    # missing, no memory). That is not a finding about the tree. A guard that exits on its own without a banner ran
+    # and proved nothing: that is the tree's fault (an emptied script), so it stays a red the walk can attribute.
+    return [pscustomobject]@{ ok = $false; ran = ($Run.code -ne -1); lines = @(@($why) + $shown) }
 }
 
 function Invoke-HordeMergeTool {
@@ -192,6 +243,43 @@ function Invoke-HordeMergeTool {
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Name, [object[]]$With = @())
     try { return (& $Tools[$Name] @With) }
     catch { return [pscustomobject]@{ code = -1; out = ""; err = ("the " + $Name + " tool failed: " + $_.Exception.Message); ok = $false; detail = ("the " + $Name + " tool failed: " + $_.Exception.Message) } }
+}
+
+function Format-HordeMergeOwedLine {
+    # PURE. The one JSON line a daytime merge queues for the nightly run, or "" when the merge has no sha
+    # to queue. Every value is a checked pattern or a sha, so the line is plain ASCII. -FirstParent may be "".
+    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$HeadSha, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$MergeSha, [AllowEmptyString()][string]$FirstParent = "", [datetime]$Now = [datetime]::UtcNow, [AllowEmptyString()][string]$BaseRef = "")
+    if ($MergeSha -cnotmatch $script:HordeMergeShaPattern) { return "" }
+    # THE REPO IS WRITTEN IN LOWER CASE: GitHub names are not case sensitive, and the nightly run compares them
+    # that way (S5 of the review of PR 375). THE BASE BRANCH IS RECORDED (M3): a merge into a stacked PR's branch
+    # is walked on that branch, not on the default one; a line without it is the default branch's.
+    $entry = [ordered]@{ repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant(); baseRefName = $BaseRef; pr = $Request.pr; task = $Request.task; by = $Request.by
+        at = $Now.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
+        headSha = $HeadSha; mergeSha = $MergeSha; firstParent = $FirstParent }
+    return (ConvertTo-Json -InputObject $entry -Compress)
+}
+
+function Add-HordeMergeLine {
+    # Append one line to a file of this command's (a JSONL queue or a report), creating its folder. { ok; detail }:
+    # the path on success, the reason on failure. Never throws. A file that does not end in a line feed (a crash
+    # in the middle of a write, a hand edit) gets one first, or the new line would be glued onto the damaged one and
+    # both would be unusable (S2 of the review of PR 375).
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Line)
+    try {
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
+        $prefix = ""
+        if ([System.IO.File]::Exists($Path)) {
+            $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                if ($fs.Length -gt 0) {
+                    [void]$fs.Seek(-1, [System.IO.SeekOrigin]::End)
+                    if ($fs.ReadByte() -ne 10) { $prefix = "`n" }
+                }
+            } finally { $fs.Dispose() }
+        }
+        [System.IO.File]::AppendAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        return [pscustomobject]@{ ok = $true; detail = $Path }
+    } catch { return [pscustomobject]@{ ok = $false; detail = ("could not append to " + $Path + ": " + $_.Exception.Message) } }
 }
 
 function Get-HordeMergeFirstLine {
@@ -339,7 +427,7 @@ function Invoke-HordeMergeCheck {
         # The PR's ref is dropped once checked, so the cache does not keep every PR it ever merged.
         $null = Invoke-HordeMergeTool -Tools $Tools -Name "Git" -With @(, [string[]]@("-C", $cache, "update-ref", "-d", $prRef))
     }
-    return [pscustomobject]@{ ok = $true; why = ""; lines = @(); base = $baseSha; head = $headSha; commit = $commit; merged = $merged }
+    return [pscustomobject]@{ ok = $true; why = ""; lines = @(); base = $baseSha; head = $headSha; commit = $commit; merged = $merged; skipped = $false }
 }
 
 function Invoke-HordeMerge {
@@ -365,14 +453,21 @@ function Invoke-HordeMerge {
     if (-not $read.ok) { return (& $refuse $read.why) }
     $pr = $read.pr
     $repo = $Request.owner + "/" + $Request.repo
-    $u = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("repo", "view", $repo, "--json", "url", "--jq", ".url"))
-    $url = ("" + $u.out).Trim()
-    if ($u.code -ne 0 -or $url -eq "") { return (& $refuse ("gh could not say where " + $repo + " is: " + (Get-HordeMergeFirstLine ("" + $u.err)))) }
+    $url = ""
+    if ($Request.guards -cne "later") {
+        $u = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("repo", "view", $repo, "--json", "url", "--jq", ".url"))
+        $url = ("" + $u.out).Trim()
+        if ($u.code -ne 0 -or $url -eq "") { return (& $refuse ("gh could not say where " + $repo + " is: " + (Get-HordeMergeFirstLine ("" + $u.err)))) }
+    }
 
-    # 3 TO 5. CHECK, AND AGAIN WHILE THE BASE MOVES.
+    # 3 TO 5. CHECK, AND AGAIN WHILE THE BASE MOVES. Only with -Guards now: in daytime mode (the default)
+    # nothing is built or run here, and the head GitHub just reported is what the merge is pinned to.
     $check = $null
     $round = 0
-    while ($true) {
+    if ($Request.guards -ceq "later") {
+        $check = [pscustomobject]@{ ok = $true; why = ""; lines = @(); base = ""; head = ("" + $pr.headRefOid); commit = ("" + $pr.headRefOid); merged = $false; skipped = $true }
+    }
+    while (-not ($Request.guards -ceq "later")) {
         $round++
         $check = Invoke-HordeMergeCheck -Request $Request -Pr $pr -Url $url -WorkFolder $WorkFolder -Tools $Tools
         if (-not $check.ok) {
@@ -413,19 +508,42 @@ function Invoke-HordeMerge {
 
     # WHERE DID IT LAND (header, step 6)? The merge commit's first parent must be the base the guards
     # checked; anything else - or no answer - means main now holds a tree nobody checked.
+    # In daytime mode nothing was checked, so there is no checked base to compare with; the first parent is
+    # only read, to be queued with the merge for the nightly run.
     $landed = ""
+    $first = ""
     if ($mergeSha -cmatch $script:HordeMergeShaPattern) {
         $pa = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("api", ("repos/" + $repo + "/commits/" + $mergeSha), "--jq", ".parents[].sha"))
         $first = (@(("" + $pa.out).Trim() -split "\s+")[0])
-        if ($pa.code -ne 0 -or $first -cnotmatch $script:HordeMergeShaPattern) { $landed = "the merge commit's parents could not be read, so where it landed is unknown" }
-        elseif ($first -cne $check.base) { $landed = "the merge landed on " + $pr.baseRefName + " " + $first.Substring(0, 8) + ", which moved after the check" }
-    } else { $landed = "GitHub gave no merge commit, so where it landed is unknown" }
+        if ($pa.code -ne 0 -or $first -cnotmatch $script:HordeMergeShaPattern) { $first = ""; if ($check.skipped -ne $true) { $landed = "the merge commit's parents could not be read, so where it landed is unknown" } }
+        elseif ($check.skipped -ne $true -and $first -cne $check.base) { $landed = "the merge landed on " + $pr.baseRefName + " " + $first.Substring(0, 8) + ", which moved after the check" }
+    } elseif ($check.skipped -ne $true) { $landed = "GitHub gave no merge commit, so where it landed is unknown" }
 
     # 7. THE LEDGER, THE TELLS, THE DRAFT. Each failure is said and kept; none undoes the merge.
     $problems = New-Object System.Collections.ArrayList
+    $queued = $true
+    $handLine = ""
     if ($landed -ne "") {
         & $say ("THE MERGE IS ON A TREE THE GUARDS DID NOT CHECK: " + $landed + "; run the guards on " + $pr.baseRefName + " now")
         [void]$problems.Add($landed + "; run the guards on " + $pr.baseRefName + " now")
+    }
+    # THE OWED LINE (daytime mode): the merge is queued for the nightly run. A failure to queue it comes after
+    # a merge that happened, so it is said loudly with the line to add by hand, and the command exits 1.
+    if ($check.skipped -eq $true) {
+        $owedLine = Format-HordeMergeOwedLine -Request $Request -HeadSha $check.head -MergeSha $mergeSha -FirstParent $first -BaseRef ("" + $pr.baseRefName)
+        $ow = $null
+        if ($owedLine -eq "") { $ow = [pscustomobject]@{ ok = $false; detail = "GitHub gave no merge commit, so there is no sha to queue" } }
+        else { $ow = Invoke-HordeMergeTool -Tools $Tools -Name "Owed" -With @($owedLine) }
+        if ($ow.ok -eq $true) { $queued = $true; & $say "guards not run: queued for the nightly run (guards-owed.jsonl)" }
+        else {
+            $queued = $false
+            & $say ("THE MERGE HAPPENED, BUT IT WAS NOT QUEUED FOR THE NIGHTLY GUARDS RUN: " + $ow.detail)
+            $hand = $owedLine
+            if ($hand -eq "") { $hand = "(a line {repo, pr, task, by, at, headSha, mergeSha, firstParent} for " + $Request.pr + " once its merge commit is known)" }
+            & $say ("add this line to guards-owed.jsonl by hand: " + $hand)
+            $handLine = $hand
+            [void]$problems.Add("the merge was not queued for the nightly guards run; add this line to guards-owed.jsonl: " + $hand)
+        }
     }
     $ledgerArgs = Get-HordeMergeLedgerArguments -Request $Request
     $lr = Invoke-HordeMergeTool -Tools $Tools -Name "Ledger" -With @(, $ledgerArgs)
@@ -436,7 +554,7 @@ function Invoke-HordeMerge {
         & $say ("run this by hand: " + $line)
         [void]$problems.Add("the ledger event was not written; run: " + $line)
     }
-    $message = Format-HordeMergeMessage -Request $Request -MergeSha $mergeSha -Check $check -Landed $landed
+    $message = Format-HordeMergeMessage -Request $Request -MergeSha $mergeSha -Check $check -Landed $landed -NotQueued:(-not $queued) -HandLine $handLine
     $t = Invoke-HordeMergeTool -Tools $Tools -Name "Tell" -With @($message)
     if ($t.ok -eq $true) { & $say "told the warchief" }
     else { & $say ("COULD NOT TELL THE WARCHIEF: " + $t.detail); [void]$problems.Add("the warchief was not told: send the warchief the message below") }
@@ -444,9 +562,401 @@ function Invoke-HordeMerge {
     if ($a.ok -eq $true) { & $say ("mailed the analyst: " + $a.detail) }
     else { & $say ("COULD NOT MAIL THE ANALYST: " + $a.detail); [void]$problems.Add("the analyst was not mailed: horde analyst mail -Text with the message below") }
     if ($problems.Count -gt 0) { foreach ($l in @($message -split "`n")) { & $say ("    " + $l) } }
-    & $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title))
+    & $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title) -GuardsOwed:($check.skipped -eq $true) -NotQueued:(-not $queued))
     if ($problems.Count -gt 0) { return [pscustomobject]@{ outcome = "merged-unfinished"; why = ("merged " + $Request.pr + " as " + $mergeSha + ", but " + ($problems -join "; ")); mergeSha = $mergeSha; problems = @($problems) } }
     return [pscustomobject]@{ outcome = "merged"; why = ""; mergeSha = $mergeSha; problems = @() }
+}
+
+# ---- THE NIGHTLY RUN: horde merge -RunOwed (header, "THE NIGHTLY RUN") -----------------------------------
+
+$script:HordeMergeOwedRepoPattern = '\A([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})\z'
+
+function Test-HordeMergeOwedRepo {
+    # PURE. Is -Repo an OWNER/REPO? The same rule as Test-HordeMergeRequest: the repository may not be "." or "..".
+    param([AllowEmptyString()][string]$Repo)
+    $m = [regex]::Match("" + $Repo, $script:HordeMergeOwedRepoPattern)
+    return [bool]($m.Success -and $m.Groups[2].Value -cne "." -and $m.Groups[2].Value -cne "..")
+}
+
+function Read-HordeMergeOwedEntries {
+    # PURE. { entries; bad } from the text of guards-owed.jsonl: entries in file order (= merge order), each
+    # { repo; base; pr; task; by; mergeSha; firstParent; headSha; at }; bad lists the line numbers that are not a
+    # usable entry, so a damaged line is said and never silently dropped. The repo is read in lower case (GitHub
+    # names are not case sensitive). base is "" for a line written before the base branch was recorded: that
+    # merge went into the repository's default branch. A second line for a mergeSha already seen is dropped (a
+    # hand re-add after a half-failed append would otherwise be walked twice).
+    param([AllowEmptyString()][string]$Text)
+    $entries = New-Object System.Collections.ArrayList
+    $bad = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $n = 0
+    foreach ($raw in @(("" + $Text) -split "\r?\n")) {
+        $n++
+        if ($raw.Trim() -eq "") { continue }
+        $e = $null
+        try { $e = ConvertFrom-HordeJson -Text $raw } catch { [void]$bad.Add($n); continue }
+        $v = @{}
+        foreach ($k in @("repo", "baseRefName", "pr", "task", "by", "headSha", "mergeSha", "firstParent", "at")) {
+            $v[$k] = ""
+            if ($null -ne $e -and $null -ne $e.PSObject -and $null -ne $e.PSObject.Properties[$k] -and $e.PSObject.Properties[$k].Value -is [string]) { $v[$k] = [string]$e.PSObject.Properties[$k].Value }
+        }
+        if (-not (Test-HordeMergeOwedRepo -Repo $v["repo"]) -or $v["mergeSha"] -cnotmatch $script:HordeMergeShaPattern) { [void]$bad.Add($n); continue }
+        if ($v["baseRefName"] -ne "" -and $v["baseRefName"] -cnotmatch $script:HordeMergeRefPattern) { [void]$bad.Add($n); continue }
+        if ($v["firstParent"] -ne "" -and $v["firstParent"] -cnotmatch $script:HordeMergeShaPattern) { $v["firstParent"] = "" }
+        foreach ($k in @("pr", "task", "by")) { $v[$k] = ($v[$k] -replace '[^\x20-\x7E]', '?') }
+        if ($seen.ContainsKey($v["mergeSha"])) { continue }
+        $seen[$v["mergeSha"]] = $true
+        [void]$entries.Add([pscustomobject]@{ repo = $v["repo"].ToLowerInvariant(); base = $v["baseRefName"]; pr = $v["pr"]; task = $v["task"]; by = $v["by"]; headSha = $v["headSha"]; mergeSha = $v["mergeSha"]; firstParent = $v["firstParent"]; at = $v["at"] })
+    }
+    return [pscustomobject]@{ entries = @($entries); bad = @($bad) }
+}
+
+function Read-HordeMergeCheckedShas {
+    # PURE. The mergeShas in the text of guards-checked.jsonl, as a hashtable used as a set. A damaged line
+    # checks nothing: the merge is checked again, which costs a run and loses no merge. A line with a mergeSha
+    # clears that merge whatever its result says: that is also how a person gives up on a merge that cannot be
+    # walked (the report prints the line to add).
+    param([AllowEmptyString()][string]$Text)
+    $set = @{}
+    foreach ($raw in @(("" + $Text) -split "\r?\n")) {
+        if ($raw.Trim() -eq "") { continue }
+        $e = $null
+        try { $e = ConvertFrom-HordeJson -Text $raw } catch { continue }
+        if ($null -ne $e -and $null -ne $e.PSObject -and $null -ne $e.PSObject.Properties["mergeSha"] -and "" + $e.mergeSha -cmatch $script:HordeMergeShaPattern) { $set["" + $e.mergeSha] = $true }
+    }
+    return $set
+}
+
+function Invoke-HordeMergeGuardAt {
+    # One guard, at one commit of the scratch checkout, in the shells named by -ShellKeys (default: all).
+    # { ok; red; absent; shells; shellKeys; lines; why }.
+    #   ok false: no answer could be had - the commit would not check out, or the guard DID NOT RUN (the tool
+    #     answered code -1: PowerShell 7 missing, a timeout, the tool threw). why says which. That is not a
+    #     finding about the tree, so no merge may be blamed and nothing may be marked checked (M2, review of
+    #     PR 375). A guard that exits by itself with no banner DID run and proved nothing: that is red, and the
+    #     walk can find the merge that emptied it.
+    #   absent: the guard is not in that commit's tree.
+    #   red: a shell ran it and it failed, twice: a red is run once more before it is believed, and a guard
+    #     that passes the second time is said and counted green (a starved or flaky run must not name a merge).
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Scratch, [Parameter(Mandatory = $true)][string]$Commit, [Parameter(Mandatory = $true)][string]$Guard, [string[]]$ShellKeys = @())
+    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; red = $false; absent = $false; shells = @(); shellKeys = @(); lines = @(); why = $Why } }
+    $r = Invoke-HordeMergeGit -Tools $Tools -What ("checking out " + $Commit.Substring(0, 8)) -Arguments @("-C", $Scratch, "-c", "core.longpaths=true", "checkout", "--detach", "--force", "--quiet", $Commit)
+    if (-not $r.ok) { return (& $no $r.why) }
+    if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($Scratch, $Guard))) { return [pscustomobject]@{ ok = $true; red = $false; absent = $true; shells = @(); shellKeys = @(); lines = @(); why = "" } }
+    $shells = @()
+    $keys = @()
+    $lines = @()
+    foreach ($sh in @(Get-HordeGuardShells)) {
+        if (@($ShellKeys).Count -gt 0 -and @($ShellKeys) -cnotcontains $sh.key) { continue }
+        $run = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($Scratch, $Guard, $sh.key)
+        $read = Read-HordeMergeGuardResult -Run $run
+        if (-not $read.ok -and $read.ran) {
+            $again = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($Scratch, $Guard, $sh.key)
+            $run = $again
+            $read = Read-HordeMergeGuardResult -Run $again
+            if ($read.ok) { & $Tools["Say"] ($Guard + " was red in " + $sh.label + " at " + $Commit.Substring(0, 8) + " and green on a second run: counted green (a flaky or starved run)") }
+        }
+        if (-not $read.ok -and -not $read.ran) { return (& $no ("the guard " + $Guard + " could not be run in " + $sh.label + " at " + $Commit.Substring(0, 8) + ", so nothing is said about it: " + (Get-HordeMergeFirstLine ("" + $run.err + "`n" + $run.out)))) }
+        if (-not $read.ok) { $shells += $sh.label; $keys += $sh.key; if ($lines.Count -eq 0) { $lines = @($read.lines) } }
+    }
+    return [pscustomobject]@{ ok = $true; red = ($shells.Count -gt 0); absent = $false; shells = @($shells); shellKeys = @($keys); lines = @($lines); why = "" }
+}
+
+function Get-HordeMergeGuardListAt {
+    # The guards listed at one commit of the cache. { ok; why; guards }: ok false when git failed; guards is $null
+    # when the commit has no list or an unusable one (why says which), else the guards in order.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Cache, [Parameter(Mandatory = $true)][string]$Commit)
+    $listGit = (Get-HordeGuardListPath).Replace("\", "/")
+    $has = Invoke-HordeMergeGit -Tools $Tools -What ("asking whether " + $Commit.Substring(0, 8) + " has a guard list") -Arguments @("-C", $Cache, "ls-tree", "--name-only", $Commit, "--", $listGit)
+    if (-not $has.ok) { return [pscustomobject]@{ ok = $false; why = $has.why; guards = $null } }
+    if ($has.out -eq "") { return [pscustomobject]@{ ok = $true; why = ("no " + (Get-HordeGuardListPath) + " at " + $Commit.Substring(0, 8)); guards = $null } }
+    $text = Invoke-HordeMergeGit -Tools $Tools -What ("reading the guard list of " + $Commit.Substring(0, 8)) -Arguments @("-C", $Cache, "show", ($Commit + ":" + $listGit))
+    if (-not $text.ok) { return [pscustomobject]@{ ok = $false; why = $text.why; guards = $null } }
+    $read = Read-HordeGuardList -Text $text.out
+    if (-not $read.ok) { return [pscustomobject]@{ ok = $true; why = $read.why; guards = $null } }
+    return [pscustomobject]@{ ok = $true; why = ""; guards = @($read.guards) }
+}
+
+function Invoke-HordeMergeRunOwedBase {
+    # One repo's unchecked entries that went into ONE branch (-Entries, merge order). { status; reds; skipped;
+    # checked; why }: status green, red or error (error: nothing of this branch may be marked checked).
+    #   reds: { kind; guard; shells; entry; note; lines; base } - kind red, missing (the script is gone) or
+    #     dropped (the list lost it); entry is the merge named, $null when none is.
+    #   skipped: { entry; why } - an entry that is not in the branch's history (a force-push took it, or it was
+    #     merged into another branch): reported, never walked, the others still are (M3).
+    #   checked: the entries that were walked.
+    param([Parameter(Mandatory = $true)][string]$Repo, [Parameter(Mandatory = $true)][string]$Base, [Parameter(Mandatory = $true)][string]$Cache, [Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)]$Entries, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$WorkFolder)
+    $say = $Tools["Say"]
+    $err = { param([string]$Why) return [pscustomobject]@{ status = "error"; reds = @(); skipped = @(); checked = @(); why = $Why } }
+    $r = Invoke-HordeMergeGit -Tools $Tools -What ("fetching " + $Base) -Arguments @("-C", $Cache, "fetch", "--no-tags", "--quiet", $Url, ("+refs/heads/" + $Base + ":refs/heads/" + $Base))
+    if (-not $r.ok) { return (& $err $r.why) }
+    $r = Invoke-HordeMergeGit -Tools $Tools -What "pointing the cache at the branch" -Arguments @("-C", $Cache, "symbolic-ref", "HEAD", ("refs/heads/" + $Base))
+    if (-not $r.ok) { return (& $err $r.why) }
+    $t = Invoke-HordeMergeGit -Tools $Tools -What "reading the branch" -Arguments @("-C", $Cache, "rev-parse", ("refs/heads/" + $Base))
+    if (-not $t.ok) { return (& $err $t.why) }
+    $tip = $t.out
+    # Every commit the walk needs must be in the branch's history as fetched. One that is not (a force-push took
+    # it away, or it was merged into another branch) is said and left out; the others are still walked.
+    $walk = New-Object System.Collections.ArrayList
+    $skipped = New-Object System.Collections.ArrayList
+    foreach ($e in $Entries) {
+        $h = Invoke-HordeMergeTool -Tools $Tools -Name "Git" -With @(, [string[]]@("-C", $Cache, "merge-base", "--is-ancestor", $e.mergeSha, $tip))
+        if ($h.code -eq 0) { [void]$walk.Add($e); continue }
+        if ($h.code -lt 0) { return (& $err ("asking git whether " + $e.mergeSha + " (" + $e.pr + ") is in " + $Base + " failed: " + (Get-HordeMergeFirstLine ("" + $h.err)))) }
+        [void]$skipped.Add([pscustomobject]@{ entry = $e; why = ("the merge " + $e.mergeSha + " (" + $e.pr + ") is not in the history of " + $Base + " " + $tip.Substring(0, 8) + " as fetched, so it cannot be walked") })
+    }
+    if ($walk.Count -eq 0) { return [pscustomobject]@{ status = "green"; reds = @(); skipped = @($skipped); checked = @(); why = "" } }
+    $baseline = $walk[0].firstParent
+    if ($baseline -eq "") {
+        $pp = Invoke-HordeMergeGit -Tools $Tools -What ("reading the first parent of " + $walk[0].mergeSha.Substring(0, 8)) -Arguments @("-C", $Cache, "rev-parse", ($walk[0].mergeSha + "^1"))
+        if (-not $pp.ok) { return (& $err $pp.why) }
+        $baseline = $pp.out
+    }
+    $runs = [System.IO.Path]::Combine($WorkFolder, "runs")
+    if ([System.IO.Directory]::Exists($runs)) { foreach ($stale in @([System.IO.Directory]::GetDirectories($runs))) { Remove-HordeMergeFolder -Path $stale -Tools $Tools } }
+    $scratch = [System.IO.Path]::Combine($runs, ("owed-" + [guid]::NewGuid().ToString("N").Substring(0, 6)))
+    $reds = New-Object System.Collections.ArrayList
+    try {
+        $r = Invoke-HordeMergeGit -Tools $Tools -What "cloning the scratch checkout" -Arguments @("-c", "core.longpaths=true", "clone", "--shared", "--no-checkout", "--quiet", $Cache, $scratch)
+        if (-not $r.ok) { return (& $err $r.why) }
+        $r = Invoke-HordeMergeGit -Tools $Tools -What "checking out the tip" -Arguments @("-C", $scratch, "-c", "core.longpaths=true", "checkout", "--detach", "--quiet", $tip)
+        if (-not $r.ok) { return (& $err $r.why) }
+        # THE GUARDS ARE THE TIP'S LIST AND THE BASELINE'S (M1, review of PR 375): the pre-merge run held a PR to
+        # "the checked tree's list plus the base's, so a PR may add a guard but not drop one", and a day's merges
+        # still are. A guard listed at the baseline and gone from the tip's list is RED, naming the first queued
+        # merge whose list lacks it; it is not run (its script may be gone with it).
+        $tipList = Get-HordeMergeGuardListAt -Tools $Tools -Cache $Cache -Commit $tip
+        if (-not $tipList.ok) { return (& $err $tipList.why) }
+        if ($null -eq $tipList.guards) { return (& $err ($Base + " " + $tip.Substring(0, 8) + " has no usable guard list, so nothing can say it is green: " + $tipList.why)) }
+        $baseList = Get-HordeMergeGuardListAt -Tools $Tools -Cache $Cache -Commit $baseline
+        if (-not $baseList.ok) { return (& $err $baseList.why) }
+        $baseGuards = @()
+        if ($null -eq $baseList.guards) { & $say ("the baseline " + $baseline.Substring(0, 8) + " has no usable guard list (" + $baseList.why + "): only the tip's list is run") }
+        else { $baseGuards = @($baseList.guards) }
+        $tipGuards = @($tipList.guards)
+        & $say ($Repo + " " + $Base + ": " + $walk.Count + " merge(s) owed; the guards of " + $tip.Substring(0, 8) + ": " + ($tipGuards -join ", "))
+        foreach ($g in $baseGuards) {
+            if ($tipGuards -ccontains $g) { continue }
+            $item = [pscustomobject]@{ kind = "dropped"; guard = $g; shells = @("the guard list"); entry = $null; note = ("it was listed at " + $baseline.Substring(0, 8) + " and is not in the list at the tip " + $tip.Substring(0, 8) + "; no queued merge is named, the list changed outside them"); lines = @(); base = $Base }
+            foreach ($e in $walk) {
+                $li = Get-HordeMergeGuardListAt -Tools $Tools -Cache $Cache -Commit $e.mergeSha
+                if (-not $li.ok) { return (& $err $li.why) }
+                if ($null -eq $li.guards -or $li.guards -cnotcontains $g) { $item.entry = $e; break }
+            }
+            & $say ($g + " was dropped from " + (Get-HordeGuardListPath) + ": RED")
+            [void]$reds.Add($item)
+        }
+        foreach ($g in $tipGuards) {
+            & $say ("running " + $g + " on the tip " + $tip.Substring(0, 8))
+            $at = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $tip -Guard $g
+            if (-not $at.ok) { return (& $err $at.why) }
+            if (-not $at.red -and -not $at.absent) { & $say ($g + " is green at the tip"); continue }
+            $item = [pscustomobject]@{ kind = "red"; guard = $g; shells = @($at.shells); entry = $null; note = ""; lines = @($at.lines); base = $Base }
+            $tipKeys = @($at.shellKeys)
+            if ($at.absent) {
+                $item.kind = "missing"; $item.shells = @("the tree"); $item.lines = @("the guard script is not in the tree of " + $tip.Substring(0, 8))
+                & $say ($g + " is listed but MISSING at the tip: looking for the merge behind it")
+            } else { & $say ($g + " is RED at the tip in " + ($at.shells -join " and ") + ": looking for the merge behind it") }
+            # THE WALK RUNS ONLY THE SHELLS RED AT THE TIP: a merge that was red in another shell and was fixed
+            # is not the cause of this red (S8, review of PR 375).
+            $bl = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $baseline -Guard $g -ShellKeys $tipKeys
+            if (-not $bl.ok) { return (& $err $bl.why) }
+            if ($bl.red) { $item.note = "red before today's first queued merge (at " + $baseline.Substring(0, 8) + "); no merge is named" }
+            else {
+                $found = $false
+                $present = (-not $bl.absent)
+                foreach ($e in $walk) {
+                    $step = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys
+                    if (-not $step.ok) { return (& $err $step.why) }
+                    if ($step.red) { $item.entry = $e; $item.shells = @($step.shells); $item.lines = @($step.lines); $found = $true; break }
+                    if ($step.absent -and $present) { $item.entry = $e; $item.shells = @("the tree"); $item.lines = @("the guard script is not in the tree of this merge"); $found = $true; break }
+                    $present = (-not $step.absent)
+                }
+                if (-not $found -and $at.absent) { $item.note = "the guard script is in no queued merge's tree; it was never added, or was removed outside the queued merges; no merge is named" }
+                elseif (-not $found) { $item.note = "green at every queued merge and red at the tip " + $tip.Substring(0, 8) + ": it broke after the last queued merge (a push or a merge not made by horde merge); no merge is named" }
+            }
+            [void]$reds.Add($item)
+        }
+    } finally { Remove-HordeMergeFolder -Path $scratch -Tools $Tools }
+    $status = "green"
+    if ($reds.Count -gt 0) { $status = "red" }
+    return [pscustomobject]@{ status = $status; reds = @($reds); skipped = @($skipped); checked = @($walk); why = "" }
+}
+
+function Invoke-HordeMergeRunOwedRepo {
+    # One repo's unchecked entries (-Entries, merge order), walked branch by branch: a merge is walked on the
+    # branch it went into (the entry's baseRefName, the default branch when it has none). { status; reds;
+    # skipped; checked; errors; why }: status red (any red), error (something could not be run, or nothing could
+    # be walked), else green. checked: { entry; result } for each entry that was walked; errors: { base; why;
+    # entries } for each branch that could not be run - those merges stay owed.
+    param([Parameter(Mandatory = $true)][string]$Repo, [Parameter(Mandatory = $true)]$Entries, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$WorkFolder)
+    $failAll = { param([string]$Why) return [pscustomobject]@{ status = "error"; reds = @(); skipped = @(); checked = @(); errors = @([pscustomobject]@{ base = ""; why = $Why; entries = @($Entries) }); why = $Why } }
+    $parts = $Repo.Split("/")
+    $u = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("repo", "view", $Repo, "--json", "url", "--jq", ".url"))
+    $url = ("" + $u.out).Trim()
+    if ($u.code -ne 0 -or $url -eq "") { return (& $failAll ("gh could not say where " + $Repo + " is: " + (Get-HordeMergeFirstLine ("" + $u.err)))) }
+    $sym = Invoke-HordeMergeGit -Tools $Tools -What "asking for the default branch" -Arguments @("ls-remote", "--symref", $url, "HEAD")
+    if (-not $sym.ok) { return (& $failAll $sym.why) }
+    $bm = [regex]::Match($sym.out, 'ref:\s+refs/heads/(\S+)\s+HEAD')
+    if (-not $bm.Success -or $bm.Groups[1].Value -cnotmatch $script:HordeMergeRefPattern) { return (& $failAll ("git did not say which branch is " + $Repo + "'s default")) }
+    $default = $bm.Groups[1].Value
+    $cache = [System.IO.Path]::Combine($WorkFolder, "repos", $parts[0], ($parts[1] + ".git"))
+    if (-not [System.IO.Directory]::Exists($cache)) {
+        $r = Invoke-HordeMergeGit -Tools $Tools -What "making the cache repository" -Arguments @("init", "--bare", "--quiet", $cache)
+        if (-not $r.ok) { return (& $failAll $r.why) }
+    }
+    # THE DEFAULT BRANCH IS ALWAYS IN THE CACHE, whatever branches the merges went into: the guards compare with
+    # origin/<default> (test-host-names reads origin/main), and a scratch checkout of a stacked branch has no
+    # origin/main unless the cache holds main.
+    $r = Invoke-HordeMergeGit -Tools $Tools -What "fetching the default branch" -Arguments @("-C", $cache, "fetch", "--no-tags", "--quiet", $url, ("+refs/heads/" + $default + ":refs/heads/" + $default))
+    if (-not $r.ok) { return (& $failAll $r.why) }
+    $groups = [ordered]@{}
+    foreach ($e in $Entries) {
+        $b = $default
+        if ($e.base -ne "") { $b = $e.base }
+        if (-not $groups.Contains($b)) { $groups[$b] = New-Object System.Collections.ArrayList }
+        [void]$groups[$b].Add($e)
+    }
+    $reds = New-Object System.Collections.ArrayList
+    $skipped = New-Object System.Collections.ArrayList
+    $checked = New-Object System.Collections.ArrayList
+    $errors = New-Object System.Collections.ArrayList
+    foreach ($b in @($groups.Keys)) {
+        $res = Invoke-HordeMergeRunOwedBase -Repo $Repo -Base $b -Cache $cache -Url $url -Entries @($groups[$b]) -Tools $Tools -WorkFolder $WorkFolder
+        if ($res.status -ceq "error") { [void]$errors.Add([pscustomobject]@{ base = $b; why = $res.why; entries = @($groups[$b]) }); continue }
+        foreach ($d in @($res.reds)) { [void]$reds.Add($d) }
+        foreach ($s in @($res.skipped)) { [void]$skipped.Add($s) }
+        foreach ($c in @($res.checked)) { [void]$checked.Add([pscustomobject]@{ entry = $c; result = $res.status }) }
+    }
+    $status = "green"
+    $why = ""
+    if ($reds.Count -gt 0) { $status = "red" }
+    elseif ($errors.Count -gt 0) { $status = "error"; $why = (@($errors | ForEach-Object { $_.why }) -join "; ") }
+    elseif ($checked.Count -eq 0) { $status = "error"; $why = "no queued merge could be walked" }
+    return [pscustomobject]@{ status = $status; reds = @($reds); skipped = @($skipped); checked = @($checked); errors = @($errors); why = $why }
+}
+
+function Invoke-HordeMergeRunOwed {
+    # The nightly run (header). { exit; json; repos }: exit 0 all green, 1 any red, 2 could not run (a red
+    # elsewhere still makes it 1). -Folder holds guards-owed.jsonl, guards-checked.jsonl and nightly\. It
+    # schedules nothing and checks no idle: the caller does.
+    #   A DAMAGED QUEUE LINE, or a merge that is not in its branch's history, is reported in every run with its
+    #   line number or the line to add to guards-checked.jsonl, and the rest is still checked; the run ends 2
+    #   for them only when nothing at all could be checked (S7, review of PR 375).
+    #   THE QUEUE IS THIS MACHINE'S: -Folder is under this machine's Horde home, so a merge made on another
+    #   machine is in that machine's queue and is not covered here (S4). The report says which machine and queue.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$WorkFolder, [Parameter(Mandatory = $true)][string]$Folder, [string]$Repo = "", [datetime]$Now = [datetime]::UtcNow)
+    $say = $Tools["Say"]
+    $owedPath = [System.IO.Path]::Combine($Folder, "guards-owed.jsonl")
+    $checkedPath = [System.IO.Path]::Combine($Folder, "guards-checked.jsonl")
+    $nowUtc = $Now.ToUniversalTime()
+    $date = $nowUtc.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
+    $stamp = $nowUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
+    $summary = New-Object System.Collections.ArrayList
+    $finish = {
+        param([int]$Code)
+        $obj = [ordered]@{ exit = $Code; date = $date; repos = @($summary) }
+        return [pscustomobject]@{ exit = $Code; json = (ConvertTo-Json -InputObject $obj -Compress -Depth 8); repos = @($summary) }
+    }
+    if ($Repo -ne "" -and -not (Test-HordeMergeOwedRepo -Repo $Repo)) { & $say ("'" + $Repo + "' is not a repository: OWNER/REPO"); return (& $finish 2) }
+    $owedText = ""
+    if ([System.IO.File]::Exists($owedPath)) {
+        try { $owedText = [System.IO.File]::ReadAllText($owedPath) } catch { & $say ("could not read " + $owedPath + ": " + $_.Exception.Message); return (& $finish 2) }
+    }
+    $checkedText = ""
+    if ([System.IO.File]::Exists($checkedPath)) {
+        try { $checkedText = [System.IO.File]::ReadAllText($checkedPath) } catch { & $say ("could not read " + $checkedPath + ": " + $_.Exception.Message); return (& $finish 2) }
+    }
+    $owed = Read-HordeMergeOwedEntries -Text $owedText
+    $checked = Read-HordeMergeCheckedShas -Text $checkedText
+    $worst = 0
+    $unchecked = 0
+    if ($owed.bad.Count -gt 0) {
+        & $say ("WARNING: " + $owedPath + " has " + $owed.bad.Count + " line(s) that are not a usable entry (line " + (($owed.bad | Select-Object -First 10) -join ", ") + "): those merges are NOT checked, and this is said again in every run until the file is fixed by hand; the other entries are still checked")
+        $unchecked += $owed.bad.Count
+    }
+    $byRepo = [ordered]@{}
+    foreach ($e in $owed.entries) {
+        if ($Repo -ne "" -and $e.repo -cne $Repo.ToLowerInvariant()) { continue }
+        if ($checked.ContainsKey($e.mergeSha)) { continue }
+        if (-not $byRepo.Contains($e.repo)) { $byRepo[$e.repo] = New-Object System.Collections.ArrayList }
+        [void]$byRepo[$e.repo].Add($e)
+    }
+    if ($byRepo.Count -eq 0) {
+        & $say "nothing is owed: every queued merge has been checked"
+        if ($unchecked -gt 0) { $worst = 2 }
+        return (& $finish $worst)
+    }
+    $anyRed = $false
+    $anyChecked = $false
+    foreach ($r in @($byRepo.Keys)) {
+        $entries = @($byRepo[$r])
+        $res = Invoke-HordeMergeRunOwedRepo -Repo $r -Entries $entries -Tools $Tools -WorkFolder $WorkFolder
+        $text = New-Object System.Collections.ArrayList
+        [void]$text.Add("guards report for " + $r + ", " + $stamp + " (UTC)")
+        [void]$text.Add("queue: " + $owedPath + " on " + [Environment]::MachineName + " - this machine's queue only; merges made on another machine are in that machine's queue and are not covered by this report")
+        $redJson = @()
+        foreach ($er in @($res.errors)) {
+            [void]$text.Add("COULD NOT RUN" + $(if ($er.base -ne "") { " on " + $er.base } else { "" }) + ": " + $er.why)
+            [void]$text.Add("" + @($er.entries).Count + " merge(s) stay owed and will be tried again")
+        }
+        $skippedJson = @()
+        foreach ($sk in @($res.skipped)) {
+            $clear = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $sk.entry.mergeSha; at = $stamp; result = "given-up" }) -Compress
+            [void]$text.Add("NOT CHECKED: " + $sk.why + ". It is reported in every run; to give it up, add this line to " + $checkedPath + ": " + $clear)
+            $skippedJson += , ([ordered]@{ pr = $sk.entry.pr; mergeSha = $sk.entry.mergeSha; why = $sk.why })
+        }
+        $nChecked = @($res.checked).Count
+        if (@($res.reds).Count -eq 0 -and $nChecked -gt 0) {
+            if (@($res.errors).Count -eq 0 -and @($res.skipped).Count -eq 0) { [void]$text.Add("all green over " + $nChecked + " merges") }
+            else { [void]$text.Add("green over " + $nChecked + " merges; the others are listed above and were not checked") }
+        }
+        foreach ($d in @($res.reds)) {
+            $who = $d.note
+            $mj = $null
+            if ($null -ne $d.entry) {
+                $verb = "first red at the merge of "
+                if ($d.kind -ceq "dropped") { $verb = "dropped from the list by the merge of " }
+                $who = $verb + $d.entry.pr + " (task " + $d.entry.task + ", by " + $d.entry.by + ", mergeSha " + $d.entry.mergeSha + ") on " + $d.base + "; its owner fixes it first thing"
+                $mj = [ordered]@{ pr = $d.entry.pr; task = $d.entry.task; by = $d.entry.by; mergeSha = $d.entry.mergeSha }
+            } elseif ($d.kind -ceq "dropped") { $who = $d.note }
+            if ($d.kind -ceq "dropped") { [void]$text.Add("RED " + $d.guard + " dropped from " + (Get-HordeGuardListPath) + ": " + $who) }
+            else { [void]$text.Add("RED " + $d.guard + " in " + ($d.shells -join " and ") + ": " + $who) }
+            foreach ($l in @($d.lines | Select-Object -First 10)) { [void]$text.Add("    " + $l) }
+            $redJson += , ([ordered]@{ kind = $d.kind; guard = $d.guard; shells = @($d.shells); merge = $mj; note = $d.note; base = $d.base })
+        }
+        if (@($res.reds).Count -gt 0) { [void]$text.Add("(" + $nChecked + " merges were walked; all are now checked)") }
+        $reportPath = [System.IO.Path]::Combine($Folder, "nightly", ($date + "-" + $r.Replace("/", "-") + ".txt"))
+        # THE REPORT IS WRITTEN BEFORE ANY MERGE IS MARKED CHECKED, and a report that could not be written marks
+        # none: a marked merge is never run again, and the finding would then live only in this run's output (S6).
+        $wrote = Add-HordeMergeLine -Path $reportPath -Line (($text -join "`n") + "`n")
+        foreach ($l in $text) { & $say $l }
+        $status = $res.status
+        $why = $res.why
+        if (-not $wrote.ok) {
+            & $say ("COULD NOT WRITE THE REPORT: " + $wrote.detail + " - no merge is marked checked, so they are all run again")
+            $status = "error"; $why = "the report could not be written: " + $wrote.detail
+            $worst = 2
+        } else {
+            # CHECKED ONLY WHEN IT RAN: a branch that could not run keeps its merges owed.
+            $failed = $false
+            foreach ($c in @($res.checked)) {
+                $l = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $c.entry.mergeSha; at = $stamp; result = $c.result }) -Compress
+                $ap = Add-HordeMergeLine -Path $checkedPath -Line $l
+                if (-not $ap.ok) { $failed = $true; & $say ("COULD NOT MARK AS CHECKED: " + $ap.detail); & $say ("add this line to guards-checked.jsonl by hand: " + $l) }
+            }
+            if ($failed) { $status = "error"; $why = "the checked marks were not all written; they would be checked again"; $worst = 2 }
+            elseif ($nChecked -gt 0) { $anyChecked = $true }
+            if (@($res.errors).Count -gt 0) { $worst = 2 }
+        }
+        if (@($res.reds).Count -gt 0) { $anyRed = $true }
+        $unchecked += @($res.skipped).Count
+        [void]$summary.Add([ordered]@{ repo = $r; status = $status; merges = $entries.Count; checked = $nChecked; skipped = @($skippedJson); reds = @($redJson); report = $reportPath; why = $why })
+    }
+    if ($unchecked -gt 0 -and -not $anyChecked -and $worst -lt 2) { $worst = 2 }
+    $code = $worst
+    if ($anyRed) { $code = 1 }
+    return (& $finish $code)
 }
 
 function Test-HordeMergeShellScript {
@@ -521,7 +1031,7 @@ function New-HordeMergeTools {
     # THE BLOCKS ARE CLOSURES, AND A CLOSURE RUNS IN A MODULE OF ITS OWN that sees global functions only, not
     # these, which a command dot-sources in its own scope. So each block holds the functions it calls as
     # values ($runProgram, $formatLine): a function's own block runs where it was defined.
-    param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail, $MachinePsModulePath = $null)
+    param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail, $MachinePsModulePath = $null, [string]$OwedFolder = "")
     $gh = "" + $Values.gh; $git = "" + $Values.git; $shell = "" + $Values.guardShell
     $shell7 = Get-HordeGuardPwsh7 -Setting ("" + $(if ($null -ne $Values.PSObject.Properties["guardShell7"]) { $Values.guardShell7 } else { "" }))
     # -MachinePsModulePath is a seam for the suite; the command reads the machine value itself.
@@ -534,6 +1044,9 @@ function New-HordeMergeTools {
     $place = Get-HordeMergeWorkFolder -Values $Values
     $runProgram = ${function:Invoke-HordeMergeProgram}
     $formatLine = ${function:Format-HordeMergeLedgerLine}
+    $appendLine = ${function:Add-HordeMergeLine}
+    $owedPath = ""
+    if ($OwedFolder -ne "") { $owedPath = [System.IO.Path]::Combine($OwedFolder, "guards-owed.jsonl") }
     return @{
         Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments -Directory $place) }.GetNewClosure()
         Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments -Directory $place) }.GetNewClosure()
@@ -552,6 +1065,8 @@ function New-HordeMergeTools {
         }.GetNewClosure()
         Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments)) -Directory $place) }.GetNewClosure()
         LedgerLine = { param([string[]]$Arguments) return (& $formatLine -Program $ledgerProgram -Script $ledgerScript -Arguments $Arguments) }.GetNewClosure()
+        # The daytime queue (-Guards later): one line appended to <HORDE_HOME>\merge\guards-owed.jsonl.
+        Owed = { param([string]$Line) if ($owedPath -eq "") { return [pscustomobject]@{ ok = $false; detail = "no merge folder was given, so there is nowhere to queue the merge" } }; return (& $appendLine -Path $owedPath -Line $Line) }.GetNewClosure()
         Tell = $Tell
         Mail = $Mail
         Wait = { param([int]$Seconds) Start-Sleep -Seconds $Seconds }

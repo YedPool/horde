@@ -1,9 +1,9 @@
 // horde-merge-guard - PreToolUse hook. Refuses a bare `gh pr merge` (or the merge endpoint of `gh api`)
 // against YedPool/horde from a Bash or PowerShell tool call, and says to use `horde merge` (T-0247).
 //
-// WHY. `horde merge OWNER/REPO#N -Task T-NNNN -State ... -By ...` runs every guard in test\guards.txt on the
-// merge result, in Windows PowerShell 5.1 and PowerShell 7, merges with --merge pinned to the checked head,
-// records the task ledger and tells the warchief and the analyst. A hand-typed `gh pr merge` does none of
+// WHY. `horde merge OWNER/REPO#N -Task T-NNNN -State ... -By ...` merges with --merge pinned to the head it
+// read, records the task ledger, tells the warchief and the analyst, and queues the merge for the nightly guards
+// run (test\guards.txt; with -Guards now it runs them first). A hand-typed `gh pr merge` does none of
 // that: on 2026-10-21 four merges skipped the repo-wide guards and one turned main red. The command makes
 // the guard run deterministic only if the hand path is closed.
 //
@@ -324,7 +324,7 @@ const MESSAGE =
   "BLOCKED by the horde merge guard: do not merge a YedPool/horde pull request with `gh pr merge` (or the merge API) by hand.\n" +
   "Use: horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane> [-On <who>] [-Reason <text>]\n" +
   "For example: horde merge YedPool/horde#320 -Task T-0247 -State done -By F\n" +
-  "It runs every guard in test\\guards.txt on the merge result in Windows PowerShell 5.1 and PowerShell 7, merges with a merge commit pinned to the checked head, records the task ledger, and tells the warchief and the analyst. A hand merge skips all of that (2026-10-21: four merges skipped the guards and one turned main red).\n" +
+  "It merges with a merge commit pinned to the head it read, records the task ledger, tells the warchief and the analyst, and queues the merge so the nightly guards run (test\\guards.txt, horde merge -RunOwed) can name it if it breaks one. A hand merge skips all of that (2026-10-21: four merges skipped the guards and one turned main red).\n" +
   "If horde merge refuses, fix what it names; do not go round it.\n";
 
 function main() {
