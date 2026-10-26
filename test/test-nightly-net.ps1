@@ -376,7 +376,8 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $h "merge\guards-owed.jsonl"), ('{"repo":"Fix/Repo","pr":102,"task":"T-7","by":"lane-x","mergeSha":"' + $mergeShas[1] + '"}' + "`n"))
     $env:HORDE_HOME = $h
     $exe = (Get-Process -Id $PID).Path
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    # -AtTime 14:00 (day) so the floor -Plan states does not move with the real clock (the night floors are below).
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
     $code = $LASTEXITCODE
     $text = $o -join "`n"
     Check ($code -eq 0) ("-Plan exits 0 (" + $code + ")")
@@ -385,9 +386,15 @@ try {
     Check ($text -like "*Merge pull request #101*" -and $text -like "*Merge pull request #103*") "the other two come from git alone"
     Check ($text -like "*units: 2*") "a pytest repo has two units: the whole run and flake8"
     Check (-not (Test-Path -LiteralPath (Join-Path $wr "runs"))) "and -Plan ran nothing: no run folder"
-    Check ($text -like "*memory floor 4.5 GB free and 2 GB commit headroom for every unit and the guards*slot wait 900 s, 120 s after a memory give-up*") "-Plan states the one memory floor (default 4.5 GB), the commit floor and both slot waits"
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
-    Check ((($o -join "`n") -like "*memory floor 3.25 GB free*")) "-MinFreeGB is the one setting that moves it"
+    Check ($text -like "*memory floor pytest 4.5 GB free, 2 GB commit headroom (night floors 22:00 to 07:00, by day 4.5 GB free and 2 GB commit headroom)*slot wait 900 s, 120 s after a memory give-up*") "-Plan by day states the day floor (default 4.5 GB), the commit floor and both slot waits"
+    Check ($text -like "*PLAN apps (named list: chrome, Slack, WhatsApp, WhatsApp.Root, ClickUp, ms-teams, Teams, Zoom*force-quit only Slack, WhatsApp, WhatsApp.Root, ClickUp*WOULD CLOSE (dry run, nothing closed)*WOULD FORCE-QUIT*") "-Plan lists, dry, what the app closer would close and force-quit"
+    Check ($text -like "*CHROME RESTORE*") "and the Chrome restore setting, read only"
+    Check ($text -like "*PLAN time: suite phase 22:00 to 04:45 = 24300 s for 2 gate runs*") ("and the time budget of the suite phase (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
+    Check ((($o -join "`n") -like "*memory floor pytest 3.25 GB free*")) "-MinFreeGB is the one setting that moves the day floor"
+    Check ((($o -join "`n") -like "*PLAN apps: -NoCloseApps, nothing would be closed*")) "-NoCloseApps: -Plan says nothing would be closed"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
+    Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
@@ -462,15 +469,18 @@ exit 125
     Check ($calls.Count -eq 7) ("every unit and the guards went to the gate: 2 + 1 + 4 (" + $calls.Count + ")")
     $scripts = @($calls | ForEach-Object { ($_ -split '\|')[0] })
     Check ($calls.Count -ge 3 -and $scripts[0] -ceq "pytest-wrap.ps1" -and $scripts[1] -ceq "pytest-wrap.ps1" -and $scripts[2] -ceq "guards-wrap.ps1") ("the 2-unit repo ran first, though given second (" + ($scripts -join ", ") + ")")
-    Check ($calls.Count -gt 0 -and @($calls | Where-Object { ($_ -split '\|')[1] -cne "4.5" -or ($_ -split '\|')[2] -cne "2" }).Count -eq 0) "every gate, guards included, was given the one floor (4.5 GB) and 2 GB of commit headroom"
+    # 23:00 is night: the night floors of each kind (core Get-HordeNightlyNightFloors), not -MinFreeGB.
+    Check ($calls.Count -eq 7 -and @($calls[0..1] | Where-Object { ($_ -split '\|')[1] -cne "2.5" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the pytest gates were given the pytest night floor, 2.5 GB free and 1 GB commit headroom"
+    Check ($calls.Count -eq 7 -and @($calls[2..6] | Where-Object { ($_ -split '\|')[1] -cne "1" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the guards and the horde units were given 1 GB free and 1 GB commit headroom"
     $waits = @($calls | ForEach-Object { ($_ -split '\|')[3] }) -join ","
     Check ($waits -ceq "900,120,120,900,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
     $rf = Join-Path $hwr ("reports\" + $night.ToString("yyyy-MM-dd") + ".txt")
     $rtext = $(if (Test-Path -LiteralPath $rf) { [System.IO.File]::ReadAllText($rf) } else { "" })
     Check ($rtext -like "*REPO Fix/Hord*units run: 0, not run (slot, memory or night ran out): 4*") "the horde repo, every unit given up, reports 0 units run"
     Check ($rtext -like "*REPO Fix/Py*units run: 0,*") "and so does the pytest repo"
-    Check ($rtext -like "*MEMORY: 6 slot waits gave up on memory (floor 4.5 GB free, 2 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") "the report counts the give-ups and names the top 3 holders"
+    Check ($rtext -like "*MEMORY: 6 slot waits gave up on memory (floor pytest 2.5, horde 1 GB free, 1 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") "the report counts the give-ups and names the top 3 holders"
     Check ($rtext -like "*guards: green*") "the guards that got their memory ran"
+    Check ($rtext -like "*APPS: nothing closed (a suite run*") "a suite run never closes an app, and the report says so"
     $nlog = Join-Path $hwr "nightly.log"
     $ltext = $(if (Test-Path -LiteralPath $nlog) { [System.IO.File]::ReadAllText($nlog) } else { "" })
     Check ($ltext -like "*gave up on memory: slot waits are 120 s*" -and $ltext -like "*got its memory: slot waits are 900 s again*") "the log says when the wait changes"

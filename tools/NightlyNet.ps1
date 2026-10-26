@@ -3,7 +3,8 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\NightlyNet.ps1 [-Repos <spec>,<spec>] [-Plan] [-NoTell]
 #       [-Only <fragments>] [-Limit <n>] [-WorkRoot <dir>] [-HordeScript <horde.ps1>] [-SlotWaitSeconds 900]
 #       [-RunSeconds 1500] [-LongRunSeconds 3600] [-BisectReserveMinutes 90] [-MaxBisectRuns 40] [-Target M]
-#       [-MinFreeGB 4.5] [-MinCommitHeadroomGB 2] [-ShortSlotWaitSeconds 120]
+#       [-MinFreeGB 4.5] [-MinCommitHeadroomGB 2] [-ShortSlotWaitSeconds 120] [-NoCloseApps] [-AppCloseWaitSeconds 60]
+#       [-AppRetryMinutes 15] [-MinFitSeconds 600]
 #   -Repos entries are OWNER/REPO:KIND:BRANCH, KIND horde (PowerShell suites, in both shells, and the repo-wide guards)
 #   or pytest (the whole pytest run, plus the critical flake8 classes). The default is horde first, then the
 #   Orahvision-Universal repo.
@@ -31,6 +32,17 @@
 #   - the repos run FEWEST UNITS FIRST (core Get-HordeNightlyRepoOrder), so a small repo is never starved by horde;
 #   - a gate that gives up lists the top 8 process groups by working set in its .gate file, and the report names the
 #     top 3 of the last give-up.
+# NIGHT FLOORS (founder's YES, 2026-10-26, after 2026-10-25 ran 0 of 462 units again): inside 22:00 to 07:00 a gate
+#   is given its repo kind's night floor (core Get-HordeNightlyNightFloors, the one place they are set: horde units and
+#   the guards 1 GB free, the pytest run 2.5 GB free, 1 GB commit headroom for both); -MinFreeGB and
+#   -MinCommitHeadroomGB stay the floor outside those hours. HeavySlot's own defaults and its other callers are untouched.
+# THE APP CLOSER (founder's order, 2026-10-26; tools/nightly/AppCloser.ps1 says exactly what and how): once a night,
+#   before the first unit and only when the PC has been idle 10 minutes (else again every -AppRetryMinutes until the
+#   suite cutoff), the named desktop apps are asked to close; three tray apps are then fully quit. -NoCloseApps closes
+#   nothing; -Plan lists what it would close. A run given -AtTime or -HeavySlotScript (a suite) never closes anything.
+# THE SUITE PHASE starts a unit while its slot wait still ends before the suite cutoff, with a run limit that ends by the
+#   run cutoff: -RunSeconds, or near the end what is left if at least -MinFitSeconds (core Get-HordeNightlySuiteRunSeconds).
+#   The old rule kept the last 1620 s of the phase idle. The bisect reserve is kept only when a repo has a merge to bisect.
 #
 # EACH REPO, in three phases over all repos (phase 1 may use the night up to 06:30 minus -BisectReserveMinutes):
 #   1. own clone at origin/<branch>; the day's merges (first-parent, since the last run's tip, labelled from
@@ -64,6 +76,7 @@ param(
     [string]$HeavySlotScript = "",
     [ValidateRange(60, 1800)][int]$RunSeconds = 1500,
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
+    [ValidateRange(60, 1800)][int]$MinFitSeconds = 600,
     [int]$BisectReserveMinutes = 90,
     [int]$MaxBisectRuns = 40,
     [ValidateRange(0, 120)][int]$ReportReserveMinutes = 15,
@@ -71,6 +84,10 @@ param(
     [ValidateRange(30, 3600)][int]$GitSeconds = 900,
     [string]$MutexName = "Global\HordeNightlyNet",
     [string]$AtTime = "",
+    [ValidateRange(0, 600)][int]$AppCloseWaitSeconds = 60,
+    [ValidateRange(1, 120)][int]$AppRetryMinutes = 15,
+    [string]$ChromeUserData = "",
+    [switch]$NoCloseApps,
     [switch]$Plan,
     [switch]$NoTell
 )
@@ -82,6 +99,8 @@ $env:GIT_TERMINAL_PROMPT = "0"
 $env:GCM_INTERACTIVE = "never"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\NightlyNet.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\IdleState.ps1")
+. (Join-Path $PSScriptRoot "nightly\AppCloser.ps1")
 
 # powershell -File hands a comma list over as ONE string: split it here.
 $Repos = @($Repos | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() })
@@ -96,6 +115,8 @@ $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:MemoryShort = $false
 $script:MemoryGiveUps = 0
 $script:MemoryHolders = @()
+# The app closer's night: acted or given up (done), when to try next, how many tries, its report lines.
+$script:AppCloser = @{ done = $false; nextTry = [datetime]::MinValue; tries = 0; lines = @() }
 $WrapDir = Join-Path $PSScriptRoot "nightly"
 $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 # -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
@@ -150,24 +171,92 @@ function Get-NightlySlotWait {
 
 function Test-NightlyMayStart {
     # May a gated run of $Seconds start now and be over by the cutoff? The gate may wait for the slot first, for the
-    # wait IN FORCE (Get-NightlySlotWait), not always the long one.
-    param([datetime]$Cutoff, [int]$Seconds)
+    # wait IN FORCE (Get-NightlySlotWait), not always the long one. With -RunCutoff (the suite phase): it may start
+    # while its wait ends before -Cutoff, if its worst case ends by -RunCutoff (core Test-HordeNightlyMayStartSuiteRun).
+    param([datetime]$Cutoff, [int]$Seconds, [Nullable[datetime]]$RunCutoff = $null)
+    if ($null -ne $RunCutoff) { return (Test-HordeNightlyMayStartSuiteRun -Now (Get-Date) -SuiteCutoff $Cutoff -RunCutoff ([datetime]$RunCutoff) -WaitSeconds (Get-NightlySlotWait) -RunSeconds $Seconds) }
     return (Test-HordeNightlyMayStartRun -Now (Get-Date) -Cutoff $Cutoff -RunSeconds ($Seconds + (Get-NightlySlotWait)))
+}
+
+function Get-NightlyFloor {
+    # The memory floor a gate of this repo kind gets now (core Get-HordeNightlyMemoryFloor): the night floor inside
+    # 22:00 to 07:00, -MinFreeGB and -MinCommitHeadroomGB outside. -AtTime stands in for the clock (the suite).
+    param([string]$Kind)
+    $at = $(if ($AtTime -ne "") { $now } else { Get-Date })
+    return (Get-HordeNightlyMemoryFloor -Now $at -Kind $Kind -DayFreeGB $MinFreeGB -DayCommitGB $MinCommitHeadroomGB)
+}
+
+function Get-NightlyFloorText {
+    # "horde 1 GB free, pytest 2.5 GB free, 1 GB commit headroom" for the kinds of tonight's repos.
+    param([string[]]$Kinds)
+    $parts = @(); $commit = ""
+    foreach ($k in @($Kinds | Select-Object -Unique)) { $f = Get-NightlyFloor $k; $parts += ($k + " " + $f.freeGB.ToString($Inv) + " GB free"); $commit = $f.commitGB.ToString($Inv) }
+    return (($parts -join ", ") + ", " + $commit + " GB commit headroom")
+}
+
+function Get-NightlyChromeUserData {
+    # Chrome's "User Data" folder, read only (-ChromeUserData for the suite).
+    if ($ChromeUserData -ne "") { return $ChromeUserData }
+    return (Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data")
+}
+
+function Invoke-NightlyAppCloser {
+    # The app closer (tools/nightly/AppCloser.ps1), called before the guards and before every unit of the suite phase
+    # until it has acted or given up for the night. Never in a suite run (-AtTime or -HeavySlotScript) and never with
+    # -NoCloseApps. The night is the REAL clock's.
+    param([datetime]$Cutoff)
+    $s = $script:AppCloser
+    if ($s.done) { return }
+    if ($NoCloseApps -or $AtTime -ne "" -or $HeavySlotScript -ne "") {
+        $s.done = $true
+        $s.lines = @("APPS: nothing closed (" + $(if ($NoCloseApps) { "-NoCloseApps" } else { "a suite run: -AtTime or -HeavySlotScript" }) + ").")
+        Say $s.lines[0]
+        return
+    }
+    $real = Get-Date
+    $idle = $null
+    try { $idle = Read-HordeIdleSeconds } catch { $idle = $null }
+    $need = 600
+    try { $ic = Get-HordeIdleConfig; if ($ic.ok) { $need = [int]$ic.idleSeconds } } catch { }
+    $step = Get-HordeNightlyAppCloserStep -Now $real -Night (Test-HordeNightlyWindow -Now $real) -Idle $idle -NeedSeconds $need -NextTry $s.nextTry -Cutoff $Cutoff
+    if ($step -ceq "wait") { return }
+    if ($step -ceq "stop") {
+        $s.done = $true
+        $s.lines = @("APPS: nothing closed, the PC was not idle " + $need + " s before " + $Cutoff.ToString("HH:mm") + " (" + $s.tries + " tries).")
+        Say $s.lines[0]
+        return
+    }
+    $s.tries++
+    if ($step -ceq "busy") {
+        $s.nextTry = $real.AddMinutes($AppRetryMinutes)
+        $what = $(if ($null -ne $idle -and ("" + $idle.state) -ceq "known") { "idle " + $idle.seconds + " s of " + $need } else { "input clock unknown" })
+        Say ("app closer: the PC is in use (" + $what + "), nothing closed, next try " + $s.nextTry.ToString("HH:mm"))
+        return
+    }
+    $s.done = $true
+    $targets = @(Select-HordeNightlyAppProcesses -Processes @(Get-Process) -Names (Get-HordeNightlyCloseAppNames))
+    $r = Close-HordeNightlyApps -Targets $targets -ForceNames (Get-HordeNightlyForceQuitAppNames) -WaitSeconds $AppCloseWaitSeconds
+    foreach ($x in @($r.closed)) { Say ("app closer: closed " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    foreach ($x in @($r.forced)) { Say ("app closer: FORCE-QUIT " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    foreach ($x in @($r.running)) { Say ("app closer: still running " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    $s.lines = @(Format-HordeNightlyAppLines -Result $r) + @((Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
+    foreach ($l in $s.lines) { Say $l }
 }
 
 function Invoke-NightlySlot {
     # One slot run through the gate: { code; timedOut; gate; out }. A hidden child; the gate's own closing line is the
     # truth about the run (heavy-slot: released exit=N). The child is ended by ITS PID and the tree under it on
     # timeout or STOP, never by name.
-    param([string]$Script, [string]$Worktree, [string[]]$ScriptArgs = @(), [string]$Tag, [int]$Seconds = 0)
+    param([string]$Script, [string]$Worktree, [string[]]$ScriptArgs = @(), [string]$Tag, [int]$Seconds = 0, [string]$Kind = "horde")
     if ($Seconds -le 0) { $Seconds = $RunSeconds }
+    $floor = Get-NightlyFloor $Kind
     [void][System.IO.Directory]::CreateDirectory($RunDir)
     $safe = ($Tag -replace '[^A-Za-z0-9._-]', '_')
     $out = Join-Path $RunDir ($safe + ".log")
     $gateOut = Join-Path $RunDir ($safe + ".gate")
     $wait = Get-NightlySlotWait
     $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + $HeavySlot + '"'), "-Script", ('"' + $Script + '"'), "-Worktree", ('"' + $Worktree + '"'),
-        "-Out", ('"' + $out + '"'), "-MinFreeGB", $MinFreeGB.ToString($Inv), "-MinCommitHeadroomGB", $MinCommitHeadroomGB.ToString($Inv), "-WaitSeconds", $wait, "-RunSeconds", $Seconds)
+        "-Out", ('"' + $out + '"'), "-MinFreeGB", $floor.freeGB.ToString($Inv), "-MinCommitHeadroomGB", $floor.commitGB.ToString($Inv), "-WaitSeconds", $wait, "-RunSeconds", $Seconds)
     if (@($ScriptArgs).Count -gt 0) {
         $af = Join-Path $RunDir ($safe + ".args.json")
         Set-Content -LiteralPath $af -Value (ConvertTo-Json -InputObject @($ScriptArgs)) -Encoding Ascii
@@ -216,23 +305,24 @@ function Invoke-NightlyUnit {
     # Run one unit at the checked-out tree: unit ids are "<suite rel path>|ps51", "<suite rel path>|pwsh7",
     # "pytest-node|<node id>" and "flake8-critical". Returns the verdict word of Get-NightlyVerdict ("red" included);
     # -AtTip: this is the night's full run at the tip, not a bisect step.
-    param($Ctx, [string]$Unit, [string]$Tag, [switch]$AtTip)
+    # -Seconds: the run limit (0: -RunSeconds), fitted to the end of the night by the suite phase.
+    param($Ctx, [string]$Unit, [string]$Tag, [switch]$AtTip, [int]$Seconds = 0)
     $tree = $Ctx.tree
     if ($Ctx.kind -ceq "horde") {
         $rel, $sh = $Unit -split '\|', 2
         if ($sh -ceq "pwsh7") {
             $abs = Join-Path $tree ($rel -replace '/', '\')
-            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag) -AtTip:$AtTip)
+            return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pwsh-wrap.ps1" -Worktree $WrapDir -ScriptArgs @($abs, $tree) -Tag $Tag -Seconds $Seconds) -AtTip:$AtTip)
         }
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag) -AtTip:$AtTip)
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Script ($rel -replace '/', '\') -Worktree $tree -Tag $Tag -Seconds $Seconds) -AtTip:$AtTip)
     }
     if ($Unit -ceq "flake8-critical") {
-        return (Get-NightlyVerdict (Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag) -AtTip:$AtTip)
+        return (Get-NightlyVerdict (Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag -Seconds $Seconds) -AtTip:$AtTip)
     }
     $node = ($Unit -split '\|', 2)[1]
     $nf = Join-Path $RunDir (($Tag -replace '[^A-Za-z0-9._-]', '_') + ".nodes")
     [System.IO.File]::WriteAllText($nf, $node + "`n")
-    $r = Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "nodes", "-NodesFile", $nf) -Tag $Tag
+    $r = Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "nodes", "-NodesFile", $nf) -Tag $Tag -Seconds $Seconds
     # pytest 4 (usage error: the file is not there) and 5 (nothing collected): the test is not in this commit.
     if (-not $r.timedOut -and ($r.code -eq 4 -or $r.code -eq 5)) { return "absent" }
     return (Get-NightlyVerdict $r -AtTip:$AtTip)
@@ -321,11 +411,13 @@ function Get-NightlyUnits {
 
 function Invoke-NightlyPhaseOne {
     # The guards and the full suite of one repo, until -Cutoff. Fills verdicts, guards, unrun, incomplete.
-    param($Ctx, [datetime]$Cutoff)
+    # -RunCutoff: the time every run must be over by (the suite phase may run into the bisect reserve, never past it).
+    param($Ctx, [datetime]$Cutoff, [datetime]$RunCutoff)
     $tag = ($Ctx.repo -replace '/', '_')
+    Invoke-NightlyAppCloser -Cutoff $Cutoff
     # THE GUARDS (horde): `horde merge -RunOwed -Json` through the gate (tools/nightly/guards-wrap.ps1 reads its -Json last line, F's shape of PR 375):
     if ($Ctx.kind -ceq "horde") {
-        if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $LongRunSeconds)) { $Ctx.guards = [pscustomobject]@{ state = "not run"; text = "the night ran out before the guards could start" } }
+        if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $LongRunSeconds -RunCutoff $RunCutoff)) { $Ctx.guards = [pscustomobject]@{ state = "not run"; text = "the night ran out before the guards could start" } }
         else {
             $g = Invoke-NightlySlot -Script "guards-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Horde", $HordeScript, "-Repo", $Ctx.repo) -Tag ($tag + "-guards") -Seconds $LongRunSeconds
             $text = ((Read-NightlyLog $g.out) -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 10) -join " | "
@@ -340,11 +432,14 @@ function Invoke-NightlyPhaseOne {
     foreach ($u in $units) {
         if (Test-Path -LiteralPath $StopFile) { $Ctx.incomplete = "STOP file seen"; break }
         $need = $(if ($u -ceq "pytest-all") { $LongRunSeconds } else { $RunSeconds })
-        if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $need)) { $Ctx.incomplete = "the night ran out before every unit ran"; break }
+        Invoke-NightlyAppCloser -Cutoff $Cutoff
+        # The run limit fitted to the night (core Get-HordeNightlySuiteRunSeconds); the whole pytest run is never cut short.
+        $secs = Get-HordeNightlySuiteRunSeconds -Now (Get-Date) -SuiteCutoff $Cutoff -RunCutoff $RunCutoff -WaitSeconds (Get-NightlySlotWait) -RunSeconds $need -MinSeconds $(if ($u -ceq "pytest-all") { $need } else { $MinFitSeconds })
+        if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; break }
         if ($u -ceq "pytest-all") {
             $nf = Join-Path $RunDir ($tag + "-nodes.txt")
             if (Test-Path -LiteralPath $nf) { Remove-Item -LiteralPath $nf -Force }
-            $r = Invoke-NightlySlot -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $Ctx.tree, "-Mode", "all", "-NodesFile", $nf) -Tag ($tag + "-pytest-all") -Seconds $LongRunSeconds
+            $r = Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $Ctx.tree, "-Mode", "all", "-NodesFile", $nf) -Tag ($tag + "-pytest-all") -Seconds $LongRunSeconds
             $nodes = @()
             if (Test-Path -LiteralPath $nf) { $nodes = @(Get-Content -LiteralPath $nf | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) }
             # Only a run that finished as pytest does (exit 0, or 1 with the failing nodes it named) is a verdict. A timeout,
@@ -355,8 +450,12 @@ function Invoke-NightlyPhaseOne {
             $Ctx.verdicts["pytest-all"] = "green"
             continue
         }
-        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip
-        Say ($Ctx.repo + " " + $u + " -> " + $v)
+        # Each unit's time, gate wait included, is logged: the measured night is tomorrow's time budget.
+        $uclock = [System.Diagnostics.Stopwatch]::StartNew()
+        $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip -Seconds $secs
+        # Past a limit cut short by the end of the night is not a hang: it is unrun, and runs again tomorrow.
+        if ($v -ceq "hung" -and $secs -lt $need) { $v = "unrun" }
+        Say ($Ctx.repo + " " + $u + " -> " + $v + " in " + [int]$uclock.Elapsed.TotalSeconds + " s")
         if ($v -ceq "absent") { continue }
         $Ctx.verdicts[$u] = $v
         if ($v -ceq "unrun") { $Ctx.unrun++ }
@@ -469,18 +568,40 @@ try {
     # Fewest units first (core Get-HordeNightlyRepoOrder): the night of 2026-10-23 never reached the 2-unit repo.
     $counts = @($ctxs | ForEach-Object { @(Get-NightlyUnits $_).Count })
     $ctxs = @(@(Get-HordeNightlyRepoOrder -Counts $counts) | ForEach-Object { $ctxs[$_] })
-    Say ("order: " + (@($ctxs | ForEach-Object { $_.repo }) -join ", ") + "; memory floor " + $MinFreeGB.ToString($Inv) + " GB free and " + $MinCommitHeadroomGB.ToString($Inv) + " GB commit headroom for every unit and the guards; slot wait " + $SlotWaitSeconds + " s, " + $ShortSlotWaitSeconds + " s after a memory give-up")
+    Say ("order: " + (@($ctxs | ForEach-Object { $_.repo }) -join ", ") + "; memory floor " + (Get-NightlyFloorText @($ctxs | ForEach-Object { $_.kind })) + " (night floors 22:00 to 07:00, by day " + $MinFreeGB.ToString($Inv) + " GB free and " + $MinCommitHeadroomGB.ToString($Inv) + " GB commit headroom); slot wait " + $SlotWaitSeconds + " s, " + $ShortSlotWaitSeconds + " s after a memory give-up")
+    # The bisect reserve is kept only when there is a merge to bisect over: with none in any repo (a first night has
+    # none), no unit can be bisected, and the suite phase gets the whole night.
+    $reserve = $(if (@($ctxs | ForEach-Object { @($_.merges) }).Count -gt 0) { $BisectReserveMinutes } else { 0 })
     if ($Plan) {
         foreach ($c in $ctxs) {
             Write-Host ("PLAN " + $c.repo + " (" + $c.kind + ") tip " + $c.tip.Substring(0, 8) + " last " + $(if ($c.state.lastTip -eq "") { "none" } else { $c.state.lastTip.Substring(0, 8) }) + ": " + @($c.merges).Count + " merges")
             foreach ($m in $c.merges) { Write-Host ("  merge " + (Format-HordeNightlyMerge -Merge $m) + " [" + $m.source + "]") }
             Write-Host ("  units: " + @(Get-NightlyUnits $c).Count)
             foreach ($n in $c.notes) { Write-Host ("  note: " + $n) }
+            $pf = Get-NightlyFloor $c.kind
+            Write-Host ("  floor: " + $pf.freeGB.ToString($Inv) + " GB free, " + $pf.commitGB.ToString($Inv) + " GB commit headroom (" + $(if ($pf.night) { "night floor" } else { "day floor: -AtTime is outside 22:00 to 07:00" }) + ")")
         }
+        # THE APPS, dry: what the closer would close now, and the Chrome restore setting (read only).
+        if ($NoCloseApps) { Write-Host "PLAN apps: -NoCloseApps, nothing would be closed" }
+        else {
+            $dry = Close-HordeNightlyApps -Targets @(Select-HordeNightlyAppProcesses -Processes @(Get-Process) -Names (Get-HordeNightlyCloseAppNames)) -ForceNames (Get-HordeNightlyForceQuitAppNames) -DryRun
+            Write-Host ("PLAN apps (named list: " + ((Get-HordeNightlyCloseAppNames) -join ", ") + "; force-quit only " + ((Get-HordeNightlyForceQuitAppNames) -join ", ") + "; only when idle " + $(try { (Get-HordeIdleConfig).idleSeconds } catch { "?" }) + " s, retry every " + $AppRetryMinutes + " min, graceful wait " + $AppCloseWaitSeconds + " s)")
+            foreach ($l in @(Format-HordeNightlyAppLines -Result $dry)) { Write-Host ("  " + $l) }
+        }
+        Write-Host ("  " + (Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
+        # THE TIME BUDGET of the suite phase, from tonight's 22:00 (or now, inside the window).
+        $real = Get-Date
+        $bStart = $(if (Test-HordeNightlyWindow -Now $real) { $real } else { $now.Date.AddHours(22) })
+        $bRun = Get-HordeNightlyRunCutoff -Now $bStart -ReportReserveMinutes $ReportReserveMinutes
+        $bSuite = $bRun.AddMinutes(-$reserve)
+        $bUnits = 0; foreach ($c in $ctxs) { $bUnits += @(Get-NightlyUnits $c).Count + $(if ($c.kind -ceq "horde") { 1 } else { 0 }) }
+        $bSecs = [int]($bSuite - $bStart).TotalSeconds
+        $lastStart = { param($w) $x = $bSuite.AddSeconds(-$w); $y = $bRun.AddSeconds(-($w + $MinFitSeconds)); if ($y -lt $x) { $y } else { $x } }
+        Write-Host ("PLAN time: suite phase " + $bStart.ToString("HH:mm") + " to " + $bSuite.ToString("HH:mm") + " = " + $bSecs + " s for " + $bUnits + " gate runs (units and guards) = " + [int]($bSecs / [math]::Max(1, $bUnits)) + " s each on average, gate wait included (bisect reserve " + $reserve + " min). A unit may start until " + (& $lastStart $SlotWaitSeconds).ToString("HH:mm") + " (" + (& $lastStart $ShortSlotWaitSeconds).ToString("HH:mm") + " on the short wait): its wait must end by " + $bSuite.ToString("HH:mm") + " and its run limit, " + $RunSeconds + " s or fitted down to no less than " + $MinFitSeconds + " s, by " + $bRun.ToString("HH:mm") + ".")
         exit 0
     }
-    $suiteCutoff = $cutoff.AddMinutes(-$BisectReserveMinutes)
-    foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff; Complete-NightlyCompare $c }
+    $suiteCutoff = $cutoff.AddMinutes(-$reserve)
+    foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff; Complete-NightlyCompare $c }
     foreach ($c in $ctxs) { Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff }
 
     $repoRows = @()
@@ -489,8 +610,8 @@ try {
             suiteCount = (Get-HordeNightlyRunCount -Verdicts $c.verdicts); unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
             pending = @($c.state.pending) }
     }
-    $memory = [pscustomobject]@{ giveUps = $script:MemoryGiveUps; minFreeGB = $MinFreeGB.ToString($Inv); minCommitGB = $MinCommitHeadroomGB.ToString($Inv); holders = @($script:MemoryHolders) }
-    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory
+    $memory = [pscustomobject]@{ giveUps = $script:MemoryGiveUps; minFreeGB = (@($ctxs | ForEach-Object { $_.kind } | Select-Object -Unique | ForEach-Object { $_ + " " + (Get-NightlyFloor $_).freeGB.ToString($Inv) }) -join ", "); minCommitGB = (Get-NightlyFloor $ctxs[0].kind).commitGB.ToString($Inv); holders = @($script:MemoryHolders) }
+    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory -AppLines @($script:AppCloser.lines)
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
