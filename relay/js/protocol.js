@@ -676,6 +676,7 @@ export function rankBody({ rankId, machine, snapshot, number, which, level }) {
 //     items: [{ text, recommendation, importance, blocks, question }] }
 // A list that does not hold together is left out whole, and so is an item; nothing is repaired.
 const PUBLISHED_LANE = /^(thrall|[A-Z][A-Z0-9]{0,3})$/;
+const PUBLISHED_SNAPSHOT = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const PUBLISHED_MOST_LISTS = 64;
 const PUBLISHED_MOST_ITEMS = 50;
 const PUBLISHED_MOST_TEXT = 500;
@@ -691,7 +692,9 @@ export function readPublishedLists(raw) {
     const publishedAt = typeof l.publishedAt === "string" ? Date.parse(l.publishedAt) : NaN;
     if (!Number.isFinite(publishedAt)) continue;
     const items = [];
+    let at = 0;
     for (const it of l.items) {
+      at++;
       if (!it || typeof it !== "object") continue;
       const text = publishedText(it.text, true);
       const recommendation = publishedText(it.recommendation, false);
@@ -699,11 +702,14 @@ export function readPublishedLists(raw) {
       const blocks = publishedText(it.blocks, false);
       const question = it.question === null || it.question === undefined ? null : (Number.isSafeInteger(it.question) && it.question >= 1 ? it.question : undefined);
       if (text === undefined || recommendation === undefined || importance === undefined || blocks === undefined || question === undefined) continue;
-      items.push({ text, recommendation, importance, blocks, question });
+      // position: the item's 1-based place in the list AS THE MACHINE PUBLISHED IT (an item dropped above leaves the others where they were), which with the list's snapshot is how an answer names it (publishedItemAnswerBody).
+      items.push({ text, recommendation, importance, blocks, question, position: at });
     }
     const more = Number.isSafeInteger(l.more) && l.more > 0 ? l.more : 0;
     const count = Number.isSafeInteger(l.count) && l.count >= 0 ? l.count : items.length;
-    out.push({ lane: l.lane, orc: l.orc, publishedAt, count, more, items });
+    // snapshot: the list's id at the machine (a ULID), "" from a machine older than the member: such a list can be read and not answered.
+    const snapshot = typeof l.snapshot === "string" && PUBLISHED_SNAPSHOT.test(l.snapshot) ? l.snapshot : "";
+    out.push({ lane: l.lane, orc: l.orc, snapshot, publishedAt, count, more, items });
   }
   return out;
 }
@@ -1299,6 +1305,100 @@ function photoItems(photos, photoReceipts, now = 0) {
 export function photosUnanswered(photos, photoReceipts, now = 0) {
   const answered = new Set(photoReceipts.map((r) => r.photoId));
   return photos.filter((p) => !answered.has(p.photoId) && !(Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt)).length;
+}
+
+// --- THE FOUNDER'S ANSWER TO AN ITEM OF A PUBLISHED LIST (channels/chat/Answer.ps1; T-0352) ---
+
+// Most items of a published list carry no question number, so there was nothing to answer them by. The phone sends the words as a
+// chat-channel envelope of kind "answer", signed like a chat line, naming the list (its lane and its snapshot id) and the item (its
+// 1-based place); the MACHINE finds the Orc that owns the list - the phone never names a recipient - and posts the words to that
+// Orc's session. The members are read exactly, as a line's are.
+const ITEM_ANSWER_MEMBERS = ["v", "messageId", "horde", "machine", "lane", "snapshot", "index", "text"];
+export const ITEM_ANSWER_MOST_INDEX = 100000;
+
+export function publishedItemAnswerBody({ messageId, horde, machine, lane, snapshot, index, text }) {
+  if (!/^[0-9a-f]{32}$/.test(messageId)) throw new Error("a messageId is 32 lower-case hex");
+  if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof lane !== "string" || !PUBLISHED_LANE.test(lane)) throw new Error("the lane is thrall or an Orc's letter");
+  if (typeof snapshot !== "string" || !PUBLISHED_SNAPSHOT.test(snapshot)) throw new Error("the snapshot is the list's id");
+  if (!Number.isSafeInteger(index) || index < 1 || index > ITEM_ANSWER_MOST_INDEX) throw new Error("the index is the item's place, from 1");
+  if (typeof text !== "string") throw new Error("the answer is text");
+  return utf8(JSON.stringify({ v: 1, messageId, horde, machine, lane, snapshot, index, text }));
+}
+
+// The same body read back, strictly - the test machine's reader and the suites'. { ok, reason, value }.
+export function readPublishedItemAnswerBody(bodyBytes) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the answer is not JSON"); }
+  if (!b || typeof b !== "object" || Array.isArray(b)) return no("the answer is not an object");
+  const names = Object.keys(b);
+  if (names.length !== ITEM_ANSWER_MEMBERS.length || ITEM_ANSWER_MEMBERS.some((n) => !names.includes(n))) return no("the answer's members are not exactly " + ITEM_ANSWER_MEMBERS.join(", "));
+  if (b.v !== 1) return no("the answer is not version 1");
+  try { publishedItemAnswerBody(b); } catch (x) { return no(x.message); }
+  return { ok: true, reason: "", value: b };
+}
+
+// The receipt's codes, by status, and the ONE sentence the phone shows for each: never a word of the machine's, the relay's or the
+// messenger's. Sent is accepted/queued (the PC has it, the Orc has not taken it); Delivered is accepted/delivered (the Orc's own
+// session took it).
+export const ITEM_ANSWER_WORDS = {
+  accepted: { queued: "Sent: the PC has it. The Orc has not taken it yet.", delivered: "Delivered: the Orc's session took it." },
+  held: {
+    "no-session": "Held: that Orc has no session running now. It goes when it does.",
+    "not-now": "Held: delivery failed for now; it will try again.",
+    "not-delivered": "Not delivered: the Orc's mailbox holds it back.",
+    expired: "Not delivered: it waited too long."
+  },
+  refused: {
+    "wrong-machine": "Refused: it was sent to the wrong machine.",
+    "wrong-horde": "Refused: it was sent to the wrong horde.",
+    empty: "Refused: it has no words.",
+    "too-long": "Refused: it is too long for one answer.",
+    "no-such-item": "Refused: the PC has no such item in any list it published.",
+    "wrong-lane": "Refused: that item belongs to another list.",
+    "orc-retired": "Refused: the Orc that owns that list has been retired."
+  }
+};
+export const ITEM_ANSWER_SENDING = "Sending...";
+export const ITEM_ANSWER_NO_PC = "Your PC does not take answers to published items yet: it needs a Horde update.";
+
+// An answer receipt, read: { ok, reason, value } with value { messageId, lane, snapshot, index, status, code, text, sentAt }. A status
+// or code off the list is refused: the phone never shows a word it did not choose.
+export function readItemAnswerReceipt(bodyBytes, horde, machine) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the answer receipt is not JSON"); }
+  if (!b || b.v !== 1 || b.kind !== "chat-answer-receipt") return no("not a version 1 chat-answer-receipt");
+  if (b.horde !== horde || b.machine !== machine) return no("the answer receipt names another horde or machine");
+  if (typeof b.messageId !== "string" || !/^[0-9a-f]{32}$/.test(b.messageId)) return no("the answer receipt names no answer");
+  if (typeof b.lane !== "string" || !PUBLISHED_LANE.test(b.lane) || typeof b.snapshot !== "string" || !PUBLISHED_SNAPSHOT.test(b.snapshot) || !Number.isSafeInteger(b.index) || b.index < 1 || b.index > ITEM_ANSWER_MOST_INDEX) return no("the answer receipt names no item");
+  if (!Object.prototype.hasOwnProperty.call(ITEM_ANSWER_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(ITEM_ANSWER_WORDS[b.status], b.code)) return no("the answer receipt's status or code is not one this phone knows");
+  if (typeof b.text !== "string") return no("the answer receipt has no words");
+  const at = Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0;
+  return { ok: true, reason: "", value: { messageId: b.messageId, lane: b.lane, snapshot: b.snapshot, index: b.index, status: b.status, code: b.code, text: b.text, sentAt: at } };
+}
+
+// The answers of the published lists as the phone shows them: sent = this session's own sends { messageId, lane, snapshot, index, text,
+// at }, receipts = every receipt read (with seq and ts). -> a Map from "<snapshot>/<index>" to that item's answers, oldest first, each
+// { messageId, text, at, status, code, words }: sending until a receipt names it, then the newest receipt's words (the receipt carries
+// his words, so they survive a reload). A receipt for an answer this phone did not send this session (after a reload, or another
+// phone's) still shows, with the words the receipt carries.
+export function itemAnswerView({ sent = [], receipts = [] } = {}) {
+  const byId = new Map();
+  for (const x of sent) byId.set(x.messageId, { messageId: x.messageId, key: x.snapshot + "/" + x.index, text: x.text, at: x.at, status: "sending", code: "", words: ITEM_ANSWER_SENDING, seq: -1 });
+  for (const r of receipts) {
+    const had = byId.get(r.messageId);
+    if (had && had.seq > r.seq) continue;
+    byId.set(r.messageId, { messageId: r.messageId, key: r.snapshot + "/" + r.index, text: r.text, at: had && had.at ? had.at : (r.sentAt || r.ts || 0), status: r.status, code: r.code, words: ITEM_ANSWER_WORDS[r.status][r.code], seq: r.seq });
+  }
+  const out = new Map();
+  for (const a of [...byId.values()].sort((m, n) => m.at - n.at)) {
+    if (!out.has(a.key)) out.set(a.key, []);
+    out.get(a.key).push({ messageId: a.messageId, text: a.text, at: a.at, status: a.status, code: a.code, words: a.words });
+  }
+  return out;
 }
 
 // --- the progress channel (channels/progress/Channel.ps1) ---

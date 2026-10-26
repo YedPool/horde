@@ -30,6 +30,10 @@
 // Enter sends, Shift+Enter or the New line key adds a line - over the soft keyboard. A line goes only
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
+// EVERY ITEM OF EVERY PUBLISHED LIST HAS ITS OWN ANSWER BOX AND SEND (T-0352; published-lists.js, drawPublishedLists, answersFor): the
+// decisions page showed each Orc's published items and gave him no way to answer any that carries no question number. The box has
+// the chat composer's keys; his words are kept per item (answerDrafts) while a redraw rebuilds the lists under his thumb, and under the
+// item stand what he sent and the PC's receipt in the app's own sentence (Sent, then Delivered), which survives a reload.
 // THE CHAT OPENS AT ITS NEWEST MESSAGE (the founder, 2026-10-15) and keeps his place while he reads back,
 // with Jump to latest while he is away from the bottom: chat-scroll.js has the rule and why it opened at
 // the top or in the middle before.
@@ -109,7 +113,7 @@ import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, ST
 import { shrinkInBrowser } from "./photo.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderDecisionCards } from "./decision-cards.js";
-import { publishedView, mergePublished, renderPublishedLists } from "./published-lists.js";
+import { publishedView, mergePublished, renderPublishedLists, settleAnswers } from "./published-lists.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
@@ -241,7 +245,7 @@ function docOf(id) {
     // minutes for the PC, and an update meanwhile loses only the button's pending mark, never his words.
     rank: (number, which, level, rankId) => bridge.request("rank", { number, which, level, id: rankId })
   });
-  docs[id] = { box, cards, pub, doc, kinds: false, storage, value: null };
+  docs[id] = { box, cards, pub, doc, kinds: false, storage, value: null, mode: "", itemAnswers: new Map() };
   return docs[id];
 }
 // The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
@@ -259,10 +263,71 @@ const laneOfQuestion = (q) => window.HordeDecisionsDocument.lanes.laneOf(q);
 function drawPublishedLists(id) {
   const d = docs[id];
   if (!d) return;
+  // A draw rebuilds every box, so the one he is typing in is found again by its key after it (his words are kept in answerDrafts as he types).
+  const active = document.activeElement;
+  const typing = active && d.pub.contains(active) && active.getAttribute ? active.getAttribute("data-answer-key") : null;
+  const caret = typing ? [active.selectionStart, active.selectionEnd] : null;
   while (d.pub.firstChild) d.pub.removeChild(d.pub.firstChild);
   const v = d.value;
   if (!v) return;
-  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime })) d.pub.appendChild(node);
+  for (const node of renderPublishedLists(document, publishedView(v.published, v.questions, d.doc.lane(), laneOfQuestion, (q) => d.doc.listed(q)), { fmt: lastTime, answers: answersFor(id, d) })) d.pub.appendChild(node);
+  if (typing) {
+    for (const t of d.pub.querySelectorAll("textarea.pl-box")) {
+      if (t.getAttribute("data-answer-key") !== typing) continue;
+      t.focus();
+      try { t.setSelectionRange(caret[0], caret[1]); } catch (e) { /* a field that takes no selection keeps its caret */ }
+    }
+  }
+}
+// THE ANSWER BOX UNDER EVERY ITEM OF A PUBLISHED LIST (T-0352; published-lists.js): his words per item are kept here while he types - a draw
+// of the lists must not take them - and each has the page's id until sent, so the same words sent again are one answer, posted once (as the chat composer's draftId).
+// canSend: a passkey session only, as a question's box and the chat's.
+const answerDrafts = new Map();
+function answersFor(id, d) {
+  const slot = (key) => { const k = id + "|" + key; if (!answerDrafts.has(k)) answerDrafts.set(k, { text: "", id: "", tried: "" }); return answerDrafts.get(k); };
+  return {
+    canSend: d.mode === "passkey",
+    viewOf: (key) => (settleAnswers(d.itemAnswers, pendingOf(id), Date.now()).get(key) || []),
+    draftOf: (key) => slot(key).text,
+    problemOf: (key) => slot(key).problem || "",
+    onDraft: (key, text) => { const x = slot(key); x.text = text; if (!text) x.id = ""; },
+    // THE DRAFT IS CLEARED BEFORE THE AWAIT and given back if the send fails (review of PR 382, S1): the send itself redraws the lists, and a
+    // box rebuilt from a draft that still held the words just sent would offer them for a second Enter, which posts them again under a new id.
+    // The id is kept until the send is taken, so a retry after a failed put is the same answer.
+    send: async (list, it, text) => {
+      const key = list.snapshot + "/" + it.position;
+      const x = slot(key);
+      if (!x.id || text !== x.tried) x.id = newDraftId();
+      x.tried = text;
+      const keep = x.text;
+      x.text = "";
+      x.problem = "";
+      let r;
+      try { r = await bridge.request("answer-item", { lane: list.lane, snapshot: list.snapshot, index: it.position, text, id: x.id }); }
+      catch (e) { r = { ok: false, reason: messageOf(e) }; }
+      if (r.ok) { x.id = ""; x.tried = ""; addPending(id, { messageId: r.id, key, text, at: Date.now() }); return r; }
+      x.text = keep || text;
+      x.problem = r.reason || "Not sent.";
+      drawPublishedLists(id);
+      return r;
+    }
+  };
+}
+// THE ANSWERS SENT AND NOT YET NAMED BY A RECEIPT are kept in sessionStorage (this tab only, gone with it, and with a lock) so a reload does not make
+// an answer the PC has not yet confirmed look lost - he would type it again and the Orc would get it twice (review of PR 382, S2). Every use is in
+// try/catch: a private window or blocked storage just keeps nothing.
+const pendingKey = (id) => "horde-item-pending|" + id;
+function pendingOf(id) {
+  try { const a = JSON.parse(sessionStorage.getItem(pendingKey(id)) || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function addPending(id, x) {
+  try { const a = pendingOf(id).filter((y) => y && y.messageId !== x.messageId).slice(-49); a.push(x); sessionStorage.setItem(pendingKey(id), JSON.stringify(a)); } catch (e) { /* nothing kept */ }
+}
+function dropPending(id, named) {
+  try {
+    const a = pendingOf(id).filter((y) => y && !named.has(y.messageId));
+    if (a.length) sessionStorage.setItem(pendingKey(id), JSON.stringify(a)); else sessionStorage.removeItem(pendingKey(id));
+  } catch (e) { /* nothing kept */ }
 }
 function showCounts() {
   const d = current && docs[current];
@@ -342,6 +407,14 @@ function render(h, rec) {
   // item is drawn once, as that question (published-lists.js). A read that failed keeps the lists drawn, as it keeps the questions; the draw is the document's (onDraw).
   const known = rec && rec.state === "known" && rec.value;
   if (known) d.value = { published: rec.value.published, questions: rec.value.questions };
+  d.mode = h.mode;
+  // A read that failed keeps the receipts drawn, as it keeps the lists (review of PR 382, S4).
+  if (known) {
+    d.itemAnswers = new Map(Array.isArray(rec.value.itemAnswers) ? rec.value.itemAnswers : []);
+    const named = new Set();
+    for (const list of d.itemAnswers.values()) for (const a of list) if (a.status !== "sending") named.add(a.messageId);
+    dropPending(h.id, named);
+  }
   const shown = known ? { ...rec, value: { ...rec.value, questions: mergePublished(rec.value.questions, rec.value.published, laneOfQuestion) } } : rec;
   const did = d.doc.setList(shown);
   // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
@@ -1228,7 +1301,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { try { sessionStorage.removeItem(pendingKey(id)); } catch (e) { /* nothing kept */ } if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); docs[id].pub.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

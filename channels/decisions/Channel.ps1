@@ -223,9 +223,10 @@
 # decisions_live and decisions_live_item). Every snapshot carries them as a member of every page,
 # "published", in the frame and the hash, so a change of a list is a new snapshot and is sealed for the phones
 # exactly as the questions are: the relay sees no text. Each list is
-#   { lane: "thrall" or the Orc's letter, orc, publishedAt (ISO time), count, more, items }
+#   { lane: "thrall" or the Orc's letter, orc, snapshot, publishedAt (ISO time), count, more, items }
 # and each item { text, recommendation, importance, blocks, question } - question the number of the store
-# question it links, or null. WHAT IS NOT THERE IS SAID, NEVER LEFT TO LOOK EMPTY: no member at all means
+# question it links, or null. THE LIST CARRIES ITS SNAPSHOT: its fleet.db id (a 26-character ULID), which with an item's
+# 1-based place in "items" is how the founder's answer to that item names it (channels/chat/Answer.ps1, T-0352). WHAT IS NOT THERE IS SAID, NEVER LEFT TO LOOK EMPTY: no member at all means
 # this machine has no fleet.db or could not read it (the phone says the machine has no lists to send), a list
 # with no items is an Orc that published an empty list, and an Orc with no list in the member never published.
 #   - FLEET.DB IS READ, NEVER WRITTEN, by the node side's `published --json` (a read-only open of the views),
@@ -972,12 +973,12 @@ function ConvertTo-HordeDecisionsChannelPublished {
             [void]$items.Add((ConvertTo-Json -InputObject $line -Compress))
         }
         $lane = $(if ("$($l.rank)" -ceq "thrall") { "thrall" } else { "$($l.orc)" })
-        [void]$made.Add([pscustomobject]@{ lane = $lane; orc = "$($l.orc)"; publishedAt = "$($l.publishedAt)"; count = [int]$l.count; items = $items; more = [int]([Math]::Max(0, $all.Count - $items.Count)) })
+        [void]$made.Add([pscustomobject]@{ lane = $lane; orc = "$($l.orc)"; snapshot = "$($l.snapshot)"; publishedAt = "$($l.publishedAt)"; count = [int]$l.count; items = $items; more = [int]([Math]::Max(0, $all.Count - $items.Count)) })
     }
     $render = {
         $texts = New-Object System.Collections.ArrayList
         foreach ($m in $made) {
-            $head = ConvertTo-Json -InputObject ([ordered]@{ lane = $m.lane; orc = $m.orc; publishedAt = $m.publishedAt; count = $m.count; more = $m.more }) -Compress
+            $head = ConvertTo-Json -InputObject ([ordered]@{ lane = $m.lane; orc = $m.orc; snapshot = $m.snapshot; publishedAt = $m.publishedAt; count = $m.count; more = $m.more }) -Compress
             [void]$texts.Add($head.Substring(0, $head.Length - 1) + ',"items":[' + (@($m.items) -join ",") + ']}')
         }
         # ESCAPED HERE, so the size is measured on what is sent: a character that is not ASCII costs six bytes.

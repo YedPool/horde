@@ -122,6 +122,7 @@ try {
     $text = ConvertTo-HordeDecisionsChannelPublished -Lists @($thrallList, $emptyList)
     $m = @(ConvertFrom-HordeJson $text | ForEach-Object { $_ })
     Check ($m.Count -eq 2 -and $m[0].lane -ceq "thrall" -and $m[0].orc -ceq "M" -and $m[0].count -eq 2 -and $m[0].more -eq 0 -and $m[0].publishedAt -ceq "2026-10-21T17:01:31.698Z" -and -not (Test-HordeTestMember $m[0] "confirmedAt")) ("the Thrall's list is the lane 'thrall', with its published time (and no confirmed time) and its count (" + $text.Substring(0, [Math]::Min(160, $text.Length)) + ")")
+    Check ($m[0].snapshot -ceq "S1" -and $m[1].snapshot -ceq "S2") "EACH LIST CARRIES ITS SNAPSHOT ID (T-0352): the founder's answer to an item names the list by it and the item's place, and the machine finds the owner from it"
     $i1 = @($m[0].items | ForEach-Object { $_ })
     Check ($i1.Count -eq 2 -and $i1[0].text -ceq "Sales queue: forward the page?" -and $i1[0].importance -ceq "high" -and $i1[0].blocks -ceq "part" -and $null -eq $i1[0].question -and $null -eq $i1[0].recommendation -and $i1[1].question -eq 31 -and $i1[1].recommendation -ceq "yes") "each item carries its text, recommendation, importance, blocking and the question it links, null where there is none"
     Check ($m[1].lane -ceq "E" -and $m[1].count -eq 0 -and @($m[1].items).Count -eq 0 -and $text.Contains('"items":[]')) "AN EMPTY LIST is a list with no items - not left out, not a list of one empty item"

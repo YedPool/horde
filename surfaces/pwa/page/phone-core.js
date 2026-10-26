@@ -150,6 +150,12 @@
 // how many are new. An id and a number, never a word of the log; read back guarded (progressPosition),
 // so a damaged record is no position. The position only ever moves forward.
 //
+// AN ANSWER TO AN ITEM OF A PUBLISHED LIST (T-0352; channels/chat/Answer.ps1, relay/js/protocol.js) is sent like a chat line: kind answer on the
+// chat channel, signed by the passkey or its unlocked session (SESSION_SIGNED), passkey sessions only, bound to the horde and the machine, and
+// naming the list (its lane and the snapshot id the machine sent) and the item (its 1-based place as published) - never a recipient: the
+// machine finds the Orc that owns the list. Only an item of a list this phone holds can be answered. The receipts (kind answer-receipt) are
+// kept in memory like the chat's and carry his words, so itemAnswers() shows the answer and Sent / Delivered again after a reload.
+//
 // THE CARDS (channels/cards) come through the same mailbox and the same refresh, machine to phone only:
 // one whole snapshot per machine, of which the session keeps the newest it opened (by its envelope's seq),
 // in memory only. THE FOUNDER RUNS TWO MACHINES, and each is its own pairing here, opening only its own
@@ -227,7 +233,7 @@ function passkeyDidNotSign(x) {
 // THE UNLOCKED SESSION (the header): what the session key signs, by "<channel> <kind>"; the vouch states
 // that end a session (relay/js/protocol.js, SESSION_REFUSALS); and the words for each way one ends.
 // A change of rank goes in session too (channels/decisions/Channel.ps1, A SESSION-SIGNED RANK, 2026-10-14).
-const SESSION_SIGNED = ["decisions answer", "decisions rank", "chat line", "chat photo"];
+const SESSION_SIGNED = ["decisions answer", "decisions rank", "chat line", "chat photo", "chat answer"];
 const SESSION_DEAD = ["session-expired", "session-idle", "session-ended", "session-stale", "session-refused"];
 const AGAIN = " The next answer asks for your passkey once, to open a new one.";
 const SESSION_ENDED = {
@@ -258,7 +264,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
   const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map(), signer: null, sessionWords: "", oldPcSaid: false });
-  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0, photoWindowMs: 0, answeredNow: [] });
+  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0, photoWindowMs: 0, answeredNow: [], itemSent: [], itemReceipts: [] });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
@@ -430,6 +436,11 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const r = P.readChatReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       c.receipts.push({ ...r.value, seq: h.seq, ts: h.ts });
+    } else if (h.kind === "answer-receipt") {
+      // The receipt of an answer to an item of a published list (channels/chat/Answer.ps1): shown under that item (itemAnswers), never in the chat.
+      const r = P.readItemAnswerReceipt(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      c.itemReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });
     } else if (h.kind === "photo-receipt") {
       const r = P.readPhotoReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
@@ -960,6 +971,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       return {
         snapshot: v ? v.snapshot : "", seq: v ? v.seq : -1, questions: v ? v.questions.map((q) => q.question) : [], pageKeyByNumber,
         published: v ? v.published : null,
+        itemAnswers: [...P.itemAnswerView({ sent: s.chat.itemSent, receipts: s.chat.itemReceipts })],
         withheld: v ? v.withheld : [], notShown: v ? P.withheldWords(v.withheld) : "", counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
         anomalies, stale, mode: s.mode, relayDown: said.length > 0, diagnostics: said.concat(diagnostics.splice(0))
       };
@@ -1012,6 +1024,36 @@ export function createPhone({ store, authenticator, relay, account = null, origi
         return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
       }
       return { ...log, mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
+    },
+
+    // THE FOUNDER'S ANSWER TO ONE ITEM OF A PUBLISHED LIST (relay/js/protocol.js, THE FOUNDER'S ANSWER TO AN ITEM; channels/chat/Answer.ps1):
+    // signed like a chat line - a passkey session only, bound to the horde and the machine - and put into the machine's mailbox. It names the
+    // list's lane and snapshot and the item's place, and only an item of a list this phone holds. The machine finds the Orc that owns the list;
+    // the phone never names a recipient. messageId is the page's id for these words: sent again, they are posted once. { key, seq }.
+    async answerItem(id, { lane, snapshot, index, text, messageId }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if ("read-only" === s.mode) throw fail(NO_PRF);
+      if ("passkey" !== s.mode) throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer an item.");
+      if (typeof text !== "string" || !text.trim()) throw fail("There is nothing to send.");
+      const lists = s.view && Array.isArray(s.view.published) ? s.view.published : [];
+      const list = lists.find((l) => l.lane === lane && l.snapshot === snapshot);
+      if (!list || !list.items.some((it) => it.position === index)) throw fail("That item is not in a list this phone holds. Wait for the lists to refresh, then answer it.");
+      if (s.chat.itemSent.some((x) => x.messageId === messageId && (x.text !== text || x.snapshot !== snapshot || x.index !== index))) throw fail("These are other words than the answer first sent under this id: send them as a new answer.");
+      const body = P.publishedItemAnswerBody({ messageId, horde: e.horde, machine: e.machine, lane, snapshot, index, text });
+      const env = await sealAndSign(e, "answer", "chat", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same answer is never delivered twice."); }
+      if (!s.chat.itemSent.some((x) => x.messageId === messageId)) s.chat.itemSent.push({ messageId, lane, snapshot, index, text, at: env.ts });
+      return { key: env.key, seq: put.value.seq };
+    },
+
+    // What the phone holds of the answers to published items: [[key, answers]] from relay/js/protocol.js's itemAnswerView, key "<snapshot>/<position>".
+    itemAnswers(id) {
+      const s = sessions.get(id);
+      if (!s) return [];
+      return [...P.itemAnswerView({ sent: s.chat.itemSent, receipts: s.chat.itemReceipts })];
     },
 
     // One line of the founder to the Thrall, signed with the passkey (user verification) and put into the

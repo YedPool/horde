@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../store.mjs';
 import { ulid } from '../ids.mjs';
-import { publishFromInput, readPublished, main } from '../decisions-cli.mjs';
+import { publishFromInput, readPublished, readPublishedItem, main } from '../decisions-cli.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
 let seq = 0;
@@ -228,4 +228,51 @@ test('main: published before init says to run init, and no home is exit 2', () =
   assert.match(err[0], /run horde db init/);
   assert.equal(fs.existsSync(path.join(dir, 'fleet.db')), false);
   assert.equal(main(['published'], {}, () => {}, () => {}), 2);
+});
+
+test('published-item finds one item of any snapshot, live or archived, by id and position (T-0352)', () => {
+  const w = world();
+  const a = publishFromInput(w.db, input({ letter: 'F' }, [lineA, lineB], w.sf), T0);
+  const b = publishFromInput(w.db, input({ letter: 'F' }, [lineB], w.sf), T0 + 10);
+  const old = readPublishedItem(w.db, a.id, 2);
+  assert.deepEqual({ ...old }, { found: true, orc: 'F', rank: 'orc', retired: false, live: false, count: 2, text: 'Pick a colour' }, 'an item of the list since replaced still resolves, and is not live');
+  const now = readPublishedItem(w.db, b.id, 1);
+  assert.equal(now.found, true);
+  assert.equal(now.live, true);
+  assert.equal(now.text, 'Pick a colour');
+});
+
+test('published-item refuses a snapshot or a position that never existed, and a malformed id (T-0352)', () => {
+  const w = world();
+  const a = publishFromInput(w.db, input({ letter: 'F' }, [lineA], w.sf), T0);
+  assert.equal(readPublishedItem(w.db, a.id, 2).found, false, 'no item 2 in a list of one');
+  assert.match(readPublishedItem(w.db, a.id, 2).reason, /no item 2/);
+  assert.match(readPublishedItem(w.db, id(), 1).reason, /ever published/);
+  assert.match(readPublishedItem(w.db, 'x; DROP', 1).reason, /not one/);
+  assert.match(readPublishedItem(w.db, a.id, 0).reason, /whole number/);
+  assert.match(readPublishedItem(w.db, a.id, 1.5).reason, /whole number/);
+});
+
+test('published-item names the Thrall by rank and says when its Orc is retired (T-0352)', () => {
+  const w = world();
+  const a = publishFromInput(w.db, input({ thrall: true }, [lineB]), T0);
+  assert.equal(readPublishedItem(w.db, a.id, 1).rank, 'thrall');
+  const b = publishFromInput(w.db, input({ letter: 'K' }, [lineB]), T0);
+  w.db.prepare("UPDATE orc SET retired_at = ?, retired_reason = 'hand' WHERE letter = 'K'").run(T0 + 5);
+  assert.equal(readPublishedItem(w.db, b.id, 1).retired, true);
+});
+
+test('main: published-item prints the item as JSON and refuses a bad call (T-0352)', () => {
+  const w = world();
+  const inFile = path.join(w.dir, 'in.json');
+  fs.writeFileSync(inFile, JSON.stringify(input({ letter: 'F' }, [lineA])));
+  const run = (argv) => { const out = []; const err = []; const code = main(argv, { HORDE_HOME: w.dir }, (s) => out.push(s), (s) => err.push(s)); return { code, out, err }; };
+  assert.equal(run(['publish', inFile]).code, 0);
+  const snapshot = JSON.parse(run(['published', '--json']).out[0]).lists[0].snapshot;
+  const ok = run(['published-item', '--snapshot', snapshot, '--position', '1']);
+  assert.equal(ok.code, 0, ok.err.join(' '));
+  assert.equal(JSON.parse(ok.out[0]).text, 'Ship the page?');
+  assert.equal(run(['published-item', '--snapshot', snapshot]).code, 1);
+  assert.equal(run(['published-item', '--snapshot', snapshot, '--position', 'x']).code, 1);
+  assert.equal(JSON.parse(run(['published-item', '--snapshot', snapshot, '--position', '9']).out[0]).found, false);
 });

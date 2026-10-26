@@ -412,6 +412,48 @@ const commands = {
     const found = await until(box + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
     return { found: !!found, text: await evaluate(box), listed: await evaluate(listed) };
   },
+  // AN ANSWER UNDER ONE ITEM OF A PUBLISHED LIST (T-0352; published-lists.js): the item whose text is c.item, its own box
+  // focused, c.text typed as a person types it and sent by a real Enter (or, with c.via touch, a touch on its Send button).
+  // { found, put, left, shown }: put says the machine's mailbox took an envelope; left is what the box holds after.
+  async itemAnswer(c) {
+    const row = "(Array.from(document.querySelectorAll('#lists .published-lists:not([hidden]) .pl-item')).find((r) => (r.querySelector('.pl-text') || { textContent: '' }).textContent === " + JSON.stringify(String(c.item)) + ") || null)";
+    const found = await until(row + " !== null && " + row + ".querySelector('textarea.pl-box') !== null", c.timeoutMs || 30000);
+    if (!found) return { found: false, put: false, left: "", shown: "" };
+    const before = headOf(c.mailbox);
+    await evaluate(row + ".querySelector('textarea.pl-box').focus()", true);
+    await cdp("Input.insertText", { text: c.text });
+    if (c.via === "touch") {
+      const at = await evaluate("(() => { const b = " + row + ".querySelector('button.pl-send').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()");
+      await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+      await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } else {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    }
+    const end = Date.now() + 30000;
+    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
+    // THE BOX IS READ A MOMENT AFTER THE SEND, from the page as it stands then (review of PR 382, S1): the send redraws the lists, and a rebuilt
+    // box must not hold the words just sent. Then a second Enter in it is pressed, and must put nothing.
+    const putNow = headOf(c.mailbox) > before;
+    await sleep(c.settleMs || 1500);
+    const after = headOf(c.mailbox);
+    const refilled = await evaluate("(" + row + " || { querySelector: () => ({ value: '' }) }).querySelector('textarea.pl-box').value");
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await sleep(1000);
+    return { found: true, put: putNow, refilled, again: headOf(c.mailbox) > after, left: await evaluate("(" + row + " || { querySelector: () => ({ value: '' }) }).querySelector('textarea.pl-box').value"), shown: await evaluate("(" + row + " || { innerText: '' }).innerText") };
+  },
+  // What stands under the item whose text is c.item once it holds c.contains (its answer and receipt), waited for: { found, text }.
+  async itemAnswerState(c) {
+    const row = "(Array.from(document.querySelectorAll('#lists .published-lists:not([hidden]) .pl-item')).find((r) => (r.querySelector('.pl-text') || { textContent: '' }).textContent === " + JSON.stringify(String(c.item)) + ") || null)";
+    const answer = "((" + row + " || { querySelector: () => null }).querySelector('.pl-answer') || { innerText: '' }).innerText";
+    const found = await until(answer + ".indexOf(" + JSON.stringify(String(c.contains)) + ") >= 0", c.timeoutMs || 30000);
+    return { found: !!found, text: await evaluate(answer) };
+  },
+  // How many answer boxes and Send buttons the published lists hold (none for a read-only unlock).
+  async itemBoxes() {
+    return await evaluate("({ boxes: document.querySelectorAll('#lists .published-lists textarea.pl-box').length, buttons: document.querySelectorAll('#lists .published-lists button.pl-send').length, items: document.querySelectorAll('#lists .published-lists .pl-item').length })");
+  },
   // THE DECISIONS PAGE'S CARD of one lane (decision-cards.js), waited for by its name ("Orc G"): { found, slot, pressed }.
   // With c.click it is tapped, and pressed says whether the page then marks it chosen.
   async publishedCard(c) {
