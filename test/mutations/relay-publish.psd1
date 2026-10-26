@@ -6,6 +6,18 @@
     Suite  = "test\test-relay-publish.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "newer-record-diffed"
+           Find = '        if ($rel.value -ne $true) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "newer-record-told"
+           Find = '            & $say ("current - the hosted page is on "'
+           Replace = '            & $queue "unreadable" ("unreadable:ancestry:" + $b.base) $h.commit; & $say ("current - the hosted page is on "' }
+        @{ Name = "absent-commit-is-failure"
+           Find = 'if ($has.code -eq 1) { return (New-HordeKnown -Value $false) }'
+           Replace = '' }
+        @{ Name = "ancestry-unknown-is-newer"
+           Find = '        if (-not (Test-HordeAnswer $rel) -or $rel.state -cne "known") {'
+           Replace = '        if ($false) {' }
         @{ Name = "worker-folder-not-the-worker"
            Find = 'foreach ($w in @($Shipped.workerPrefixes)) { if ($p.StartsWith($w, [System.StringComparison]::Ordinal)) { $inFolder = $true } }'
            Replace = '' }

@@ -51,6 +51,15 @@
 #      when the deploy worked and only its check did not. While the record is that one, the failure
 #      stands and is tried again from the base before it. Any other record is a deploy made since - by
 #      hand, of any commit - and it settles the failure and is the base from then on.
+#   5a. A RECORD NEWER THAN THE CHECKOUT IS NOT A TROUBLE, AND NEVER A DEPLOY (T-0333; live 2026-10-21, -22
+#      and -26): a deploy by hand from a newer checkout records a commit the supervisor's own checkout has
+#      not fetched yet, or has fetched but not reached. When the base - the commit the hosted page is on -
+#      is not an ancestor of the checkout's commit (newer, unrelated, or not in the checkout at all, which
+#      git answers "bad object"), the page is current: say so, queue no notice, close the episode. It must
+#      never be diffed: with the newer commit present the diff would list its files as changed and the
+#      older checkout would be deployed over the newer page, a rollback. When the checkout moves to or
+#      past the record, the normal path resumes. Whether the two are related that way is asked of the
+#      Ancestry tool; only an answer that cannot be had (both commits present, git fails) is unreadable.
 #   6. One deploy at a time on the machine, by hand or not: the deploy itself holds the lock
 #      (cli/RelayDeploy.ps1), and a deploy that finds it held is left to the next pass, neither a failure
 #      nor told.
@@ -384,7 +393,7 @@ function Invoke-HordeRelayPublishTool {
 
 function Invoke-HordeRelayPublishStep {
     # One look at the hosted page, once a pass (header): the lines to say. Never throws for a tool.
-    #   -Tools   Now, Sleep, NewId, Head, Diff, Load, Shipped, Upstream, Bundle, Deploy, Http, SiteMap
+    #   -Tools   Now, Sleep, NewId, Head, Ancestry, Diff, Load, Shipped, Upstream, Bundle, Deploy, Http, SiteMap
     #            (New-HordeRelayPublishTools); Load may be $null where what the others need is loaded
     #   -Teller  the pass's teller (Tools.TellAll of cli/ServicesTend.ps1): param($Notices, $HordeHome,
     #            $Policy) -> { told; problem }; $null, or the policy's tellWarchief off, keeps them waiting
@@ -431,6 +440,21 @@ function Invoke-HordeRelayPublishStep {
             $s.checked = $null
             if ($null -ne $s.failure) { $s.failure = $null; & $say ("the hosted page is on " + (ConvertTo-HordeRelayPublishShort $h.commit) + "; the failure before is settled") -Log }
             else { & $say ("current - " + $b.reason) }
+            Close-HordeRelayPublishEpisode -State $s
+            return
+        }
+        # THE HOSTED PAGE IS ON A COMMIT THIS CHECKOUT HAS NOT REACHED (header, THE RULE 5a): current, never
+        # diffed, never deployed. Asked before anything reads the range, so a bad object is never met.
+        $rel = $null
+        try { $rel = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Ancestry" -With @($Checkout, $b.base, $h.commit) } catch { $rel = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
+        if (-not (Test-HordeAnswer $rel) -or $rel.state -cne "known") {
+            & $queue "unreadable" ("unreadable:ancestry:" + $b.base + ":" + $h.commit) $h.commit
+            & $say ("NOT DEPLOYED - whether " + (ConvertTo-HordeRelayPublishShort $b.base) + " is behind this checkout could not be told" + $(if ((Test-HordeAnswer $rel) -and "" + $rel.reason -ne "") { ": " + $rel.reason } else { "" })) -Log
+            return
+        }
+        if ($rel.value -ne $true) {
+            $s.checked = $null
+            & $say ("current - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", newer than this checkout (" + (ConvertTo-HordeRelayPublishShort $h.commit) + "); nothing to deploy until the checkout moves")
             Close-HordeRelayPublishEpisode -State $s
             return
         }
@@ -607,6 +631,25 @@ function Get-HordeRelayPublishChanged {
     return (New-HordeKnown -Value ([pscustomobject]@{ paths = [string[]]@(("" + $r.out) -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) }))
 }
 
+function Test-HordeRelayPublishBehind {
+    # Is -Base (what the hosted page is on) in the history of -Head (the checkout's commit), or equal to
+    # it (header, THE RULE 5a)? Known $true; known $false when -Base is not an ancestor of it (newer,
+    # unrelated, or a commit this checkout does not hold: no object is ever asked of a diff); or unknown
+    # when git could not answer with both commits present. Both are full commit ids.
+    param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string]$Base, [Parameter(Mandatory = $true)][string]$Head)
+    if ($Base -cnotmatch $script:HordeRelayPublishCommitPattern -or $Head -cnotmatch $script:HordeRelayPublishCommitPattern) { return (New-HordeUnknown -Reason "a commit to compare is not a full commit id") }
+    $has = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("cat-file", "-e", ($Base + "^{commit}")) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
+    if (-not $has.ok) {
+        # cat-file -e answers 1, quietly, for an object that is not there; any other failure is not "absent".
+        if ($has.code -eq 1) { return (New-HordeKnown -Value $false) }
+        return (New-HordeUnknown -Reason ("whether the checkout holds " + (ConvertTo-HordeRelayPublishShort $Base) + " could not be read: " + $has.detail))
+    }
+    $r = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("merge-base", "--is-ancestor", $Base, $Head) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
+    if ($r.ok) { return (New-HordeKnown -Value $true) }
+    if ($r.code -eq 1) { return (New-HordeKnown -Value $false) }
+    return (New-HordeUnknown -Reason ("whether " + (ConvertTo-HordeRelayPublishShort $Base) + " is behind the checkout could not be read: " + $r.detail))
+}
+
 function Get-HordeRelayPublishUrl {
     # GET -Url with a short time limit: known { status; body; sha256 } (any status; body and sha256 of a
     # 200 only), or unknown when nothing answered. Only an https origin's address is asked; the cache is
@@ -753,6 +796,7 @@ function New-HordeRelayPublishTools {
         Sleep    = { param($Ms) Start-Sleep -Milliseconds $Ms }
         NewId    = { return [guid]::NewGuid().ToString() }
         Head     = { param($Checkout) return (Get-HordeRelayPublishRevision -Checkout $Checkout) }
+        Ancestry = { param($Checkout, $Base, $Head) return (Test-HordeRelayPublishBehind -Checkout $Checkout -Base $Base -Head $Head) }
         Diff     = { param($Checkout, $Base, $Head) return (Get-HordeRelayPublishChanged -Checkout $Checkout -Base $Base -Head $Head) }
         Http     = { param($Url) return (Get-HordeRelayPublishUrl -Url $Url) }
         SiteMap  = { return (Get-HordeRelayDeploySiteSources) }
