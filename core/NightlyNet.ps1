@@ -100,6 +100,52 @@ function Get-HordeNightlySlotWait {
     return $Normal
 }
 
+function Get-HordeNightlyNightFloors {
+    # THE NIGHT FLOORS, the one place they are set (founder's YES, 2026-10-26). On the nights of 2026-10-23 and
+    # 2026-10-25 free memory was 1.1 to 2.5 GB all night and the 4.5 GB floor ran 0 of 462 units; a horde suite
+    # file was measured at 0.1 to 0.4 GB peak, so 1 GB free covers one with room, and the whole pytest run
+    # of the Python repo gets 2.5 GB. Commit headroom (commit limit less commit charge) 1 GB for every kind.
+    # Keys are the -Repos kinds; the guards are a horde run.
+    return @{ freeGB = @{ horde = 1.0; pytest = 2.5 }; commitGB = 1.0; startHour = 22; endHour = 7 }
+}
+
+function Get-HordeNightlyMemoryFloor {
+    # The floor a gate of this repo kind is given now: { freeGB; commitGB; night }. Inside the night hours
+    # (22:00 to 07:00, Get-HordeNightlyNightFloors) the night floor of the kind; outside them the day floor the
+    # caller passes (-MinFreeGB, -MinCommitHeadroomGB of tools/NightlyNet.ps1), so nothing changes by day. A
+    # kind with no night floor keeps the day floor.
+    param([datetime]$Now, [string]$Kind, [double]$DayFreeGB, [double]$DayCommitGB)
+    $f = Get-HordeNightlyNightFloors
+    $h = $Now.Hour
+    $night = ($h -ge $f.startHour -or $h -lt $f.endHour)
+    if (-not $night -or -not $f.freeGB.ContainsKey($Kind)) { return [pscustomobject]@{ freeGB = $DayFreeGB; commitGB = $DayCommitGB; night = $false } }
+    return [pscustomobject]@{ freeGB = [double]$f.freeGB[$Kind]; commitGB = [double]$f.commitGB; night = $true }
+}
+
+function Test-HordeNightlyMayStartSuiteRun {
+    # May a run of the full-suite phase start now? Before 2026-10-26 a unit needed Now + its slot wait + its whole
+    # -RunSeconds (1500) before the SUITE cutoff (06:15 less the 90 min bisect reserve), so the last 1620 s of the
+    # phase started nothing (2026-10-25: the last unit was tried at 04:18), though units take a minute or so. Now
+    # it may start while Now + its slot wait is before the suite cutoff, as long as its worst case (wait plus
+    # RunSeconds) still ends by the RUN cutoff: a long unit eats into the bisect reserve, never past 06:15.
+    param([datetime]$Now, [datetime]$SuiteCutoff, [datetime]$RunCutoff, [int]$WaitSeconds, [int]$RunSeconds)
+    return ((Get-HordeNightlySuiteRunSeconds -Now $Now -SuiteCutoff $SuiteCutoff -RunCutoff $RunCutoff -WaitSeconds $WaitSeconds -RunSeconds $RunSeconds -MinSeconds $RunSeconds) -gt 0)
+}
+
+function Get-HordeNightlySuiteRunSeconds {
+    # The run limit a unit of the suite phase is given if it starts now, or 0 when it may not start. It may start
+    # while its wait ends by the suite cutoff. It gets -RunSeconds when that still ends by the run cutoff; near the
+    # end it gets what is left, if that is at least -MinSeconds (a per-unit limit FITTED to the night: a horde
+    # suite file takes well under 600 s, the longest measured about 540 s, so a 1500 s reservation kept the last 25
+    # minutes of the night idle). A unit past its fitted limit is ended and reported unrun, never green.
+    param([datetime]$Now, [datetime]$SuiteCutoff, [datetime]$RunCutoff, [int]$WaitSeconds, [int]$RunSeconds, [int]$MinSeconds = 600)
+    if ($Now.AddSeconds($WaitSeconds) -gt $SuiteCutoff) { return 0 }
+    $left = [int][math]::Floor(($RunCutoff - $Now).TotalSeconds - $WaitSeconds)
+    if ($left -ge $RunSeconds) { return $RunSeconds }
+    if ($left -ge [math]::Min($MinSeconds, $RunSeconds)) { return $left }
+    return 0
+}
+
 function Read-HordeNightlyMemoryHolders {
     # The memory holders a gate listed when it gave up (core/HeavySlotAcquire.ps1 Get-HordeHeavySlotMemoryHolders):
     # [{ name; count; gb }], in the gate's order (largest first).
@@ -469,10 +515,12 @@ function New-HordeNightlyReport {
     # where culprits is a list of { unit; state; sha; merge; runs; between }. Returns the text, every line sanitized.
     # -Memory (optional): { giveUps; minFreeGB; minCommitGB; holders = [{ name; count; gb }] } - when a gate gave up
     # waiting for memory, one line says how often and names the top 3 holders of the last give-up.
-    param([string]$Date, [object[]]$Repos, $Memory = $null)
+    # -AppLines (optional): the lines of the night's app closer (tools/nightly/AppCloser.ps1), CLOSED first.
+    param([string]$Date, [object[]]$Repos, $Memory = $null, [string[]]$AppLines = @())
     $lines = @()
     $newly = 0; foreach ($r in @($Repos)) { $newly += @($r.compare.newlyRed).Count }
     $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos. " + (Get-HordeNightlyHeadlineStatus -Repos $Repos))
+    foreach ($a in @($AppLines)) { if ("" + $a -ne "") { $lines += ("" + $a) } }
     if ($null -ne $Memory -and [int]$Memory.giveUps -gt 0) {
         $inv = [System.Globalization.CultureInfo]::InvariantCulture
         $who = @(@($Memory.holders) | Select-Object -First 3 | ForEach-Object { $_.name + " " + $_.count + " processes " + ([double]$_.gb).ToString("0.0", $inv) + " GB" })
