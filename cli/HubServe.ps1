@@ -114,7 +114,9 @@ function Read-HordeHubMirror {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$Contract)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no mirror file at " + $Path)) }
     $m = $null
-    try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }
+    # ConvertFrom-HordeJson (core/JsonText.ps1): bare ConvertFrom-Json under 7 read heardAt and the
+    # inventory times as [datetime], and node-mirror.v1 refused every mirror read (T-0366).
+    try { $m = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path) }
     catch {
         # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
         # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the

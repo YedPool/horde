@@ -81,9 +81,13 @@ $script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-
     # checked keywords and compiled pattern, or throw), and Test-HordeSchemaType, Test-HordeSchemaIsNumber
     # and Compare-HordeSchemaNumber are the type and minimum checks it applies, called for the rare value
     # the walk does not check inline. Each takes plain values and runs nothing it is given. Added 2026-10-02.
-    "Get-HordeSchemaNode", "Assert-HordeSchema", "Test-HordeSchemaType", "Test-HordeSchemaIsNumber", "Compare-HordeSchemaNumber")
+    "Get-HordeSchemaNode", "Assert-HordeSchema", "Test-HordeSchemaType", "Test-HordeSchemaIsNumber", "Compare-HordeSchemaNumber",
+    # ConvertFrom-HordeJson (core/JsonText.ps1, T-0366): ConvertFrom-Json, already allowed, made the same under
+    # both shells - text in, parsed values out, every string left a string. Under 7.0 to 7.4 it walks the result
+    # with ConvertTo-HordeJsonDateText, which rewrites [datetime] values as text. Neither runs anything it is given.
+    "ConvertFrom-HordeJson", "ConvertTo-HordeJsonDateText")
 # Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
-$script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1")
+$script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1", "JsonText.ps1")
 
 # Rule 2. The types New-Object may make.
 $script:HordeExecNewTypes = @("System.Collections.ArrayList", "System.Collections.Stack", "System.Collections.Generic.List[string]",
