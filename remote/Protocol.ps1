@@ -74,6 +74,9 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path $PSScriptRoot "Contract.ps1")
+# ConvertFrom-HordeJson, the parse that gives the same values under both shells (T-0366): bare
+# ConvertFrom-Json under 7 turned every date-shaped string into a [datetime], which the writer refuses.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 $script:HordeWireMaxDepth = 64
 # A string with nothing to escape: printable ASCII but the quote and the backslash. Written as it is,
@@ -345,12 +348,13 @@ function ConvertFrom-HordeFrameBytes {
         return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ($what + " at offset " + $badAt.Index + "; a frame is printable ASCII"))
     }
     $frame = $null
-    try { $frame = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+    try { $frame = ConvertFrom-HordeJson -Text $text }
     catch { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the line is not JSON: " + $_.Exception.Message)) }
     if ($frame -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason "the line is JSON but not one object") }
     if (-not (Test-HordeLinkHasProp $frame "v")) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason "the frame has no version (v)") }
     $v = Get-HordeLinkProp $frame "v"
-    if (-not ($v -is [int] -and $v -eq 1)) { return (New-HordeWireResult -Ok $false -Code "unknown-version" -Bom $bom -Reason ("the frame is version '" + $v + "'; this end reads version 1 only")) }
+    # A whole number parses as Int32 under 5.1 and Int64 under 7 (core/JsonText.ps1); either is the number.
+    if (-not (($v -is [int] -or $v -is [long]) -and $v -eq 1)) { return (New-HordeWireResult -Ok $false -Code "unknown-version" -Bom $bom -Reason ("the frame is version '" + $v + "'; this end reads version 1 only")) }
     $again = $null
     try { $again = ConvertTo-HordeWireText $frame } catch { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the frame holds a value the link cannot carry: " + $_.Exception.Message)) }
     if (-not [string]::Equals($again, $text, [System.StringComparison]::Ordinal)) {
