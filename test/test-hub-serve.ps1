@@ -98,7 +98,7 @@ try {
     [System.IO.File]::WriteAllText($bad, '{"schemaVersion":1,"deviceId":"' + $device + '","deviceName":"x"}')
     Check ((Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract).state -ceq "known") "CONTROL: the same file without the extra member reads"
     # An inventory the link contract refuses: a session whose role answer is known with no value.
-    $view = [System.IO.File]::ReadAllText($viewPath) | ConvertFrom-Json
+    $view = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($viewPath))
     $ns = New-HordeNamespace -Device $device -Space "windows"
     $list = ConvertTo-HordeMirrorObject (Get-HordeNodeSessionList -View $view -Namespace $ns -Contract $contract)
     $good = Update-HordeNodeMirror -Mirror $m -List $list -NodeSentAt (Utc) -ReceivedAt (Utc)
@@ -110,7 +110,7 @@ try {
     [System.IO.File]::WriteAllText($bad, $broken)
     $r = Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract
     Check ($r.state -ceq "unknown" -and $r.reason -clike "*link contract*") ("an inventory the link contract refuses is unknown, naming the contract (" + $r.reason + ")")
-    $carriedBroken = $good | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $carriedBroken = ConvertFrom-HordeJson -Text ($good | ConvertTo-Json -Depth 40)
     $carriedBroken.inventory.carried = @([pscustomobject]@{ lastSeenAt = "2026-10-05T12:00:00Z"; session = [pscustomobject]@{ sessionId = "x" } })
     $threw = $false; try { $null = Write-HordeHubMirror -Root $mirrorRoot -Mirror $carriedBroken -Contract $contract } catch { $threw = $true }
     Check $threw "a mirror whose carried sessions the contract refuses is never written"
@@ -244,7 +244,7 @@ try {
     Write-Host "--- membershipComplete over a real pull (verbs version 2, ledger core-projection L-101) ---" -ForegroundColor Cyan
     # The hub's own hello, from Invoke-HordeHubPull, against the node's real loop: no hand-built offer.
     # The node declares X2 and has no other session-naming folder; its second view lists one session.
-    $mv = [System.IO.File]::ReadAllText($viewPath) | ConvertFrom-Json
+    $mv = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($viewPath))
     $mv | Add-Member -NotePropertyName sessionStores -NotePropertyValue ([pscustomobject][ordered]@{ state = "known"; value = @("X2"); reason = "" })
     $mv | Add-Member -NotePropertyName storeFolders -NotePropertyValue ([pscustomobject][ordered]@{ X2 = $true; W8 = $false; W1 = $false; X1 = $false; W5 = $false })
     $mvTwo = Join-Path $work "view-member-two.json"; [System.IO.File]::WriteAllText($mvTwo, ($mv | ConvertTo-Json -Depth 30))
@@ -490,7 +490,7 @@ try {
     Write-Host "--- horde nodes' report ---" -ForegroundColor Cyan
     $fleet = Get-HordeFleetView -Mirrors @($after2.value) -Now (Utc)
     $rep = ConvertTo-HordeNodesReport -Fleet $fleet
-    $json = $rep | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $json = ConvertFrom-HordeJson -Text ($rep | ConvertTo-Json -Depth 40)
     Check (@($json.nodes).Count -eq 1 -and $json.nodes[0].heard.state -ceq "unknown" -and $json.nodes[0].heard.reason -clike "*unreachable since*") "each node's answer is a record: state and reason"
     Check (@($json.sessions).Count -eq 2 -and @($json.sessions | Where-Object { $_.presence.state -ceq "unknown" -and $_.fields.role.state -ceq "unknown" -and $_.device -ceq $device }).Count -eq 2) "each session row carries its device, its presence and its fields as records"
     Check (@($json.sessions | Where-Object { "$($_.lastKnown.role.value)" -ceq "warg" }).Count -ge 1) "and its last-known copy while it is not current"

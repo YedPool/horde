@@ -439,7 +439,8 @@ function New-HordeNodeResult {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)]$Answer)
     # Built as ordered maps, sent as parsed JSON objects: the contract's checker and the wire writer
     # read objects, and a round trip through JSON is the one conversion both agree on.
-    $result = ($Answer | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json
+    # ConvertFrom-HordeJson (core/JsonText.ps1): under 7 bare ConvertFrom-Json made observedAt a [datetime] (T-0366).
+    $result = ConvertFrom-HordeJson -Text ($Answer | ConvertTo-Json -Depth 40 -Compress)
     return [pscustomobject][ordered]@{ v = 1; kind = "res"; id = (New-HordeLinkFrameId); seq = (Get-HordeNodeNextSeq $State); ts = (Get-HordeLinkTime); verb = "$($Request.verb)"; requestId = "$($Request.requestId)"; re = "$($Request.id)"; result = $result }
 }
 

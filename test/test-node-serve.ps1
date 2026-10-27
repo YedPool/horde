@@ -30,7 +30,7 @@ $viewPath = Join-Path $fx "view.json"
 $device = "0f8fad5b-d9cb-469f-a165-70867728950e"
 $ns = New-HordeNamespace -Device $device -Space "windows"
 $manifest = New-HordeNodeManifest -Root $root -Node ([pscustomobject]@{ deviceId = $device; deviceName = "fixture-node" }) -Space "windows"
-function View { return ([System.IO.File]::ReadAllText($viewPath) | ConvertFrom-Json) }
+function View { return (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($viewPath))) }
 function Data { param($View = $null, [string]$Journal = "", [string]$ViewError = "") return [pscustomobject]@{ manifest = $manifest; view = $View; viewError = $ViewError; journalRoot = $Journal; namespace = $ns } }
 function State { return (New-HordeNodeServeState -NodeId $device -NodeName "fixture-node" -HordeVersion "0.1.0") }
 function Hello {
@@ -186,7 +186,7 @@ Check ((Sendable $r.reply) -and @($r.reply.result.value.sessions).Count -eq 1 -a
 $many = View
 $proto = @($many.sessions)[0]
 $rows = New-Object System.Collections.ArrayList
-for ($i = 0; $i -lt 260; $i++) { $c = ($proto | ConvertTo-Json -Depth 10) | ConvertFrom-Json; $c.sessionId = ("bbbbbbbb-0000-4000-8000-" + $i.ToString("000000000000")); [void]$rows.Add($c) }
+for ($i = 0; $i -lt 260; $i++) { $c = ConvertFrom-HordeJson -Text ($proto | ConvertTo-Json -Depth 10); $c.sessionId = ("bbbbbbbb-0000-4000-8000-" + $i.ToString("000000000000")); [void]$rows.Add($c) }
 $many.sessions = $rows.ToArray()
 $r = Ask "sessions.list" -View $many
 # Whether the capped list fits one frame is test\test-node-serve-capacity.ps1, which encodes it: about
@@ -301,7 +301,7 @@ Check ("$($r.reply.result.state)" -ceq "absent" -and (Sendable $r.reply)) "a ses
 $r = Ask "session.get" ([pscustomobject]@{ sessionId = "AAAAAAAA-0000-4000-8000-000000000001" }) -View $full
 Check ("$($r.reply.result.state)" -ceq "absent") "a session id is matched exactly"
 $twin = View
-$t2 = (@($twin.sessions)[0] | ConvertTo-Json -Depth 10) | ConvertFrom-Json
+$t2 = ConvertFrom-HordeJson -Text (@($twin.sessions)[0] | ConvertTo-Json -Depth 10)
 $t2.fields.agent.value = "harness-b"
 $twin.sessions = @(@($twin.sessions) + @($t2))
 $r = Ask "session.get" ([pscustomobject]@{ sessionId = "aaaaaaaa-0000-4000-8000-000000000001" }) -View $twin
