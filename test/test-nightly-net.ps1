@@ -490,6 +490,29 @@ exit 125
     $oldPath = $env:PATH
     try { $env:PATH = $work; $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode all -NodesFile (Join-Path $work "n.txt")); $pc = $LASTEXITCODE } finally { $env:PATH = $oldPath }
     Check ($pc -eq 71 -and -not (Test-Path -LiteralPath (Join-Path $work "n.txt"))) ("pytest-wrap without python is 71 and writes no nodes file (" + $pc + ")")
+    # pytest-wrap gives pytest a --basetemp of its own beside the nodes file, never the shared %TEMP%\pytest-of-<user>
+    # (2026-10-26: that folder's ACL locked even its owner out and 786 tmp_path tests errored at setup). A fake python
+    # records its arguments; the wrap must pass a fresh, unique, per-run folder and leave nothing behind.
+    $fake = Join-Path $work "fakepy"
+    [void][System.IO.Directory]::CreateDirectory($fake)
+    $argLog = Join-Path $fake "args.txt"
+    [System.IO.File]::WriteAllText((Join-Path $fake "python.cmd"), ("@echo off" + "`r`n" + ">>""" + $argLog + """ echo %*" + "`r`n" + "exit /b 0" + "`r`n"))
+    $btDir = Join-Path $work "btrun"
+    [void][System.IO.Directory]::CreateDirectory($btDir)
+    $btNodes = Join-Path $btDir "one.nodes"
+    [System.IO.File]::WriteAllText($btNodes, "tests/test_x.py::test_y`n")
+    try {
+        $env:PATH = $fake + ";" + $oldPath
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode nodes -NodesFile $btNodes); $bc1 = $LASTEXITCODE
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode all -NodesFile (Join-Path $btDir "all-nodes.txt")); $bc2 = $LASTEXITCODE
+    } finally { $env:PATH = $oldPath }
+    $argLines = @($(if (Test-Path -LiteralPath $argLog) { Get-Content -LiteralPath $argLog } else { @() }))
+    $bts = @($argLines | ForEach-Object { if ($_ -match '--basetemp=(\S+)') { $Matches[1] } })
+    Check ($bc1 -eq 0 -and $bc2 -eq 0 -and $argLines.Count -eq 2) ("pytest-wrap ran the fake python once per mode and kept its exit codes (" + $bc1 + ", " + $bc2 + ", " + $argLines.Count + " calls)")
+    Check ($bts.Count -eq 2) ("pytest-wrap passes --basetemp in nodes and all mode (" + ($argLines -join " | ") + ")")
+    Check (@($bts | Where-Object { $_ -like "*pytest-of-*" -or (Split-Path -Parent $_) -ne $btDir }).Count -eq 0 -and $bts.Count -eq 2) ("the basetemp is beside the nodes file, never the shared pytest-of folder (" + ($bts -join ", ") + ")")
+    Check ($bts.Count -eq 2 -and $bts[0] -ne $bts[1]) "each run gets a basetemp of its own"
+    Check (@(Get-ChildItem -LiteralPath $btDir -Directory).Count -eq 0) "and the wrap leaves no basetemp folder behind"
 } finally {
     $env:HORDE_HOME = $oldHome
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
