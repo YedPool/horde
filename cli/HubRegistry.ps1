@@ -59,14 +59,21 @@ function Test-HordeHubExpired {
 
 function Set-HordeHubRegistryAcl {
     # -Path's ACL: this user alone, inheritance cut. Throws when it does not read back so.
+    # Read and written by .NET, not the Get-Acl / Set-Acl cmdlets (T-0367): their module does not load in a Windows
+    # PowerShell child of a PowerShell 7 parent, so `horde hub enroll` started that way failed here; and Set-Acl may
+    # ask for a privilege a non-elevated user lacks (transports/ssh/Files.ps1). The owner is set only when it is not
+    # already this user, since changing it needs a right the user may not hold.
     param([Parameter(Mandatory = $true)][string]$Path)
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $fi = New-Object System.IO.FileInfo -ArgumentList $Path
+    $hasMethods = [bool]$fi.PSObject.Methods["GetAccessControl"]
+    $current = if ($hasMethods) { $fi.GetAccessControl() } else { [System.IO.FileSystemAclExtensions]::GetAccessControl($fi) }
     $acl = New-Object System.Security.AccessControl.FileSecurity
     $acl.SetAccessRuleProtection($true, $false)
-    $acl.SetOwner($me)
+    if ("$($current.GetOwner([System.Security.Principal.SecurityIdentifier]))" -cne "$me") { $acl.SetOwner($me) }
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, "FullControl", "Allow")))
-    Set-Acl -LiteralPath $Path -AclObject $acl
-    $read = Get-Acl -LiteralPath $Path
+    if ($hasMethods) { $fi.SetAccessControl($acl) } else { [System.IO.FileSystemAclExtensions]::SetAccessControl($fi, $acl) }
+    $read = if ($hasMethods) { $fi.GetAccessControl() } else { [System.IO.FileSystemAclExtensions]::GetAccessControl($fi) }
     $rules = @($read.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     if (-not $read.AreAccessRulesProtected -or $rules.Count -ne 1 -or "$($rules[0].IdentityReference)" -cne "$me") { throw ("the register file " + $Path + " could not be made this user's alone") }
 }
