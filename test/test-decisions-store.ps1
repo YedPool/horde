@@ -11,6 +11,10 @@
 #
 # Every store here is a fresh folder under %TEMP% that this suite made and removes (CONTRIBUTING 9).
 # The suite deletes and damages records on purpose, and only ever in those folders.
+#
+# NIGHTLY NET: its CONTROL symbolic links (cmd mklink) need the privilege to make one; without it they fail
+# (nightly net, 2026-10-26).
+# nightly-needs: symlink
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here

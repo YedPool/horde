@@ -8,6 +8,10 @@
 # folder (never ProgramData), and reports whether its rules are protected from inheritance and name
 # only SYSTEM and Administrators. The folder is deleted afterwards. A pwsh that is not here is a
 # partial run (exit 3), said, not a pass for it.
+#
+# NIGHTLY NET: the folder it makes admits only SYSTEM and Administrators, so only an elevated token can list
+# and remove it; non-elevated the deletes fail (nightly net, 2026-10-26, and again 2026-10-27).
+# nightly-needs: elevated
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here

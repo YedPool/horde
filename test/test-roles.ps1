@@ -3,6 +3,10 @@
 # Every lesson here is cited in planning/ledger/core-roles.md. Nothing touches the real wezfleet store:
 # a throwaway store is built in TEMP and reached through WEZFLEET_ROOT, the same override wezfleet's own
 # tests use.
+#
+# NIGHTLY NET: its drift check reads a wezfleet checkout's lib\Hierarchy.ps1; the night's clone has none
+# beside it (nightly net, 2026-10-26).
+# nightly-needs: wezfleet-repo
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here

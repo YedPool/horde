@@ -343,6 +343,40 @@ Check ((New-HordeNightlyReport -Date "d" -Repos @($mrow) -Memory ([pscustomobjec
 Check ((New-HordeNightlyReport -Date "d" -Repos @($mrow)) -cnotlike "*MEMORY*") "nor when no memory facts are given"
 
 Write-Host ""
+Write-Host "--- needs: a suite declares what the night must have, a probe that says no SKIPS it, never green ---" -ForegroundColor Cyan
+# 2026-10-26: 15 horde units were red only because the night lacked a symbolic link privilege, an elevated token, WSL or
+# a wezfleet checkout. The probes are FAKE here (stand-in answers): nothing on this machine is asked.
+$hdr = @("# DOES IT WORK?", "#", "# nightly-needs: symlink", "", "`$x = 1", "# nightly-needs: wsl", "Write-Host '# nightly-needs: elevated'")
+Check ((@(Read-HordeNightlyNeeds -Lines $hdr) -join ",") -ceq "symlink") ("the header's declaration is read, and nothing after the first line of code (" + (@(Read-HordeNightlyNeeds -Lines $hdr) -join ",") + ")")
+Check ((@(Read-HordeNightlyNeeds -Lines @("# a", "# nightly-needs: symlink, elevated", "#nightly-needs: wsl")) -join ",") -ceq "symlink,elevated,wsl") "a list, and more than one line, are read"
+Check (@(Read-HordeNightlyNeeds -Lines @("# a suite", "", "`$x = 1")).Count -eq 0) "a suite that declares nothing needs nothing"
+Check ((@(Read-HordeNightlyNeeds -Lines @("# nightly-needs: Sym link!")) -join ",") -ceq "malformed") "a declaration of the wrong shape is the need malformed, never nothing"
+$noLink = @{ symlink = [pscustomobject]@{ ok = $false; why = "this account may not make a symbolic link" }; wsl = [pscustomobject]@{ ok = $true; why = "WSL lists 1 distro(s)" } }
+$sr = Get-HordeNightlySkipReason -Needs @("symlink") -Probes $noLink
+Check ($sr -ceq "needs symlink: this account may not make a symbolic link") ("a unit needing symlink with the probe false is skipped, with the probe's reason (" + $sr + ")")
+Check ((Get-HordeNightlySkipReason -Needs @("wsl") -Probes $noLink) -ceq "") "with the probe true it runs (no reason)"
+Check ((Get-HordeNightlySkipReason -Needs @() -Probes $noLink) -ceq "") "a unit with no needs runs"
+Check ((Get-HordeNightlySkipReason -Needs @("wsl", "symlink") -Probes $noLink) -like "needs symlink:*" -and (Get-HordeNightlySkipReason -Needs @("wsl", "symlink") -Probes $noLink) -notlike "*wsl*") "only the unmet need is named"
+Check ((Get-HordeNightlySkipReason -Needs @("elevatd") -Probes $noLink) -ceq "needs elevatd, which no probe answers") "a need no probe answers is skipped and named, never taken as met"
+Check ((@(Get-HordeNightlyNeedNames) -join ",") -ceq "symlink,elevated,wsl,wezfleet-repo") "the needs the night can probe"
+$skv = @{ "s|ps51" = "skipped"; "g|ps51" = "green"; "r|ps51" = "red"; "u|ps51" = "unrun" }
+Check ((Get-HordeNightlyRunCount -Verdicts $skv) -eq 2) ("a skipped unit is not counted as run (" + (Get-HordeNightlyRunCount -Verdicts $skv) + ")")
+$skc = Compare-HordeNightlyVerdicts -Now @{ "s|ps51" = "skipped"; "t|ps51" = "skipped" } -Last @{ "s|ps51" = "red"; "t|ps51" = "green" }
+Check ((($skc.skipped -join ",") -ceq "s|ps51,t|ps51") -and @($skc.fixed).Count -eq 0 -and @($skc.newlyRed).Count -eq 0 -and @($skc.newRed).Count -eq 0) "a skipped unit is listed as skipped: a red skipped tonight is not fixed, and it is never red"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skipped" -Previous "green") -ceq "skip" -and (Get-HordeNightlyStoredVerdict -Verdict "skipped" -Previous "") -ceq "skip") "a skipped unit is never stored green, not even over a green"
+Check ((Get-HordeNightlyStoredVerdict -Verdict "skipped" -Previous "red") -ceq "") "and a stored red stands over it"
+Check ((ConvertTo-HordeNightlyBisectAnswer "skipped") -eq $null) "a skipped answer in a bisect is no answer"
+$skRow = [pscustomobject]@{ repo = "Y/h"; tip = "abcdef01"; lastTip = "01234567"; merges = @(); guards = [pscustomobject]@{ state = "green"; text = "" }
+    suiteCount = (Get-HordeNightlyRunCount -Verdicts @{ "test/test-a.ps1|ps51" = "skipped"; "test/test-a.ps1|pwsh7" = "skipped"; "test/test-b.ps1|ps51" = "green" }); unrunCount = 0
+    compare = (Compare-HordeNightlyVerdicts -Now @{ "test/test-a.ps1|ps51" = "skipped"; "test/test-a.ps1|pwsh7" = "skipped"; "test/test-b.ps1|ps51" = "green" } -Last @{})
+    skipReasons = @{ "test/test-a.ps1|ps51" = $sr; "test/test-a.ps1|pwsh7" = $sr }; culprits = @(); notes = @(); incomplete = "" }
+$skRep = New-HordeNightlyReport -Date "2026-10-27" -Repos @($skRow)
+Check ($skRep -like "*SKIPPED test/test-a.ps1|ps51, test/test-a.ps1|pwsh7 - needs symlink: this account may not make a symbolic link*") ("the report shows the skipped units on one line with their reason (" + (($skRep -split "`n") | Where-Object { $_ -like "*SKIPPED*" }) + ")")
+Check ($skRep -like "*units run: 1,*" -and $skRep -like "*skipped (the night lacks what they need, not run, never green): 2*") "units run counts only what ran, and the skipped count is its own line"
+Check ((($skRep -split "`n")[0]) -like "*COMPLETE.*SKIPPED: 2 units, the night lacks what they need (never green).*") ("the headline says how many were skipped (" + (($skRep -split "`n")[0]) + ")")
+Check ($skRep -notmatch '["<>;]') "and the report still has no double quote, semicolon or angle bracket"
+
+Write-Host ""
 Write-Host "--- the tool, with -Plan: a throwaway repository, nothing run ---" -ForegroundColor Cyan
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-nightly-test-" + [guid]::NewGuid().ToString("N"))
 $oldHome = $env:HORDE_HOME
@@ -484,6 +518,43 @@ exit 125
     $nlog = Join-Path $hwr "nightly.log"
     $ltext = $(if (Test-Path -LiteralPath $nlog) { [System.IO.File]::ReadAllText($nlog) } else { "" })
     Check ($ltext -like "*gave up on memory: slot waits are 120 s*" -and $ltext -like "*got its memory: slot waits are 900 s again*") "the log says when the wait changes"
+    # A NIGHT WITH NEEDS, through the real tool: test-a declares symlink (the stand-in probe says no), test-b declares wsl
+    # (says yes), test-c declares nothing. Stand-in probes (-ProbesFile) and a gate that runs everything green (exit 0).
+    $sn = Join-Path $work "needs"; [void][System.IO.Directory]::CreateDirectory($sn)
+    $okGate = Join-Path $sn "gate.ps1"
+    [System.IO.File]::WriteAllText($okGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = ""; if ($ArgsFile -ne "") { $a = [System.IO.File]::ReadAllText($ArgsFile) -replace '\s+', ' ' }
+Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ($Script + " " + $a)
+[System.IO.File]::WriteAllText($Out, "")
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0
+'@)
+    $probesJson = Join-Path $sn "probes.json"
+    [System.IO.File]::WriteAllText($probesJson, '{ "symlink": { "ok": false, "why": "this account may not make a symbolic link (stand-in)" }, "wsl": { "ok": true, "why": "WSL lists 1 distro(s) (stand-in)" } }')
+    $sorigin = Join-Path $sn "origin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $sorigin "test\lib"))
+    [void](Git $sorigin @("init", "-q", "-b", "main"))
+    [System.IO.File]::WriteAllText((Join-Path $sorigin "test\lib\SuiteFiles.ps1"), "function Get-HordeSuiteFiles { param([string]`$Root) return @(Get-ChildItem -LiteralPath (Join-Path `$Root 'test') -Filter 'test-*.ps1' | Sort-Object Name) }`r`nfunction Get-HordeMachineBoundSuites { return @() }`r`n")
+    $decl = "# nightly" + "-needs: "
+    [System.IO.File]::WriteAllText((Join-Path $sorigin "test\test-a.ps1"), ("# A SUITE THAT MAKES A SYMBOLIC LINK`r`n" + $decl + "symlink`r`nexit 0`r`n"))
+    [System.IO.File]::WriteAllText((Join-Path $sorigin "test\test-b.ps1"), ("# A SUITE THAT NEEDS WSL`r`n" + $decl + "wsl`r`nexit 0`r`n"))
+    [System.IO.File]::WriteAllText((Join-Path $sorigin "test\test-c.ps1"), "# A SUITE THAT NEEDS NOTHING`r`nexit 0`r`n")
+    [void](Git $sorigin @("add", "-A")); [void](Git $sorigin @("commit", "-q", "-m", "base"))
+    $swr = Join-Path $sn "wr"
+    & git.exe clone -q $sorigin (Join-Path $swr "Fix__Need\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $okGate -ProbesFile $probesJson -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Need:horde:main")
+    $snc = $LASTEXITCODE
+    $scalls = @(); if (Test-Path -LiteralPath (Join-Path $sn "calls.txt")) { $scalls = @(Get-Content -LiteralPath (Join-Path $sn "calls.txt")) }
+    Check ($snc -eq 0) ("the night with needs ends exit 0 (" + $snc + ")")
+    Check (@($scalls | Where-Object { $_ -like "*test-a.ps1*" }).Count -eq 0) ("the unit needing symlink, with the probe false, never went to the gate (" + ($scalls -join " | ") + ")")
+    Check (@($scalls | Where-Object { $_ -like "*test-b.ps1*" }).Count -eq 2 -and @($scalls | Where-Object { $_ -like "*test-c.ps1*" }).Count -eq 2) "the unit needing wsl, with the probe true, ran in both shells, and so did the unit that needs nothing"
+    $srf = Join-Path $swr ("reports\" + $night.ToString("yyyy-MM-dd") + ".txt")
+    $srt = $(if (Test-Path -LiteralPath $srf) { [System.IO.File]::ReadAllText($srf) } else { "" })
+    Check ($srt -like "*SKIPPED test/test-a.ps1|ps51, test/test-a.ps1|pwsh7 - needs symlink: this account may not make a symbolic link (stand-in)*") ("the report shows the skipped line with its reason (" + (($srt -split "`n") | Where-Object { $_ -like "*SKIPPED*" }) + ")")
+    Check ($srt -like "*units run: 4, not run (slot, memory or night ran out): 0*") ("the skipped units are not counted as run (" + (($srt -split "`n") | Where-Object { $_ -like "*units run*" }) + ")")
+    $sst = $(if (Test-Path -LiteralPath (Join-Path $swr "Fix__Need\state.json")) { ConvertFrom-HordeJson ([System.IO.File]::ReadAllText((Join-Path $swr "Fix__Need\state.json"))) } else { $null })
+    Check ($null -ne $sst -and ("" + $sst.units.'test/test-a.ps1|ps51') -ceq "skip" -and ("" + $sst.units.'test/test-a.ps1|pwsh7') -ceq "skip" -and ("" + $sst.units.'test/test-c.ps1|ps51') -ceq "green") "the skipped unit is never stored green (stored as a skip), while the units that ran are"
+    $slog = $(if (Test-Path -LiteralPath (Join-Path $swr "nightly.log")) { [System.IO.File]::ReadAllText((Join-Path $swr "nightly.log")) } else { "" })
+    Check (([regex]::Matches($slog, 'probe symlink: NO')).Count -eq 1 -and $slog -like "*probe wsl: yes*") "the probes were asked once for the night and logged"
     # The wrappers: a suite that is not in the commit is 126 (absent), a missing python is 71 (unrun, never green).
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pwsh-wrap.ps1") -Suite (Join-Path $work "no-such-suite.ps1") -Tree $work)
     Check ($LASTEXITCODE -eq 126 -or $LASTEXITCODE -eq 127) ("pwsh-wrap on an absent suite is 126 (or 127 where pwsh 7 is not installed) (" + $LASTEXITCODE + ")")
@@ -518,4 +589,4 @@ exit 125
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "the nightly net keeps to its window, lists the day's merges, finds newly red units, bisects to one merge, reports in text a tell can carry, and on a short-memory night fails fast, runs the small repo first, counts only what ran and names who holds the memory"
+Complete-HordeSuite -Success "the nightly net keeps to its window, lists the day's merges, finds newly red units, bisects to one merge, reports in text a tell can carry, and on a short-memory night fails fast, runs the small repo first, counts only what ran and names who holds the memory, and skips with its reason, never green, a unit whose declared need the night lacks"

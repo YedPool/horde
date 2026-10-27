@@ -11,6 +11,10 @@
 # boundary. If WSL or tmux is missing the preflight FAILS - an absent host is never a green skip.
 #
 # -Distro, or HORDE_TMUX_DISTRO, names the WSL distro; empty means WSL's default distro.
+#
+# NIGHTLY NET: its preflight reaches WSL; on a machine with no WSL distro it fails by design (nightly net,
+# 2026-10-26).
+# nightly-needs: wsl
 
 param([string]$Distro = "$env:HORDE_TMUX_DISTRO")
 

@@ -23,6 +23,10 @@
 #
 # Every store here is a fresh folder under %TEMP% that this suite made and removes (CONTRIBUTING 9),
 # and the home every call is given is that folder: the real home is never read.
+#
+# NIGHTLY NET: its symbolic links named like leftovers need the privilege to make one; without it they fail
+# (nightly net, 2026-10-26).
+# nightly-needs: symlink
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
