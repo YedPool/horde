@@ -21,8 +21,9 @@
 #     left alone and reported with its memory.
 #   - Every process closed, forced or still running is logged with name, id and working set; the report gets a
 #     CLOSED line. Nothing is reopened in the morning.
-#   - Read only: whether Chrome reopens the last session on startup (session.restore_on_startup == 1, per profile:
-#     Get-HordeNightlyChromeRestore). It is reported, never changed.
+#   - Read only: whether Chrome reopens the last session on startup (Get-HordeNightlyChromeRestore): the machine
+#     policy RestoreOnStartup first (HKLM, then HKCU), which decides for every profile; only without one each
+#     profile's session.restore_on_startup == 1. It is reported, never changed.
 #
 # EVERYTHING THAT ACTS TAKES ITS PROCESSES AS INPUT (Close-HordeNightlyApps -Targets): the name match is a separate,
 # pure step (Select-HordeNightlyAppProcesses), so test/test-nightly-apps.ps1 closes only stand-in processes it
@@ -241,12 +242,41 @@ function Get-HordeNightlyChromeProfileRestore {
     return ""
 }
 
+function Get-HordeNightlyChromeRestorePolicy {
+    # READ ONLY, never changed: Chrome's RestoreOnStartup policy, in Chrome's own precedence, HKLM before HKCU. A set
+    # policy applies to every profile and overrides each profile's own setting (T-0331, 2026-10-27: this box has
+    # HKLM RestoreOnStartup = 1, and the line said 8 profiles did not restore). 1 restores the last session, 4 opens
+    # URLs, 5 the new tab page. Returns { hive; key; value } or $null when neither hive sets it. -PolicyReader is
+    # { param($Key) value-or-$null } so the suites never read this PC's registry; a reader that throws counts as not set.
+    param([scriptblock]$PolicyReader)
+    if ($null -eq $PolicyReader) {
+        $PolicyReader = { param($Key) $v = Get-ItemProperty -LiteralPath $Key -Name "RestoreOnStartup" -ErrorAction SilentlyContinue; if ($null -eq $v) { return $null }; return $v.RestoreOnStartup }
+    }
+    foreach ($h in @("HKLM", "HKCU")) {
+        $key = $h + ":\SOFTWARE\Policies\Google\Chrome"
+        $v = $null
+        try { $v = & $PolicyReader $key } catch { $v = $null }
+        if ($null -ne $v -and ("" + $v).Trim() -ne "") { return [pscustomobject]@{ hive = $h; key = $key; value = ("" + $v).Trim() } }
+    }
+    return $null
+}
+
 function Get-HordeNightlyChromeRestore {
     # READ ONLY, never changed: does Chrome reopen the last session on startup, per profile? -UserDataDir is Chrome's
     # "User Data" folder. Returns { state = yes|no|some|unknown; profiles = [{ name; value }]; lastUsed; text }:
     # yes every profile restores, no none does, some a part does. Not set is Chrome's default (the new tab page).
-    param([string]$UserDataDir)
-    $none = { param($why) [pscustomobject]@{ state = "unknown"; profiles = @(); lastUsed = ""; text = ("CHROME RESTORE: unknown, " + $why + ".") } }
+    # A RestoreOnStartup policy (Get-HordeNightlyChromeRestorePolicy) decides first, for every profile; policy is
+    # { hive; key; value } then, else $null. -PolicyReader is handed on (the suites hand in a fake).
+    param([string]$UserDataDir, [scriptblock]$PolicyReader)
+    $pol = Get-HordeNightlyChromeRestorePolicy -PolicyReader $PolicyReader
+    if ($null -ne $pol) {
+        $what = $(switch ($pol.value) { "1" { "restore the last session" } "4" { "open URLs" } "5" { "the new tab page" } default { "unknown value" } })
+        $src = "(" + $pol.hive + "\" + $pol.key.Substring(6) + " RestoreOnStartup = " + $pol.value + ", " + $what + ")"
+        if ($pol.value -ceq "1") { $text = "yes, every profile restores by policy " + $src + ", whatever each profile's own setting says" }
+        else { $text = "NO profile restores, by policy " + $src + ", so tabs closed at night do not come back by themselves" }
+        return [pscustomobject]@{ state = $(if ($pol.value -ceq "1") { "yes" } else { "no" }); profiles = @(); lastUsed = ""; policy = $pol; text = ("CHROME RESTORE (read only, not changed): " + $text + ".") }
+    }
+    $none = { param($why) [pscustomobject]@{ state = "unknown"; profiles = @(); lastUsed = ""; policy = $null; text = ("CHROME RESTORE: unknown, " + $why + ".") } }
     if ("" + $UserDataDir -eq "" -or -not (Test-Path -LiteralPath $UserDataDir)) { return (& $none "no Chrome profile folder was found") }
     $profiles = @()
     foreach ($d in @(Get-ChildItem -LiteralPath $UserDataDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
@@ -268,5 +298,5 @@ function Get-HordeNightlyChromeRestore {
         $text += " Does not: " + (@($no | ForEach-Object { $_.name + " " + $(if ($_.value -eq "") { "(not set, the new tab page)" } else { "(" + $_.value + ")" }) }) -join ", ")
     }
     if ($last -ne "") { $lp = @($profiles | Where-Object { $_.name -ceq $last }); $text += ". Last used profile: " + $last + $(if ($lp.Count -gt 0) { $(if ($lp[0].value -ceq "1") { " (restores)" } else { " (does not restore)" }) } else { "" }) }
-    return [pscustomobject]@{ state = $state; profiles = $profiles; lastUsed = $last; text = ($text + ".") }
+    return [pscustomobject]@{ state = $state; profiles = $profiles; lastUsed = $last; policy = $null; text = ($text + ".") }
 }

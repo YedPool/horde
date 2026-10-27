@@ -99,7 +99,9 @@ foreach ($p in @("Default", "Profile 1", "System Profile")) { [void][System.IO.D
 [System.IO.File]::WriteAllText((Join-Path $ud "Profile 1\Secure Preferences"), '{"protection":{"macs":{"session":{"restore_on_startup":"59BF"}}}}')
 [System.IO.File]::WriteAllText((Join-Path $ud "Local State"), '{"profile":{"last_used":"Profile 1"}}')
 $before = @(Get-ChildItem -LiteralPath $ud -Recurse -File | ForEach-Object { $_.FullName + "|" + $_.LastWriteTimeUtc.Ticks + "|" + $_.Length })
-$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud
+# Every call here hands in a policy reader: the default one reads THIS PC's registry (T-0331: this box has a policy).
+$noPolicy = { param($Key) return $null }
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader $noPolicy
 Check ($cr.state -ceq "some" -and @($cr.profiles).Count -eq 2) ("one of two profiles restores: some, System Profile skipped (" + $cr.state + ", " + @($cr.profiles).Count + ")")
 Check ((Get-HordeNightlyChromeProfileRestore -ProfileDir (Join-Path $ud "Default")) -ceq "1") "the number is read from Secure Preferences, never the hash string beside it"
 Check ((Get-HordeNightlyChromeProfileRestore -ProfileDir (Join-Path $ud "Profile 1")) -ceq "") "a profile with only the hash has it not set"
@@ -107,8 +109,30 @@ Check ($cr.text -like "*NOT every profile*Restores (1): Default*Does not: Profil
 $after = @(Get-ChildItem -LiteralPath $ud -Recurse -File | ForEach-Object { $_.FullName + "|" + $_.LastWriteTimeUtc.Ticks + "|" + $_.Length })
 Check ((($before -join ";") -ceq ($after -join ";"))) "nothing in the profile folder was changed"
 [System.IO.File]::WriteAllText((Join-Path $ud "Profile 1\Preferences"), '{"session":{"restore_on_startup":1}}')
-Check ((Get-HordeNightlyChromeRestore -UserDataDir $ud).state -ceq "yes") "every profile at 1: yes"
-Check ((Get-HordeNightlyChromeRestore -UserDataDir (Join-Path $work "none")).state -ceq "unknown") "no folder: unknown"
+Check ((Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader $noPolicy).state -ceq "yes") "every profile at 1: yes"
+Check ((Get-HordeNightlyChromeRestore -UserDataDir (Join-Path $work "none") -PolicyReader $noPolicy).state -ceq "unknown") "no folder: unknown"
+
+Write-Host ""
+Write-Host "--- the Chrome restore setting: machine policy first, HKLM then HKCU (T-0331) ---" -ForegroundColor Cyan
+[System.IO.File]::WriteAllText((Join-Path $ud "Profile 1\Preferences"), '{"browser":{"x":1}}')
+$asked = New-Object System.Collections.ArrayList
+function New-PolicyReader { param($Lm, $Cu) $a = $asked; $m = @{ "HKLM:\SOFTWARE\Policies\Google\Chrome" = $Lm; "HKCU:\SOFTWARE\Policies\Google\Chrome" = $Cu }; return { param($Key) [void]$a.Add($Key); return $m[$Key] }.GetNewClosure() }
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader (New-PolicyReader -Lm 1 -Cu $null)
+Check ($cr.state -ceq "yes") ("HKLM policy 1 with a profile not set: yes, the policy decides for every profile (" + $cr.state + ")")
+Check ($cr.text -like "*every profile restores by policy (HKLM\SOFTWARE\Policies\Google\Chrome RestoreOnStartup = 1, restore the last session)*" -and $cr.text -notlike "*NOT every profile*" -and $cr.text -notlike "*Does not:*") ("the line says restores by policy and the hive (" + $cr.text + ")")
+Check ($cr.policy.hive -ceq "HKLM" -and ("" + $cr.policy.value) -ceq "1") "the result names the deciding hive and value"
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader (New-PolicyReader -Lm $null -Cu 5)
+Check ($cr.state -ceq "no" -and $cr.text -like "*NO profile restores, by policy (HKCU*RestoreOnStartup = 5, the new tab page)*") ("HKCU policy 5 with Default at 1: no profile restores, by policy (" + $cr.text + ")")
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader (New-PolicyReader -Lm 4 -Cu 1)
+Check ($cr.state -ceq "no" -and $cr.text -like "*by policy (HKLM*RestoreOnStartup = 4, open URLs)*") ("HKLM is read before HKCU and wins (" + $cr.text + ")")
+$asked.Clear()
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader (New-PolicyReader -Lm $null -Cu $null)
+Check (($asked -join "|") -ceq "HKLM:\SOFTWARE\Policies\Google\Chrome|HKCU:\SOFTWARE\Policies\Google\Chrome") ("both hives are asked, HKLM first (" + ($asked -join "|") + ")")
+Check ($cr.state -ceq "some" -and $cr.text -like "*NOT every profile*Does not: Profile 1*" -and $null -eq $cr.policy) ("no policy: the per-profile reading as before (" + $cr.text + ")")
+$cr = Get-HordeNightlyChromeRestore -UserDataDir (Join-Path $work "none") -PolicyReader (New-PolicyReader -Lm 1 -Cu $null)
+Check ($cr.state -ceq "yes") "a policy decides even with no profile folder"
+$cr = Get-HordeNightlyChromeRestore -UserDataDir $ud -PolicyReader { param($Key) throw "registry unreadable" }
+Check ($cr.state -ceq "some") "a policy read that fails falls back to the per-profile reading"
 
 Write-Host ""
 Write-Host "--- the report's lines ---" -ForegroundColor Cyan
