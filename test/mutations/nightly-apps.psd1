@@ -28,5 +28,11 @@
         @{ Name = "chrome-hash-read-as-value"
            Find = '''"restore_on_startup"\s*:\s*(\d+)'''
            Replace = '''"restore_on_startup"\s*:\s*"?(\w+)''' }
+        @{ Name = "chrome-policy-ignored"
+           Find = '    if ($null -ne $pol) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "chrome-policy-hkcu-before-hklm"
+           Find = 'foreach ($h in @("HKLM", "HKCU")) {'
+           Replace = 'foreach ($h in @("HKCU", "HKLM")) {' }
     )
 }
