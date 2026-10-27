@@ -74,6 +74,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 # \A and \z, not ^ and $: in .NET, $ also matches before a final LF, so '^...$' accepted
 # "session.spawn" followed by an LF, and it was acted on (review of PR #39, 2026-09-30).
@@ -316,7 +317,9 @@ function Read-HordeJournalFile {
         return [pscustomobject]@{ kind = "error"; data = $null; reason = ("it could not be read: " + $_.Exception.Message) }
     }
     if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty" } }
-    try { $data = $text | ConvertFrom-Json } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON" } }
+    # ConvertFrom-HordeJson (core/JsonText.ps1, T-0366): under 7 bare ConvertFrom-Json read every time as a
+    # [datetime], and an entry read back could not be answered on the link. ConvertFrom-HordeJournalTime reads the text.
+    try { $data = ConvertFrom-HordeJson -Text $text } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON" } }
     if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not a JSON object" } }
     return [pscustomobject]@{ kind = "ok"; data = $data; reason = "" }
 }

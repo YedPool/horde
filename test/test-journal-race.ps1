@@ -177,6 +177,8 @@ $brokenPath = Join-Path $script:work "Journal-overwrites.ps1"
 # The copy dot-sources core/Tristate.ps1 by a path relative to itself, so it needs one beside it.
 New-Item -ItemType Directory -Path (Join-Path $script:work "core") | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "core\Tristate.ps1") -Destination (Join-Path $script:work "core\Tristate.ps1")
+# remote/Journal.ps1 loads core/JsonText.ps1 too, for ConvertFrom-HordeJson (T-0366).
+Copy-Item -LiteralPath (Join-Path $root "core\JsonText.ps1") -Destination (Join-Path $script:work "core\JsonText.ps1")
 $brokenDir = Join-Path $script:work "remote"
 New-Item -ItemType Directory -Path $brokenDir | Out-Null
 Move-Item -LiteralPath $brokenPath -Destination (Join-Path $brokenDir "Journal.ps1")
