@@ -86,11 +86,11 @@
            Find = 'if ($e -isnot [int] -and $e -isnot [long]) {'
            Replace = 'if ($false) {' }
         @{ Name = "skip-keeps-a-stored-green"
-           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
-           Replace = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red" -or $Previous -ceq "green") { return "" } return "skip" }' }
+           Find = 'if ($Verdict -ceq "skip" -or $Verdict -ceq "skipped") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip" -or $Verdict -ceq "skipped") { if ($Previous -ceq "red" -or $Previous -ceq "green") { return "" } return "skip" }' }
         @{ Name = "skip-clears-a-stored-red"
-           Find = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" }'
-           Replace = 'if ($Verdict -ceq "skip") { return "skip" }' }
+           Find = 'if ($Verdict -ceq "skip" -or $Verdict -ceq "skipped") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip" -or $Verdict -ceq "skipped") { return "skip" }' }
         @{ Name = "tell-exit-6-not-told"
            Find = 'if ($c -eq 0 -or $c -eq 6) { return "told" }'
            Replace = 'if ($c -eq 0) { return "told" }' }
@@ -152,8 +152,38 @@
            Find = '(free memory|commit headroom)'
            Replace = '(free memory)' }
         @{ Name = "unrun-counted-as-run"
-           Find = 'if (("" + $Verdicts[$k]) -cne "unrun") { $n++ }'
-           Replace = 'if ($true) { $n++ }' }
+           Find = 'if ($v -cne "unrun" -and $v -cne "skipped") { $n++ }'
+           Replace = 'if ($v -cne "skipped") { $n++ }' }
+        @{ Name = "skipped-counted-as-run"
+           Find = 'if ($v -cne "unrun" -and $v -cne "skipped") { $n++ }'
+           Replace = 'if ($v -cne "unrun") { $n++ }' }
+        @{ Name = "skipped-stored-as-given"
+           Find = 'if ($Verdict -ceq "skip" -or $Verdict -ceq "skipped") { if ($Previous -ceq "red") { return "" } return "skip" }'
+           Replace = 'if ($Verdict -ceq "skip") { if ($Previous -ceq "red") { return "" } return "skip" } if ($Verdict -ceq "skipped") { return "green" }' }
+        @{ Name = "needs-read-past-the-header"
+           Find = 'if (-not $t.StartsWith("#")) { break }'
+           Replace = 'if (-not $t.StartsWith("#")) { continue }' }
+        @{ Name = "malformed-need-read-as-nothing"
+           Find = 'if (-not $m.Success) { $needs += "malformed"; continue }'
+           Replace = 'if (-not $m.Success) { continue }' }
+        @{ Name = "need-with-no-probe-taken-as-met"
+           Find = 'if ($null -eq $p) { $why += ("needs " + $n + ", which no probe answers"); continue }'
+           Replace = 'if ($null -eq $p) { continue }' }
+        @{ Name = "probe-no-taken-as-met"
+           Find = 'if ($p.ok -eq $true) { continue }'
+           Replace = 'if ($true) { continue }' }
+        @{ Name = "probe-yes-still-skips"
+           Find = 'if ($p.ok -eq $true) { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "skipped-compared-as-unrun"
+           Find = 'if ($v -ceq "skipped") { $skipped += $u; continue }'
+           Replace = 'if ($v -ceq "skipped") { $unrun += $u; continue }' }
+        @{ Name = "skipped-line-dropped"
+           Find = 'foreach ($w in @($groups.Keys)) { $lines += ("  SKIPPED " + (@($groups[$w]) -join ", ") + " - " + $w) }'
+           Replace = 'foreach ($w in @()) { }' }
+        @{ Name = "skipped-headline-dropped"
+           Find = 'if ($skipped -gt 0) { $t += " SKIPPED: "'
+           Replace = 'if ($false) { $t += " SKIPPED: "' }
         @{ Name = "repos-not-ordered-by-units"
            Find = '@{ Expression = { $c[$_] } }, '
            Replace = '' }

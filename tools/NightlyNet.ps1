@@ -4,7 +4,7 @@
 #       [-Only <fragments>] [-Limit <n>] [-WorkRoot <dir>] [-HordeScript <horde.ps1>] [-SlotWaitSeconds 900]
 #       [-RunSeconds 1500] [-LongRunSeconds 3600] [-BisectReserveMinutes 90] [-MaxBisectRuns 40] [-Target M]
 #       [-MinFreeGB 4.5] [-MinCommitHeadroomGB 2] [-ShortSlotWaitSeconds 120] [-NoCloseApps] [-AppCloseWaitSeconds 60]
-#       [-AppRetryMinutes 15] [-MinFitSeconds 600]
+#       [-AppRetryMinutes 15] [-MinFitSeconds 600] [-ProbesFile <json, for the suite>]
 #   -Repos entries are OWNER/REPO:KIND:BRANCH, KIND horde (PowerShell suites, in both shells, and the repo-wide guards)
 #   or pytest (the whole pytest run, plus the critical flake8 classes). The default is horde first, then the
 #   Orahvision-Universal repo.
@@ -43,6 +43,11 @@
 # THE SUITE PHASE starts a unit while its slot wait still ends before the suite cutoff, with a run limit that ends by the
 #   run cutoff: -RunSeconds, or near the end what is left if at least -MinFitSeconds (core Get-HordeNightlySuiteRunSeconds).
 #   The old rule kept the last 1620 s of the phase idle. The bisect reserve is kept only when a repo has a merge to bisect.
+#
+# NEEDS (2026-10-27): a horde suite may declare in its header what the night must have for it to mean anything
+#   ("# nightly-needs: symlink"; core Read-HordeNightlyNeeds). The needs are probed ONCE a night (tools/nightly/Probes.ps1:
+#   a symbolic link really made, the token's elevation, a working WSL distro list, a named wezfleet checkout) and a unit
+#   whose need is not met is SKIPPED with the reason: not run, not red, never green, one report line per reason.
 #
 # EACH REPO, in three phases over all repos (phase 1 may use the night up to 06:30 minus -BisectReserveMinutes):
 #   1. own clone at origin/<branch>; the day's merges (first-parent, since the last run's tip, labelled from
@@ -87,6 +92,7 @@ param(
     [ValidateRange(0, 600)][int]$AppCloseWaitSeconds = 60,
     [ValidateRange(1, 120)][int]$AppRetryMinutes = 15,
     [string]$ChromeUserData = "",
+    [string]$ProbesFile = "",
     [switch]$NoCloseApps,
     [switch]$Plan,
     [switch]$NoTell
@@ -101,6 +107,7 @@ $env:GCM_INTERACTIVE = "never"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\IdleState.ps1")
 . (Join-Path $PSScriptRoot "nightly\AppCloser.ps1")
+. (Join-Path $PSScriptRoot "nightly\Probes.ps1")
 
 # powershell -File hands a comma list over as ONE string: split it here.
 $Repos = @($Repos | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() })
@@ -117,6 +124,8 @@ $script:MemoryGiveUps = 0
 $script:MemoryHolders = @()
 # The app closer's night: acted or given up (done), when to try next, how many tries, its report lines.
 $script:AppCloser = @{ done = $false; nextTry = [datetime]::MinValue; tries = 0; lines = @() }
+# The night's probe answers (tools/nightly/Probes.ps1), asked once, the first time a unit declares a need.
+$script:NightProbes = $null
 $WrapDir = Join-Path $PSScriptRoot "nightly"
 $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 # -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
@@ -241,6 +250,32 @@ function Invoke-NightlyAppCloser {
     foreach ($x in @($r.running)) { Say ("app closer: still running " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
     $s.lines = @(Format-HordeNightlyAppLines -Result $r) + @((Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
     foreach ($l in $s.lines) { Say $l }
+}
+
+function Get-NightlyProbes {
+    # The night's probe answers, name -> { ok; why }, asked ONCE a night and logged. -ProbesFile is for the suite: a JSON
+    # object of stand-in answers ({ "symlink": { "ok": false, "why": "..." } }), so a night is driven with no real probe.
+    if ($null -ne $script:NightProbes) { return $script:NightProbes }
+    $p = @{}
+    if ($ProbesFile -ne "") {
+        $o = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ProbesFile))
+        foreach ($q in $o.PSObject.Properties) { $p["" + $q.Name] = [pscustomobject]@{ ok = ($q.Value.ok -eq $true); why = ("" + $q.Value.why) } }
+    } else { $p = Get-HordeNightlyProbes }
+    foreach ($k in (@($p.Keys) | Sort-Object)) { Say ("probe " + $k + ": " + $(if ($p[$k].ok -eq $true) { "yes" } else { "NO" }) + " - " + $p[$k].why) }
+    $script:NightProbes = $p
+    return $p
+}
+
+function Get-NightlySkipReason {
+    # Why a horde unit is skipped tonight ("" when it runs): the needs its suite file declares at this tree (core
+    # Read-HordeNightlyNeeds) against the night's probes. A suite that declares nothing is never probed for.
+    param($Ctx, [string]$Unit)
+    $rel = ($Unit -split '\|', 2)[0]
+    $f = Join-Path $Ctx.tree ($rel -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return "" }
+    $needs = @(Read-HordeNightlyNeeds -Lines @([System.IO.File]::ReadAllLines($f)))
+    if ($needs.Count -eq 0) { return "" }
+    return (Get-HordeNightlySkipReason -Needs $needs -Probes (Get-NightlyProbes))
 }
 
 function Invoke-NightlySlot {
@@ -388,7 +423,7 @@ function New-NightlyContext {
     }
     $merges = @(Get-HordeNightlyMerges -GitLines $gitLines -Owed $owed)
     return [pscustomobject]@{ repo = $repo; kind = $kind; branch = $branch; dir = $dir; tree = $tree; tip = $tip; statePath = $statePath; state = $state
-        merges = $merges; notes = @($notes); units = @(); verdicts = @{}; guards = [pscustomobject]@{ state = "not run"; text = "" }; unrun = 0; compare = $null; culprits = @(); incomplete = "" }
+        merges = $merges; notes = @($notes); units = @(); verdicts = @{}; skipReasons = @{}; guards = [pscustomobject]@{ state = "not run"; text = "" }; unrun = 0; compare = $null; culprits = @(); incomplete = "" }
 }
 
 function Get-NightlyUnits {
@@ -431,6 +466,11 @@ function Invoke-NightlyPhaseOne {
     $Ctx.units = @($units)
     foreach ($u in $units) {
         if (Test-Path -LiteralPath $StopFile) { $Ctx.incomplete = "STOP file seen"; break }
+        # A unit whose declared need the night lacks is SKIPPED with the reason: not run, not red, never green.
+        if ($Ctx.kind -ceq "horde") {
+            $skip = Get-NightlySkipReason -Ctx $Ctx -Unit $u
+            if ($skip -ne "") { $Ctx.verdicts[$u] = "skipped"; $Ctx.skipReasons[$u] = $skip; Say ($Ctx.repo + " " + $u + " -> skipped, " + $skip); continue }
+        }
         $need = $(if ($u -ceq "pytest-all") { $LongRunSeconds } else { $RunSeconds })
         Invoke-NightlyAppCloser -Cutoff $Cutoff
         # The run limit fitted to the night (core Get-HordeNightlySuiteRunSeconds); the whole pytest run is never cut short.
@@ -608,7 +648,7 @@ try {
     foreach ($c in $ctxs) {
         $repoRows += [pscustomobject]@{ repo = $c.repo; tip = $c.tip; lastTip = $c.state.lastTip; merges = $c.merges; guards = $c.guards
             suiteCount = (Get-HordeNightlyRunCount -Verdicts $c.verdicts); unrunCount = $c.unrun; compare = $c.compare; culprits = $c.culprits; notes = $c.notes; incomplete = $c.incomplete
-            pending = @($c.state.pending) }
+            skipReasons = $c.skipReasons; pending = @($c.state.pending) }
     }
     $memory = [pscustomobject]@{ giveUps = $script:MemoryGiveUps; minFreeGB = (@($ctxs | ForEach-Object { $_.kind } | Select-Object -Unique | ForEach-Object { $_ + " " + (Get-NightlyFloor $_).freeGB.ToString($Inv) }) -join ", "); minCommitGB = (Get-NightlyFloor $ctxs[0].kind).commitGB.ToString($Inv); holders = @($script:MemoryHolders) }
     $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory -AppLines @($script:AppCloser.lines)
