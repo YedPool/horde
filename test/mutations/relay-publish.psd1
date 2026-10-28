@@ -6,6 +6,12 @@
     Suite  = "test\test-relay-publish.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "slow-git-told-at-once"
+           Find = '        if ($slowBefore -ge 1) { return $false }'
+           Replace = '        return $false' }
+        @{ Name = "slow-count-never-reset"
+           Find = '    $s.slow = 0'
+           Replace = '' }
         @{ Name = "worker-folder-not-the-worker"
            Find = 'foreach ($w in @($Shipped.workerPrefixes)) { if ($p.StartsWith($w, [System.StringComparison]::Ordinal)) { $inFolder = $true } }'
            Replace = '' }
