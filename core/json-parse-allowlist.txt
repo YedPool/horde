@@ -17,7 +17,6 @@ core/AgentDescriptor.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed wh
 core/EngineResolve.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Heartbeat.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Identity.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-core/ModuleSettings.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/NodeDeliverTo.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/NodePolicy.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Ownership.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
