@@ -51,15 +51,20 @@
 #      when the deploy worked and only its check did not. While the record is that one, the failure
 #      stands and is tried again from the base before it. Any other record is a deploy made since - by
 #      hand, of any commit - and it settles the failure and is the base from then on.
-#   5a. A RECORD NEWER THAN THE CHECKOUT IS NOT A TROUBLE, AND NEVER A DEPLOY (T-0333; live 2026-10-21, -22
-#      and -26): a deploy by hand from a newer checkout records a commit the supervisor's own checkout has
-#      not fetched yet, or has fetched but not reached. When the base - the commit the hosted page is on -
-#      is not an ancestor of the checkout's commit (newer, unrelated, or not in the checkout at all, which
-#      git answers "bad object"), the page is current: say so, queue no notice, close the episode. It must
-#      never be diffed: with the newer commit present the diff would list its files as changed and the
-#      older checkout would be deployed over the newer page, a rollback. When the checkout moves to or
-#      past the record, the normal path resumes. Whether the two are related that way is asked of the
-#      Ancestry tool; only an answer that cannot be had (both commits present, git fails) is unreadable.
+#   5a. A RECORD THE CHECKOUT HAS NOT REACHED IS NOT A DEPLOY (T-0333; live 2026-10-21, -22 and -26): a
+#      deploy by hand from a newer checkout records a commit the supervisor's own checkout has not fetched
+#      yet, or has fetched but not reached. When the base - the commit the hosted page is on - is not in
+#      the checkout's history, it is never diffed and never deployed: with the newer commit present the
+#      diff would list its files as changed and the older checkout would be deployed over the newer page,
+#      a rollback. The Ancestry tool tells the four cases apart: "behind" (the base is in the checkout's
+#      history: the normal path), "newer" (the checkout is in the base's history: current, quiet, one log
+#      line), "diverged" (the checkout holds both and neither holds the other, as after a force-push or a
+#      rewritten history: told at once, because it never resolves by itself), and "absent" (the checkout
+#      does not hold the base: quiet, the window of 2026-10-26 18:32, but counted in publish-state.json
+#      as "absent" like "slow"; told once when it is still absent after 5 passes in a row; any pass where
+#      the base is present or the record is this commit resets the count). When the checkout moves to or
+#      past the record, the normal path resumes. Only an answer that cannot be had (git fails with the
+#      object there, a cat-file exit of 128 included) is unreadable.
 #   6. One deploy at a time on the machine, by hand or not: the deploy itself holds the lock
 #      (cli/RelayDeploy.ps1), and a deploy that finds it held is left to the next pass, neither a failure
 #      nor told.
@@ -110,6 +115,8 @@ $script:HordeRelayPublishExportSeconds = 120
 $script:HordeRelayPublishLogMaxBytes = 1048576
 $script:HordeRelayPublishHttpSeconds = 10
 $script:HordeRelayPublishGitSeconds = 20
+# Passes in a row a record may be missing from the checkout before a person is told (header, THE RULE 5a).
+$script:HordeRelayPublishAbsentPasses = 5
 $script:HordeRelayPublishVersionPattern = 'const VERSION = "([0-9a-f]{8,64})";'
 $script:HordeRelayPublishCommitPattern = '\A[0-9a-f]{40}\z'
 # An import a bundler follows from one file to another: a relative specifier after from, or after a
@@ -128,7 +135,7 @@ function Get-HordeRelayPublishStatePath { param([string]$HordeHome = "") return 
 function Get-HordeRelayPublishLogPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeRelayDeployFolder -HordeHome $HordeHome), "publish-log.txt") }
 
 function New-HordeRelayPublishState {
-    return [pscustomobject]@{ attempt = $null; failure = $null; checked = $null; bundles = @(); episode = 0; troubled = $false; slow = 0; told = [string[]]@(); pending = @() }
+    return [pscustomobject]@{ attempt = $null; failure = $null; checked = $null; bundles = @(); episode = 0; troubled = $false; slow = 0; absent = 0; told = [string[]]@(); pending = @() }
 }
 
 function Read-HordeRelayPublishState {
@@ -152,6 +159,7 @@ function Read-HordeRelayPublishState {
         if ($null -ne $r.attempt) { $s.attempt = [pscustomobject]@{ head = "" + $r.attempt.head; base = "" + $r.attempt.base; at = (& $when $r.attempt.at) } }
         if ($null -ne $r.failure) { $s.failure = [pscustomobject]@{ head = "" + $r.failure.head; base = "" + $r.failure.base; at = (& $when $r.failure.at); what = "" + $r.failure.what; recordId = "" + $r.failure.recordId } }
         if ($null -ne $r.PSObject.Properties["slow"]) { $s.slow = [int]$r.slow }
+        if ($null -ne $r.PSObject.Properties["absent"]) { $s.absent = [int]$r.absent }
         if ($null -ne $r.PSObject.Properties["episode"]) { $s.episode = [int]$r.episode; $s.troubled = [bool]($r.troubled -eq $true) }
         $checked = $r.PSObject.Properties["checked"]
         if ($null -ne $checked -and $null -ne $checked.Value) { $s.checked = [pscustomobject]@{ base = "" + $checked.Value.base; through = "" + $checked.Value.through } }
@@ -174,6 +182,7 @@ function Write-HordeRelayPublishState {
         episode = [int]$State.episode
         troubled = [bool]$State.troubled
         slow = [int]$State.slow
+        absent = [int]$State.absent
         checked = $(if ($null -ne $State.checked) { [ordered]@{ base = $State.checked.base; through = $State.checked.through } } else { $null })
         bundles = @(@($State.bundles) | ForEach-Object { [ordered]@{ commit = $_.commit; sha256 = $_.sha256 } })
         told = [string[]]@($State.told)
@@ -458,7 +467,7 @@ function Invoke-HordeRelayPublishStep {
         if ($b.kind -ceq "unknown") { & $queue $b.what $b.key $h.commit; & $say ("NOT DEPLOYED - " + $b.reason + "; a deploy by hand records it"); return }
         if ($b.settles) { $s.failure = $null; & $say ("a deploy recorded since the last failure (" + (ConvertTo-HordeRelayPublishShort $record.value.commit) + ") settles it, and is the base") -Log }
         if ($b.kind -ceq "same") {
-            $s.checked = $null
+            $s.checked = $null; $s.absent = 0
             if ($null -ne $s.failure) { $s.failure = $null; & $say ("the hosted page is on " + (ConvertTo-HordeRelayPublishShort $h.commit) + "; the failure before is settled") -Log }
             else { & $say ("current - " + $b.reason) }
             Close-HordeRelayPublishEpisode -State $s
@@ -474,9 +483,33 @@ function Invoke-HordeRelayPublishStep {
             & $say ("NOT DEPLOYED - whether " + (ConvertTo-HordeRelayPublishShort $b.base) + " is behind this checkout could not be told" + $(if ((Test-HordeAnswer $rel) -and "" + $rel.reason -ne "") { ": " + $rel.reason } else { "" })) -Log
             return
         }
-        if ($rel.value -ne $true) {
+        if ($rel.value -cnotin @("behind", "newer", "diverged", "absent")) {
+            & $queue "unreadable" ("unreadable:ancestry:" + $b.base + ":" + $h.commit) $h.commit
+            & $say "NOT DEPLOYED - the revision tool answered something unexpected about the hosted page's commit" -Log
+            return
+        }
+        if ($rel.value -cne "absent") { $s.absent = 0 }
+        if ($rel.value -ceq "newer") {
             $s.checked = $null
-            & $say ("current - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", newer than this checkout (" + (ConvertTo-HordeRelayPublishShort $h.commit) + "); nothing to deploy until the checkout moves")
+            & $say ("current - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", newer than this checkout (" + (ConvertTo-HordeRelayPublishShort $h.commit) + "); nothing to deploy until the checkout moves") -Log
+            Close-HordeRelayPublishEpisode -State $s
+            return
+        }
+        if ($rel.value -ceq "diverged") {
+            $s.checked = $null
+            & $queue "diverged" ("diverged:" + $b.base + ":" + $h.commit) $h.commit
+            & $say ("NOT DEPLOYED - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", which is unrelated to this checkout's " + (ConvertTo-HordeRelayPublishShort $h.commit) + " (neither holds the other); someone must decide") -Log
+            return
+        }
+        if ($rel.value -ceq "absent") {
+            $s.checked = $null
+            $s.absent = [int]$s.absent + 1
+            if ($s.absent -ge $script:HordeRelayPublishAbsentPasses) {
+                & $queue "record-absent" ("record-absent:" + $b.base) $h.commit
+                & $say ("NOT DEPLOYED - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", which this checkout (" + (ConvertTo-HordeRelayPublishShort $h.commit) + ") has not held for " + $s.absent + " passes in a row; someone must look") -Log
+                return
+            }
+            & $say ("current - the hosted page is on " + (ConvertTo-HordeRelayPublishShort $b.base) + ", which this checkout does not hold yet (" + (ConvertTo-HordeRelayPublishShort $h.commit) + "); nothing to deploy until the checkout moves")
             Close-HordeRelayPublishEpisode -State $s
             return
         }
@@ -655,22 +688,28 @@ function Get-HordeRelayPublishChanged {
 }
 
 function Test-HordeRelayPublishBehind {
-    # Is -Base (what the hosted page is on) in the history of -Head (the checkout's commit), or equal to
-    # it (header, THE RULE 5a)? Known $true; known $false when -Base is not an ancestor of it (newer,
-    # unrelated, or a commit this checkout does not hold: no object is ever asked of a diff); or unknown
-    # when git could not answer with both commits present. Both are full commit ids.
+    # How -Base (what the hosted page is on) relates to -Head (the checkout's commit) in the checkout's
+    # history (header, THE RULE 5a). Known "behind" when -Base is -Head or in its history; "newer" when
+    # -Head is in -Base's history (the page is ahead of this checkout); "diverged" when the checkout holds
+    # both and neither holds the other; "absent" when the checkout does not hold -Base at all (a clone
+    # that has not fetched it, or a shallow or collected one); unknown when git could not answer with
+    # the object there. A cat-file exit of 128 (a corrupt repository) is unknown, not absent. Both are
+    # full commit ids.
     param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string]$Base, [Parameter(Mandatory = $true)][string]$Head)
     if ($Base -cnotmatch $script:HordeRelayPublishCommitPattern -or $Head -cnotmatch $script:HordeRelayPublishCommitPattern) { return (New-HordeUnknown -Reason "a commit to compare is not a full commit id") }
     $has = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("cat-file", "-e", $Base) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
     if (-not $has.ok) {
         # cat-file -e answers 1, quietly, for an object that is not there; any other failure is not "absent".
-        if ($has.code -eq 1) { return (New-HordeKnown -Value $false) }
+        if ($has.code -eq 1) { return (New-HordeKnown -Value "absent") }
         return (New-HordeUnknown -Reason ("whether the checkout holds " + (ConvertTo-HordeRelayPublishShort $Base) + " could not be read: " + $has.detail))
     }
     $r = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("merge-base", "--is-ancestor", $Base, $Head) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
-    if ($r.ok) { return (New-HordeKnown -Value $true) }
-    if ($r.code -eq 1) { return (New-HordeKnown -Value $false) }
-    return (New-HordeUnknown -Reason ("whether " + (ConvertTo-HordeRelayPublishShort $Base) + " is behind the checkout could not be read: " + $r.detail))
+    if ($r.ok) { return (New-HordeKnown -Value "behind") }
+    if ($r.code -ne 1) { return (New-HordeUnknown -Reason ("whether " + (ConvertTo-HordeRelayPublishShort $Base) + " is behind the checkout could not be read: " + $r.detail)) }
+    $back = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("merge-base", "--is-ancestor", $Head, $Base) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
+    if ($back.ok) { return (New-HordeKnown -Value "newer") }
+    if ($back.code -eq 1) { return (New-HordeKnown -Value "diverged") }
+    return (New-HordeUnknown -Reason ("whether the checkout is behind " + (ConvertTo-HordeRelayPublishShort $Base) + " could not be read: " + $back.detail))
 }
 
 function Get-HordeRelayPublishUrl {
