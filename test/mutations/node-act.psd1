@@ -70,8 +70,8 @@
            Find = 'if (-not $ok -or $t -ge $midnight) { $n++ }'
            Replace = 'if (-not $ok -or ($t -ge $midnight -and $t -lt $midnight.AddDays(1))) { $n++ }' }
         @{ Name = "torn-records-free-the-cap"
-           Find = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { $n++; continue }'
-           Replace = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue }' }
+           Find = 'try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { $n++; continue }'
+           Replace = 'try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { continue }' }
         @{ Name = "local-time-accepted"
            Find = 'if ($Now.Kind -ne [System.DateTimeKind]::Utc) {'
            Replace = 'if ($false) {' }
