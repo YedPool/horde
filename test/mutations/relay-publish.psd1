@@ -10,7 +10,16 @@
            Find = '        if ($slowBefore -ge 1) { return $false }'
            Replace = '        return $false' }
         @{ Name = "slow-count-never-reset"
-           Find = '    $s.slow = 0'
+           Find = '$s.slow = 0'
+           Replace = '' }
+        @{ Name = "slow-count-not-incremented"
+           Find = '$s.slow = $slowBefore + 1'
+           Replace = '$s.slow = $slowBefore + 0' }
+        @{ Name = "slow-match-never-matches"
+           Find = "-cnotmatch 'did not finish within [0-9]+ s and was ended'"
+           Replace = "-cnotmatch 'zzz'" }
+        @{ Name = "slow-match-always-matches"
+           Find = " -or `"`" + `$Answer.reason -cnotmatch 'did not finish within [0-9]+ s and was ended'"
            Replace = '' }
         @{ Name = "worker-folder-not-the-worker"
            Find = 'foreach ($w in @($Shipped.workerPrefixes)) { if ($p.StartsWith($w, [System.StringComparison]::Ordinal)) { $inFolder = $true } }'
