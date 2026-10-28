@@ -63,8 +63,8 @@ function Set-HordeHubRegistryAcl {
     # -Path's ACL: this user alone, inheritance cut. Throws when it does not read back so.
     # Read and written by .NET, not the Get-Acl / Set-Acl cmdlets (T-0367): their module does not load in a Windows
     # PowerShell child of a PowerShell 7 parent, so `horde hub enroll` started that way failed here; and Set-Acl may
-    # ask for a privilege a non-elevated user lacks (transports/ssh/Files.ps1). The owner is set only when it is not
-    # already this user, since changing it needs a right the user may not hold.
+    # ask for a privilege a non-elevated user lacks (as the ssh transport's key file showed). The owner is set
+    # only when it is not already this user, since changing it needs a right the user may not hold.
     param([Parameter(Mandatory = $true)][string]$Path)
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $fi = New-Object System.IO.FileInfo -ArgumentList $Path
