@@ -18,6 +18,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "core\JsonText.ps1")   # ConvertFrom-HordeJson: the register read back keeps its times as text (T-0366)
 . (Join-Path $root "transports\Port.ps1")
 . (Join-Path $root "transports\ssh\Enroll.ps1")
 . (Join-Path $here "ExecGuard.ps1")
@@ -304,10 +305,10 @@ try {
     $wantCmd = Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $enCmd.Groups["dev"].Value
     Check ($e.code -eq 0 -and $auth.StartsWith('command="' + $wantCmd + '",restrict,expiry-time="') -and $wantCmd.EndsWith("\cli\attach.ps1 -Device " + $enCmd.Groups["dev"].Value)) ("horde hub enroll admits the key, forced to cli\attach.ps1 for that device, with restrict (" + $auth.Trim() + ")")
     $regPath = Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json")
-    $reg = $null; if (Test-Path -LiteralPath $regPath) { $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json }
+    $reg = $null; if (Test-Path -LiteralPath $regPath) { $reg = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($regPath)) }
     Check ($null -ne $reg -and $reg.key -ceq $enCmd.Groups["key"].Value -and $reg.transport -ceq "ssh" -and $auth.Contains('expiry-time="' + $reg.expires + '"') -and $null -eq $reg.PSObject.Properties["revokedAt"]) "and records the device in the hub's register: its key, its transport and the same expiry"
     $ea = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "192.168.1.156") -Env $envs
-    $regA = [System.IO.File]::ReadAllText((Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json"))) | ConvertFrom-Json
+    $regA = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json"))))
     Check ($ea.code -eq 0 -and $regA.address -ceq "192.168.1.156") ("horde hub enroll -Address records the node's last-known address in the hub's register (mesh v1) (exit " + $ea.code + ")")
     $authBefore = [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys"))
     $eb = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "8.8.8.8") -Env $envs
@@ -319,7 +320,7 @@ try {
     $rv = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", $enCmd.Groups["dev"].Value) -Env $envs
     $e2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
     Check ($rv.code -eq 0 -and $e2.code -eq 1 -and $e2.out -clike "*was revoked*") "horde hub revoke, then the same key enrolled again: exit 1, saying it was revoked"
-    $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json
+    $reg = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($regPath))
     Check ($null -ne $reg.PSObject.Properties["revokedAt"] -and "$($reg.revokedAt)" -cmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\z') ("horde hub revoke marks the register entry revoked, so the hub binds no link to it (" + $reg.revokedAt + ")")
     # A register that cannot be written or read is said, never passed over (issue #144 item 3).
     $ch2 = Join-Path $tmp "cli-home-blocked"
