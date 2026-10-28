@@ -323,7 +323,7 @@ function Set-HordeNodeOwnerOnly {
     $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
     # Written by .NET on both shells: PowerShell 7 (.NET) has no static [System.IO.Directory]::SetAccessControl
     # and no DirectoryInfo.SetAccessControl, only the FileSystemAclExtensions extension; Windows PowerShell 5.1
-    # has the instance method (as Set-HordeWezfleetMessengerFolderAcl).
+    # has the instance method (as the messenger's folder ACL helper does).
     $di = New-Object System.IO.DirectoryInfo($Path)
     if ($di.PSObject.Methods["SetAccessControl"]) { $di.SetAccessControl($sec); return }
     [System.IO.FileSystemAclExtensions]::SetAccessControl($di, $sec)
