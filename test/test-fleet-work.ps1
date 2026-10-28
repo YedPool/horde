@@ -31,7 +31,7 @@ $endLine = $realLines[5]
 function Edit-Line {
     # One fixture line with one change: -Set is given the parsed event to change in place.
     param([string]$Line, [scriptblock]$Set = {})
-    $e = $Line | ConvertFrom-Json
+    $e = ConvertFrom-HordeJson -Text $Line
     & $Set $e
     return ($e | ConvertTo-Json -Depth 10 -Compress)
 }
