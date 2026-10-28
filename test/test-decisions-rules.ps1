@@ -53,7 +53,7 @@ function New-Record {
     if ($Id -eq "") { $Id = $Seq.ToString("x32") }
     if ($SaysSeq -lt 0) { $SaysSeq = $Seq }
     $envelope = [ordered]@{ schemaVersion = $Version; sequence = $SaysSeq; id = $Id; kind = $Kind; at = ("2026-10-06T12:00:" + ($Seq % 60).ToString("00") + ".0000000Z"); actor = "warchief"; requestHash = $zeros; data = $Data }
-    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = ((ConvertTo-Json -InputObject $envelope -Compress -Depth 12) | ConvertFrom-Json); reason = "" }
+    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = (ConvertFrom-HordeJson -Text (ConvertTo-Json -InputObject $envelope -Compress -Depth 12)); reason = "" }
 }
 function New-Added { param([long]$Seq, [int]$Number, [string]$Title = "") if ($Title -eq "") { $Title = "Is question number $Number asked in plain words here?" }; return (New-Record -Seq $Seq -Kind "question-added" -Data ([ordered]@{ number = $Number; question = (ConvertTo-HordeDecisionFields -Source (New-Question @{ title = $Title })) })) }
 function New-Torn { param([long]$Seq) return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
@@ -445,7 +445,7 @@ Write-Host "--- a number too large to be one never stops the list ---" -Foregrou
 function New-RawRecord {
     param([long]$Seq, [string]$SaysSeq, [string]$Kind, [string]$DataJson)
     $json = '{"schemaVersion":1,"sequence":' + $SaysSeq + ',"id":"' + $Seq.ToString("x32") + '","kind":"' + $Kind + '","at":"2026-10-06T12:00:00.0000000Z","actor":"warchief","requestHash":"' + $zeros + '","data":' + $DataJson + '}'
-    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = ($json | ConvertFrom-Json); reason = "" }
+    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = (ConvertFrom-HordeJson -Text $json); reason = "" }
 }
 $wordsJson = ConvertTo-Json -InputObject (ConvertTo-HordeDecisionFields -Source (New-Question)) -Compress
 foreach ($huge in @("99999999999", "1e30", "1000000000")) {
