@@ -315,7 +315,7 @@ function Read-HordeDecisionsChannelAnswer {
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the answer is not a JSON object"; return $fail }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { $fail.reason = ("the answer has a member more than once: " + $dups[0]); return $fail }
-    try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the answer is not JSON"; return $fail }
+    try { $a = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the answer is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the answer is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
     # THE VERSION FIRST, THEN EXACTLY THAT VERSION'S MEMBERS (header, IN): a version this machine does not
@@ -586,7 +586,7 @@ function ConvertTo-HordeDecisionsChannelQuestion {
     # One question of the list as the phone gets it, as JSON text: the view less what is the warchief's
     # inbox (OUT, in the header).
     param($Question)
-    $q = (ConvertTo-Json -InputObject $Question -Compress -Depth 20) | ConvertFrom-Json
+    $q = ConvertFrom-HordeJson -Text (ConvertTo-Json -InputObject $Question -Compress -Depth 20)
     # WHERE HIS ANSWERS WERE ROUTED is the keeper's record of its own sends (decisions/Route.ps1): which
     # session, which notice. Nothing he reads, so it does not travel to his phone.
     if ($null -ne $q.PSObject.Properties["routes"]) { $q.PSObject.Properties.Remove("routes") }
@@ -653,7 +653,7 @@ function Read-HordeDecisionsChannelLedgerFile {
     try {
         $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
         if (-not [System.IO.File]::Exists($path)) { return $out }
-        $j = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($path))
+        $j = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($path))
         if ($null -eq $j -or $j.v -ne 1) { return @{} }
         foreach ($s in @($j.streams)) {
             if ("$($s.from)" -cnotmatch '\A[0-9a-f]{32}\z') { return @{} }

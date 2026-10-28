@@ -7,7 +7,6 @@
 agents/claude-code/Conversation.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 agents/claude-code/Launch.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 channels/chat/Channel.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
-channels/decisions/Channel.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 channels/notices/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 channels/trust/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 cli/RelayDeploy.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
