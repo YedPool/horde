@@ -90,7 +90,7 @@
            Replace = 'fleetOpen = $false; pick = $Orc }' }
         # --- what the page drew, held to its shape and bounds
         @{ Name = "a-report-of-any-version"
-           Find = 'if ($drawn.v -isnot [int] -or $drawn.v -ne 1) {'
+           Find = 'if (($drawn.v -isnot [int] -and $drawn.v -isnot [long]) -or $drawn.v -ne 1) {'
            Replace = 'if ($false) {' }
         @{ Name = "a-report-missing-a-member"
            Find = 'if (-not (& $has $drawn $name)) { return (& $bad ("has no member " + $name)) }'

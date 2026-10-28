@@ -90,10 +90,10 @@
            Find = 'if ($v -is [decimal] -or $v -is [double] -or $v -is [single]) {'
            Replace = 'if ($v -is [decimal] -or $v -is [double] -or $v -is [single]) { [void]$sb.Append($v.ToString($inv)); continue' }
         @{ Name = "version-not-read-first"
-           Find = 'if (-not ($v -is [int] -and $v -eq 1))'
+           Find = 'if (-not (($v -is [int] -or $v -is [long]) -and $v -eq 1))'
            Replace = 'if ($false)' }
         @{ Name = "version-as-text-accepted"
-           Find = 'if (-not ($v -is [int] -and $v -eq 1))'
+           Find = 'if (-not (($v -is [int] -or $v -is [long]) -and $v -eq 1))'
            Replace = 'if (-not ($v -eq 1))' }
         @{ Name = "closure-not-sticky"
            Find = 'if ($null -ne $Reader.closed) { return $Reader.closed }'

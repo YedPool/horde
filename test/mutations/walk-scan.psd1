@@ -18,8 +18,8 @@
            Find = '"Test-HordeSchemaIsNumber", '
            Replace = '"New-HordeKnown", ' }
         @{ Name = "compare-number-not-allowed"
-           Find = '"Compare-HordeSchemaNumber")'
-           Replace = '"New-HordeKnown")' }
+           Find = '"Compare-HordeSchemaNumber",'
+           Replace = '"New-HordeKnown",' }
         @{ Name = "dictionary-not-allowed"
            Find = '    "System.Collections.Generic.Dictionary[string,object]")'
            Replace = '    "System.Collections.ArrayList")' }
