@@ -376,7 +376,7 @@ try {
     Check ($parsed.services[0].name -ceq "svc" -and $parsed.services[0].escalationOutstanding -eq $true -and @("running", "stale", "unknown") -ccontains $parsed.supervisor.state -and $parsed.definitions.state -ceq "read") "-Json carries the same, and says in one word whether an escalation is outstanding"
     $rep3 = Get-HordeServiceStatusReport -HordeHome $h3 -Tools $tools -Now $t0
     $json3 = ConvertTo-Json -InputObject (ConvertTo-HordeServiceStatusRecord -Report $rep3) -Depth 8 -Compress
-    Check (($json3 | ConvertFrom-Json).services[0].lastAction.at -like "2026-10-13T12:00:*Z" -and -not $json3.Contains("Date(") -and ((Format-HordeServiceStatus -Report $rep3) -join " ") -like "*last action: 2026-10-13 12:00:* UTC restart-for-update (confirm) done - updated to bbbbbbbbb*") "a last action is shown with its time, and in -Json as text that reads back"
+    Check ((ConvertFrom-HordeJson -Text $json3).services[0].lastAction.at -like "2026-10-13T12:00:*Z" -and -not $json3.Contains("Date(") -and ((Format-HordeServiceStatus -Report $rep3) -join " ") -like "*last action: 2026-10-13 12:00:* UTC restart-for-update (confirm) done - updated to bbbbbbbbb*") "a last action is shown with its time, and in -Json as text that reads back"
     $rep8 = Get-HordeServiceStatusReport -HordeHome $refused -Tools $tools -Now $t0
     Check (((Format-HordeServiceStatus -Report $rep8) -join " ") -like "*NO SERVICE IS SUPERVISED until that file is mended*") "a refused definitions file is said as what it is: nothing is supervised"
     $rep2 = Get-HordeServiceStatusReport -HordeHome $h2 -Tools $tools -Now $t0

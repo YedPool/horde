@@ -11,7 +11,6 @@ channels/notices/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; liste
 channels/trust/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 cli/RelayDeploy.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 cli/RelayPublish.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-cli/ServicesAct.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 conversations/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/AgentDescriptor.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/EngineResolve.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
@@ -26,7 +25,6 @@ core/Projection.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when th
 core/RestoreSource.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Roles.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Schema.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-core/ServicesFiles.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Wake.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/WakeFiles.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/WakeTell.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)

@@ -394,7 +394,7 @@ function Read-HordeServiceWindowReport {
         $text = Read-HordeSharedText -Path $Path
         # 2 MiB: the decisions window bounds its report at 60,000 characters; this is far above it.
         if ($text.Length -gt 2097152) { return (New-HordeUnknown -Reason "its report file is larger than a report is") }
-        $have = Get-HordeObjectByKey ($text | ConvertFrom-Json)
+        $have = Get-HordeObjectByKey (ConvertFrom-HordeJson -Text $text)
         $processId = $have["pid"]; $handle = $have["handle"]
         if (($processId -isnot [int] -and $processId -isnot [long]) -or $processId -le 0 -or ($handle -isnot [int] -and $handle -isnot [long]) -or $handle -le 0) { return (New-HordeUnknown -Reason "its report file names no process and window") }
         return (New-HordeKnown -Value ([pscustomobject]@{ pid = [int]$processId; handle = [long]$handle }))
