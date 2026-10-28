@@ -29,15 +29,41 @@ $script:HordeSshWriteRights = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0
 # SYSTEM and the Administrators group (header).
 $script:HordeSshTrustedWriters = @("S-1-5-18", "S-1-5-32-544")
 
+# THE ACLS ARE READ AND WRITTEN BY .NET, NOT THE Get-Acl / Set-Acl CMDLETS (T-0367). Set-Acl asks for
+# SeSecurityPrivilege on a key ssh-keygen made, which a non-elevated user lacks, so a non-elevated `horde node init`
+# failed; and the cmdlets' module does not load in a Windows PowerShell child of a PowerShell 7 parent (measured
+# 2026-10-17, notices/Services.ps1), which is how a suite or a scheduled task may start horde. .NET reads the owner,
+# group and access rules (never the audit rules) and writes only the sections the object sets. Windows PowerShell
+# has the methods on FileInfo and DirectoryInfo; PowerShell 7 has them as FileSystemAclExtensions.
+
+function Get-HordeSshAcl {
+    # -Path's owner and access rules, for a file or a folder.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (Test-Path -LiteralPath $Path -PathType Container) {
+        $di = New-Object System.IO.DirectoryInfo -ArgumentList $Path
+        if ($di.PSObject.Methods["GetAccessControl"]) { return $di.GetAccessControl() }
+        return [System.IO.FileSystemAclExtensions]::GetAccessControl($di)
+    }
+    $fi = New-Object System.IO.FileInfo -ArgumentList $Path
+    if ($fi.PSObject.Methods["GetAccessControl"]) { return $fi.GetAccessControl() }
+    return [System.IO.FileSystemAclExtensions]::GetAccessControl($fi)
+}
+
 function Set-HordeSshKeyAcl {
     # The file's ACL: this user alone, inheritance cut. Returns "" when it reads back so, or why not.
+    # THE OWNER IS SET ONLY WHEN IT IS NOT ALREADY THIS USER: ssh-keygen's ACL gives the user no WRITE_OWNER, so even
+    # setting the same owner is refused, while an owner may always change the access rules. An elevated process may
+    # have made the file owned by BUILTIN\Administrators; then it is made this user's, which an elevated one may do.
     param([string]$Path)
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $acl = New-Object System.Security.AccessControl.FileSecurity
     $acl.SetAccessRuleProtection($true, $false)
-    $acl.SetOwner($me)
+    $owner = (Get-HordeSshAcl -Path $Path).GetOwner([System.Security.Principal.SecurityIdentifier])
+    if ("$owner" -cne "$me") { $acl.SetOwner($me) }
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, "FullControl", "Allow")))
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    $fi = New-Object System.IO.FileInfo -ArgumentList $Path
+    if ($fi.PSObject.Methods["SetAccessControl"]) { $fi.SetAccessControl($acl) }
+    else { [System.IO.FileSystemAclExtensions]::SetAccessControl($fi, $acl) }
     return (Test-HordeSshKeyAcl -Path $Path)
 }
 
@@ -45,7 +71,7 @@ function Test-HordeSshKeyAcl {
     # "" when -Path's ACL is protected and admits this user alone; otherwise why not.
     param([string]$Path)
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $read = Get-Acl -LiteralPath $Path
+    $read = Get-HordeSshAcl -Path $Path
     if (-not $read.AreAccessRulesProtected) { return ("the key " + $Path + " inherits access from its folder") }
     $rules = @($read.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     $others = @($rules | Where-Object { "$($_.IdentityReference)" -cne "$me" })
@@ -60,7 +86,7 @@ function Get-HordeSshOtherWriters {
     param([Parameter(Mandatory = $true)][string]$Path)
     $me = "" + [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $ok = @($me) + $script:HordeSshTrustedWriters
-    $acl = Get-Acl -LiteralPath $Path
+    $acl = Get-HordeSshAcl -Path $Path
     $out = New-Object System.Collections.ArrayList
     $owner = "" + $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
     if ($ok -cnotcontains $owner) { [void]$out.Add($owner + " (owns it, so it may change who writes it)") }

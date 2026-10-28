@@ -59,8 +59,9 @@
 # configuration Listen.ps1 wrote under Horde's home.
 
 $script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome", "Add-Type",
-    # Enroll.ps1 (R17b): its own files under Horde's home, the key's ACL, and its registration.
-    "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
+    # Enroll.ps1 (R17b): its own files under Horde's home, and its registration. (The key's ACL went from the
+    # Get-Acl and Set-Acl cmdlets to .NET in T-0367, 2026-10-27, so neither cmdlet is allowed any more.)
+    "Remove-Item", "Move-Item", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
     # Listen.ps1 (R17a): its registration.
     "Register-HordeListener",
     # Listen.ps1, mesh v1 (2026-10-11): the port's rule for which address the hub may listen on, applied again.
@@ -93,7 +94,10 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     "Parse",
     # Transport.ps1, the first live mesh link (2026-10-11): the fd state an ssh session handed this process,
     # taken out of ssh.exe's environment. It narrows what the start passes on and runs nothing.
-    "Remove")
+    "Remove",
+    # Files.ps1, T-0367 (2026-10-27): ACLs read and written by .NET, since the Set-Acl cmdlet needs a privilege a
+    # non-elevated user lacks and the cmdlets do not load in a 5.1 child of PowerShell 7. They run nothing.
+    "GetAccessControl", "SetAccessControl")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
@@ -105,11 +109,15 @@ $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datet
     # Listen.ps1, issue #144 item 3 (2026-10-11): the hub's register, handed over as a table of device and key.
     "hashtable",
     # Listen.ps1, mesh v1 (2026-10-11): the address it binds.
-    "system.net.ipaddress")
+    "system.net.ipaddress",
+    # Files.ps1, T-0367 (2026-10-27): where PowerShell 7 keeps a file's SetAccessControl.
+    "system.io.filesystemaclextensions")
 $script:HordeSshGuardNewTypes = @("System.Diagnostics.ProcessStartInfo", "System.IO.FileStream", "byte[]", "System.Net.Sockets.TcpClient", "System.Text.StringBuilder",
     "System.Collections.Generic.List[byte]",
     # Enroll.ps1 (R17b): the key's ACL, and a list of lines.
-    "System.Security.AccessControl.FileSecurity", "System.Security.AccessControl.FileSystemAccessRule", "System.Collections.ArrayList")
+    "System.Security.AccessControl.FileSecurity", "System.Security.AccessControl.FileSystemAccessRule", "System.Collections.ArrayList",
+    # Files.ps1, T-0367 (2026-10-27): the file or folder whose ACL is read or written by .NET.
+    "System.IO.FileInfo", "System.IO.DirectoryInfo")
 # Variables that ARE the engine, and properties that lead to it, as tools/ExecScan.ps1 lists them. A
 # property named Host on the adapter's own endpoint object is data, so the two lists are kept apart.
 $script:HordeSshGuardEngineVariables = @("ExecutionContext", "Host", "PSCmdlet")
