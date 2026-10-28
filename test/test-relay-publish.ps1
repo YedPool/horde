@@ -48,7 +48,7 @@ function Hash { param([string]$Path, [string]$Version) return ("h" + $Version + 
 # hosts every file it built (with the hash it answers) unless the suite says a file is hosted otherwise.
 function New-World {
     param([string]$HordeHome)
-    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true; bundles = @{}; bundleOk = $true; onMain = $true; movedTo = ""; propagateAfter = 0; sleeps = 0; staged = $null
+    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; headReason = "no revision tool"; diffs = @{}; diffOk = $true; diffReason = "bad revision"; upstreamReason = "origin could not be reached"; shippedOk = $true; bundles = @{}; bundleOk = $true; onMain = $true; movedTo = ""; propagateAfter = 0; sleeps = 0; staged = $null
         deploy = "ok"; built = $v2; serveAfter = $null; deploys = 0; calls = (New-Object System.Collections.ArrayList)
         hosted = @{ "app/sw.js" = [pscustomobject]@{ status = 200; body = (Sw $v1); sha256 = (Hash "app/sw.js" $v1) } }
         otherwise = @{}; changed = @("surfaces/pwa/page/app.js")
@@ -63,13 +63,13 @@ function New-Tools {
             $W.sleeps++; $W.now = $W.now.AddMilliseconds($Ms)
             if ($null -ne $W.staged -and $W.sleeps -ge $W.propagateAfter) { foreach ($k in @($W.staged.Keys)) { $W.hosted[$k] = $W.staged[$k] }; $W.staged = $null }
         }
-        Upstream = { param($Checkout, $Commit) [void]$W.calls.Add("upstream " + $Commit.Substring(0, 1)); if ($null -eq $W.onMain) { return (New-HordeUnknown -Reason "origin could not be reached") }; return (New-HordeKnown -Value ([bool]$W.onMain)) }
+        Upstream = { param($Checkout, $Commit) [void]$W.calls.Add("upstream " + $Commit.Substring(0, 1)); if ($null -eq $W.onMain) { return (New-HordeUnknown -Reason $W.upstreamReason) }; return (New-HordeKnown -Value ([bool]$W.onMain)) }
         NewId   = { return [guid]::NewGuid().ToString() }
-        Head    = { param($Checkout) [void]$W.calls.Add("head"); if (-not $W.headOk) { return (New-HordeUnknown -Reason "no revision tool") }; return (New-HordeKnown -Value ([pscustomobject]@{ commit = $W.head; clean = $W.clean })) }
+        Head    = { param($Checkout) [void]$W.calls.Add("head"); if (-not $W.headOk) { return (New-HordeUnknown -Reason $W.headReason) }; return (New-HordeKnown -Value ([pscustomobject]@{ commit = $W.head; clean = $W.clean })) }
         Diff    = {
             param($Checkout, $Base, $Head)
             [void]$W.calls.Add("diff " + $Base.Substring(0, 1) + ".." + $Head.Substring(0, 1))
-            if (-not $W.diffOk -or -not $W.diffs.ContainsKey($Base + ".." + $Head)) { return (New-HordeUnknown -Reason "bad revision") }
+            if (-not $W.diffOk -or -not $W.diffs.ContainsKey($Base + ".." + $Head)) { return (New-HordeUnknown -Reason $W.diffReason) }
             return (New-HordeKnown -Value ([pscustomobject]@{ paths = [string[]]@($W.diffs[$Base + ".." + $Head]) }))
         }
         Load    = $null
@@ -501,6 +501,60 @@ try {
     $W = New-World (New-Home "no-head"); Seed; $W.headOk = $false
     $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a commit that cannot be read is not deployed"
+    # T-0380: the 2026-10-28 05:41Z incident - the checkout's rev-parse did not finish in 20 s, the card said
+    # "needs attention", and the next pass (05:47Z) was fine. The reason is the exact text the real tool gives.
+    $slowWords = "the checkout's commit could not be read: its checkout X is not a checkout (git rev-parse: it did not finish within 20 s and was ended)"
+    $W = New-World (New-Home "slow-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $l = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0) "a git call that runs out of time, once: nothing deployed and nothing told"
+    $st = (Read-HordeRelayPublishState -HordeHome $W.home).value
+    Check ($st.troubled -ne $true -and @($st.told).Count -eq 0 -and $st.slow -eq 1) "and the episode is not troubled, no key is told, the slow pass is counted"
+    Check (Says $l "next pass looks again") "and the pass says it will look again"
+    $W.headOk = $true; $W.now = $t0.AddMinutes(6)
+    $l = Pass
+    Check ($W.deploys -eq 1 -and $W.told.Count -eq 1 -and (Whats) -ceq "deployed") "the next pass deploys, and only the deploy is told"
+    Check ((Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the count starts over"
+    $W = New-World (New-Home "slow-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "two passes in a row that run out of time: the second is told"
+    $null = Pass
+    Check ((Whats) -ceq "unreadable") "and a third is not told again in the same episode"
+    $W = New-World (New-Home "slow-reset"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $null = Pass
+    $W.headOk = $true; $W.deploy = "fail"; $W.now = $t0.AddMinutes(6); $null = Pass
+    $W.headOk = $false; $W.headReason = $slowWords; $W.now = $t0.AddHours(2); $null = Pass
+    Check (-not (@($W.told | ForEach-Object { $_.what }) -ccontains "unreadable")) "a pass between two slow ones starts the count over: the second slow one is quiet again"
+    $W = New-World (New-Home "not-slow"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = "the checkout's commit could not be read: its checkout X is not a checkout (git rev-parse: fatal: not a git repository)"
+    $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a failure that is not a time-out is told at once, as before"
+    # The same three cases at the diff and at the origin/main fetch (round 2, S1).
+    $W = New-World (New-Home "slow-diff-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.diffOk = $false; $W.diffReason = $slowWords
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 1) "a diff that runs out of time, once: nothing deployed, nothing told"
+    $W.diffOk = $true; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed" -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the next pass deploys clean"
+    $W = New-World (New-Home "slow-diff-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.diffOk = $false; $W.diffReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a diff that runs out of time twice in a row is told on the second"
+    $W = New-World (New-Home "slow-main-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.onMain = $null; $W.upstreamReason = $slowWords
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 1 -and $null -eq (Read-HordeRelayPublishState -HordeHome $W.home).value.failure) "an origin/main fetch that runs out of time, once: nothing deployed, nothing told, no failure kept"
+    $W.onMain = $true; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed" -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the next pass deploys clean"
+    $W = New-World (New-Home "slow-main-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.onMain = $null; $W.upstreamReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "an origin/main fetch that runs out of time twice in a row is told on the second"
+    $W = New-World (New-Home "other-diff"); Seed; $W.diffOk = $false
+    $null = Pass
+    Check ($W.told.Count -eq 1) "a diff that fails for another reason is still told at once"
     $W = New-World (New-Home "interrupted"); Seed
     Range @("surfaces/pwa/page/app.js")
     $s0 = New-HordeRelayPublishState; $s0.attempt = [pscustomobject]@{ head = $cB; base = $cA; at = $t0.AddMinutes(-5) }
