@@ -18,6 +18,7 @@ trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
 . (Join-Path $root "core\Ownership.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 . (Join-Path $root "test\lib\RecordDrift.ps1")
 
 $schemaPath = Join-Path $root "schema\session-binding.v1.json"
@@ -30,7 +31,7 @@ $own = Get-HordeOwnership
 $bindingKeys = $script:HordeBindingRecordKeys
 $fleetKeys = $script:HordeFleetRecordKeys
 
-function Copy-HordeJson { param($Value) return (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json) }
+function Copy-HordeJson { param($Value) return (ConvertFrom-HordeJson -Text ($Value | ConvertTo-Json -Depth 30)) }
 function Drifts { param($O, $S, [string]$Like) return (@(Get-HordeRecordDrift -Own $O -Schema $S -Owner "node" -Keys $bindingKeys | Where-Object { $_ -like $Like }).Count -gt 0) }
 
 Write-Host ""
@@ -115,7 +116,7 @@ Check ($dupText -ne $schemaText -and @(Find-HordeJsonDuplicateKey -Text $dupText
 Write-Host ""
 Write-Host "--- golden records: the valid ones pass ---" -ForegroundColor Cyan
 $fx = Join-Path $root "test\fixtures\session-binding"
-function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
+function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = ConvertFrom-HordeJson -Text $t; return ,$v }
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
 Check ($valid.Count -eq 2) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
 foreach ($f in $valid) {
