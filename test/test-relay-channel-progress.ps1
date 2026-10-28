@@ -146,7 +146,7 @@ function Get-NewMail {
         $machine = New-HordeRelaySender -Public $World.id.sign.public -Proof "es256"
         $verdict = New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header $hdr); fresh = $true })
         $o = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders @{ ($machine.keyId) = $machine } -RecipientKeys @{ (Get-HordeRelayKeyId -Public $Phone.agreePublic) = $Phone.agree } -Replay $verdict -Channel $hdr.channel -Kind $hdr.kind
-        if ($o.ok) { $raw = [System.Text.Encoding]::ASCII.GetString($o.value); [void]$out.Add([pscustomobject]@{ header = $hdr; body = ($raw | ConvertFrom-Json); raw = $raw; to = @($hdr.to); length = $o.value.Length }) }
+        if ($o.ok) { $raw = [System.Text.Encoding]::ASCII.GetString($o.value); [void]$out.Add([pscustomobject]@{ header = $hdr; body = (ConvertFrom-HordeJson -Text $raw); raw = $raw; to = @($hdr.to); length = $o.value.Length }) }
         else { [void]$out.Add([pscustomobject]@{ header = $hdr; body = $null; raw = ""; to = @($hdr.to); length = 0 }) }
     }
     return @($out.ToArray())

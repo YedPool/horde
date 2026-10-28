@@ -91,7 +91,7 @@ function Get-CardsMail {
         $machine = New-HordeRelaySender -Public $World.id.sign.public -Proof "es256"
         $verdict = New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header $hdr); fresh = $true })
         $o = Unprotect-HordeRelayEnvelope -Envelope $env1.value -Senders @{ ($machine.keyId) = $machine } -RecipientKeys @{ (Get-HordeRelayKeyId -Public $World.phone.agreePublic) = $World.phone.agree } -Replay $verdict -Channel $hdr.channel -Kind $hdr.kind
-        if ($o.ok) { $raw = [System.Text.Encoding]::ASCII.GetString($o.value); [void]$out.Add([pscustomobject]@{ seq = [long]$hdr.seq; kind = $hdr.kind; body = ($raw | ConvertFrom-Json); raw = $raw }) }
+        if ($o.ok) { $raw = [System.Text.Encoding]::ASCII.GetString($o.value); [void]$out.Add([pscustomobject]@{ seq = [long]$hdr.seq; kind = $hdr.kind; body = (ConvertFrom-HordeJson -Text $raw); raw = $raw }) }
     }
     return @($out.ToArray())
 }
@@ -287,7 +287,7 @@ try {
     $setD = (Get-HordeModuleSettings -Declaration (Get-HordeCardsChannelSettingsDeclaration) -HordeHome $D.home).values
     $pathsD = Get-HordeCardsChannelPaths -HordeHome $D.home -Settings $setD
     $snap = New-HordeCardsChannelSnapshot -Context $D.ctx -Settings $setD -Paths $pathsD -Now ([datetime]::UtcNow) -Budget $hosted
-    $sb = $snap.body | ConvertFrom-Json
+    $sb = ConvertFrom-HordeJson -Text $snap.body
     Check ($hosted -eq 47918 -and $snap.body.Length -le $hosted -and $snap.cards -eq 2 -and $snap.left -eq 0) ("200 AREAS: the body fits the hosted relay's budget for two phones and every card is kept (" + $snap.body.Length + " of " + $hosted + ", cards " + $snap.cards + ")")
     Check (@($sb.areas).Count -gt 0 -and @($sb.areas).Count -lt 200 -and $sb.areasLeftOut -eq (200 - @($sb.areas).Count) -and $sb.areas[0].area.EndsWith("001") -and (@($snap.lines) -join " | ") -like "*area(s) of the map did not fit*") ("the map is cut from its end, the rest counted for the phone and said at the machine (areas " + @($sb.areas).Count + ", left out " + $sb.areasLeftOut + ")")
     # F, review of PR 244: the map was held to a quarter of the budget even with the rest unused, so two
@@ -302,7 +302,7 @@ try {
     $pathsG = Get-HordeCardsChannelPaths -HordeHome $G.home -Settings $setG
     $whole = New-HordeCardsChannelSnapshot -Context $G.ctx -Settings $setG -Paths $pathsG -Now ([datetime]::UtcNow) -Budget 1048576
     $snap = New-HordeCardsChannelSnapshot -Context $G.ctx -Settings $setG -Paths $pathsG -Now ([datetime]::UtcNow) -Budget $hosted
-    $sb = $snap.body | ConvertFrom-Json
+    $sb = ConvertFrom-HordeJson -Text $snap.body
     Check ($whole.left -eq 0 -and $whole.body.Length -gt 100000 -and $snap.body.Length -le $hosted -and $snap.cards -gt 0 -and $snap.cards + $snap.left -eq 64 -and $sb.cardsLeftOut -eq $snap.left -and @($sb.cards).Count -eq $snap.cards -and (@($snap.lines) -join " | ") -like "*card(s) did not fit one envelope*") ("64 FULL CARDS do not fit the hosted budget: the last are left out, the phone told how many (whole " + $whole.body.Length + " bytes; kept " + $snap.cards + ", left out " + $snap.left + ")")
     # The map is cut further once no card is left: at every budget from 700 to 2000 bytes the body fits,
     # unless nothing but the Thrall's card and the name is left to cut.
@@ -310,7 +310,7 @@ try {
     $over = New-Object System.Collections.ArrayList
     foreach ($bud in @(700..2000 | Where-Object { $_ % 25 -eq 0 })) {
         $sn = New-HordeCardsChannelSnapshot -Context $D.ctx -Settings $setD -Paths $pathsD -Now ([datetime]::UtcNow) -Budget $bud
-        $sj = $sn.body | ConvertFrom-Json
+        $sj = ConvertFrom-HordeJson -Text $sn.body
         if ($sn.body.Length -gt $bud -and ($sn.cards -gt 0 -or @($sj.areas).Count -gt 0)) { [void]$over.Add($bud) }
     }
     Check ($over.Count -eq 0) ("WITH NO CARD LEFT THE MAP IS CUT TOO: no budget leaves a body over it while a card or an area could still go (over at: " + ($over -join ",") + ")")
