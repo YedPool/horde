@@ -477,7 +477,8 @@ function ConvertFrom-HordeDecisionWindowDrawn {
     if ($null -eq $drawn -or $drawn -isnot [System.Management.Automation.PSCustomObject]) { return (& $bad "is not one JSON object") }
     $has = { param($Object, [string]$Name) return ($null -ne $Object -and $Object -is [System.Management.Automation.PSCustomObject] -and $null -ne $Object.PSObject.Properties[$Name]) }
     foreach ($name in @("v", "draws", "counts", "headings", "lines", "sub", "fleet", "notice", "foot", "text", "left")) { if (-not (& $has $drawn $name)) { return (& $bad ("has no member " + $name)) } }
-    if ($drawn.v -isnot [int] -or $drawn.v -ne 1) { return (& $bad "is not version 1") }
+    # A whole number parses as Int32 under 5.1 and Int64 under 7 (core/JsonText.ps1): either is the number (T-0366).
+    if (($drawn.v -isnot [int] -and $drawn.v -isnot [long]) -or $drawn.v -ne 1) { return (& $bad "is not version 1") }
     $lists = @(@{ name = "headings"; most = $Bounds.lines }, @{ name = "lines"; most = $Bounds.lines }, @{ name = "sub"; most = $Bounds.subLines })
     foreach ($list in $lists) {
         $items = $drawn.PSObject.Properties[$list.name].Value
@@ -489,7 +490,7 @@ function ConvertFrom-HordeDecisionWindowDrawn {
         }
     }
     foreach ($line in @($drawn.lines)) {
-        if (-not (& $has $line "s") -or $line.s -isnot [string] -or $line.s.Length -gt $Bounds.lineChars -or -not (& $has $line "open") -or $line.open -isnot [bool] -or -not (& $has $line "dim") -or $line.dim -isnot [bool] -or -not (& $has $line "g") -or $line.g -isnot [int]) { return (& $bad "holds a question line that does not say its suffix, its heading, and whether it is unfolded and dimmed") }
+        if (-not (& $has $line "s") -or $line.s -isnot [string] -or $line.s.Length -gt $Bounds.lineChars -or -not (& $has $line "open") -or $line.open -isnot [bool] -or -not (& $has $line "dim") -or $line.dim -isnot [bool] -or -not (& $has $line "g") -or ($line.g -isnot [int] -and $line.g -isnot [long])) { return (& $bad "holds a question line that does not say its suffix, its heading, and whether it is unfolded and dimmed") }
     }
     if (-not (& $has $drawn.fleet "head") -or $drawn.fleet.head -isnot [string] -or $drawn.fleet.head.Length -gt $Bounds.textChars -or -not (& $has $drawn.fleet "rows") -or @($drawn.fleet.rows).Count -gt $Bounds.fleetRows) { return (& $bad "does not say what the fleet line shows, within its bounds") }
     foreach ($row in @($drawn.fleet.rows)) { if ($row -isnot [string] -or $row.Length -gt $Bounds.lineChars) { return (& $bad "holds a fleet line that is not text within its bounds") } }

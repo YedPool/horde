@@ -103,7 +103,7 @@ Check ((@(Get-NumbersWritten "decisions\Rules.ps1") -join ",") -ceq "999999999" 
 Check ((Get-HordeDecisionRecordName -Sequence (Get-HordeDecisionMaxSequence)) -ceq "9999999999.json" -and (Throws { Get-HordeDecisionRecordName -Sequence ((Get-HordeDecisionMaxSequence) + 1) } "1 to 9999999999")) "the store names the largest record and refuses the one after it"
 $tooFar = '{"schemaVersion":1,"sequence":10000000000,"id":"' + ("a" * 32) + '","kind":"question-closed","at":"2026-10-06T12:00:00Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":1,"outcome":"x"}}'
 $atEnd = $tooFar.Replace('"sequence":10000000000', '"sequence":9999999999')
-Check ("$(@(Test-HordeDecisionEvent -Ev ($tooFar | ConvertFrom-Json) -Definitions $defs)[0])" -like "*sequence number is beyond 9999999999*" -and @(Test-HordeDecisionEvent -Ev ($atEnd | ConvertFrom-Json) -Definitions $defs).Count -eq 0) "and the rules refuse a record claiming the number after the largest, and accept the largest: the same limit, read from the same place"
+Check ("$(@(Test-HordeDecisionEvent -Ev (ConvertFrom-HordeJson -Text $tooFar) -Definitions $defs)[0])" -like "*sequence number is beyond 9999999999*" -and @(Test-HordeDecisionEvent -Ev (ConvertFrom-HordeJson -Text $atEnd) -Definitions $defs).Count -eq 0) "and the rules refuse a record claiming the number after the largest, and accept the largest: the same limit, read from the same place"
 Check (Throws { Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits" } "is not a setting") "the width is not a setting: nothing can ask the settings for it"
 
 Write-Host ""
@@ -156,7 +156,7 @@ $a = Add-Q $s @{} $id1
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 1 -and $a.value.sequence -eq 1 -and $a.value.attempts -eq 1) ("the first question is added as number 1, record 1 (" + (Get-Outcome $a) + ")")
 Check ($a.value.question.title -ceq "Should the closing sound play when the assistant closes?" -and $a.value.question.state -ceq "open" -and $a.value.question.wordingVersion -eq 1) "and the answer holds it, open, at wording 1"
 Check ((Get-Files $s) -ceq "0000000001.json") "one record was written"
-$stored = [System.IO.File]::ReadAllText((Join-Path $s "0000000001.json")) | ConvertFrom-Json
+$stored = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $s "0000000001.json")))
 Check (@(Test-HordeDecisionEvent -Ev $stored -Definitions $defs).Count -eq 0 -and $stored.id -ceq $id1 -and $stored.kind -ceq "question-added" -and $stored.actor -ceq "warchief" -and $stored.data.number -eq 1) "the record on disk is a decision-event.v1 record with the id, the kind, the actor and the number"
 Check ($stored.at -cmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z\z') "its time is UTC, with a Z"
 $bytesBefore = [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $s "0000000001.json")))
@@ -283,13 +283,13 @@ Write-Host ""
 Write-Host "--- how much a question matters, and how much it holds up: stated at add, corrected by rank ---" -ForegroundColor Cyan
 $r = New-TestStore
 $plain = Add-Q $r @{ title = "Is a question added with neither word the record it always was?" }
-$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")))
 Check ((Get-Outcome $plain) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $plain.value.question.importance -ceq "normal" -and $plain.value.question.blocks -ceq "part" -and $plain.value.question.importanceShown -eq "" -and $plain.value.question.blocksShown -eq "") "A QUESTION ADDED WITH NEITHER WORD writes the record every earlier version wrote - a number and the question, nothing else - and reads as normal and part"
 $marked = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; importance = "high"; blocks = "all"; question = (New-Question @{ title = "Is a question added with both words given them back?" }) }
-$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000002.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $r "0000000002.json")))
 Check ((Get-Outcome $marked) -ceq "done" -and (@($rec.data.PSObject.Properties | Where-Object { @("importance", "blocks") -ccontains $_.Name } | ForEach-Object { $_.Name + "=" + $_.Value } | Sort-Object) -join ",") -ceq "blocks=all,importance=high" -and $marked.value.question.importance -ceq "high" -and $marked.value.question.importanceShown -ceq "Important" -and $marked.value.question.blocksShown -ceq "Blocks all work") "add with both words records them, and the answer hands them back with their plain words"
 $half = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; blocks = "none"; question = (New-Question @{ title = "Is a question added with one word given the other's default?" }) }
-$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000003.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $r "0000000003.json")))
 Check ((Get-Outcome $half) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,number,question" -and $half.value.question.importance -ceq "normal" -and $half.value.question.blocks -ceq "none") "add with one word records that one only: the other is not written down as if it had been said"
 $filesWere = Get-Files $r
 foreach ($bad in @(
@@ -314,13 +314,13 @@ Write-Host ""
 Write-Host "--- needs a passkey: written only as true, shown only when true ---" -ForegroundColor Cyan
 $p = New-TestStore
 $keyed = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = (New-Question @{ title = "Is a question marked as needing a passkey recorded so?" }) }
-$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000001.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $p "0000000001.json")))
 Check ((Get-Outcome $keyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "needsPasskey,number,question" -and (Get-HordeTestMember $rec.data "needsPasskey") -eq $true -and (Get-HordeTestMember $keyed.value.question "needsPasskey") -eq $true) "add with needsPasskey true writes needsPasskey true into the record, and the view hands it back as true"
 $unkeyed = Add-Q $p @{ title = "Is a question with no passkey mark the record it always was?" }
-$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000002.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $p "0000000002.json")))
 Check ((Get-Outcome $unkeyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $unkeyed.value.question.PSObject.Properties["needsPasskey"]) "CONTROL: add without needsPasskey writes no needsPasskey member, and the view has none"
 $falseKey = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $false; question = (New-Question @{ title = "Is needsPasskey false written down at all?" }) }
-$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000003.json")) | ConvertFrom-Json
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $p "0000000003.json")))
 Check ((Get-Outcome $falseKey) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $falseKey.value.question.PSObject.Properties["needsPasskey"]) "add with needsPasskey false writes nothing: the record is byte for byte the unmarked one, and the view has no needsPasskey"
 $pFiles = Get-Files $p
 foreach ($bad in @(
@@ -346,8 +346,8 @@ $filesWere = Get-Files $r
 $id = New-Id
 $up = Invoke-Op $r "rank" @{ id = $id; actor = "warchief"; number = 1; importance = "high"; blocks = "all" }
 Check ((Get-Outcome $up) -ceq "done" -and $up.value.number -eq 1 -and $up.value.sequence -eq 5 -and $up.value.question.importance -ceq "high" -and $up.value.question.blocks -ceq "all" -and (@($up.value.question.history | ForEach-Object { $_.note }) -join "|") -ceq "added|ranked: importance high, blocks all") ("rank changes the two words of question 1 in one record of its own, and the history says so (" + (Get-Outcome $up) + ")")
-$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000005.json")) | ConvertFrom-Json
-Check ($rec.kind -ceq "question-ranked" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,importance,number" -and ([System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")) | ConvertFrom-Json).data.PSObject.Properties["importance"] -eq $null) "THE QUESTION'S OWN RECORD IS NEVER EDITED: the ranking is record 5, and record 1 still states no word"
+$rec = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $r "0000000005.json")))
+Check ($rec.kind -ceq "question-ranked" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,importance,number" -and (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")))).data.PSObject.Properties["importance"] -eq $null) "THE QUESTION'S OWN RECORD IS NEVER EDITED: the ranking is record 5, and record 1 still states no word"
 $replay = Invoke-Op $r "rank" @{ id = $id; actor = "warchief"; number = 1; importance = "high"; blocks = "all" }
 Check ((Get-Outcome $replay) -ceq "replayed" -and $replay.value.sequence -eq 5 -and (Get-Files $r) -ceq ($filesWere + ",0000000005.json")) "the same ranking sent again under its id is answered from its record, and writes nothing"
 $filesWere = Get-Files $r
