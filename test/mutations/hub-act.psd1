@@ -34,8 +34,8 @@
            Find = '$closable = (@("done", "failed") -ccontains ("" + $r.answer.state)) -and'
            Replace = '$closable = (@("done") -ccontains ("" + $r.answer.state)) -and' }
         @{ Name = "unreadable-record-skipped"
-           Find = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { return (New-HordeUnknown'
-           Replace = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue; return (New-HordeUnknown' }
+           Find = 'try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { return (New-HordeUnknown'
+           Replace = 'try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { continue; return (New-HordeUnknown' }
         @{ Name = "close-other-node-allowed"
            Find = '    if ($named -cne $own) {'
            Replace = '    if ($false) {' }

@@ -12,10 +12,6 @@ channels/decisions/Channel.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; lis
 channels/notices/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 channels/progress/Channel.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
 channels/trust/Channel.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when channels/ joined the shipped folders
-cli/HubAct.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-cli/HubCarry.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-cli/HubRegistry.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-cli/HubServe.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 cli/NodeAct.ps1 | 4 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 cli/RelayDeploy.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 cli/RelayPublish.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
@@ -56,12 +52,6 @@ relays/cloudflare/Relay.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed
 relays/cloudflare/Wrangler.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 relays/local/Relay.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 relays/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/Journal.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/Mirror.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/NodeServe.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/Outbox.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/Overlay.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-remote/Protocol.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 surfaces/Port.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 transports/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 wakers/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)

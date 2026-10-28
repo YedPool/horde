@@ -71,8 +71,8 @@
            Find = 'if ("$($m.deviceId)" -cne $DeviceId) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "reader-without-shared-access"
-           Find = 'try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }'
-           Replace = 'try { $m = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json }' }
+           Find = 'try { $m = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path) }'
+           Replace = 'try { $m = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path)) }' }
         @{ Name = "write-not-a-rename"
            Find = 'try { Move-HordeFileAtomic -From $tmp -To $path }'
            Replace = 'try { [System.IO.File]::Copy($tmp, $path, $true) }' }
