@@ -13,6 +13,9 @@
 # is under review in another pull request (#88), and the duplication goes when both have merged.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+# ConvertFrom-HordeJson reads the hub's records (T-0366): under 7 bare ConvertFrom-Json turned issuedAt into a
+# [datetime], and the req carried from it failed the link's time pattern.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 $script:HordeHubActProtocols = @(1)
 $script:HordeHubActVerbsVersions = @(1)
@@ -55,7 +58,7 @@ function Read-HordeHubActRecord {
     param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$RequestId)
     $p = Join-Path $Dir ($RequestId + ".json")
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
-    return ([System.IO.File]::ReadAllText($p) | ConvertFrom-Json)
+    return (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($p)))
 }
 
 function Find-HordeHubSpawn {
@@ -70,7 +73,7 @@ function Find-HordeHubSpawn {
     foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File)) {
         $r = $null
         # A record that cannot be read could be a second claim: the answer is unknown, never one picked.
-        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason ("the hub's record " + $f.Name + " cannot be read, so whether it claims the session " + $SessionId + " cannot be told: " + $_.Exception.Message)) }
+        try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f.FullName)) } catch { return (New-HordeUnknown -Reason ("the hub's record " + $f.Name + " cannot be read, so whether it claims the session " + $SessionId + " cannot be told: " + $_.Exception.Message)) }
         if ("" + $r.verb -cne "session.spawn" -or $null -eq $r.answer) { continue }
         $ex = Get-HordeLinkProp $r.answer "expect"
         $closable = (@("done", "failed") -ccontains ("" + $r.answer.state)) -and $null -ne $ex -and "" + $ex.pid -ne ""

@@ -26,6 +26,8 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
+
 $script:HordeHubRegistryDevicePattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 
 function Get-HordeHubRegistryRoot {
@@ -103,7 +105,9 @@ function Read-HordeHubEnrolment {
     $path = Get-HordeHubEnrolmentPath -HordeHome $HordeHome -DeviceId $DeviceId
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note ("device " + $DeviceId + " is not in the hub's register (" + $path + " does not exist): enrol it with horde hub enroll")) }
     $e = $null
-    try { $e = Read-HordeSharedText -Path $path | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason ("the register entry " + $path + " could not be read") -ErrorRecord $_) }
+    # ConvertFrom-HordeJson (core/JsonText.ps1, T-0366): under 7 bare ConvertFrom-Json read enrolledAt and the
+    # other times as [datetime], and every entry failed its schema as not text.
+    try { $e = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path) } catch { return (New-HordeUnknown -Reason ("the register entry " + $path + " could not be read") -ErrorRecord $_) }
     if ($null -eq $e) { return (New-HordeUnknown -Reason ("the register entry " + $path + " is empty")) }
     $found = @(Test-HordeSchema -Value $e -Schema (Get-HordeSchema -Name "hub-enrolment.v1"))
     if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the register entry " + $path + " is not one to trust: " + ($found -join "; "))) }
