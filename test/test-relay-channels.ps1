@@ -156,7 +156,7 @@ function Get-Said {
     # The message-said records of a store, parsed, in order.
     param([string]$Store)
     if (-not (Test-Path -LiteralPath $Store)) { return @() }
-    return @(Get-ChildItem -LiteralPath $Store -Filter "*.json" | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json } | Where-Object { $_.kind -ceq "message-said" })
+    return @(Get-ChildItem -LiteralPath $Store -Filter "*.json" | Sort-Object Name | ForEach-Object { ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($_.FullName, $utf8)) } | Where-Object { $_.kind -ceq "message-said" })
 }
 function Get-RecordFile {
     # The journal record file of one received envelope.
