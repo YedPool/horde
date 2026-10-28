@@ -76,6 +76,8 @@ $script:HordeServiceTellPageSentences = [ordered]@{
     "not-on-main"   = "the checkout the supervisor runs from is on a commit that is not on origin/main, so it never deploys the phone page from it"
     "no-record"     = "nothing records a clean commit the hosted phone page was deployed from, so the supervisor does not deploy it; one deploy by hand from a clean checkout (horde relay deploy) records it"
     "unreadable"    = "what changed since the phone page was last deployed could not be read, so the supervisor did not deploy it"
+    "diverged"      = "the phone page is hosted from a commit unrelated to the checkout the supervisor runs from (neither holds the other), so it never deploys; a person decides which is right"
+    "record-absent" = "the phone page is hosted from a commit the checkout the supervisor runs from has not held for several passes in a row, so it did not deploy; a person checks the checkout and its fetch"
     "dirty"         = "the checkout the phone page is built from has changes of its own, so the supervisor did not deploy it"
 }
 

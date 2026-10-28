@@ -6,6 +6,54 @@
     Suite  = "test\test-relay-publish.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "newer-record-diffed"
+           Find = '        if ($rel.value -ceq "newer") {'
+           Replace = '        if ($false) {' }
+        @{ Name = "newer-record-told"
+           Find = '        if ($rel.value -ceq "newer") {'
+           Replace = '        if ($rel.value -ceq "newer") { & $queue "unreadable" "x" $h.commit' }
+        @{ Name = "absent-commit-is-failure"
+           Find = 'if ($has.code -eq 1) { return (New-HordeKnown -Value "absent") }'
+           Replace = '' }
+        @{ Name = "cat-file-failure-is-absent"
+           Find = 'if ($has.code -eq 1) { return (New-HordeKnown -Value "absent") }'
+           Replace = 'if ($true) { return (New-HordeKnown -Value "absent") }' }
+        @{ Name = "presence-asked-of-the-wrong-commit"
+           Find = '"cat-file", "-e", $Base'
+           Replace = '"cat-file", "-e", $Head' }
+        @{ Name = "ancestry-failure-is-not-unknown"
+           Find = 'if ($r.code -ne 1) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "newer-is-diverged"
+           Find = 'if ($back.ok) { return (New-HordeKnown -Value "newer") }'
+           Replace = '' }
+        @{ Name = "head-ancestor-asked-backwards"
+           Find = '"merge-base", "--is-ancestor", $Head, $Base)'
+           Replace = '"merge-base", "--is-ancestor", $Base, $Head)' }
+        @{ Name = "diverged-not-told"
+           Find = '& $queue "diverged" ("diverged:" + $b.base + ":" + $h.commit) $h.commit'
+           Replace = '' }
+        @{ Name = "absent-told-at-once"
+           Find = 'if ($s.absent -ge $script:HordeRelayPublishAbsentPasses) {'
+           Replace = 'if ($s.absent -ge 1) {' }
+        @{ Name = "absent-told-too-late"
+           Find = 'if ($s.absent -ge $script:HordeRelayPublishAbsentPasses) {'
+           Replace = 'if ($s.absent -ge 6) {' }
+        @{ Name = "absent-count-not-incremented"
+           Find = '$s.absent = [int]$s.absent + 1'
+           Replace = '$s.absent = [int]$s.absent + 0' }
+        @{ Name = "absent-count-never-reset"
+           Find = 'if ($rel.value -cne "absent") { $s.absent = 0 }'
+           Replace = '' }
+        @{ Name = "ancestry-unknown-is-newer"
+           Find = '        if (-not (Test-HordeAnswer $rel) -or $rel.state -cne "known") {'
+           Replace = '        if ($false) {' }
+        @{ Name = "head-in-record-failure-is-diverged"
+           Find = 'if ($back.code -eq 1) { return (New-HordeKnown -Value "diverged") }'
+           Replace = 'return (New-HordeKnown -Value "diverged")' }
+        @{ Name = "slow-ancestry-told-at-once"
+           Find = '            if (& $quietSlow $rel "asking whether the checkout holds the deployed commit") { return }'
+           Replace = '' }
         @{ Name = "slow-git-told-at-once"
            Find = '        if ($slowBefore -ge 1) { return $false }'
            Replace = '        return $false' }
