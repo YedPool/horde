@@ -885,6 +885,21 @@ try {
     Check ($bh.state -ceq "unknown") "git failing in merge-base after cat-file succeeded is unknown, not diverged"
     $bh = Test-HordeRelayPublishBehind -Checkout (New-Home "not-a-repo") -Base $c1 -Head $c2
     Check ($bh.state -ceq "unknown") "git failing outright (not a repository) is unknown, not absent"
+    # The second merge-base (is the head in the record's history?) can itself time out or find no git: the
+    # port answers code -1, which is unknown (quiet once when it is a time-out), never diverged.
+    $realGit = (Get-Command Invoke-HordeServiceGit -CommandType Function).ScriptBlock
+    foreach ($case in @(@("time-out", "git merge-base: it did not finish within 20 s and was ended"), @("no git", "the revision tool (git) was not found on this machine"))) {
+        $script:gitStubCalls = 0; $script:gitStubDetail = $case[1]; $script:gitRealGit = $realGit
+        Set-Item -Path Function:Invoke-HordeServiceGit -Value {
+            param($Checkout, $Arguments, $TimeoutSeconds)
+            $script:gitStubCalls++
+            if ($script:gitStubCalls -ge 3) { return [pscustomobject]@{ ok = $false; code = -1; out = ""; detail = $script:gitStubDetail } }
+            return (& $script:gitRealGit -Checkout $Checkout -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds)
+        }
+        try { $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c3 -Head $c2 } finally { Set-Item -Path Function:Invoke-HordeServiceGit -Value $realGit }
+        Check ($bh.state -ceq "unknown" -and $script:gitStubCalls -eq 3) ("the head-in-record merge-base failing outright (" + $case[0] + ") is unknown, not diverged")
+        if ($case[0] -ceq "time-out") { Check ("" + $bh.reason -cmatch 'did not finish within [0-9]+ s and was ended') "and a time-out keeps the words the quiet-once rule reads" }
+    }
     Check ((Test-HordeRelayPublishBehind -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool (ancestry)"
     Check ((Get-HordeRelayPublishChanged -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool"
     # Refused by their words, before any request: the addresses are this machine's closed port.

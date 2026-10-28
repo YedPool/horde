@@ -48,6 +48,9 @@
         @{ Name = "ancestry-unknown-is-newer"
            Find = '        if (-not (Test-HordeAnswer $rel) -or $rel.state -cne "known") {'
            Replace = '        if ($false) {' }
+        @{ Name = "head-in-record-failure-is-diverged"
+           Find = 'if ($back.code -eq 1) { return (New-HordeKnown -Value "diverged") }'
+           Replace = 'return (New-HordeKnown -Value "diverged")' }
         @{ Name = "slow-ancestry-told-at-once"
            Find = '            if (& $quietSlow $rel "asking whether the checkout holds the deployed commit") { return }'
            Replace = '' }

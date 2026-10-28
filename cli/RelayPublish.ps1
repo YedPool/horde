@@ -61,8 +61,9 @@
 #      line), "diverged" (the checkout holds both and neither holds the other, as after a force-push or a
 #      rewritten history: told at once, because it never resolves by itself), and "absent" (the checkout
 #      does not hold the base: quiet, the window of 2026-10-26 18:32, but counted in publish-state.json
-#      as "absent" like "slow"; told once when it is still absent after 5 passes in a row; any pass where
-#      the base is present or the record is this commit resets the count). When the checkout moves to or
+#      as "absent" like "slow"; told once on the 5th absent pass with no present pass between (a pass that
+#      returns early leaves the count as it is); any pass where the base is present or the record is
+#      this commit resets the count). When the checkout moves to or
 #      past the record, the normal path resumes. Only an answer that cannot be had (git fails with the
 #      object there, a cat-file exit of 128 included) is unreadable.
 #   6. One deploy at a time on the machine, by hand or not: the deploy itself holds the lock
@@ -115,7 +116,7 @@ $script:HordeRelayPublishExportSeconds = 120
 $script:HordeRelayPublishLogMaxBytes = 1048576
 $script:HordeRelayPublishHttpSeconds = 10
 $script:HordeRelayPublishGitSeconds = 20
-# Passes in a row a record may be missing from the checkout before a person is told (header, THE RULE 5a).
+# Absent passes, with no present pass between, a record may be missing from the checkout before a person is told (header, THE RULE 5a).
 $script:HordeRelayPublishAbsentPasses = 5
 $script:HordeRelayPublishVersionPattern = 'const VERSION = "([0-9a-f]{8,64})";'
 $script:HordeRelayPublishCommitPattern = '\A[0-9a-f]{40}\z'
