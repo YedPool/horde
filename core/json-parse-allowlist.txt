@@ -15,7 +15,6 @@ cli/ServicesAct.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when th
 conversations/Port.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/AgentDescriptor.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/EngineResolve.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-core/Finding.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Heartbeat.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Identity.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/ModuleSettings.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
