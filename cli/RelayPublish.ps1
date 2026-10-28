@@ -128,7 +128,7 @@ function Get-HordeRelayPublishStatePath { param([string]$HordeHome = "") return 
 function Get-HordeRelayPublishLogPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeRelayDeployFolder -HordeHome $HordeHome), "publish-log.txt") }
 
 function New-HordeRelayPublishState {
-    return [pscustomobject]@{ attempt = $null; failure = $null; checked = $null; bundles = @(); episode = 0; troubled = $false; told = [string[]]@(); pending = @() }
+    return [pscustomobject]@{ attempt = $null; failure = $null; checked = $null; bundles = @(); episode = 0; troubled = $false; slow = 0; told = [string[]]@(); pending = @() }
 }
 
 function Read-HordeRelayPublishState {
@@ -151,6 +151,7 @@ function Read-HordeRelayPublishState {
         $s = New-HordeRelayPublishState
         if ($null -ne $r.attempt) { $s.attempt = [pscustomobject]@{ head = "" + $r.attempt.head; base = "" + $r.attempt.base; at = (& $when $r.attempt.at) } }
         if ($null -ne $r.failure) { $s.failure = [pscustomobject]@{ head = "" + $r.failure.head; base = "" + $r.failure.base; at = (& $when $r.failure.at); what = "" + $r.failure.what; recordId = "" + $r.failure.recordId } }
+        if ($null -ne $r.PSObject.Properties["slow"]) { $s.slow = [int]$r.slow }
         if ($null -ne $r.PSObject.Properties["episode"]) { $s.episode = [int]$r.episode; $s.troubled = [bool]($r.troubled -eq $true) }
         $checked = $r.PSObject.Properties["checked"]
         if ($null -ne $checked -and $null -ne $checked.Value) { $s.checked = [pscustomobject]@{ base = "" + $checked.Value.base; through = "" + $checked.Value.through } }
@@ -172,6 +173,7 @@ function Write-HordeRelayPublishState {
         failure = $(if ($null -ne $State.failure) { [ordered]@{ head = $State.failure.head; base = $State.failure.base; at = (& $fmt $State.failure.at); what = $State.failure.what; recordId = $State.failure.recordId } } else { $null })
         episode = [int]$State.episode
         troubled = [bool]$State.troubled
+        slow = [int]$State.slow
         checked = $(if ($null -ne $State.checked) { [ordered]@{ base = $State.checked.base; through = $State.checked.through } } else { $null })
         bundles = @(@($State.bundles) | ForEach-Object { [ordered]@{ commit = $_.commit; sha256 = $_.sha256 } })
         told = [string[]]@($State.told)
@@ -416,6 +418,24 @@ function Invoke-HordeRelayPublishStep {
     $recordId = { $r = Read-HordeRelayDeployed -HordeHome $HordeHome; if ($r.state -ceq "known") { return ("" + $r.value.id) }; return "" }
     # The look is a block of its own, so each of its ends is a return from IT, and the state is written
     # and the teller called below whichever end it took.
+    # A GIT CALL THAT RAN OUT OF TIME IS QUIET THE FIRST TIME (T-0380). On 2026-10-28 at 05:41Z the
+    # revision tool did not answer "rev-parse" within 20 s on a busy box, the pass said NOT DEPLOYED and
+    # the phone page card said "needs attention"; the pass at 05:47Z was fine. A tool that is slow once
+    # says nothing about the page, so the first pass in a row that ran out of time is only logged and
+    # the next pass looks again; a SECOND in a row is told like any other trouble. $slowBefore is the
+    # count the last pass left; $s.slow is set afresh by this pass (0 unless it ran out of time), so any
+    # pass that does not run out of time - a success, or a failure that is not a timeout - starts the
+    # count over. Only the exact words Invoke-HordeServiceProgram gives a call it ended are a timeout.
+    $slowBefore = [int]$s.slow
+    $s.slow = 0
+    $quietSlow = {
+        param($Answer, [string]$Where)
+        if (-not (Test-HordeAnswer $Answer) -or "" + $Answer.reason -cnotmatch 'did not finish within [0-9]+ s and was ended') { return $false }
+        $s.slow = $slowBefore + 1
+        if ($slowBefore -ge 1) { return $false }
+        & $say ("NOT DEPLOYED THIS PASS - " + $Where + " did not finish in time; the next pass looks again, and tells only if that one fails too") -Log
+        return $true
+    }
     $look = {
         # A DEPLOY LEFT PART WAY - the pass was ended in the middle of it - is a failed deploy.
         if ($null -ne $s.attempt) {
@@ -427,6 +447,7 @@ function Invoke-HordeRelayPublishStep {
         $head = $null
         try { $head = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Head" -With @($Checkout) } catch { $head = New-HordeUnknown -Reason "the checkout's commit could not be read" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $head) -or $head.state -cne "known" -or ("" + $head.value.commit) -cnotmatch $script:HordeRelayPublishCommitPattern) {
+            if (& $quietSlow $head "reading the checkout's commit") { return }
             & $queue "unreadable" "unreadable:head" ""
             & $say ("NOT DEPLOYED - the checkout's commit could not be read" + $(if ((Test-HordeAnswer $head) -and "" + $head.reason -ne "") { ": " + $head.reason } else { "" })) -Log
             return
@@ -448,6 +469,7 @@ function Invoke-HordeRelayPublishStep {
         $rel = $null
         try { $rel = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Ancestry" -With @($Checkout, $b.base, $h.commit) } catch { $rel = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $rel) -or $rel.state -cne "known") {
+            if (& $quietSlow $rel "asking whether the checkout holds the deployed commit") { return }
             & $queue "unreadable" ("unreadable:ancestry:" + $b.base + ":" + $h.commit) $h.commit
             & $say ("NOT DEPLOYED - whether " + (ConvertTo-HordeRelayPublishShort $b.base) + " is behind this checkout could not be told" + $(if ((Test-HordeAnswer $rel) -and "" + $rel.reason -ne "") { ": " + $rel.reason } else { "" })) -Log
             return
@@ -470,6 +492,7 @@ function Invoke-HordeRelayPublishStep {
         $diff = $null
         try { $diff = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Diff" -With @($Checkout, $from, $h.commit) } catch { $diff = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $diff) -or $diff.state -cne "known") {
+            if (& $quietSlow $diff "reading what changed") { return }
             & $queue "unreadable" ("unreadable:" + $from + ":" + $h.commit) $h.commit
             & $say ("NOT DEPLOYED - what changed since " + (ConvertTo-HordeRelayPublishShort $from) + " could not be read" + $(if ((Test-HordeAnswer $diff) -and "" + $diff.reason -ne "") { ": " + $diff.reason } else { "" })) -Log
             return
@@ -507,7 +530,7 @@ function Invoke-HordeRelayPublishStep {
         # ON ORIGIN/MAIN, fetched now (S1): never a deploy from a branch.
         $on = $null
         try { $on = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Upstream" -With @($Checkout, $h.commit) } catch { $on = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
-        if (-not (Test-HordeAnswer $on) -or $on.state -cne "known") { & $failed "unreadable" ("whether " + (ConvertTo-HordeRelayPublishShort $h.commit) + " is on origin/main could not be told" + $(if ((Test-HordeAnswer $on) -and "" + $on.reason -ne "") { ": " + $on.reason } else { "" })); return }
+        if (-not (Test-HordeAnswer $on) -or $on.state -cne "known") { if (& $quietSlow $on "asking whether the commit is on origin/main") { return }; & $failed "unreadable" ("whether " + (ConvertTo-HordeRelayPublishShort $h.commit) + " is on origin/main could not be told" + $(if ((Test-HordeAnswer $on) -and "" + $on.reason -ne "") { ": " + $on.reason } else { "" })); return }
         if ($on.value -ne $true) { & $warn "not-on-main" ("offmain:" + $h.commit) ("the checkout's commit is not on origin/main, so it is never deployed by the supervisor"); return }
         # THE WORKER, BUNDLED at the deployed commit and at the checkout's (S3); kept only when made (S4).
         $bundleOf = {
@@ -638,7 +661,7 @@ function Test-HordeRelayPublishBehind {
     # when git could not answer with both commits present. Both are full commit ids.
     param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string]$Base, [Parameter(Mandatory = $true)][string]$Head)
     if ($Base -cnotmatch $script:HordeRelayPublishCommitPattern -or $Head -cnotmatch $script:HordeRelayPublishCommitPattern) { return (New-HordeUnknown -Reason "a commit to compare is not a full commit id") }
-    $has = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("cat-file", "-e", ($Base + "^{commit}")) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
+    $has = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("cat-file", "-e", $Base) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
     if (-not $has.ok) {
         # cat-file -e answers 1, quietly, for an object that is not there; any other failure is not "absent".
         if ($has.code -eq 1) { return (New-HordeKnown -Value $false) }

@@ -21,6 +21,10 @@
 # harnesses are two this suite describes in a repository folder of its own (so no real harness is
 # named or looked for), and every file holds dummy words. All of it is one fresh folder under %TEMP%
 # that this suite removes (CONTRIBUTING 9).
+#
+# NIGHTLY NET: its CONTROL symbolic links need the privilege to make one; without it they fail (nightly net,
+# 2026-10-26).
+# nightly-needs: symlink
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here

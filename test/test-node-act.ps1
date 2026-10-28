@@ -19,7 +19,7 @@ $aText = [System.IO.File]::ReadAllText((Join-Path $root "test\fixtures\agent-des
 $aText = $aText.Replace('"session.remoteName": { "support": "unverified"', '"session.remoteName": { "support": "yes"')
 $descriptors = @{ "harness-a" = (Read-HordeAgentDescriptorText -Text $aText -ExpectedName "harness-a") }
 $fx = Join-Path $root "test\fixtures\engine-config"
-$builtinDoc = [System.IO.File]::ReadAllText((Join-Path $fx "builtin.json")) | ConvertFrom-Json
+$builtinDoc = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $fx "builtin.json")))
 $device = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 # THE FIXTURE WORLD: processes by pid, sessions by id, what each pane received.
@@ -504,7 +504,7 @@ $dialogKept = @("Do you trust the files in this folder?", "", $rule, " ? 1. Yes,
 function RecText { param($O) return [System.IO.File]::ReadAllText((Join-Path $script:lastRecords ($O.sessionId + ".json"))) }
 # The screen's rows are kept in the session's own folder, never in the record (F's re-check of round 4).
 function ScreenText { param($X) $f = "" + $X.rec.screen.file; if ($f -ne "" -and (Test-Path -LiteralPath $f -PathType Leaf)) { return [System.IO.File]::ReadAllText($f) }; return "" }
-function ScreenRows { param($X) $t = ScreenText $X; if ($t -eq "") { return [string[]]@() }; return [string[]]@(($t | ConvertFrom-Json).rows) }
+function ScreenRows { param($X) $t = ScreenText $X; if ($t -eq "") { return [string[]]@() }; return [string[]]@((ConvertFrom-HordeJson -Text $t).rows) }
 function SpawnRec { param([scriptblock]$Tune = $null) $c = New-Context; if ($null -ne $Tune) { & $Tune $c }; $script:lastRecords = $c.records; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value } }
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
 $x = SpawnRec
@@ -654,7 +654,7 @@ $sfSids = @(RuleSids $sf)
 $recSids = @(RuleSids (Join-Path $script:lastRecords ($x.o.sessionId + ".json")))
 Check ($sf -ceq (Join-Path (Join-Path $script:lastRecords $x.o.sessionId) "screen.json") -and $sfSids.Count -eq 1 -and $sfSids[0] -ceq $me.Value) ("the screen's rows are in <records>\<sid>\screen.json, whose every access rule is this user's alone (" + ($sfSids -join ",") + ")")
 Check ($recSids.Count -gt 1 -and -not (RecText $x.o).Contains("Do you trust")) ("CONTROL: the record beside it takes the folder's wider rules (" + $recSids.Count + " identities), and holds no row of the screen")
-Check (("" + (ScreenText $x | ConvertFrom-Json).takenAt) -ceq "2026-10-05T12:00:00.0000000Z") "the screen file says when it was taken, by the node's clock, for the week it is kept"
+Check (("" + (ConvertFrom-HordeJson -Text (ScreenText $x)).takenAt) -ceq "2026-10-05T12:00:00.0000000Z") "the screen file says when it was taken, by the node's clock, for the week it is kept"
 # A record with no folder of its own (as one read back without promptDir): the screen is read, never kept.
 $bare = [pscustomobject]@{ sessionId = "s1"; handle = "p" }
 $script:scrRows = $dialog

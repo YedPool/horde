@@ -252,7 +252,7 @@ function Read-HordeCardsChannelLedger {
     foreach ($line in ($text -split "\r?\n")) {
         if ($line.Trim() -eq "") { continue }
         $r = $null
-        try { $r = ConvertFrom-Json -InputObject $line } catch { $r = $null }
+        try { $r = ConvertFrom-HordeJson -Text $line } catch { $r = $null }
         if ($null -eq $r -or $r -isnot [System.Management.Automation.PSCustomObject]) { $answer.skipped++; continue }
         # A member a line does not have is "": under -Version Latest a missing member read bare throws.
         $field = @{}
@@ -307,7 +307,7 @@ function Read-HordeCardsChannelCensus {
         try {
             $manifest = Join-Path $run "run.json"
             if (-not [System.IO.File]::Exists($manifest)) { continue }
-            $m = ConvertFrom-Json -InputObject (Read-HordeSharedText -Path $manifest)
+            $m = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $manifest)
             if ($m -isnot [System.Management.Automation.PSCustomObject]) { $answer.skipped++; continue }
             $closed = $m.PSObject.Properties["closedAt"]
             if ($null -ne $closed -and "$($closed.Value)" -cne "") { continue }
@@ -320,7 +320,7 @@ function Read-HordeCardsChannelCensus {
                 $last = Read-HordeCardsChannelLastLine -Path $events
                 if ($last -ceq "") { continue }
                 $event = ""
-                try { $r = ConvertFrom-Json -InputObject $last } catch { continue }
+                try { $r = ConvertFrom-HordeJson -Text $last } catch { continue }
                 if ($r -isnot [System.Management.Automation.PSCustomObject]) { continue }
                 $ev = $r.PSObject.Properties["event"]
                 if ($null -ne $ev -and $ev.Value -is [string]) { $event = $ev.Value }

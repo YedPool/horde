@@ -18,6 +18,7 @@ trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
 . (Join-Path $root "core\Ownership.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 . (Join-Path $root "test\lib\RecordDrift.ps1")
 
 $schemaPath = Join-Path $root "schema\session-record.v1.json"
@@ -25,7 +26,7 @@ $schemaText = Get-Content -LiteralPath $schemaPath -Raw
 $schema = Get-HordeSchema -Name "session-record.v1"
 $own = Get-HordeOwnership
 
-function Copy-HordeJson { param($Value) return (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json) }
+function Copy-HordeJson { param($Value) return (ConvertFrom-HordeJson -Text ($Value | ConvertTo-Json -Depth 30)) }
 
 # The fleet record's fields the table does not own: the session id, and the device it runs on.
 $fleetKeys = $script:HordeFleetRecordKeys
@@ -98,7 +99,7 @@ Check ($dupText -ne $schemaText -and @(Find-HordeJsonDuplicateKey -Text $dupText
 Write-Host ""
 Write-Host "--- golden records: the valid ones pass ---" -ForegroundColor Cyan
 $fx = Join-Path $root "test\fixtures\session-record"
-function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
+function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = ConvertFrom-HordeJson -Text $t; return ,$v }
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
 Check ($valid.Count -eq 3) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
 foreach ($f in $valid) {

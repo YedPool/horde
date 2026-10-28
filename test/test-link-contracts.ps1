@@ -23,14 +23,16 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "remote\Contract.ps1")
 . (Join-Path $root "core\Tristate.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 
 $fx = Join-Path $here "fixtures\link"
 
 # A FIXTURE IS DATA, NOT A SCHEMA: read as UTF-8 JSON. Read-HordeSchemaFile checks that what it reads
 # is a schema (review of PR #27), so a frame read through it is refused for its member v.
-function Read-Data { param([string]$Path) return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json) }
+# Parsed with ConvertFrom-HordeJson (core/JsonText.ps1, T-0366), so a golden frame's times stay text under 7 too.
+function Read-Data { param([string]$Path) return (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))) }
 function Read-Fx { param([string]$Name) return (Read-Data (Join-Path $fx $Name)) }
-function Copy-Json { param($Value) return (($Value | ConvertTo-Json -Depth 40) | ConvertFrom-Json) }
+function Copy-Json { param($Value) return (ConvertFrom-HordeJson -Text ($Value | ConvertTo-Json -Depth 40)) }
 function Says {
     # Is there a finding containing Text? A boolean, never the matching items.
     param($Findings, [string]$Text)

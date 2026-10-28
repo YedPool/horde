@@ -67,7 +67,8 @@ function New-HordeOutboxMail {
     if ($bad -ne "") { return (New-HordeUnknown -Reason $bad) }
     $id = "$(Get-HordeLinkProp $Mail 'messageId')"
     if ($id -cnotmatch $script:HordeJournalIdPattern) { return (New-HordeUnknown -Reason ("'" + $id + "' is not a message id: an id is one lowercase UUID")) }
-    $m = ($Mail | ConvertTo-Json -Depth 20) | ConvertFrom-Json
+    # ConvertFrom-HordeJson (core/JsonText.ps1): bare ConvertFrom-Json under 7 made every time a [datetime] (T-0366).
+    $m = ConvertFrom-HordeJson -Text ($Mail | ConvertTo-Json -Depth 20)
     $contract = Get-HordeOutboxContract
     $walk = Get-HordeLinkWalkTarget -Contract $contract -Target "#/definitions/outbound-mail" -Path '$.mail'
     $found = @(Test-HordeLinkValue -Value $m -Walk $walk -Path '$.mail')

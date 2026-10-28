@@ -144,7 +144,7 @@ function Read-HordeProgressChannelEntry {
     if ($text.Trim() -eq "") { $fail.blank = $true; return $fail }
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "it is not a JSON object"; return $fail }
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { $fail.reason = "it has a member more than once"; return $fail }
-    try { $e = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "it is not JSON"; return $fail }
+    try { $e = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "it is not JSON"; return $fail }
     if ($e -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "it is not a JSON object"; return $fail }
     # Names are compared exactly: "ID" is not id.
     $has = New-Object System.Collections.Hashtable -ArgumentList ([System.StringComparer]::Ordinal)
@@ -359,7 +359,7 @@ function Read-HordeProgressChannelState {
     catch { return (New-HordeUnknown -Reason ("the progress state " + $path + " cannot be read: " + $_.Exception.Message)) }
     $why = "the progress state " + $path + " does not hold together"
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (New-HordeUnknown -Reason ($why + ": a member is repeated")) }
-    try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
+    try { $s = ConvertFrom-HordeJson -Text $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
     if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
     $names = @($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
     if (($names -join ",") -cne "head,line,offset,path,pending,phones,rewind,sent,skip,started,stopped,tail,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }

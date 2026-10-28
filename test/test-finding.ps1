@@ -25,7 +25,7 @@ $seedText = [System.IO.File]::ReadAllText((Join-Path $fxDir "g01.json"))
 function New-FindingText {
     # g01 with one change: -Set is a script block given the parsed finding to change in place.
     param([scriptblock]$Set = {})
-    $f = $seedText | ConvertFrom-Json
+    $f = ConvertFrom-HordeJson -Text $seedText
     & $Set $f
     return ($f | ConvertTo-Json -Depth 20)
 }

@@ -55,7 +55,7 @@ $getView = {
     if ($ThrowOnView) { throw "the fixture projection is broken on purpose" }
     if ($ViewDelayMs -gt 0) { Start-Sleep -Milliseconds $ViewDelayMs }
     if ($ViewThrowsWhenRead) { return (New-Object HordeTestThrowingView) }
-    return ($viewText | ConvertFrom-Json)
+    return (ConvertFrom-HordeJson -Text $viewText)
 }
 $signal = { if ($null -ne $Ready) { $Ready.Set() } }
 $transport = Get-HordeTransport -Name "memory"

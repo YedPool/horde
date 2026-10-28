@@ -19,6 +19,10 @@
 #
 # Every home here is a fresh folder under %TEMP% that this suite made and removes (CONTRIBUTING 9);
 # HORDE_HOME is set for each child, so the real home is never read or written.
+#
+# NIGHTLY NET: its CONTROL symbolic link to the report needs the privilege to make one; without it it fails
+# (nightly net, 2026-10-26).
+# nightly-needs: symlink
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here

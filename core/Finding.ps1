@@ -218,7 +218,9 @@ function Read-HordeFindingText {
         return (New-HordeFindingAnswer -State "refused" -Finding $null -Problems @("the finding holds the character U+" + ([int][char]$wide.Value).ToString("X4") + ", which is not ASCII. A finding is kept as ASCII: write the character as a \u escape"))
     }
     $parsedValue = $null
-    try { $parsedValue = $Text | ConvertFrom-Json } catch { $parsedValue = $null }
+    # ConvertFrom-HordeJson (T-0366): under 7 bare ConvertFrom-Json unwrapped a list of findings into its first one, and
+    # read a window's times as [datetime].
+    try { $parsedValue = ConvertFrom-HordeJson -Text $Text } catch { $parsedValue = $null }
     if ($null -eq $parsedValue -or $parsedValue -isnot [System.Management.Automation.PSCustomObject]) {
         return (New-HordeFindingAnswer -State "refused" -Finding $null -Problems @("the finding is not a JSON object the parser can read"))
     }

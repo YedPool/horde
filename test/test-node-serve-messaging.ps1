@@ -50,7 +50,7 @@ $outboxRoot = Join-Path $tmp "outbox"
 $null = Initialize-HordeJournal -Root $journalRoot -Kind "message"
 $null = Initialize-HordeOutbox -Root $outboxRoot
 
-function View { return ([System.IO.File]::ReadAllText((Join-Path $fx "view.json")) | ConvertFrom-Json) }
+function View { return (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $fx "view.json")))) }
 function Proc { param([string]$Id, [string]$Label, [string]$ProcessId, [string]$Start) return [pscustomobject]@{ sessionId = $Id; label = $Label; pid = $ProcessId; procStart = $Start; ns = [pscustomobject]@{ device = $device; space = "windows" } } }
 function Data {
     param($View = $null, [string[]]$DeliverTo = @(), $HubSpawned = @(), [string]$Messenger = "fake", $DeliverResult = $null, $DeliveryStatus = $null, $Outbox = $null, [string]$Journal = $journalRoot)

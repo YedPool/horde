@@ -25,9 +25,10 @@ $ascii = [System.Text.Encoding]::ASCII
 
 # A FIXTURE IS DATA, NOT A SCHEMA: read as UTF-8 JSON. Read-HordeSchemaFile checks that what it reads
 # is a schema (review of PR #27), so a frame read through it is refused for its member v.
-function Read-Data { param([string]$Path) return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json) }
+# Parsed with ConvertFrom-HordeJson (core/JsonText.ps1), so a fixture's timestamps stay text under 7 too.
+function Read-Data { param([string]$Path) return (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))) }
 function Read-Fx { param([string]$Name) return (Read-Data (Join-Path $fx $Name)) }
-function Copy-Json { param($Value) return (($Value | ConvertTo-Json -Depth 40) | ConvertFrom-Json) }
+function Copy-Json { param($Value) return (ConvertFrom-HordeJson -Text ($Value | ConvertTo-Json -Depth 40)) }
 function Says { param($Text, [string]$Part) return ("$Text".Contains($Part)) }
 function Bytes { param([string]$Text) return ,([byte[]]$ascii.GetBytes($Text)) }
 function Join-Bytes {
