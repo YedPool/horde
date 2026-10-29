@@ -295,6 +295,8 @@ try {
     # Review of 3d837f0: two runs on one home were let race on its state; now the second refuses. The stop
     # file still obeys every run started before it (review of 48bc492, finding 4).
     $runs = New-Object System.Collections.ArrayList
+    # A lock left by an earlier section is not held by anyone now; remove it so its appearing means the first run took the home.
+    Remove-Item -LiteralPath (Join-Path $hh "relay\run.lock") -Force -ErrorAction SilentlyContinue
     foreach ($i in 1..2) {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "powershell.exe"
@@ -303,6 +305,7 @@ try {
         # to start (milliseconds of delay) or never end, to prove the wait below is on the run's exit and not a fixed sleep.
         if ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_HANG -ceq "1") { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Seconds 600" }
         elseif ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_DELAY_MS -match '^[0-9]+$') { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Milliseconds " + $env:HORDE_TEST_SECOND_RUN_DELAY_MS + "; & powershell.exe " + $psi.Arguments }
+        elseif ($i -eq 1 -and $env:HORDE_TEST_FIRST_RUN_DELAY_MS -match '^[0-9]+$') { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Milliseconds " + $env:HORDE_TEST_FIRST_RUN_DELAY_MS + "; & powershell.exe " + $psi.Arguments }
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -310,7 +313,15 @@ try {
         $psi.EnvironmentVariables["HORDE_HOME"] = $hh
         $p = [System.Diagnostics.Process]::Start($psi)
         [void]$runs.Add([pscustomobject]@{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
-        Start-Sleep -Milliseconds 1500
+        if ($i -eq 1) {
+            # Wait on the event, not a fixed head start: the first run has taken the home when it has created
+            # <home>\relay\run.lock (cli/RelayRun.ps1 opens it OpenOrCreate, no sharing, before its first turn).
+            $lockFile = Join-Path $hh "relay\run.lock"
+            $took = New-Object System.Diagnostics.Stopwatch
+            $took.Start()
+            while (-not (Test-Path -LiteralPath $lockFile) -and -not $p.HasExited -and $took.ElapsedMilliseconds -lt 20000) { Start-Sleep -Milliseconds 50 }
+            Check (Test-Path -LiteralPath $lockFile) $(if (Test-Path -LiteralPath $lockFile) { "the first run took the home (run.lock) before the second was started" } elseif ($p.HasExited) { "the first run took the home within 20 s - it ended instead" } else { "the first run took the home within 20 s - the first run never took the home within 20 s" })
+        }
     }
     try {
         $second = $runs[1]
