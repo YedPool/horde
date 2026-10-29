@@ -296,7 +296,10 @@ try {
     # file still obeys every run started before it (review of 48bc492, finding 4).
     $runs = New-Object System.Collections.ArrayList
     # A lock left by an earlier section is not held by anyone now; remove it so its appearing means the first run took the home.
-    Remove-Item -LiteralPath (Join-Path $hh "relay\run.lock") -Force -ErrorAction SilentlyContinue
+    $lockFile = Join-Path $hh "relay\run.lock"
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+    Check (-not (Test-Path -LiteralPath $lockFile)) "before the first run starts, no run.lock is left on the home (an earlier run still holds it if one is)"
+    try {
     foreach ($i in 1..2) {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "powershell.exe"
@@ -316,14 +319,14 @@ try {
         if ($i -eq 1) {
             # Wait on the event, not a fixed head start: the first run has taken the home when it has created
             # <home>\relay\run.lock (cli/RelayRun.ps1 opens it OpenOrCreate, no sharing, before its first turn).
-            $lockFile = Join-Path $hh "relay\run.lock"
             $took = New-Object System.Diagnostics.Stopwatch
             $took.Start()
             while (-not (Test-Path -LiteralPath $lockFile) -and -not $p.HasExited -and $took.ElapsedMilliseconds -lt 20000) { Start-Sleep -Milliseconds 50 }
-            Check (Test-Path -LiteralPath $lockFile) $(if (Test-Path -LiteralPath $lockFile) { "the first run took the home (run.lock) before the second was started" } elseif ($p.HasExited) { "the first run took the home within 20 s - it ended instead" } else { "the first run took the home within 20 s - the first run never took the home within 20 s" })
+            # run.lock stays on disk after a run exits, so the file alone is not proof: the run must still be alive.
+            $heldNow = (Test-Path -LiteralPath $lockFile) -and -not $p.HasExited
+            Check $heldNow $(if ($heldNow) { "the first run took the home (run.lock) before the second was started" } elseif ($p.HasExited) { "the first run ended before taking the home" } else { "the first run never took the home within 20 s" })
         }
     }
-    try {
         $second = $runs[1]
         # Wait on the event itself - the second run's exit - not a fixed sleep: a slow box needs longer to start it.
         $secondEnded = $second.p.WaitForExit(20000)
@@ -334,7 +337,10 @@ try {
         Check ($stop.code -eq 0 -and $ended -and $runs[0].p.ExitCode -eq 0 -and $runs[0].out.Result.Contains("stopped after") -and $runs[0].out.Result.Contains("stop file")) "horde relay stop ends the first within a turn; it exits 0 and says it stopped for the stop file"
         $next = Invoke-Run -Turns 1
         Check ($next.code -eq 0 -and $next.out.Contains("stopped after 1 turn(s): turns") -and $next.out.Contains("stop file from before")) "a run started after the stop does not obey it: it was a request to the runs before it, and it clears it"
-    } finally { foreach ($x in $runs) { if (-not $x.p.HasExited) { $x.p.Kill() }; $x.p.Dispose() } }
+    } finally {
+        # Kill the tree by the PID this test started (the delay/hang wrapper has the relay as a child); never by name.
+        foreach ($x in $runs) { if (-not $x.p.HasExited) { & taskkill.exe /T /F /PID $x.p.Id *> $null }; $x.p.Dispose() }
+    }
     }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
