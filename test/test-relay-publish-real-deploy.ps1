@@ -66,6 +66,10 @@ try {
         Sleep    = { param($Ms) $script:clock = $script:clock.AddMilliseconds($Ms) }
         NewId    = { return [guid]::NewGuid().ToString() }
         Head     = { param($Checkout) return (New-HordeKnown -Value ([pscustomobject]@{ commit = $cB; clean = $true })) }
+        # PR 384 (T-0333): the step asks how the record's commit relates to the checkout before it deploys. The
+        # seeded record ($cA) is behind the checkout ($cB), as a normal deploy is; without this entry the
+        # call throws, the step reads it as unknown and never reaches the deploy function.
+        Ancestry = { param($Checkout, $Base, $Head) return (New-HordeKnown -Value "behind") }
         Diff     = { param($Checkout, $Base, $Head) return (New-HordeKnown -Value ([pscustomobject]@{ paths = [string[]]@("surfaces/pwa/page/app.js") })) }
         Load     = $null
         Shipped  = { param($Checkout) return (New-HordeKnown -Value $shippedHere) }
