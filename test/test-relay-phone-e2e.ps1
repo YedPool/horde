@@ -316,6 +316,7 @@ try {
         $psi.EnvironmentVariables["HORDE_HOME"] = $hh
         $p = [System.Diagnostics.Process]::Start($psi)
         [void]$runs.Add([pscustomobject]@{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
+        if ($i -eq 2) { $secondClock = [System.Diagnostics.Stopwatch]::StartNew() }
         if ($i -eq 1) {
             # Wait on the event, not a fixed head start: the first run has taken the home when it has created
             # <home>\relay\run.lock (cli/RelayRun.ps1 opens it OpenOrCreate, no sharing, before its first turn).
@@ -331,7 +332,11 @@ try {
         # Wait on the event itself - the second run's exit - not a fixed sleep: a slow box needs longer to start it.
         $secondEnded = $second.p.WaitForExit(20000)
         Check ($secondEnded -and -not $runs[0].p.HasExited -and $second.p.ExitCode -ne 0) $(if ($secondEnded) { "the first run is running; the second, started beside it on the same home, has ended with an error" } else { "the first run is running; the second, started beside it on the same home, has ended with an error - but it had NOT ended 20 s after it started (a hang, not a slow start)" })
-        Check (($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) "and it says why, plainly"
+        # A run 2 that has not ended is killed (its tree, by the PID started here) BEFORE its output is read: .Result on a
+        # redirected stream blocks until the stream closes, which for a hang is never. Never block forever on it.
+        if (-not $secondEnded) { try { & taskkill.exe /T /F /PID $second.p.Id *> $null } catch { } }
+        $outDone = $second.out.Wait(5000) -and $second.err.Wait(5000)
+        Check ($outDone -and ($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) $(if ($outDone) { "and it says why, plainly" } else { "and it says why, plainly - its output did not close within 5 s of killing it (skipped: it never ended)" })
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
         $ended = $runs[0].p.WaitForExit(30000)
         Check ($stop.code -eq 0 -and $ended -and $runs[0].p.ExitCode -eq 0 -and $runs[0].out.Result.Contains("stopped after") -and $runs[0].out.Result.Contains("stop file")) "horde relay stop ends the first within a turn; it exits 0 and says it stopped for the stop file"
@@ -339,7 +344,8 @@ try {
         Check ($next.code -eq 0 -and $next.out.Contains("stopped after 1 turn(s): turns") -and $next.out.Contains("stop file from before")) "a run started after the stop does not obey it: it was a request to the runs before it, and it clears it"
     } finally {
         # Kill the tree by the PID this test started (the delay/hang wrapper has the relay as a child); never by name.
-        foreach ($x in $runs) { if (-not $x.p.HasExited) { & taskkill.exe /T /F /PID $x.p.Id *> $null }; $x.p.Dispose() }
+        foreach ($x in $runs) { if (-not $x.p.HasExited) { try { & taskkill.exe /T /F /PID $x.p.Id *> $null } catch { } }; $x.p.Dispose() }
+        if ($null -ne $secondClock) { Write-Host ("  [info] section 6 ran " + $secondClock.ElapsedMilliseconds + " ms from the second run's start to here") }
     }
     }
 } finally {
