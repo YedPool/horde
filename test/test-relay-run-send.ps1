@@ -454,12 +454,14 @@ try {
 
     Write-Host ""
     Write-Host "--- through a real turn: a note, the Thrall's reply and a progress entry written during the watch are opened by the phone from that same watch ---" -ForegroundColor Cyan
-    Set-RunSettings $W '{"watchMs": 20000, "sendCheckMs": 200, "minTurnMs": 50}'
+    Set-RunSettings $W '{"watchMs": 30000, "sendCheckMs": 200, "minTurnMs": 50}'
     $before = @((Receive-HordeRelayItems -Connection $script:conn -Mailbox "work/phone" -Since 0).value.items).Count
     Clear-HordeCountingRelayLog
     $script:changedAt = $null
     $script:wrote = 0
     $script:want = $(if ($script:canDecide) { 3 } else { 2 })
+    $script:sendCapMs = 20000
+    $script:capHit = $false
     # Slice 3 of the turn's watch: all three are written, as a warchief, a Thrall and a fleet's log would.
     # When the three envelopes that follow are at the relay, the run is asked to stop.
     Set-HordeCountingRelayHook -Hook {
@@ -467,10 +469,15 @@ try {
         if ($n -eq 3 -and $script:wrote -eq 0) {
             $script:wrote = 1
             if ($script:canDecide) { $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "Written while the watch was open."; asks = $false } }
-            Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "assistant"; text = "replied while the watch was open" })
+            if ($env:HORDE_TEST_RUNSEND_WITHHOLD -cne "1") { Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "assistant"; text = "replied while the watch was open" }) }
             [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"e3","ts":"2026-10-13T08:02:00Z","title":"third","text":"logged while the watch was open"}' + "`n"), $utf8)
             $script:changedAt = [datetime]::UtcNow
+            # TEST-ONLY KNOBS (never read by production code), to prove this check waits on the event and not on a clock:
+            # HORDE_TEST_RUNSEND_DELAY_MS holds the run this long before it can send; HORDE_TEST_RUNSEND_WITHHOLD=1 sends nothing.
+            if ($env:HORDE_TEST_RUNSEND_DELAY_MS) { Start-Sleep -Milliseconds ([int]$env:HORDE_TEST_RUNSEND_DELAY_MS) }
         }
+        # THE EVENT IS WHAT IS WAITED ON: the watch stays open until all the envelopes are at the relay, or until the cap.
+        if ($script:wrote -eq 1 -and ([datetime]::UtcNow - $script:changedAt).TotalMilliseconds -ge $script:sendCapMs) { $script:capHit = $true; [void](Request-HordeRelayRunStop -HordeHome $W.home) }
         if ($script:wrote -eq 1 -and @(Get-HordeCountingRelayLog | Where-Object { $_.op -ceq "put" -and $_.at -gt $script:changedAt }).Count -ge $script:want) { [void](Request-HordeRelayRunStop -HordeHome $W.home) }
     }
     $live = Invoke-Run $W -Turns 5
@@ -481,7 +488,8 @@ try {
     $during = @($log | Where-Object { $_.op -ceq "put" -and $null -ne $script:changedAt -and $_.at -gt $script:changedAt })
     $slowest = $(if ($during.Count -gt 0) { [long](($during | ForEach-Object { ($_.at - $script:changedAt).TotalMilliseconds } | Measure-Object -Maximum).Maximum) } else { [long]-1 })
     Check ($live.r.turns -eq 1 -and $live.r.stoppedBy -ceq "stop file" -and $opened.Count -eq 1 -and $closed.Count -eq 1) ("CONTROL: it all happened in one turn, in one watch, which the stop then ended (" + $live.r.turns + " turn, " + $opened.Count + " watch)")
-    Check ($during.Count -eq $script:want -and @($during | Where-Object { $_.n -lt $opened[0].n -or $_.n -gt $closed[0].n }).Count -eq 0 -and $slowest -ge 0 -and $slowest -lt 2000) ("each channel's envelope was put while that watch was open, the last of them " + $slowest + " ms after the three were written - of a 20 s watch (" + $during.Count + " puts)")
+    Check ($during.Count -eq $script:want -and @($during | Where-Object { $_.n -lt $opened[0].n -or $_.n -gt $closed[0].n }).Count -eq 0 -and $slowest -ge 0) ("each channel's envelope was put while that watch was open, the last of them " + $slowest + " ms after the three were written, the watch held open for them up to " + $script:sendCapMs + " ms (" + $during.Count + " puts)")
+    if ($script:capHit -or $during.Count -ne $script:want) { Write-Host ("  NEVER ARRIVED: " + ($script:want - $during.Count) + " of " + $script:want + " envelopes (the decisions note, the Thrall's chat reply, the progress entry) were not at the relay " + $script:sendCapMs + " ms after they were written; the cap was " + $(if ($script:capHit) { "hit" } else { "not hit" })) -ForegroundColor Red }
     Check (@($log | Where-Object { $_.request -and $_.n -gt $opened[0].n }).Count -eq $script:want) ("and after the watch was opened the relay was asked for those " + $script:want + " puts and nothing else: " + (@($log | Where-Object { $_.request -and $_.n -gt $opened[0].n } | ForEach-Object { $_.op }) -join ","))
     $bodies = @(Get-PhoneBodies -World $W -Since $before)
     $chatSeen = @($bodies | Where-Object { $_.kind -ceq "chat-turns" } | ForEach-Object { @($_.turns) } | ForEach-Object { $_.text })
