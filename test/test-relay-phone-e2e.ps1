@@ -299,6 +299,10 @@ try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "powershell.exe"
         $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
+        # TEST-ONLY KNOBS (read here only, default off; production code is untouched): they make the SECOND run slow
+        # to start (milliseconds of delay) or never end, to prove the wait below is on the run's exit and not a fixed sleep.
+        if ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_HANG -ceq "1") { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Seconds 600" }
+        elseif ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_DELAY_MS -match '^[0-9]+$') { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Milliseconds " + $env:HORDE_TEST_SECOND_RUN_DELAY_MS + "; & powershell.exe " + $psi.Arguments }
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -309,9 +313,10 @@ try {
         Start-Sleep -Milliseconds 1500
     }
     try {
-        Start-Sleep -Milliseconds 3000
         $second = $runs[1]
-        Check (-not $runs[0].p.HasExited -and $second.p.HasExited -and $second.p.ExitCode -ne 0) "the first run is running; the second, started beside it on the same home, has ended with an error"
+        # Wait on the event itself - the second run's exit - not a fixed sleep: a slow box needs longer to start it.
+        $secondEnded = $second.p.WaitForExit(20000)
+        Check ($secondEnded -and -not $runs[0].p.HasExited -and $second.p.ExitCode -ne 0) $(if ($secondEnded) { "the first run is running; the second, started beside it on the same home, has ended with an error" } else { "the first run is running; the second, started beside it on the same home, has ended with an error - but it had NOT ended 20 s after it started (a hang, not a slow start)" })
         Check (($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) "and it says why, plainly"
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
         $ended = $runs[0].p.WaitForExit(30000)
