@@ -109,8 +109,12 @@ try {
     $horde = Join-Path $root "horde.ps1"
     $oldHome = $env:HORDE_HOME
     function Run-Horde {
-        param([string]$HomeDir, [string[]]$Words)
+        param([string]$HomeDir, [string[]]$Words, [string]$Pin = "")
         $env:HORDE_HOME = $HomeDir
+        # The "never" home needs the input clock pinned: the real one reads however long the PC was left alone
+        # (33 h on 2026-10-31, past its 86400 s), and the suite failed on both shells. The wall clock does not
+        # matter: that home has no night.
+        $env:HORDE_IDLE_INPUT_SECONDS = $Pin
         $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File $horde @Words)
         return [pscustomobject]@{ code = $LASTEXITCODE; text = ($o -join "`n") }
     }
@@ -120,22 +124,26 @@ try {
         $never = New-Home "never" '{ "schemaVersion": 1, "settings": { "nightStartHour": 5, "nightEndHour": 5, "idleSeconds": 86400 } }'
         $r = Run-Horde $always @("idle")
         Check ($r.code -eq 0 -and $r.text -like "*idle-or-night: yes (night)*" -and $r.text -like "*local time: *" -and $r.text -like "*idle seconds: *") ("allowed: exit 0 and the three lines (" + $r.code + ")")
-        $r = Run-Horde $never @("idle")
+        $r = Run-Horde $never @("idle") "0"
         Check ($r.code -eq 1 -and $r.text -like "*idle-or-night: no*") ("not allowed: exit 1, after the lines (" + $r.code + ")")
-        $r = Run-Horde $never @("idle", "-Json")
+        $r = Run-Horde $never @("idle", "-Json") "0"
         Check ($r.code -eq 1 -and $r.text -like '*"allowed":false*') "-Json says allowed false, exit 1"
         $r = Run-Horde $always @("idle", "-Json")
         Check ($r.code -eq 0 -and $r.text -like '*"allowed":true*' -and $r.text -like '*"why":"night"*') "-Json says allowed true, exit 0"
-        $r = Run-Horde $never @("idle", "-Wait", "-WaitSeconds", "1")
+        $r = Run-Horde $never @("idle", "-Wait", "-WaitSeconds", "1") "0"
         Check ($r.code -eq 1 -and $r.text -like "*gave up after 1 s*") ("-Wait gives up at -WaitSeconds, exit 1 (" + $r.code + ")")
         $r = Run-Horde $always @("idle", "-Wait", "-WaitSeconds", "1")
         Check ($r.code -eq 0 -and $r.text -like "*idle-or-night: yes*") "-Wait returns at once when it holds, exit 0"
         $r = Run-Horde $always @("idle", "-WaitSeconds", "5")
         Check ($r.code -eq 2) ("-WaitSeconds without -Wait is a wrong command line, exit 2 (" + $r.code + ")")
+        $r = Run-Horde $never @("idle", "-Json") "86400"
+        Check ($r.code -eq 0 -and $r.text -like '*"allowed":true*' -and $r.text -like '*"why":"idle"*') "a pinned 86400 s is idle: the pin is what the command read"
+        $r = Run-Horde $never @("idle") "ten"
+        Check ($r.code -eq 1 -and $r.text -notlike "*idle-or-night: yes*") "a pin that is not digits fails the command; it never answers yes"
         $bad = New-Home "refused" '{ "schemaVersion": 1, "settings": { "idleSeconds": "ten" } }'
         $r = Run-Horde $bad @("idle")
         Check ($r.code -eq 1 -and $r.text -notlike "*idle-or-night: yes*") "a refused settings file fails the command; it never answers yes on defaults"
-    } finally { $env:HORDE_HOME = $oldHome }
+    } finally { $env:HORDE_HOME = $oldHome; $env:HORDE_IDLE_INPUT_SECONDS = $null }
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
