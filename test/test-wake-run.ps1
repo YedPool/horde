@@ -722,7 +722,10 @@ Check ($null -eq $second) "a second run in the same home and mode is refused whi
 $live = Enter-HordeWakeLock -Mode "live" -ProcessId 4244 -HordeHome $h
 Check ($null -ne $live) "a live run's lock is another: shadow and live do not shut each other out"
 if ($null -ne $live) { $live.Dispose() }
-Check ([System.IO.File]::Open((Join-Path $h "wake\run-shadow.lock"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite) -is [System.IO.FileStream]) "CONTROL: the held lock can still be opened for reading"
+$peek = [System.IO.File]::Open((Join-Path $h "wake\run-shadow.lock"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+Check ($peek -is [System.IO.FileStream]) "CONTROL: the held lock can still be opened for reading"
+# Closed here, not left to the collector: an open handle on the lock makes the cleanup of this home fail.
+$peek.Dispose()
 $lock.Dispose()
 # The file is still there, with the pid of a process that no longer holds it: exactly what a crash leaves.
 Check (Test-Path -LiteralPath (Join-Path $h "wake\run-shadow.lock") -PathType Leaf) "CONTROL: the lock file outlives the run that held it"
