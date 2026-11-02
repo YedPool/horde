@@ -43,7 +43,7 @@
            Find = 'return 2;'
            Replace = 'return 1;' }
         @{ Name = "kept-reported-as-added"
-           Find = 'out(r.added ? ''added'' : ''kept'');'
-           Replace = 'out(''added'');' }
+           Find = '(r.added ? ''added'' : ''kept'')'
+           Replace = '(''added'')' }
     )
 }

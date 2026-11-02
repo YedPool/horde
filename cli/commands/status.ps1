@@ -40,6 +40,7 @@ $HordeCommand = @{
                 $row = Invoke-HordeStatusOrcRow -Folder $dir -Orc $r.orc -Lane $r.lane
                 if ($row.state -ceq "added") { Write-Output ("fleet.db: row made for Orc " + $r.orc) }
                 elseif ($row.state -ceq "skipped") { Write-Output ("card written; fleet.db row not made: " + $row.reason) }
+                if ($row.statusRow -clike "no status row:*") { Write-Output ("fleet.db: " + $row.statusRow) }
             }
             return
         }
