@@ -476,6 +476,7 @@ function Invoke-HordeDecisionRoutePass {
     if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }
     if ($FromLabel -eq "") { $FromLabel = @($script:HordeDecisionRouteSettings.settings | Where-Object { $_.name -ceq "fromLabel" })[0].default }
     $now = (& $Clock).ToUniversalTime()
+    if ($null -eq $Memory) { $Memory = @{} }
     # WHAT WAS SENT BEFORE IS ASKED FIRST (T-0391): whether the Orcs' own sessions took the notices already accepted.
     # Whatever the rest of the pass finds, its lines are said; the awaiting list is read before any messenger is looked for.
     $takenLines = @()
@@ -544,32 +545,26 @@ function Invoke-HordeDecisionRoutePass {
         # reserved system sender, which is the true name of the poster (header, WHO THE POSTER IS).
         $fromHere = $(if ($null -ne $who.verified) { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel; verified = $who.verified } } else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; system = "horde" } })
         $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $fromHere; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target -HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
-        # THE AWAITING LIST IS READ BEFORE THE POST (T-0391 review): a list that cannot be read (corrupt) would make every pass
-        # post the notice and then refuse to record it. Unreadable: nothing is posted, the answer stays pending, and the
-        # reason is said (the same line every pass, which the turn says once).
-        $listed = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
-        if ($listed.state -cne "known") {
-            $pending++
-            [void]$lines.Add("pending: " + $what + " was not sent: the routed-answers ledger cannot be read (" + $listed.reason + "); nothing is posted until it can be, and the answer waits")
-            continue
+        # THE MARK IS WRITTEN BEFORE THE POST (T-0391 slice 2). A list that cannot be read or written (corrupt, disk full, locked)
+        # means nothing is posted: the answer stays pending and the reason is said (the same line every pass, which the turn
+        # says once), instead of a post every pass that then fails to be listed. A crash between the mark and the post only
+        # costs an alarm at takenAlarmSeconds; the next pass posts the same notice id, which wezfleet writes once and never
+        # knocks for again (lib/MailPost.ps1 already-posted), and the mark keeps its first clock. A notice already TAKEN in
+        # this process is not listed again (its route record failed; its post is a repost), so it is not reported TAKEN twice.
+        if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {
+            $awaited = Add-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId -Answer $seq -SessionId "$($target.sessionId)" -Now $now
+            foreach ($awaitedLine in @($awaited.lines)) { [void]$lines.Add($awaitedLine) }
+            if (-not $awaited.ok) {
+                $pending++
+                [void]$lines.Add("pending: " + $what + " was not sent: it cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be, and the answer waits")
+                continue
+            }
         }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
             $pending++
             $why = $(if ($posted.state -ceq "known") { "the messenger answered " + $posted.value.stage + $(if ($null -ne $posted.value.PSObject.Properties["reason"] -and "$($posted.value.reason)" -ne "") { ": " + $posted.value.reason } else { "" }) } else { "the messenger did not take it: " + $posted.reason })
             [void]$lines.Add("pending: " + $what + " was not sent (" + $why + "); nothing is recorded, and it is tried again")
-            continue
-        }
-        # ACCEPTED IS NOT DELIVERED (T-0391): the notice is on the awaiting list, on disk, BEFORE its route record is written.
-        # A list that cannot be written leaves the answer unrecorded and the same notice is sent, and listed, on the next pass.
-        $woken = $false
-        $wokenProp = $posted.value.PSObject.Properties["woken"]
-        if ($null -ne $wokenProp -and $wokenProp.Value -eq $true) { $woken = $true }
-        $awaited = Add-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId -Answer $seq -SessionId "$($target.sessionId)" -Woken $woken -Now $now
-        foreach ($awaitedLine in @($awaited.lines)) { [void]$lines.Add($awaitedLine) }
-        if (-not $awaited.ok) {
-            $pending++
-            [void]$lines.Add("pending: " + $what + " was sent but cannot be awaited (" + $awaited.reason + "); nothing is recorded, and the same notice is sent again")
             continue
         }
         $toldAnalyst = ""

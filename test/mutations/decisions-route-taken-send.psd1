@@ -23,10 +23,10 @@
         @{ Name = "taken-lines-not-said"
            Find = 'lines = @(@($takenLines) + @($Lines))'
            Replace = 'lines = @($Lines)' }
-        # An unreadable list no longer stops the post: it is posted every pass and never recorded.
-        @{ Name = "unreadable-list-still-posts"
-           Find = 'if ($listed.state -cne "known") {'
-           Replace = 'if ($false) {' }
+        # A notice taken in this process is listed again by its repost, and reported TAKEN a second time.
+        @{ Name = "taken-notice-listed-again"
+           Find = 'if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {'
+           Replace = 'if ($true) {' }
         # The notice's age limit is not the mailbox's.
         @{ Name = "pass-ignores-the-notice-ttl"
            Find = '-TtlSeconds $script:HordeDecisionRouteTtlSeconds'

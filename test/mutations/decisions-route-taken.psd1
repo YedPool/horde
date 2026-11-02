@@ -52,6 +52,10 @@
         @{ Name = "failed-write-alarm-forgotten"
            Find = '$Memory["alarmed-" + $e.messageId] = $true'
            Replace = '' }
+        # A notice reported TAKEN is not remembered, so its repost lists it again.
+        @{ Name = "taken-not-remembered"
+           Find = '$Memory["delivered-" + $e.messengerId] = $true'
+           Replace = '' }
         # A full list pushes its oldest notice off without a word.
         @{ Name = "overflow-notice-dropped-in-silence"
            Find = '$lines = @(foreach ($old in $overflow) { "ALARM: routed notice "'

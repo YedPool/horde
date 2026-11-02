@@ -152,6 +152,7 @@ function Invoke-HordeDecisionRouteTakenTick {
             }
             "confirmed" {
                 $changed = $true; $delivered++
+                $Memory["delivered-" + $e.messengerId] = $true
                 [void]$lines.Add("TAKEN: " + $name + " was taken by the Orc's own session after " + [int]$age + " s" + $(if ($e.alarmed) { ", after the alarm" } else { "" }) + ": delivered")
             }
             "held" { $changed = $true; [void]$lines.Add("ALARM: " + $name + " NOT DELIVERED: the messenger holds it for good; it is no longer watched") }
@@ -161,7 +162,7 @@ function Invoke-HordeDecisionRouteTakenTick {
                 $e.alarmed = $true
                 $Memory["alarmed-" + $e.messageId] = $true
                 [void]$keep.Add((ConvertTo-HordeChatTakenMark -Entry $e))
-                [void]$lines.Add("ALARM: " + $name + " was NOT TAKEN by the Orc's session in " + [int]$age + " s (" + $(if ($e.woken) { "the knock landed and the session did not take it" } else { "the session was not woken" }) + "); it stays in the Orc's mailbox and is asked about until it is taken")
+                [void]$lines.Add("ALARM: " + $name + " was NOT TAKEN by the Orc's session in " + [int]$age + " s (the wake is the wake watcher's, core/Wake.ps1); it stays in the Orc's mailbox and is asked about until it is taken")
             }
         }
     }
