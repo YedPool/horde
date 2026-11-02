@@ -336,6 +336,42 @@ try {
     $p = Pass; $takenLinesG += @($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nG + "*") })
 } finally { Set-Item function:Invoke-HordeDecision $script:realInvoke }
 Check ($takenLinesG.Count -eq 1 -and @(Routes $qG).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nG }).Count -eq 0) "and it is said TAKEN once across all the passes, then recorded"
+
+# A REFUSED POST LEAVES NO MARK and no false alarm (review of 416).
+$qH = Add-Question "Orc C" "Should the refused step go ahead?"
+$sH = Say $qH "Yes, refused."
+$script:postSays = "held"
+$postsH = $script:posts.Count
+$p = Pass
+$nH = NoticeOf $qH
+Check ($script:posts.Count -eq $postsH + 1 -and $nH -ne "" -and @(Routes $qH).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nH }).Count -eq 0) "a refused post: it was tried, nothing is recorded, and no mark is left behind"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nH + "*") }).Count -eq 0) "and 3 minutes on, no 'not taken' alarm is raised for a notice that was never sent"
+$script:postSays = "accepted"
+$p = Pass
+Check (@(Routes $qH).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nH -and -not $_.alarmed }).Count -eq 1) "refused, then accepted on a later pass: it is listed afresh and recorded"
+Advance 0.2
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nH + "*") }).Count -eq 0) "and it does not alarm at once from the old attempt's clock"
+
+# A STALE SESSION, THEN A NEW SESSION ID (the notice id carries the session): no orphan mark.
+$qS = Add-Question "Orc C" "Should the restarted-session step go ahead?"
+$sS = Say $qS "Yes, new session."
+$script:seats["orc C"] = "orc-c-old-session"
+$script:postSays = "held"
+$p = Pass
+$nOld = NoticeOf $qS
+$script:seats["orc C"] = "orc-c-new-session"
+$script:postSays = "accepted"
+Advance 0.2
+$p = Pass
+$nNew = "$(@($script:posts | Where-Object { $_.body -like ('*question ' + $qS + ':*') -and "$($_.sessionId)" -ceq 'orc-c-new-session' })[0].messageId)"
+Check ($nOld -ne "" -and $nNew -ne "" -and $nOld -cne $nNew -and @(Marks | Where-Object { $_.noticeId -ceq $nOld }).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nNew }).Count -eq 1) "a stale session then a new session id: the old notice leaves no orphan mark, the new one is listed"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nOld + "*") }).Count -eq 0 -and (Alarms $p.lines | Where-Object { $_ -like ("*" + $nNew + "*") }).Count -eq 1) "and only the notice that was really sent ever alarms"
+$script:seats["orc C"] = "orc-c-session"
 }
 finally {
     $env:HORDE_HOME = $keepHome

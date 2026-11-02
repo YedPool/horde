@@ -23,6 +23,14 @@
         @{ Name = "taken-lines-not-said"
            Find = 'lines = @(@($takenLines) + @($Lines))'
            Replace = 'lines = @($Lines)' }
+        # A refused post keeps its mark, which alarms "not taken" for a notice that was never sent.
+        @{ Name = "refused-post-keeps-its-mark"
+           Find = '$removed = Remove-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId'
+           Replace = '$removed = [pscustomobject]@{ ok = $true; reason = "" }' }
+        # The mark is not written before the post (it is never written, so the unusable-list tests post).
+        @{ Name = "mark-not-before-the-post"
+           Find = 'if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {'
+           Replace = 'if ($false) {' }
         # A notice taken in this process is listed again by its repost, and reported TAKEN a second time.
         @{ Name = "taken-notice-listed-again"
            Find = 'if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {'

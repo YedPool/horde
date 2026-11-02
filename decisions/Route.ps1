@@ -550,7 +550,8 @@ function Invoke-HordeDecisionRoutePass {
         # says once), instead of a post every pass that then fails to be listed. A crash between the mark and the post only
         # costs an alarm at takenAlarmSeconds; the next pass posts the same notice id, which wezfleet writes once and never
         # knocks for again (lib/MailPost.ps1 already-posted), and the mark keeps its first clock. A notice already TAKEN in
-        # this process is not listed again (its route record failed; its post is a repost), so it is not reported TAKEN twice.
+        # this process is not listed again (its route record failed; its post is a repost), so it is not reported TAKEN twice;
+        # that memory is per-process, so a restart in that window can say TAKEN one more time.
         if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {
             $awaited = Add-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId -Answer $seq -SessionId "$($target.sessionId)" -Now $now
             foreach ($awaitedLine in @($awaited.lines)) { [void]$lines.Add($awaitedLine) }
@@ -564,7 +565,12 @@ function Invoke-HordeDecisionRoutePass {
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
             $pending++
             $why = $(if ($posted.state -ceq "known") { "the messenger answered " + $posted.value.stage + $(if ($null -ne $posted.value.PSObject.Properties["reason"] -and "$($posted.value.reason)" -ne "") { ": " + $posted.value.reason } else { "" }) } else { "the messenger did not take it: " + $posted.reason })
-            [void]$lines.Add("pending: " + $what + " was not sent (" + $why + "); nothing is recorded, and it is tried again")
+            # A REFUSED POST LEAVES NO MARK (review of 416): the notice is not in any mailbox, so a mark would alarm "not taken" at
+            # 90 s, and again at 7 days, for something that was never sent (a stale session, a write failure, a session id that
+            # changed - the notice id carries it, so the old id would be an orphan for ever). The mark is removed, whether this
+            # pass added it or an earlier crash did; the next pass lists the notice afresh, on a new clock, before it posts again.
+            $removed = Remove-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId
+            [void]$lines.Add("pending: " + $what + " was not sent (" + $why + "); nothing is recorded, and it is tried again" + $(if ($removed.ok) { "" } else { "; its awaiting mark could not be removed (" + $removed.reason + ")" }))
             continue
         }
         $toldAnalyst = ""
