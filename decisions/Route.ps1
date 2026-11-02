@@ -18,6 +18,12 @@
 #   3. ACKNOWLEDGED: the asker closes the question with `horde decisions ack <number> -Answer <record>`,
 #      which the notice names; that is the operation ack, and the rules' (Step-HordeDecisionAcked).
 #
+# SENT IS NOT DELIVERED (T-0391, decisions/RouteTaken.ps1). The messenger accepting the notice puts it in the Orc's
+# mailbox; it does not prompt the session. So the route record below means SENT, and the notice is on an awaiting
+# list from the moment it is accepted: it is DELIVERED only when the Orc's own session took it (the messenger's
+# status says handed-over or seen), one ALARM line is raised when it is not taken in takenAlarmSeconds, and it is
+# never dropped. The pass asks the awaiting list first, before it reads the store.
+#
 # EXACTLY ONCE, AND PROVEN. What was sent is a record of the store (answer-routed: to whom, whether askedBy
 # could be resolved, the notice's id, what the analyst was told), written only after the messenger took
 # the notice, and the rules apply one per answer and purpose. So:
@@ -100,6 +106,8 @@
 # The one rule for naming the founder as a verified sender (Get-HordeDecisionNotifyVerified) and the
 # trust store it asks: routing reuses the bell's rule and does not write a second one.
 . (Join-Path $PSScriptRoot "Notify.ps1")
+# A notice the messenger accepted is delivered only on the Orc's own TAKEN (T-0391; RouteTaken.ps1).
+. (Join-Path $PSScriptRoot "RouteTaken.ps1")
 # Every messenger, at script level, as decisions/Notify.ps1 loads them; one already registered is not
 # loaded again, because a second registration is refused.
 foreach ($routeMessengerFile in @(Get-HordeMessengerFiles)) {
@@ -113,6 +121,8 @@ $script:HordeDecisionRouteModule = "decisions-route"
 $script:HordeDecisionRouteSettings = New-HordeModuleSettings -Module $script:HordeDecisionRouteModule -Settings @(
     @{ name = "passSeconds"; kind = "whole"; default = 60; min = 5; max = 3600; what = "How often the store is read for answers to route and questions to flag when nothing in it changed, in seconds." }
     @{ name = "seatGraceSeconds"; kind = "whole"; default = 300; min = 0; max = 3600; what = "How long an answer waits for an Orc seat that cannot be proven just now before it goes to the warchief, in seconds." }
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600; what = "How long a routed notice the messenger accepted may wait to be taken by the Orc's own session before one ALARM line is raised and the notice is kept awaiting, in seconds." }
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 300; min = 5; max = 3600; what = "How often a routed notice already alarmed is asked about, until it is taken, in seconds." }
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label wezfleet needs beside a VERIFIED routed answer (it shows the founder banner instead of the label). An answer that is not verified is posted as Horde itself, the reserved sender horde." }
 )
 # Who the notice is from: the router is no session, so it names itself, as the bell does.
@@ -458,15 +468,26 @@ function Invoke-HordeDecisionRoutePass {
     # routed; pending }: outcome nothing, routed or pending; lines one plain line for each answer sent,
     # reminded or left pending; routed and pending how many. -Clock, -Seat and -Analyst are for a test
     # that hands in its own; -StoreRoot names a store that is not this home's own.
-    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "", [int]$SeatGraceSeconds = 300, [scriptblock]$Trust = $null)
+    param([scriptblock]$Clock = $null, [scriptblock]$Seat = $null, [scriptblock]$Analyst = $null, [string]$HordeHome = "", [string]$StoreRoot = "", [string]$FromLabel = "", [int]$SeatGraceSeconds = 300, [scriptblock]$Trust = $null, [int]$TakenAlarmSeconds = 90, [int]$TakenAfterAlarmSeconds = 300, [hashtable]$Memory = $null)
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Seat) { $Seat = { param([string]$Role, [string]$Label) if ($Label -ceq "") { return (Get-HordeRoleSeat -Role $Role) }; return (Get-HordeLabelSeat -Label $Label -Role $Role) } }
     if ($null -eq $Analyst) { $Analyst = { param([string]$Text, [string]$Token, $Since) return (Send-HordeDecisionRouteAnalyst -Text $Text -Token $Token -HordeHome $HordeHome -Since $Since) } }
     if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }
     if ($FromLabel -eq "") { $FromLabel = @($script:HordeDecisionRouteSettings.settings | Where-Object { $_.name -ceq "fromLabel" })[0].default }
-    $result = { param([string]$Outcome, $Lines, [int]$Routed, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; lines = @($Lines); routed = $Routed; pending = $Pending } }
     $now = (& $Clock).ToUniversalTime()
+    # WHAT WAS SENT BEFORE IS ASKED FIRST (T-0391): whether the Orcs' own sessions took the notices already accepted.
+    # Whatever the rest of the pass finds, its lines are said; the awaiting list is read before any messenger is looked for.
+    $takenLines = @()
+    $takenState = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
+    if ($takenState.state -cne "known" -or @($takenState.value.awaiting).Count -gt 0) {
+        $takenMessenger = $null
+        $takenFound = Find-HordeMessenger -Require $script:HordeDecisionRouteMessengerNeeds
+        if ($takenFound.state -ceq "known") { $takenMessenger = $takenFound.value }
+        $takenTick = Invoke-HordeDecisionRouteTakenTick -HordeHome $HordeHome -Messenger $takenMessenger -Now $now -AlarmSeconds $TakenAlarmSeconds -AfterAlarmSeconds $TakenAfterAlarmSeconds -TtlSeconds $script:HordeDecisionRouteTtlSeconds -Memory $Memory
+        $takenLines = @($takenTick.lines)
+    }
+    $result = { param([string]$Outcome, $Lines, [int]$Routed, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; lines = @(@($takenLines) + @($Lines)); routed = $Routed; pending = $Pending } }
     $list = $null
     try { $list = Invoke-HordeDecision -Operation "list" -Request @{ state = "all"; messages = $true } -Root $StoreRoot -Now $now } catch { $list = New-HordeUnknown -Reason $_.Exception.Message }
     if ($list.state -cne "known" -or $list.value.outcome -cne "done") {
@@ -523,11 +544,32 @@ function Invoke-HordeDecisionRoutePass {
         # reserved system sender, which is the true name of the poster (header, WHO THE POSTER IS).
         $fromHere = $(if ($null -ne $who.verified) { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel; verified = $who.verified } } else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; system = "horde" } })
         $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $fromHere; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target -HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
+        # THE AWAITING LIST IS READ BEFORE THE POST (T-0391 review): a list that cannot be read (corrupt) would make every pass
+        # post the notice and then refuse to record it. Unreadable: nothing is posted, the answer stays pending, and the
+        # reason is said (the same line every pass, which the turn says once).
+        $listed = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
+        if ($listed.state -cne "known") {
+            $pending++
+            [void]$lines.Add("pending: " + $what + " was not sent: the routed-answers ledger cannot be read (" + $listed.reason + "); nothing is posted until it can be, and the answer waits")
+            continue
+        }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
             $pending++
             $why = $(if ($posted.state -ceq "known") { "the messenger answered " + $posted.value.stage + $(if ($null -ne $posted.value.PSObject.Properties["reason"] -and "$($posted.value.reason)" -ne "") { ": " + $posted.value.reason } else { "" }) } else { "the messenger did not take it: " + $posted.reason })
             [void]$lines.Add("pending: " + $what + " was not sent (" + $why + "); nothing is recorded, and it is tried again")
+            continue
+        }
+        # ACCEPTED IS NOT DELIVERED (T-0391): the notice is on the awaiting list, on disk, BEFORE its route record is written.
+        # A list that cannot be written leaves the answer unrecorded and the same notice is sent, and listed, on the next pass.
+        $woken = $false
+        $wokenProp = $posted.value.PSObject.Properties["woken"]
+        if ($null -ne $wokenProp -and $wokenProp.Value -eq $true) { $woken = $true }
+        $awaited = Add-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId -Answer $seq -SessionId "$($target.sessionId)" -Woken $woken -Now $now
+        foreach ($awaitedLine in @($awaited.lines)) { [void]$lines.Add($awaitedLine) }
+        if (-not $awaited.ok) {
+            $pending++
+            [void]$lines.Add("pending: " + $what + " was sent but cannot be awaited (" + $awaited.reason + "); nothing is recorded, and the same notice is sent again")
             continue
         }
         $toldAnalyst = ""
@@ -551,7 +593,7 @@ function Invoke-HordeDecisionRoutePass {
         if ($wrote.state -ceq "known" -and @("done", "replayed") -ccontains "$($wrote.value.outcome)") {
             $routed++
             $verb = $(if ($item.purpose -ceq "nudge") { "reminded " + $to + " of question " + $number + " (answer record " + $seq + ", still open)" } elseif ($item.purpose -ceq "closed") { "told " + $to + " that the warchief closed question " + $number } else { "routed " + $what + " to " + $to })
-            [void]$lines.Add($verb + ", " + $how + $(if ($target.note -ne "") { "; " + $target.note } else { "" }))
+            [void]$lines.Add($verb + ", " + $how + $(if ($target.note -ne "") { "; " + $target.note } else { "" }) + "; SENT, not yet delivered: awaiting the session's own TAKEN")
             continue
         }
         # THE NOTICE WAS TAKEN AND ITS RECORD WAS NOT WRITTEN: the next pass sends the same notice under
@@ -612,7 +654,8 @@ function Invoke-HordeDecisionRouteTurn {
     try { $mine = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mine = $true }
     if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; lines = @(); againMs = 0 } }
     $pass = $null
-    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" -SeatGraceSeconds ([int]$v.seatGraceSeconds) -Trust $Trust }
+    if (-not $Memory.ContainsKey("taken")) { $Memory["taken"] = @{} }
+    try { $pass = Invoke-HordeDecisionRoutePass -Clock $Clock -Seat $Seat -Analyst $Analyst -HordeHome $HordeHome -StoreRoot $StoreRoot -FromLabel "$($v.fromLabel)" -SeatGraceSeconds ([int]$v.seatGraceSeconds) -Trust $Trust -TakenAlarmSeconds ([int]$v.takenAlarmSeconds) -TakenAfterAlarmSeconds ([int]$v.takenAfterAlarmSeconds) -Memory $Memory["taken"] }
     finally { try { $mutex.ReleaseMutex() } catch { }; $mutex.Dispose() }
     # The mark AFTER the pass: the records this pass wrote itself are no change to read again for. A record
     # another writer made during the pass is read at the latest passSeconds later.
