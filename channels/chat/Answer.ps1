@@ -102,35 +102,15 @@ function Get-HordeChatAnswerLedgerPath {
 
 function Read-HordeChatAnswerLedger {
     # The awaiting list of answers: known { awaiting }, the empty list when there is no file yet, unknown when the file cannot be
-    # read or does not hold together - never a guess, and never quietly started over.
+    # read or does not hold together - never a guess, and never quietly started over. (Taken.ps1 reads any such file.)
     param([Parameter(Mandatory = $true)][string]$HordeHome)
-    $path = Get-HordeChatAnswerLedgerPath -HordeHome $HordeHome
-    if (-not [System.IO.File]::Exists($path)) { return (New-HordeKnown -Value ([pscustomobject]@{ awaiting = @() })) }
-    $why = "the answers ledger " + $path + " does not hold together"
-    try { $bytes = [System.IO.File]::ReadAllBytes($path); Assert-HordeAsciiBytes -Bytes $bytes -What ("the answers ledger " + $path); $text = [System.Text.Encoding]::ASCII.GetString($bytes) }
-    catch { return (New-HordeUnknown -Reason ("the answers ledger " + $path + " cannot be read: " + $_.Exception.Message)) }
-    if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (New-HordeUnknown -Reason ($why + ": a member is repeated")) }
-    try { $s = ConvertFrom-HordeJson $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
-    if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
-    $names = (@($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join ","
-    if ($names -cne "awaiting,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + $names)) }
-    if (-not ($s.v -is [int] -or $s.v -is [long]) -or $s.v -ne 1) { return (New-HordeUnknown -Reason ($why + ": it is not version 1")) }
-    foreach ($a in @($s.awaiting)) { if ($a -isnot [string] -or $a -cnotmatch $script:HordeChatTakenMarkPattern) { return (New-HordeUnknown -Reason ($why + ": an awaiting answer is not a mark")) } }
-    return (New-HordeKnown -Value ([pscustomobject]@{ awaiting = @($s.awaiting) }))
+    return (Read-HordeTakenLedgerFile -Path (Get-HordeChatAnswerLedgerPath -HordeHome $HordeHome) -What "the answers ledger" -Noun "answer")
 }
 
 function Write-HordeChatAnswerLedger {
     # The awaiting list, replaced whole in one rename. Throws when it cannot be written.
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)]$Ledger)
-    $path = Get-HordeChatAnswerLedgerPath -HordeHome $HordeHome
-    $dir = [System.IO.Path]::GetDirectoryName($path)
-    [void][System.IO.Directory]::CreateDirectory($dir)
-    $marks = (@($Ledger.awaiting) | ForEach-Object { '"' + $_ + '"' }) -join ","
-    $text = '{"v":1,"awaiting":[' + $marks + ']}'
-    $tmp = [System.IO.Path]::Combine($dir, ("answers-" + [guid]::NewGuid().ToString("N") + ".tmp"))
-    $fs = New-Object System.IO.FileStream -ArgumentList $tmp, ([System.IO.FileMode]::CreateNew), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::None)
-    try { $b = [System.Text.Encoding]::ASCII.GetBytes($text); $fs.Write($b, 0, $b.Length); $fs.Flush($true) } finally { $fs.Dispose() }
-    try { Move-HordeFileAtomic -From $tmp -To $path } catch { try { [System.IO.File]::Delete($tmp) } catch { }; throw }
+    Write-HordeTakenLedgerFile -Path (Get-HordeChatAnswerLedgerPath -HordeHome $HordeHome) -Ledger $Ledger -TempPrefix "answers"
 }
 
 function Get-HordeChatAnswerLedgerOf {
