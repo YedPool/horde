@@ -131,7 +131,7 @@ test('a card that cannot be read or is not valid costs the status row only', () 
   const bad = world();
   fs.writeFileSync(bad.cardFile, 'not a card\n');
   const r = ensure(bad);
-  assert.match(r.out, /^added; no status row: card is not valid, no Orc row made: has 1 lines/);
+  assert.match(r.out, /^added; no status row: card is not valid: has 1 lines/);
   assert.equal(orcCount(bad), 1, 'status set decided the Orc row; the card reader only judges the status row');
 });
 

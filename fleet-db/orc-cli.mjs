@@ -98,7 +98,9 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         folder: flags['--folder'], letter: flags['--letter'], lane: flags['--lane'], isThrall: flags['--thrall'] === true, createdAt: Date.now(),
       });
       if (cardRead === null) return orc;
-      const s = cardRead.error ? { skip: cardRead.error } : statusRowFor(cardRead.card);
+      // The reader's refusal is worded for the importer, where a bad card also costs the orc row; here the orc row is
+      // made regardless, so that clause is dropped rather than told to the person.
+      const s = cardRead.error ? { skip: cardRead.error.replace(/, no Orc row made|\s*\(no Orc row made\)/g, '') } : statusRowFor(cardRead.card);
       if (s.skip) { status = 'no status row: ' + s.skip; return orc; }
       // The same check as the importer's stepStatus (its comment says why): a row at this time is the card's already.
       if (db.prepare('SELECT 1 FROM orc_status WHERE orc_id = ? AND at = ? LIMIT 1').get(orc.id, s.row.at)) { status = 'status row kept'; return orc; }
