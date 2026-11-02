@@ -49,8 +49,10 @@ $stubPost = {
 # WHAT THE ORC'S OWN SIDE SAYS OF A POST, BY THE MESSENGER'S ID (T-0391): nothing here makes a notice "taken"; a test says so
 # by setting the stage, as the Orc's own hook does. A notice not named keeps no status (absent), as before.
 $script:stages = @{}
+$script:askedIds = @{}
 $stubStatus = {
     param($MessageId)
+    $script:askedIds["$MessageId"] = 1 + [int]$script:askedIds["$MessageId"]
     $st = "$($script:stages["$MessageId"])"
     if ($st -ceq "") { return (New-HordeAbsent -Note "the stand-in keeps no status") }
     if ($st -ceq "unknown") { return (New-HordeUnknown -Reason "the stand-in cannot say") }
@@ -237,6 +239,69 @@ $again = Add-HordeDecisionRouteTaken -HordeHome $hordeHome -NoticeId $ownId -Ans
 Check ($again.ok -and @($again.lines).Count -eq 0 -and @(Marks).Count -eq $script:HordeChatTakenKept -and @(Marks | Where-Object { $_.noticeId -ceq $ownId }).Count -eq 1) "a full list: a notice sent again is already there, so nobody is evicted and no line is said"
 $brandNew = Add-HordeDecisionRouteTaken -HordeHome $hordeHome -NoticeId "99999999-2222-3333-4444-555555555555" -Answer 8 -Now $fullNow
 Check ($brandNew.ok -and @($brandNew.lines).Count -eq 1 -and @($brandNew.lines)[0] -clike ("ALARM: routed notice " + $ownId + " (answer record 7) left the awaiting list because it is full*") -and @(Marks).Count -eq $script:HordeChatTakenKept) "a full list: a new notice pushes the oldest off WITH an ALARM line naming it, never in silence"
+
+# A CORRUPT LIST (not just an unwritable one): nothing is posted, the reason is stated, and it does not loop.
+$qC = Add-Question "Orc C" "Should the corrupt-list step go ahead?"
+$sC = Say $qC "Yes, corrupt list."
+Remove-Item -LiteralPath $takenFile -Force -ErrorAction SilentlyContinue
+[System.IO.File]::WriteAllText($takenFile, "this is not a ledger")
+$postsC = $script:posts.Count
+$p = Pass
+$p2 = Pass
+Check ($script:posts.Count -eq $postsC -and $p.outcome -ceq "pending" -and @(Routes $qC).Count -eq 0 -and @($p.lines | Where-Object { $_ -like ("pending: *was not sent: the routed-answers ledger cannot be read (*") }).Count -eq 1) ("a corrupt list: nothing is posted and the reason is stated (" + (@($p.lines) -join " | ") + ")")
+Check ($script:posts.Count -eq $postsC -and @(Routes $qC).Count -eq 0) "and passes after it still post nothing: no loop"
+Remove-Item -LiteralPath $takenFile -Force
+Advance 0.2
+$p = Pass
+Check (@(Routes $qC).Count -eq 1 -and $script:posts.Count -eq $postsC + 1) "once the list can be read the answer is posted, once, and recorded"
+
+# THE RE-ASK CADENCE AFTER THE ALARM: not before takenAfterAlarmSeconds, once after.
+$qD = Add-Question "Orc C" "Should the cadence step go ahead?"
+$sD = Say $qD "Yes, cadence."
+Advance 0.2
+$p = Pass
+$nD = NoticeOf $qD
+Advance 2
+$p = Pass
+Check ((Alarms $p.lines).Count -ge 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nD -and $_.alarmed }).Count -eq 1) "CONTROL: the notice is alarmed"
+$asked0 = [int]$script:askedIds[$nD]
+Advance 1
+$p = Pass
+Check ([int]$script:askedIds[$nD] -eq $asked0) "an alarmed mark is not asked again before takenAfterAlarmSeconds (1 min of 5)"
+Advance 4.5
+$p = Pass
+Check ([int]$script:askedIds[$nD] -eq $asked0 + 1) "and it is asked once after it"
+
+# THE END OF THE ROAD: a notice nobody takes in the 7 days the mailbox keeps it is given up WITH an ALARM line.
+Advance (8 * 24 * 60)
+$p = Pass
+Check (@($p.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nD + "*NOT DELIVERED, given up after*") }).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nD }).Count -eq 0) "past the 7 days: one ALARM line says it is given up, and the mark leaves the list"
+$qE = Add-Question "Orc C" "Should the six-day step go ahead?"
+$sE = Say $qE "Yes, six days."
+Advance 0.2
+$p = Pass
+$nE = NoticeOf $qE
+Advance 2
+$p = Pass
+Advance (6 * 24 * 60)
+$p = Pass
+Check (@(Marks | Where-Object { $_.noticeId -ceq $nE }).Count -eq 1 -and @($p.lines | Where-Object { $_ -like "*given up after*" }).Count -eq 0) "CONTROL: at 6 days the alarmed notice is still awaited, not given up"
+
+# A FAILED WRITE AFTER AN ALARM does not repeat the alarm in this process.
+$qF = Add-Question "Orc C" "Should the failed-write step go ahead?"
+$sF = Say $qF "Yes, failed write."
+Advance 0.2
+$p = Pass
+$nF = NoticeOf $qF
+Advance 2
+$fileItem = Get-Item -LiteralPath $takenFile
+$fileItem.IsReadOnly = $true
+try { $p = Pass; $p2 = Pass } finally { (Get-Item -LiteralPath $takenFile).IsReadOnly = $false }
+$mine = @($p.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nF + "*") }).Count
+$mine2 = @($p2.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nF + "*") }).Count
+Check ($mine -eq 1 -and $mine2 -eq 0 -and @($p.lines | Where-Object { $_ -like "*could not be written*" }).Count -ge 1) "the write failed after the alarm: the alarm is said once, and not again at the next pass"
+$p3 = Pass
+Check (@($p3.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nF + "*") }).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nF -and $_.alarmed }).Count -eq 1) "and once the file can be written the alarmed mark is saved, still without a second alarm"
 }
 finally {
     $env:HORDE_HOME = $keepHome

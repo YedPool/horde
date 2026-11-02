@@ -36,6 +36,22 @@
         @{ Name = "resend-listed-again"
            Find = 'if ($null -ne (Get-HordeChatTakenEntry -State $ledger -MessageId $entry.messageId)) {'
            Replace = 'if ($false) {' }
+        # An alarmed notice is asked about at every pass, not at the slow cadence.
+        @{ Name = "alarmed-notice-asked-every-pass"
+           Find = '$every = $(if ($de.alarmed) { [long]($AfterAlarmSeconds * 1000) } else { [long]0 })'
+           Replace = '$every = [long]0' }
+        # A notice is never given up at its age limit.
+        @{ Name = "notice-never-expires"
+           Find = '-AlarmSeconds $AlarmSeconds -TtlSeconds $TtlSeconds'
+           Replace = '-AlarmSeconds $AlarmSeconds -TtlSeconds 100000000000' }
+        # A notice given up at its age limit is dropped without a word.
+        @{ Name = "expired-notice-dropped-in-silence"
+           Find = '[void]$lines.Add("ALARM: " + $name + " NOT DELIVERED, given up after " + [int]$age + " s; it is no longer watched, but it may still be in the Orc''s mailbox")'
+           Replace = '' }
+        # An alarm whose write failed is forgotten, so it is said again at the next pass.
+        @{ Name = "failed-write-alarm-forgotten"
+           Find = '$Memory["alarmed-" + $e.messageId] = $true'
+           Replace = '' }
         # A full list pushes its oldest notice off without a word.
         @{ Name = "overflow-notice-dropped-in-silence"
            Find = '$lines = @(foreach ($old in $overflow) { "ALARM: routed notice "'

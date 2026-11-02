@@ -23,6 +23,14 @@
         @{ Name = "taken-lines-not-said"
            Find = 'lines = @(@($takenLines) + @($Lines))'
            Replace = 'lines = @($Lines)' }
+        # An unreadable list no longer stops the post: it is posted every pass and never recorded.
+        @{ Name = "unreadable-list-still-posts"
+           Find = 'if ($listed.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        # The notice's age limit is not the mailbox's.
+        @{ Name = "pass-ignores-the-notice-ttl"
+           Find = '-TtlSeconds $script:HordeDecisionRouteTtlSeconds'
+           Replace = '-TtlSeconds 100000000000' }
         # The alarm limit of the setting is not the one the pass uses.
         @{ Name = "turn-ignores-the-alarm-setting"
            Find = '-TakenAlarmSeconds ([int]$v.takenAlarmSeconds)'

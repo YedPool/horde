@@ -140,10 +140,16 @@ function Invoke-HordeDecisionRouteTakenTick {
         $status = $null
         if ($null -ne $Messenger) { $status = Get-HordeMessengerStatus -Messenger $Messenger -MessageId $e.messengerId }
         $age = ($nowMs - $e.postedMs) / 1000.0
+        # A FAILED WRITE AFTER AN ALARM (review nit): the alarm was said but not saved; this process remembers it so the next
+        # pass does not say it again, and saves it then. A restart before that repeats the line once, which is accepted.
+        $wasAlarmed = $e.alarmed
+        $e.alarmed = ($e.alarmed -or $Memory.ContainsKey("alarmed-" + $e.messageId))
         $act = Get-HordeChatTakenAction -Status $status -AgeSeconds $age -Alarmed $e.alarmed -AlarmSeconds $AlarmSeconds -TtlSeconds $TtlSeconds
         $name = "routed notice " + $e.messengerId + " (answer record " + $e.seq + ")"
         switch ($act) {
-            "wait" { [void]$keep.Add($mark) }
+            "wait" {
+                if ($e.alarmed -and -not $wasAlarmed) { $changed = $true; $saved = ConvertTo-HordeChatTakenMark -Entry $e; [void]$keep.Add($saved) } else { [void]$keep.Add($mark) }
+            }
             "confirmed" {
                 $changed = $true; $delivered++
                 [void]$lines.Add("TAKEN: " + $name + " was taken by the Orc's own session after " + [int]$age + " s" + $(if ($e.alarmed) { ", after the alarm" } else { "" }) + ": delivered")
@@ -153,6 +159,7 @@ function Invoke-HordeDecisionRouteTakenTick {
             "alarm" {
                 $changed = $true; $alarmed++
                 $e.alarmed = $true
+                $Memory["alarmed-" + $e.messageId] = $true
                 [void]$keep.Add((ConvertTo-HordeChatTakenMark -Entry $e))
                 [void]$lines.Add("ALARM: " + $name + " was NOT TAKEN by the Orc's session in " + [int]$age + " s (" + $(if ($e.woken) { "the knock landed and the session did not take it" } else { "the session was not woken" }) + "); it stays in the Orc's mailbox and is asked about until it is taken")
             }

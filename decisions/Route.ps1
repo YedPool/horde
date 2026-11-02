@@ -544,6 +544,15 @@ function Invoke-HordeDecisionRoutePass {
         # reserved system sender, which is the true name of the poster (header, WHO THE POSTER IS).
         $fromHere = $(if ($null -ne $who.verified) { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel; verified = $who.verified } } else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; system = "horde" } })
         $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $fromHere; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target -HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
+        # THE AWAITING LIST IS READ BEFORE THE POST (T-0391 review): a list that cannot be read (corrupt) would make every pass
+        # post the notice and then refuse to record it. Unreadable: nothing is posted, the answer stays pending, and the
+        # reason is said (the same line every pass, which the turn says once).
+        $listed = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
+        if ($listed.state -cne "known") {
+            $pending++
+            [void]$lines.Add("pending: " + $what + " was not sent: the routed-answers ledger cannot be read (" + $listed.reason + "); nothing is posted until it can be, and the answer waits")
+            continue
+        }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
             $pending++
