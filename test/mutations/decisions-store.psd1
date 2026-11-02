@@ -105,8 +105,8 @@
            Find = 'if (-not $absolute) {'
            Replace = 'if ($false) {' }
         @{ Name = "reading-creates-the-store"
-           Find = 'if (-not [System.IO.Directory]::Exists($Root)) { return $none }'
-           Replace = 'if (-not [System.IO.Directory]::Exists($Root)) { [void][System.IO.Directory]::CreateDirectory($Root); return $none }' }
+           Find = 'if (-not [System.IO.Directory]::Exists($Root)) { Clear-HordeDecisionStoreCache -Root $Root; return $none }'
+           Replace = 'if (-not [System.IO.Directory]::Exists($Root)) { Clear-HordeDecisionStoreCache -Root $Root; [void][System.IO.Directory]::CreateDirectory($Root); return $none }' }
         @{ Name = "empty-file-not-named-empty"
            Find = 'if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty: its writer stopped before writing it" } }'
            Replace = '' }
@@ -135,8 +135,8 @@
            Find = 'return (''\A([0-9]{'' + (Get-HordeDecisionSequenceDigits) + ''})\.json\z'')'
            Replace = 'return (''([0-9]{'' + (Get-HordeDecisionSequenceDigits) + ''})\.json'')' }
         @{ Name = "damaged-record-keeps-no-reason"
-           Find = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })'
-           Replace = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = "" })' }
+           Find = '$rec = [pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason }'
+           Replace = '$rec = [pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = "" }' }
         # --- gaps and strays ---
         @{ Name = "file-far-ahead-believed"
            Find = 'if ($gap -gt $maxGap) {'
