@@ -1,10 +1,10 @@
-# Mutations of decisions/RouteTaken.ps1, T-0391 slice 1: a routed answer is DELIVERED only when the Orc's own session
+# Mutations of decisions/NoticeTaken.ps1 (the awaiting-list engine, moved out of RouteTaken.ps1 in slice 3 so the doorbell shares it), T-0391 slice 1: a routed answer is DELIVERED only when the Orc's own session
 # took it, one ALARM is raised when it does not in time, and a notice is never dropped from the awaiting list.
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\decisions-route-taken.psd1
 # test\test-decisions-route-taken.ps1 must fail for every one. The send side (Route.ps1) is in decisions-route-taken-send.psd1;
 # the chat's own decision (Taken.ps1) is in relay-chat-taken.psd1.
 @{
-    Target = "decisions\RouteTaken.ps1"
+    Target = "decisions\NoticeTaken.ps1"
     Suite  = "test\test-decisions-route-taken.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
@@ -46,7 +46,7 @@
            Replace = '-AlarmSeconds $AlarmSeconds -TtlSeconds 100000000000' }
         # A notice given up at its age limit is dropped without a word.
         @{ Name = "expired-notice-dropped-in-silence"
-           Find = '[void]$lines.Add("ALARM: " + $name + " NOT DELIVERED, given up after " + [int]$age + " s; it is no longer watched, but it may still be in the Orc''s mailbox")'
+           Find = '[void]$lines.Add("ALARM: " + $name + " NOT DELIVERED, given up after " + [int]$age + " s; it is no longer watched, but it may still be in " + $Kind.owner + " mailbox")'
            Replace = '' }
         # An alarm whose write failed is forgotten, so it is said again at the next pass.
         @{ Name = "failed-write-alarm-forgotten"
@@ -62,11 +62,11 @@
            Replace = '$keep = @($r.value.awaiting)' }
         # A full list pushes its oldest notice off without a word.
         @{ Name = "overflow-notice-dropped-in-silence"
-           Find = '$lines = @(foreach ($old in $overflow) { "ALARM: routed notice "'
-           Replace = '$lines = @(foreach ($old in @()) { "ALARM: routed notice "' }
+           Find = '$lines = @(foreach ($old in $overflow) { "ALARM: " + $Kind.notice + " "'
+           Replace = '$lines = @(foreach ($old in @()) { "ALARM: " + $Kind.notice + " "' }
         # A list that cannot be written is taken for written: the record would be written for a notice nobody awaits.
         @{ Name = "unwritable-list-taken-for-written"
-           Find = 'catch { return [pscustomobject]@{ ok = $false; reason = ("the routed-answers ledger could not be written: " + $_.Exception.Message); lines = $lines } }'
+           Find = 'catch { return [pscustomobject]@{ ok = $false; reason = ($Kind.ledger + " could not be written: " + $_.Exception.Message); lines = $lines } }'
            Replace = 'catch { }' }
     )
 }
