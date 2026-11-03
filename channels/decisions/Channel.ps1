@@ -1169,6 +1169,8 @@ function Invoke-HordeDecisionsChannelBell {
     } catch { return [pscustomobject]@{ lines = @("the founder's answers could not be rung for: " + $_.Exception.Message); againMs = 0 } }
     $lines = @()
     if ("$($turn.said)" -cne "") { $lines = @("notify: " + $turn.said) }
+    # What the awaiting list of rung notices said (T-0391 slice 3): a TAKEN, an ALARM for one the warchief's session did not take.
+    $lines = @(@($lines) + @(@($turn.lines) | ForEach-Object { "notify: " + $_ }))
     return [pscustomobject]@{ lines = $lines; againMs = [int]$turn.againMs }
 }
 

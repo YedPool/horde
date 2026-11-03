@@ -88,6 +88,8 @@
 # The id recipe, shared with every sender that names a message by what it is about.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\TextUuid.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
+# A notice the messenger accepted is delivered only on the warchief's own TAKEN (T-0391; NoticeTaken.ps1).
+. (Join-Path $PSScriptRoot "NoticeTaken.ps1")
 # relay's trust store, read only: whether the passkey a record names is trusted now (header, THE FOUNDER,
 # VERIFIED). Loading it costs about 250 ms (measured 2026-10-12, PowerShell 5.1).
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Trust.ps1")
@@ -106,7 +108,12 @@ $script:HordeDecisionNotifySettings = New-HordeModuleSettings -Module $script:Ho
     @{ name = "rereadSeconds"; kind = "whole"; default = 30; min = 1; max = 3600; what = "How often the inbox is read even when no change to the store was seen, in seconds." }
     @{ name = "startWithWindow"; kind = "truefalse"; default = $true; what = "Whether horde decisions open starts notify beside the window, and stops it when the window closes." }
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the notice is from: the founder's, F, unless the person who answers wears another." }
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600; what = "How long a notice the messenger accepted may wait to be taken by the warchief's own session before one ALARM line is raised and the notice is kept awaiting, in seconds." }
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 300; min = 5; max = 3600; what = "How often a notice already alarmed is asked about, until it is taken, in seconds." }
 )
+# The doorbell's kind of the awaiting list (NoticeTaken.ps1): its file beside the told record, and the words its lines use. The mark's number is
+# how many answers the notice rang for.
+$script:HordeDecisionNotifyTakenKind = New-HordeDecisionNoticeKind -Path @("decisions", "notify-taken.json") -TempPrefix "notify-taken" -Ledger "the doorbell's awaiting ledger" -List "the awaiting list of doorbell notices" -Label "bell" -Notice "bell notice" -Owner "the warchief's" -Detail { param($Entry) return ("" + $Entry.seq + " answer(s) of the founder's") }
 # The reader whose unread messages are rung for, and whose seat the notice goes to: the role that keeps
 # the list, and the one actor the command line reads the inbox as (decisions/Console.ps1).
 $script:HordeDecisionNotifyReader = "warchief"
@@ -312,10 +319,11 @@ function Get-HordeDecisionNotifyVerified {
 
 function New-HordeDecisionNotifyTracker {
     # What one running notify keeps in memory: when it first saw each message, and the back-off; and the
-    # label its notices wear, the setting fromLabel (its declared default when none is given).
-    param([int]$QuietSeconds = 30, [string]$FromLabel = "")
+    # label its notices wear, the setting fromLabel (its declared default when none is given); the alarm limits of the awaiting
+    # list and its memory (when each mark was last asked, what was alarmed or delivered in this process: NoticeTaken.ps1).
+    param([int]$QuietSeconds = 30, [string]$FromLabel = "", [int]$TakenAlarmSeconds = 90, [int]$TakenAfterAlarmSeconds = 300)
     if ($FromLabel -eq "") { $FromLabel = @($script:HordeDecisionNotifySettings.settings | Where-Object { $_.name -ceq "fromLabel" })[0].default }
-    return [pscustomobject]@{ quietSeconds = $QuietSeconds; fromLabel = $FromLabel; firstSeen = @{}; nextAttemptAt = [datetime]::MinValue; retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; problem = "" }
+    return [pscustomobject]@{ quietSeconds = $QuietSeconds; fromLabel = $FromLabel; takenAlarmSeconds = $TakenAlarmSeconds; takenAfterAlarmSeconds = $TakenAfterAlarmSeconds; taken = @{}; firstSeen = @{}; nextAttemptAt = [datetime]::MinValue; retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; problem = "" }
 }
 
 function Get-HordeDecisionNotifyName {
@@ -373,14 +381,29 @@ function Invoke-HordeDecisionNotifyPass {
     # ONE PASS: read the told record and the inbox, and ring for the set if it is due. Returns
     # { outcome; said; wakeAt; pending }: outcome nothing, waiting, reread, rang, pending or refused;
     # said the one plain line for it; wakeAt when to pass again ($null: no reason to); pending how many
-    # answers wait untold. -Clock, -Inbox, -Seat and -Trust are for a test that hands in its own.
+    # answers wait untold; takenLines what the awaiting list said this pass (a TAKEN, an ALARM; T-0391) and takenFailed
+    # whether the list could not be read or written. -Clock, -Inbox, -Seat and -Trust are for a test that hands in its own.
     param([Parameter(Mandatory = $true)]$Tracker, [scriptblock]$Clock = $null, [scriptblock]$Inbox = $null, [scriptblock]$Seat = $null, [string]$HordeHome = "", [scriptblock]$Trust = $null)
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($null -eq $Inbox) { $Inbox = { return (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = $script:HordeDecisionNotifyReader }) } }
     if ($null -eq $Seat) { $Seat = { return (Get-HordeRoleSeat -Role $script:HordeDecisionNotifyReader) } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }
-    $result = { param([string]$Outcome, [string]$Said, $WakeAt, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; said = $Said; wakeAt = $WakeAt; pending = $Pending } }
+    # WHAT WAS RUNG BEFORE IS ASKED FIRST (T-0391 slice 3): whether the warchief's own session took the notices the messenger
+    # already accepted. Whatever the rest of the pass finds, its lines are said; the awaiting list is read before any
+    # messenger is looked for, and a list that cannot be read is said, never taken for empty.
+    $takenLines = @()
+    $takenFailed = $false
+    $takenState = Read-HordeDecisionNoticeTaken -Kind $script:HordeDecisionNotifyTakenKind -HordeHome $HordeHome
+    if ($takenState.state -cne "known" -or @($takenState.value.awaiting).Count -gt 0) {
+        $takenMessenger = $null
+        $takenFound = Find-HordeMessenger -Require $script:HordeDecisionNotifyMessengerNeeds
+        if ($takenFound.state -ceq "known") { $takenMessenger = $takenFound.value }
+        $takenTick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeDecisionNotifyTakenKind -HordeHome $HordeHome -Messenger $takenMessenger -Now ((& $Clock).ToUniversalTime()) -AlarmSeconds $Tracker.takenAlarmSeconds -AfterAlarmSeconds $Tracker.takenAfterAlarmSeconds -TtlSeconds $script:HordeDecisionNotifyTtlSeconds -Memory $Tracker.taken
+        $takenLines = @($takenTick.lines)
+        $takenFailed = [bool]$takenTick.failed
+    }
+    $result = { param([string]$Outcome, [string]$Said, $WakeAt, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; said = $Said; wakeAt = $WakeAt; pending = $Pending; takenLines = @($takenLines); takenFailed = $takenFailed } }
     $path = Get-HordeDecisionNotifyRecordPath -HordeHome $HordeHome
     $record = Read-HordeDecisionNotifyRecord -Path $path
     if ($record.state -ceq "refused") { return (& $result "refused" ("refused: " + $record.problem + ". Nothing is rung from an empty memory: mend or move the file, then start notify again.") $null 0) }
@@ -428,6 +451,20 @@ function Invoke-HordeDecisionNotifyPass {
             $who = Get-HordeDecisionNotifyVerified -Items $pending -Trust $Trust
             if ($null -ne $who.verified) { $from | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }
             $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $sessionId; from = $from; body = (Format-HordeDecisionNotifyNotice -Items $pending); ttlSeconds = $script:HordeDecisionNotifyTtlSeconds }
+            # THE MARK IS WRITTEN BEFORE THE POST (T-0391 slice 3, as the routed answers' is). A list that cannot be read or
+            # written (corrupt, disk full, locked) means nothing is posted: the set stays pending and the reason is said, instead
+            # of a post at every try that then cannot be watched. A crash between the mark and the post only costs an alarm at
+            # takenAlarmSeconds; the next pass posts the same notice id, which wezfleet writes once and never knocks for again
+            # (lib/MailPost.ps1 already-posted), and the mark keeps its first clock. A notice already TAKEN in this process is not
+            # listed again (its told record failed; its post is a repost), so it is not reported TAKEN twice; that memory is
+            # per-process, so a restart in that window can say TAKEN one more time.
+            if (-not $Tracker.taken.ContainsKey("delivered-" + $noticeId)) {
+                $awaited = Add-HordeDecisionNoticeTaken -Kind $script:HordeDecisionNotifyTakenKind -HordeHome $HordeHome -NoticeId $noticeId -Answer ([long]$pending.Count) -SessionId $sessionId -Now $now.ToUniversalTime()
+                $takenLines = @(@($takenLines) + @($awaited.lines))
+                if (-not $awaited.ok) { $problem = "the notice cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be" }
+            }
+        }
+        if ($problem -eq "") {
             $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
             if ($posted.state -ceq "known" -and $script:HordeDecisionNotifyStages -ccontains "$($posted.value.stage)") {
                 $stamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -438,7 +475,7 @@ function Invoke-HordeDecisionNotifyPass {
                 # says whether the warchief was woken for it or reads it at its next turn.
                 $wake = Format-HordeMessengerWake -Answer $posted
                 if ($wake -cne "") { $wake = "; " + $wake }
-                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + $wake + ")"
+                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + $wake + "); SENT, not yet delivered: awaiting the session's own TAKEN"
                 if ($null -ne $who.verified) {
                     $said = $said + "; as the founder, verified by his passkey " + $who.verified.keyId
                     # What the messenger says of it: one that cannot show a verified sender posts by label.
@@ -458,6 +495,14 @@ function Invoke-HordeDecisionNotifyPass {
                 $problem = "messenger " + $messenger.name + " answered " + $posted.value.stage + $(if ($null -ne $why -and "$($why.Value)" -ne "") { ": " + $why.Value } else { "" })
             }
             else { $problem = "messenger " + $messenger.name + " did not take it: " + $posted.reason }
+            # A REFUSED POST LEAVES NO MARK (as the routed answers', review of 416): the notice is in no mailbox, so a mark would
+            # alarm "not taken" at takenAlarmSeconds, and again at 7 days, for something that was never sent. ONLY A KNOWN
+            # REFUSAL removes it: an UNKNOWN result (a timeout, a dropped link) may have landed, and a notice that landed must
+            # stay watched, so its mark is kept and, if it is never taken, it alarms. KNOWN COST: a crash between the mark and the
+            # post, then the answers being read before the next pass, gives one false NOT TAKEN alarm.
+            $removed = [pscustomobject]@{ ok = $true; reason = "" }
+            if ($posted.state -ceq "known") { $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeDecisionNotifyTakenKind -HordeHome $HordeHome -NoticeId $noticeId }
+            if (-not $removed.ok) { $problem = $problem + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
         }
     }
     # NOT SENT: nothing recorded; tried again after the back-off (header).
@@ -484,8 +529,10 @@ function Invoke-HordeDecisionNotifyTurn {
     # -Memory is the caller's own table, kept between turns: the tracker (when each answer was first
     # seen, the back-off) and the last line said. Returns { outcome; said; againMs }: outcome the pass's
     # (nothing, waiting, rang, pending, refused), or elsewhere; said a line only when it is new and worth
-    # a log's line (rang, pending, refused - not waiting, not nothing); againMs how soon to turn again
+    # a log's line (rang, pending, refused - not waiting, not nothing); lines the awaiting list's; againMs how soon to turn again
     # for the bell's sake (the end of the quiet period, the end of a back-off), 0 when there is no reason.
+    # LINES (T-0391 slice 3): what the awaiting list said (a notice TAKEN, an ALARM for one that was not, a list that cannot be
+    # read) is returned as lines, each once: a list that cannot be read is said again only when its words change.
     # NOT EVERY TURN READS THE INBOX, as the loop does not: only when the store's mark changed, the time
     # the last pass asked for has come, or rereadSeconds have passed (outcome idle otherwise). Measured
     # 2026-10-12: a pass on every turn made an empty turn of the run longer than its 300 ms minimum.
@@ -494,20 +541,21 @@ function Invoke-HordeDecisionNotifyTurn {
     param([Parameter(Mandatory = $true)][hashtable]$Memory, [string]$HordeHome = "", [string]$StoreRoot = "", [scriptblock]$Clock = $null, [scriptblock]$Inbox = $null, [scriptblock]$Seat = $null, [scriptblock]$Trust = $null)
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
+    $takenOut = @()
     $answer = {
         param([string]$Outcome, [string]$Line, [int]$AgainMs)
         $said = ""
         if ($Line -cne "" -and $Line -cne "$($Memory['said'])") { $said = $Line }
         if ($Line -cne "") { $Memory["said"] = $Line }
-        return [pscustomobject]@{ outcome = $Outcome; said = $said; againMs = $AgainMs }
+        return [pscustomobject]@{ outcome = $Outcome; said = $said; lines = @($takenOut); againMs = $AgainMs }
     }
     $settings = Get-HordeDecisionNotifySettings -HordeHome $HordeHome
     if ($settings.state -ceq "refused") { return (& $answer "refused" ("the founder's answers are not rung for, because the notify settings file is refused: " + (@($settings.findings) -join "; ")) 0) }
     $v = $settings.values
     $tracker = $Memory["tracker"]
-    if ($null -eq $tracker -or $tracker.quietSeconds -ne [int]$v.quietSeconds -or $tracker.fromLabel -cne "$($v.fromLabel)") {
-        $fresh = New-HordeDecisionNotifyTracker -FromLabel $v.fromLabel -QuietSeconds $v.quietSeconds
-        if ($null -ne $tracker) { $fresh.firstSeen = $tracker.firstSeen }
+    if ($null -eq $tracker -or $tracker.quietSeconds -ne [int]$v.quietSeconds -or $tracker.fromLabel -cne "$($v.fromLabel)" -or $tracker.takenAlarmSeconds -ne [int]$v.takenAlarmSeconds -or $tracker.takenAfterAlarmSeconds -ne [int]$v.takenAfterAlarmSeconds) {
+        $fresh = New-HordeDecisionNotifyTracker -FromLabel $v.fromLabel -QuietSeconds $v.quietSeconds -TakenAlarmSeconds ([int]$v.takenAlarmSeconds) -TakenAfterAlarmSeconds ([int]$v.takenAfterAlarmSeconds)
+        if ($null -ne $tracker) { $fresh.firstSeen = $tracker.firstSeen; $fresh.taken = $tracker.taken }
         $tracker = $fresh
         $Memory["tracker"] = $tracker
     }
@@ -518,20 +566,24 @@ function Invoke-HordeDecisionNotifyTurn {
     if (-not $due) {
         $left = 0
         if ($null -ne $wakeAt) { $left = [int][Math]::Max(200, [Math]::Min(3600000, ([datetime]$wakeAt - $now).TotalMilliseconds)) }
-        return [pscustomobject]@{ outcome = "idle"; said = ""; againMs = $left }
+        return [pscustomobject]@{ outcome = "idle"; said = ""; lines = @(); againMs = $left }
     }
     $mutex = New-HordeDecisionNotifyMutex -HordeHome $HordeHome
-    if ($null -eq $mutex) { return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }
+    if ($null -eq $mutex) { return [pscustomobject]@{ outcome = "elsewhere"; said = ""; lines = @(); againMs = 0 } }
     $mine = $false
     try { $mine = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $mine = $true }
-    if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }
+    if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; lines = @(); againMs = 0 } }
     $last = $null
+    $takenAll = @()
+    $takenFailed = $false
     try {
         # The quiet period can end while the store is being read: read again before ringing, a few times
         # at most, as the loop does.
         for ($i = 0; $i -lt 3; $i++) {
             $last = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $Clock -Inbox $Inbox -Seat $Seat -HordeHome $HordeHome -Trust $Trust
+            $takenAll = @(@($takenAll) + @($last.takenLines))
+            $takenFailed = [bool]$last.takenFailed
             if ($last.outcome -cne "reread") { break }
             Start-Sleep -Milliseconds 200
         }
@@ -541,6 +593,14 @@ function Invoke-HordeDecisionNotifyTurn {
         $mutex.Dispose()
     }
     $Memory["mark"] = $mark; $Memory["passAt"] = $now; $Memory["wakeAt"] = $last.wakeAt
+    # A list that cannot be read or written is the same words every pass: said once, until they change or it is mended.
+    $takenOut = @($takenAll)
+    if ($takenFailed) {
+        $takenText = $takenOut -join "`n"
+        if ($takenText -ceq "$($Memory['takenFailedSaid'])") { $takenOut = @() }
+        $Memory["takenFailedSaid"] = $takenText
+    }
+    else { $Memory["takenFailedSaid"] = "" }
     $again = 0
     if ($null -ne $last.wakeAt) { $again = [int][Math]::Max(200, [Math]::Min(3600000, ([datetime]$last.wakeAt - (& $Clock)).TotalMilliseconds)) }
     $line = ""
@@ -574,7 +634,8 @@ function Invoke-HordeDecisionNotifyLoop {
     }
     $refused = ""
     try {
-        $tracker = New-HordeDecisionNotifyTracker -QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel
+        $tracker = New-HordeDecisionNotifyTracker -QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel -TakenAlarmSeconds ([int]$v.takenAlarmSeconds) -TakenAfterAlarmSeconds ([int]$v.takenAfterAlarmSeconds)
+        $lastTakenFailed = ""
         $stopSince = $null; $lastSaid = ""; $lastMark = $null; $lastPassAt = [datetime]::MinValue; $wakeAt = [datetime]::MinValue; $force = $true; $last = $null
         while ($true) {
             $now = & $Clock
@@ -584,6 +645,10 @@ function Invoke-HordeDecisionNotifyLoop {
                 $force = $false
                 $last = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $Clock -Inbox $Inbox -Seat $Seat -HordeHome $hordeHome
                 $lastMark = $mark; $lastPassAt = & $Clock
+                # What the awaiting list said (a TAKEN, an ALARM; a list that cannot be read once until its words change).
+                $takenText = @($last.takenLines) -join "`n"
+                if (-not ($last.takenFailed -and $takenText -ceq $lastTakenFailed)) { foreach ($takenLine in @($last.takenLines)) { Write-Output $takenLine } }
+                $lastTakenFailed = $(if ($last.takenFailed) { $takenText } else { "" })
                 # The quiet period ended while the store was being read: read again before ringing, after
                 # a moment, so that a clock that has not moved (a test's) cannot spin here.
                 if ($last.outcome -ceq "reread") { $force = $true; & $Sleep 0.2; continue }

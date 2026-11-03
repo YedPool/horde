@@ -132,7 +132,7 @@ try {
 Write-Host ""
 Write-Host "--- every number a person might tune is one setting of the module decisions-notify ---" -ForegroundColor Cyan
 $names = @($defaults.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq "quietSeconds,pollSeconds,rereadSeconds,startWithWindow,fromLabel") ("the module declares five settings (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "quietSeconds,pollSeconds,rereadSeconds,startWithWindow,fromLabel,takenAlarmSeconds,takenAfterAlarmSeconds") ("the module declares seven settings (" + ($names -join ",") + ")")
 Check ($defaults.quietSeconds -eq 30 -and $defaults.pollSeconds -eq 3 -and $defaults.rereadSeconds -eq 30 -and $defaults.startWithWindow -eq $true) "their defaults: 30 s of quiet, the store looked at every 3 s, the inbox read at least every 30 s, started with the window"
 Check ($defaults.fromLabel -ceq "F") ("the notice is from the founder's hub label, F, by default (" + $defaults.fromLabel + ")")
 $person = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionNotifySettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"fromLabel":"B12"}}'
