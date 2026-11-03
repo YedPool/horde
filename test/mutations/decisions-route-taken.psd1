@@ -52,6 +52,14 @@
         @{ Name = "failed-write-alarm-forgotten"
            Find = '$Memory["alarmed-" + $e.messageId] = $true'
            Replace = '' }
+        # A notice reported TAKEN is not remembered, so its repost lists it again.
+        @{ Name = "taken-not-remembered"
+           Find = '$Memory["delivered-" + $e.messengerId] = $true'
+           Replace = '' }
+        # Taking a mark off the list removes nothing (a refused post's mark stays).
+        @{ Name = "removal-removes-nothing"
+           Find = '$keep = @(@($r.value.awaiting) | Where-Object { $e = ConvertFrom-HordeChatTakenMark -Mark $_; $null -eq $e -or $e.messageId -cne $id })'
+           Replace = '$keep = @($r.value.awaiting)' }
         # A full list pushes its oldest notice off without a word.
         @{ Name = "overflow-notice-dropped-in-silence"
            Find = '$lines = @(foreach ($old in $overflow) { "ALARM: routed notice "'

@@ -201,11 +201,24 @@ $qX = Add-Question "Orc C" "Should the unwritable step go ahead?"
 $sX = Say $qX "Yes, unwritable."
 Remove-Item -LiteralPath $takenFile -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $takenFile | Out-Null
-try { $p = Pass } finally { Remove-Item -LiteralPath $takenFile -Recurse -Force -ErrorAction SilentlyContinue }
+$postsX = $script:posts.Count
+try { $p = Pass; $pX2 = Pass } finally { Remove-Item -LiteralPath $takenFile -Recurse -Force -ErrorAction SilentlyContinue }
+Check ($script:posts.Count -eq $postsX) "an unusable list: NOTHING is posted, at the first pass or the second (no post-and-fail loop)"
 Check ($p.outcome -ceq "pending" -and @(Routes $qX).Count -eq 0 -and @($p.lines | Where-Object { $_ -like "pending:*cannot be awaited*" }).Count -eq 1) ("a list that cannot be had holds the record back, and says so (" + (@($p.lines) -join " | ") + ")")
 Advance 0.2
 $p = Pass
-Check (@(Routes $qX).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq (NoticeOf $qX) }).Count -eq 1) "the next pass sends the same notice, lists it, and records it"
+Check (@(Routes $qX).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq (NoticeOf $qX) }).Count -eq 1 -and $script:posts.Count -eq $postsX + 1) "the next pass lists the notice, posts it once, and records it"
+
+# A LIST THAT READS BUT CANNOT BE WRITTEN (read-only: the disk full or locked reads the same): no post, a stated reason, no loop.
+$qR = Add-Question "Orc C" "Should the read-only step go ahead?"
+$sR = Say $qR "Yes, read-only."
+(Get-Item -LiteralPath $takenFile).IsReadOnly = $true
+$postsR = $script:posts.Count
+try { $p = Pass; $pR2 = Pass } finally { (Get-Item -LiteralPath $takenFile).IsReadOnly = $false }
+Check ($script:posts.Count -eq $postsR -and @(Routes $qR).Count -eq 0 -and @($p.lines | Where-Object { $_ -like "pending: *was not sent: it cannot be awaited (the routed-answers ledger could not be written*" }).Count -eq 1 -and @($pR2.lines | Where-Object { $_ -like "pending: *cannot be awaited*" }).Count -eq 1) ("a readable but unwritable list: nothing is posted in two passes, and the reason is stated each time (" + (@($p.lines) -join " | ") + ")")
+Advance 0.2
+$p = Pass
+Check (@(Routes $qR).Count -eq 1 -and $script:posts.Count -eq $postsR + 1) "and once it can be written the notice is posted once and recorded"
 
 # A NOTICE THE MESSENGER HOLDS FOR GOOD, AND A STATUS THAT CANNOT BE HAD.
 $qY = Add-Question "Orc C" "Should the held step go ahead?"
@@ -248,7 +261,7 @@ Remove-Item -LiteralPath $takenFile -Force -ErrorAction SilentlyContinue
 $postsC = $script:posts.Count
 $p = Pass
 $p2 = Pass
-Check ($script:posts.Count -eq $postsC -and $p.outcome -ceq "pending" -and @(Routes $qC).Count -eq 0 -and @($p.lines | Where-Object { $_ -like ("pending: *was not sent: the routed-answers ledger cannot be read (*") }).Count -eq 1) ("a corrupt list: nothing is posted and the reason is stated (" + (@($p.lines) -join " | ") + ")")
+Check ($script:posts.Count -eq $postsC -and $p.outcome -ceq "pending" -and @(Routes $qC).Count -eq 0 -and @($p.lines | Where-Object { $_ -like "pending: *was not sent: it cannot be awaited (the routed-answers ledger cannot be read*" }).Count -eq 1) ("a corrupt list: nothing is posted and the reason is stated (" + (@($p.lines) -join " | ") + ")")
 Check ($script:posts.Count -eq $postsC -and @(Routes $qC).Count -eq 0) "and passes after it still post nothing: no loop"
 Remove-Item -LiteralPath $takenFile -Force
 Advance 0.2
@@ -302,6 +315,85 @@ $mine2 = @($p2.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nF +
 Check ($mine -eq 1 -and $mine2 -eq 0 -and @($p.lines | Where-Object { $_ -like "*could not be written*" }).Count -ge 1) "the write failed after the alarm: the alarm is said once, and not again at the next pass"
 $p3 = Pass
 Check (@($p3.lines | Where-Object { $_ -clike ("ALARM: routed notice " + $nF + "*") }).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nF -and $_.alarmed }).Count -eq 1) "and once the file can be written the alarmed mark is saved, still without a second alarm"
+
+# A NOTICE TAKEN WHILE ITS ROUTE RECORD KEEPS FAILING is reported TAKEN once, and is not listed again by the repost.
+$qG = Add-Question "Orc C" "Should the twice-taken step go ahead?"
+$sG = Say $qG "Yes, twice taken."
+$script:failRoute = $true
+function Invoke-HordeDecision { param([string]$Operation, $Request = $null, [string]$Root = "", [datetime]$Now = [datetime]::UtcNow) if ($Operation -ceq "route" -and $script:failRoute) { return (New-HordeUnknown -Reason "the disk went away (stand-in)") }; return (& $script:realInvoke -Operation $Operation -Request $Request -Root $Root -Now $Now) }
+$takenLinesG = @()
+try {
+    $p = Pass
+    $nG = NoticeOf $qG
+    $script:stages[$nG] = "seen"
+    Advance 0.2
+    $p = Pass; $takenLinesG += @($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nG + "*") })
+    Advance 0.2
+    $p = Pass; $takenLinesG += @($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nG + "*") })
+    Check (@(Marks | Where-Object { $_.noticeId -ceq $nG }).Count -eq 0) "a notice taken while its record fails is not put on the list again by the repost"
+    $script:failRoute = $false
+    Advance 0.2
+    $p = Pass; $takenLinesG += @($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nG + "*") })
+} finally { Set-Item function:Invoke-HordeDecision $script:realInvoke }
+Check ($takenLinesG.Count -eq 1 -and @(Routes $qG).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nG }).Count -eq 0) "and it is said TAKEN once across all the passes, then recorded"
+
+# A REFUSED POST LEAVES NO MARK and no false alarm (review of 416).
+$qH = Add-Question "Orc C" "Should the refused step go ahead?"
+$sH = Say $qH "Yes, refused."
+$script:postSays = "held"
+$postsH = $script:posts.Count
+$p = Pass
+$nH = NoticeOf $qH
+Check ($script:posts.Count -eq $postsH + 1 -and $nH -ne "" -and @(Routes $qH).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nH }).Count -eq 0) "a refused post: it was tried, nothing is recorded, and no mark is left behind"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nH + "*") }).Count -eq 0) "and 3 minutes on, no 'not taken' alarm is raised for a notice that was never sent"
+$script:postSays = "accepted"
+$p = Pass
+Check (@(Routes $qH).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nH -and -not $_.alarmed }).Count -eq 1) "refused, then accepted on a later pass: it is listed afresh and recorded"
+Advance 0.2
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nH + "*") }).Count -eq 0) "and it does not alarm at once from the old attempt's clock"
+
+# A STALE SESSION, THEN A NEW SESSION ID (the notice id carries the session): no orphan mark.
+$qS = Add-Question "Orc C" "Should the restarted-session step go ahead?"
+$sS = Say $qS "Yes, new session."
+$script:seats["orc C"] = "orc-c-old-session"
+$script:postSays = "held"
+$p = Pass
+$nOld = NoticeOf $qS
+$script:seats["orc C"] = "orc-c-new-session"
+$script:postSays = "accepted"
+Advance 0.2
+$p = Pass
+$nNew = "$(@($script:posts | Where-Object { $_.body -like ('*question ' + $qS + ':*') -and "$($_.sessionId)" -ceq 'orc-c-new-session' })[0].messageId)"
+Check ($nOld -ne "" -and $nNew -ne "" -and $nOld -cne $nNew -and @(Marks | Where-Object { $_.noticeId -ceq $nOld }).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nNew }).Count -eq 1) "a stale session then a new session id: the old notice leaves no orphan mark, the new one is listed"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nOld + "*") }).Count -eq 0 -and (Alarms $p.lines | Where-Object { $_ -like ("*" + $nNew + "*") }).Count -eq 1) "and only the notice that was really sent ever alarms"
+$script:seats["orc C"] = "orc-c-session"
+
+# AN UNKNOWN POST RESULT (a timeout, a dropped link) KEEPS THE MARK: the notice may have landed, so it stays watched.
+# A clean list: the leftovers above would fill the ten asks of a pass (the cap rotates them, longest-unasked first).
+Remove-Item -LiteralPath $takenFile -Force -ErrorAction SilentlyContinue
+$script:takenMem = @{}
+$qU2 = Add-Question "Orc C" "Should the timeout step go ahead?"
+$sU2 = Say $qU2 "Yes, timeout."
+$script:postSays = "unknown"
+$p = Pass
+$nU2 = NoticeOf $qU2
+Check ($nU2 -ne "" -and @(Routes $qU2).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nU2 -and -not $_.alarmed }).Count -eq 1 -and @($p.lines | Where-Object { $_ -like "pending: *was not sent*" }).Count -ge 1) "an unknown post result: not recorded, still pending, and the mark is KEPT"
+$script:postSays = "accepted"
+Advance 0.2
+$p = Pass
+Check (@(Routes $qU2).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nU2 }).Count -eq 1) "the retry is accepted: recorded, and the one mark stays (no second)"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nU2 + "*was NOT TAKEN*") }).Count -eq 1) "and, never taken, it is still asked about and alarmed once"
+$script:stages[$nU2] = "seen"
+Advance 6
+$p = Pass
+Check (@($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nU2 + "*") }).Count -eq 1) "and a TAKEN is seen for it"
 }
 finally {
     $env:HORDE_HOME = $keepHome

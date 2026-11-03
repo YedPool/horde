@@ -9,9 +9,14 @@
 # (TAKEN) - was never asked for.
 #
 # THE RULE, the chat's own (Taken.ps1 is used as it is; nothing of its decision is written again here):
-#   - SENT, AWAITING. A notice the messenger accepted (stage accepted) is put on the awaiting list BEFORE its route
-#     record is written. The route record means "sent" (it is what keeps the answer from being sent twice); it never
-#     means delivered. The pass says "SENT ... awaiting TAKEN".
+#   - MARK FIRST, THEN POST (slice 2). The notice is put on the awaiting list BEFORE it is posted, and the route record is
+#     written after the messenger accepted it. A list that cannot be read or written posts nothing (the answer waits, the
+#     reason is said); a post the messenger REFUSES (a known refusal, not an unknown result) takes its mark off again, so a
+#     notice that was never sent never alarms; KNOWN COST: a crash between the mark and the post, then the question closing,
+#     gives one false NOT TAKEN alarm;
+#     a crash between mark and post costs one alarm at takenAlarmSeconds, and the next pass posts the same id (wezfleet
+#     writes it once and knocks nobody again: its lib/MailPost.ps1 already-posted). The route record means "sent" (it is
+#     what keeps the answer from being sent twice); it never means delivered. The pass says "SENT ... awaiting TAKEN".
 #   - DELIVERED is the session's own TAKEN: the messenger's status for the notice, asked by the id the notice was
 #     posted under, says handed-over or seen. Only then is the line "TAKEN ... delivered" said and the mark removed.
 #   - ALARMED, ONCE. Not taken in takenAlarmSeconds (90, the chat's number and for its reasons: the knock and the wake
@@ -23,7 +28,7 @@
 #     is given up with a second line in capitals. A notice the messenger holds for good is told the same way. Past
 #     HordeChatTakenKept marks the oldest is given up with a line in capitals, never in silence.
 #   - A RESTART DOES NOTHING TWICE. The list is a file (<HORDE_HOME>\relay\decisions\route-taken.json), written whole
-#     in one rename BEFORE the route record, so a router that restarts reads it back: the mark is added once (a
+#     in one rename BEFORE the post, so a router that restarts reads it back: the mark is added once (a
 #     resend of the same notice keeps its own clock), the alarm is in the mark, and the notice id is the same, so a
 #     messenger that keeps one message per id is not sent a second one.
 #
@@ -84,13 +89,13 @@ function Add-HordeDecisionRouteTaken {
     # there (the same id sent again after a crash) keeps its own clock and its alarm. The oldest mark past the list's
     # size is given up WITH a line in capitals. ok is $false when the file cannot be read or written: the caller must then
     # not write the route record (the next pass sends the same notice and adds it again).
-    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId, [Parameter(Mandatory = $true)][long]$Answer, [string]$SessionId = "", [bool]$Woken = $false, [Parameter(Mandatory = $true)][datetime]$Now)
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId, [Parameter(Mandatory = $true)][long]$Answer, [string]$SessionId = "", [Parameter(Mandatory = $true)][datetime]$Now)
     $lines = @()
     $r = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
     if ($r.state -cne "known") { return [pscustomobject]@{ ok = $false; reason = ("the routed-answers ledger cannot be read: " + $r.reason); lines = $lines } }
     $ledger = [pscustomobject]@{ awaiting = @($r.value.awaiting) }
     $session = $(if ($SessionId -cmatch '\A[A-Za-z0-9._:-]{1,128}\z') { $SessionId } else { "" })
-    $entry = [pscustomobject]@{ messageId = $NoticeId.Replace("-", ""); messengerId = $NoticeId; postedMs = (Get-HordeDecisionRouteTakenNowMs -Now $Now); from = $script:HordeDecisionRouteTakenFrom; seq = $Answer; alarmed = $false; woken = $Woken; session = $session }
+    $entry = [pscustomobject]@{ messageId = $NoticeId.Replace("-", ""); messengerId = $NoticeId; postedMs = (Get-HordeDecisionRouteTakenNowMs -Now $Now); from = $script:HordeDecisionRouteTakenFrom; seq = $Answer; alarmed = $false; woken = $false; session = $session }
     if ($null -ne (Get-HordeChatTakenEntry -State $ledger -MessageId $entry.messageId)) { return [pscustomobject]@{ ok = $true; reason = ""; lines = $lines } }
     $overflow = @(Get-HordeChatTakenOverflow -State $ledger)
     [void](Add-HordeChatTaken -State $ledger -Entry $entry)
@@ -98,6 +103,20 @@ function Add-HordeDecisionRouteTaken {
     catch { return [pscustomobject]@{ ok = $false; reason = ("the routed-answers ledger could not be written: " + $_.Exception.Message); lines = $lines } }
     $lines = @(foreach ($old in $overflow) { "ALARM: routed notice " + $old.messengerId + " (answer record " + $old.seq + ") left the awaiting list because it is full; it is no longer watched, but it may still be in the Orc's mailbox and be taken" })
     return [pscustomobject]@{ ok = $true; reason = ""; lines = $lines }
+}
+
+function Remove-HordeDecisionRouteTaken {
+    # A notice's mark off the list and the file (a post the messenger refused, so the notice is in no mailbox): { ok; reason }.
+    # A notice not listed is already as wanted. Never throws.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId)
+    $r = Read-HordeDecisionRouteTaken -HordeHome $HordeHome
+    if ($r.state -cne "known") { return [pscustomobject]@{ ok = $false; reason = "the routed-answers ledger cannot be read: " + $r.reason } }
+    $id = $NoticeId.Replace("-", "")
+    $keep = @(@($r.value.awaiting) | Where-Object { $e = ConvertFrom-HordeChatTakenMark -Mark $_; $null -eq $e -or $e.messageId -cne $id })
+    if ($keep.Count -eq @($r.value.awaiting).Count) { return [pscustomobject]@{ ok = $true; reason = "" } }
+    try { Write-HordeTakenLedgerFile -Path (Get-HordeDecisionRouteTakenPath -HordeHome $HordeHome) -Ledger ([pscustomobject]@{ awaiting = $keep }) -TempPrefix "route-taken" }
+    catch { return [pscustomobject]@{ ok = $false; reason = "the routed-answers ledger could not be written: " + $_.Exception.Message } }
+    return [pscustomobject]@{ ok = $true; reason = "" }
 }
 
 function Invoke-HordeDecisionRouteTakenTick {
@@ -152,6 +171,7 @@ function Invoke-HordeDecisionRouteTakenTick {
             }
             "confirmed" {
                 $changed = $true; $delivered++
+                $Memory["delivered-" + $e.messengerId] = $true
                 [void]$lines.Add("TAKEN: " + $name + " was taken by the Orc's own session after " + [int]$age + " s" + $(if ($e.alarmed) { ", after the alarm" } else { "" }) + ": delivered")
             }
             "held" { $changed = $true; [void]$lines.Add("ALARM: " + $name + " NOT DELIVERED: the messenger holds it for good; it is no longer watched") }
@@ -161,7 +181,7 @@ function Invoke-HordeDecisionRouteTakenTick {
                 $e.alarmed = $true
                 $Memory["alarmed-" + $e.messageId] = $true
                 [void]$keep.Add((ConvertTo-HordeChatTakenMark -Entry $e))
-                [void]$lines.Add("ALARM: " + $name + " was NOT TAKEN by the Orc's session in " + [int]$age + " s (" + $(if ($e.woken) { "the knock landed and the session did not take it" } else { "the session was not woken" }) + "); it stays in the Orc's mailbox and is asked about until it is taken")
+                [void]$lines.Add("ALARM: " + $name + " was NOT TAKEN by the Orc's session in " + [int]$age + " s (the wake is the wake watcher's, core/Wake.ps1); it stays in the Orc's mailbox and is asked about until it is taken")
             }
         }
     }
