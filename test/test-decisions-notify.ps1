@@ -261,7 +261,7 @@ Check ($p.outcome -ceq "pending" -and $script:posts.Count -eq 0) "within the bac
 $script:now = $script:now.AddSeconds(120)
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq 1) ("after it, one post (" + $p.said + ")")
-Check ($p.said -ceq ("rang for 1 answer, on question 1, through messenger doorbell (accepted)")) ("and it says so plainly (" + $p.said + ")")
+Check ($p.said -ceq ("rang for 1 answer, on question 1, through messenger doorbell (accepted); SENT, not yet delivered: awaiting the session's own TAKEN")) ("and it says so plainly, and that it is only sent (" + $p.said + ")")
 $m = $script:posts[0]
 Check ("$($m.sessionId)" -ceq "warchief-session-1") "addressed to the warchief's session, from its seat"
 Check ("$($m.messageId)" -ceq (Get-HordeDecisionNotifyMessageId -HordeHome $hordeHome -Ids @("" + $s1))) "its messageId is the set's"
@@ -287,13 +287,13 @@ $script:now = [datetime]::UtcNow.AddMinutes(10)
 $script:postWoken = $true; $script:postWhy = "woken"
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq 2 -and "$($script:posts[1].body)".Contains("2 answers, for questions 2 and 3.")) ("one post for both (" + $p.said + ")")
-Check ($p.said -clike "rang for 2 answers*through messenger doorbell (accepted; woken)") ("and the line says the warchief was woken (" + $p.said + ")")
+Check ($p.said -clike "rang for 2 answers*through messenger doorbell (accepted; woken); SENT, not yet delivered*") ("and the line says the warchief was woken (" + $p.said + ")")
 [void](Say-Founder -Number 2 -Text "and one more thing")
 $script:now = [datetime]::UtcNow.AddMinutes(20)
 $script:postWoken = $false; $script:postWhy = "send-refused: not woken (occupied)"
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq 3 -and "$($script:posts[2].body)".Contains("1 answer, for question 2.")) "a new answer under a question already told rings once more, for itself"
-Check ($p.said -clike "rang for 1 answer*through messenger doorbell (accepted; queued, NOT woken: send-refused: not woken (occupied))") ("a notice in the mailbox of a warchief nobody woke says queued, NOT woken, and why (" + $p.said + ")")
+Check ($p.said -clike "rang for 1 answer*through messenger doorbell (accepted; queued, NOT woken: send-refused: not woken (occupied)); SENT, not yet delivered*") ("a notice in the mailbox of a warchief nobody woke says queued, NOT woken, and why (" + $p.said + ")")
 Check (((Told) -join ",") -ceq "1,2,3,2") "and the record holds every message told: in the mailbox is told, woken or not"
 $script:postWoken = $null; $script:postWhy = ""
 
@@ -379,14 +379,14 @@ $p = PassT $tracker
 $m = $script:posts[-1]
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq ($before + 1) -and (Test-Verified $m $keyA)) ("a phone answer signed by a trusted passkey: the notice is from the founder, verified, by passkey, naming that key id and no more (" + $p.said + ")")
 Check ("$($m.from.label)" -ceq "F" -and "$($m.from.sessionId)" -ceq "horde-decisions-notify" -and @("$($m.body)" -split "`r?`n")[0] -ceq "FOUNDER ANSWER from the decisions window") "it still wears the label, and the rest of the notice is what it was"
-Check ($p.said -ceq (($plain -f 1) + "; as the founder, verified by his passkey " + $keyA)) ("and the line says so, with the key id (" + $p.said + ")")
+Check ($p.said -ceq (($plain -f 1) + "; SENT, not yet delivered: awaiting the session's own TAKEN; as the founder, verified by his passkey " + $keyA)) ("and the line says so, with the key id (" + $p.said + ")")
 Check ($script:asked.Count -eq 1 -and $script:asked[0] -ceq $keyA) "the trust store was asked once, for the key the record names"
 Check (((Told) | Select-Object -Last 1) -eq 1) "and the answer is told, as any other"
 
 [void](Say-Founder -Number 2 -Text "typed in the window")
 $p = PassT $tracker
 Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and "$($script:posts[-1].from.label)" -ceq "F") "an answer typed in the window: by label only, exactly as before - no passkey signed it"
-Check ($p.said -ceq ($plain -f 2) -and $script:asked.Count -eq 1) ("its line is the line it always was, and the trust store was not even asked (" + $p.said + ")")
+Check ($p.said -ceq (($plain -f 2) + "; SENT, not yet delivered: awaiting the session's own TAKEN") -and $script:asked.Count -eq 1) ("its line is the line it always was, and the trust store was not even asked (" + $p.said + ")")
 
 [void](Say-Phone -Number 3 -Text "phone" -SignedBy $keyA)
 [void](Say-Founder -Number 3 -Text "and typed")
@@ -454,7 +454,7 @@ Check ($p.outcome -ceq "rang" -and (Test-Verified $script:posts[-1] $keyA) -and 
 $script:postWoken = $false; $script:postWhy = "send-refused: not woken (occupied)"
 $p = PassT $tracker
 $script:postWoken = $null; $script:postWhy = ""
-Check ($p.outcome -ceq "rang" -and $p.said -like "*(accepted; queued, NOT woken: send-refused: not woken (occupied)); as the founder, verified by his passkey*" -and ([regex]::Matches($p.said, "send-refused")).Count -eq 1) ("a verified phone answer that woke nobody says so, and the messenger's reason is in the line once, not twice (" + $p.said + ")")
+Check ($p.outcome -ceq "rang" -and $p.said -like "*(accepted; queued, NOT woken: send-refused: not woken (occupied)); SENT, not yet delivered: awaiting the session's own TAKEN; as the founder, verified by his passkey*" -and ([regex]::Matches($p.said, "send-refused")).Count -eq 1) ("a verified phone answer that woke nobody says so, and the messenger's reason is in the line once, not twice (" + $p.said + ")")
 
 # WITHOUT A STAND-IN the pass asks relay's own trust store of this home - which holds nobody.
 [void](Say-Phone -Number 1 -Text "asked of the real store of an empty home" -SignedBy $keyA)
