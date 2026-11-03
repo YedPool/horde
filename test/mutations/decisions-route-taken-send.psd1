@@ -27,6 +27,10 @@
         @{ Name = "refused-post-keeps-its-mark"
            Find = '$removed = Remove-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId'
            Replace = '$removed = [pscustomobject]@{ ok = $true; reason = "" }' }
+        # An UNKNOWN post result (a timeout) is treated as a refusal: the mark of a notice that may have landed is removed.
+        @{ Name = "unknown-post-result-removes-the-mark"
+           Find = 'if ($posted.state -ceq "known") { $removed = '
+           Replace = 'if ($true) { $removed = ' }
         # The mark is not written before the post (it is never written, so the unusable-list tests post).
         @{ Name = "mark-not-before-the-post"
            Find = 'if (-not $Memory.ContainsKey("delivered-" + $noticeId)) {'

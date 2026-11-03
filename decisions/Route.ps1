@@ -569,7 +569,12 @@ function Invoke-HordeDecisionRoutePass {
             # 90 s, and again at 7 days, for something that was never sent (a stale session, a write failure, a session id that
             # changed - the notice id carries it, so the old id would be an orphan for ever). The mark is removed, whether this
             # pass added it or an earlier crash did; the next pass lists the notice afresh, on a new clock, before it posts again.
-            $removed = Remove-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId
+            # ONLY A KNOWN REFUSAL removes it: an UNKNOWN result (a timeout, a dropped link) may have landed, and a notice that
+            # landed must stay watched, so its mark is kept and, if it is never taken, it alarms.
+            # KNOWN COST: a crash between the mark and the post, followed by the question closing before the next pass, leaves
+            # a mark for a notice that was never posted, and it gives one false NOT TAKEN alarm.
+            $removed = [pscustomobject]@{ ok = $true; reason = "" }
+            if ($posted.state -ceq "known") { $removed = Remove-HordeDecisionRouteTaken -HordeHome $HordeHome -NoticeId $noticeId }
             [void]$lines.Add("pending: " + $what + " was not sent (" + $why + "); nothing is recorded, and it is tried again" + $(if ($removed.ok) { "" } else { "; its awaiting mark could not be removed (" + $removed.reason + ")" }))
             continue
         }

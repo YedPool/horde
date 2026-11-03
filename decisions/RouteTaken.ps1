@@ -11,7 +11,9 @@
 # THE RULE, the chat's own (Taken.ps1 is used as it is; nothing of its decision is written again here):
 #   - MARK FIRST, THEN POST (slice 2). The notice is put on the awaiting list BEFORE it is posted, and the route record is
 #     written after the messenger accepted it. A list that cannot be read or written posts nothing (the answer waits, the
-#     reason is said); a post the messenger REFUSES takes its mark off again, so a notice that was never sent never alarms;
+#     reason is said); a post the messenger REFUSES (a known refusal, not an unknown result) takes its mark off again, so a
+#     notice that was never sent never alarms; KNOWN COST: a crash between the mark and the post, then the question closing,
+#     gives one false NOT TAKEN alarm;
 #     a crash between mark and post costs one alarm at takenAlarmSeconds, and the next pass posts the same id (wezfleet
 #     writes it once and knocks nobody again: its lib/MailPost.ps1 already-posted). The route record means "sent" (it is
 #     what keeps the answer from being sent twice); it never means delivered. The pass says "SENT ... awaiting TAKEN".

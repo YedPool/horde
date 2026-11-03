@@ -372,6 +372,28 @@ Advance 3
 $p = Pass
 Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nOld + "*") }).Count -eq 0 -and (Alarms $p.lines | Where-Object { $_ -like ("*" + $nNew + "*") }).Count -eq 1) "and only the notice that was really sent ever alarms"
 $script:seats["orc C"] = "orc-c-session"
+
+# AN UNKNOWN POST RESULT (a timeout, a dropped link) KEEPS THE MARK: the notice may have landed, so it stays watched.
+# A clean list: the leftovers above would fill the ten asks of a pass (the cap rotates them, longest-unasked first).
+Remove-Item -LiteralPath $takenFile -Force -ErrorAction SilentlyContinue
+$script:takenMem = @{}
+$qU2 = Add-Question "Orc C" "Should the timeout step go ahead?"
+$sU2 = Say $qU2 "Yes, timeout."
+$script:postSays = "unknown"
+$p = Pass
+$nU2 = NoticeOf $qU2
+Check ($nU2 -ne "" -and @(Routes $qU2).Count -eq 0 -and @(Marks | Where-Object { $_.noticeId -ceq $nU2 -and -not $_.alarmed }).Count -eq 1 -and @($p.lines | Where-Object { $_ -like "pending: *was not sent*" }).Count -ge 1) "an unknown post result: not recorded, still pending, and the mark is KEPT"
+$script:postSays = "accepted"
+Advance 0.2
+$p = Pass
+Check (@(Routes $qU2).Count -eq 1 -and @(Marks | Where-Object { $_.noticeId -ceq $nU2 }).Count -eq 1) "the retry is accepted: recorded, and the one mark stays (no second)"
+Advance 3
+$p = Pass
+Check ((Alarms $p.lines | Where-Object { $_ -like ("*" + $nU2 + "*was NOT TAKEN*") }).Count -eq 1) "and, never taken, it is still asked about and alarmed once"
+$script:stages[$nU2] = "seen"
+Advance 6
+$p = Pass
+Check (@($p.lines | Where-Object { $_ -clike ("TAKEN: routed notice " + $nU2 + "*") }).Count -eq 1) "and a TAKEN is seen for it"
 }
 finally {
     $env:HORDE_HOME = $keepHome
