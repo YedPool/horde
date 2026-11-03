@@ -656,7 +656,8 @@ try {
     try {
         $null = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\decisions-notify\doorbell") `
             -Post { param($Message) [void]$script:bellPosts.Add($Message); return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Message.messageId)"; stage = "accepted"; at = [datetime]::UtcNow; reason = "woken"; woken = $true }) -ObservedAt ([datetime]::UtcNow)) } `
-            -Status { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
+            -Status { param($MessageId) if ("$($script:bellStage)" -ceq "") { return (New-HordeAbsent -Note "the stand-in keeps no status") }; return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$MessageId"; stage = "$($script:bellStage)"; at = [datetime]::UtcNow; reason = "" })) }
+        $script:bellStage = ""
         $script:HordeDecisionsChannelBellSeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "3"; instance = "t1" })) }
         $B = New-World
         [System.IO.File]::WriteAllText((Join-Path $B.home "settings\decisions-notify.json"), '{"schemaVersion": 1, "settings": {"quietSeconds": 0}}', $utf8)
@@ -666,11 +667,23 @@ try {
         Use-World $B
         $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
         Check ($script:bellPosts.Count -eq 1 -and "$($script:bellPosts[0].sessionId)" -ceq "warchief-session-1" -and @("$($script:bellPosts[0].body)" -split "`r?`n")[0] -ceq "FOUNDER ANSWER from the decisions window") ("the next Tick rings the warchief for it: notify's own notice, once (" + (@($ticks.lines) -join " | ") + ")")
-        Check (@($ticks.lines | Where-Object { $_ -clike "decisions: notify: rang for 1 answer, on question 1, through messenger doorbell (accepted; woken)*" }).Count -eq 1) "and the run's log has notify's own line for it, with whether the warchief was woken"
+        Check (@($ticks.lines | Where-Object { $_ -clike "decisions: notify: rang for 1 answer, on question 1, through messenger doorbell (accepted; woken); SENT, not yet delivered: awaiting the session's own TAKEN; as the founder, verified by his passkey *" }).Count -eq 1) "and the run's log has notify's own line for it, with whether the warchief was woken"
         $v = Get-Member2 $script:bellPosts[0].from "verified"
         Check ($null -ne $v -and $v.keyId -ceq $B.phone.keyId) "as the founder, verified by the passkey that signed the answer"
         $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
         Check ($script:bellPosts.Count -eq 1 -and @($ticks.lines | Where-Object { $_ -clike "*notify:*" }).Count -eq 0) "a Tick after that rings nothing more and says nothing more"
+        # WHAT THE AWAITING LIST SAYS reaches the run's log (T-0391 slice 3): an ALARM for a notice the warchief's session did not take,
+        # and its TAKEN, each once, as `decisions: notify: ...`. The bell's clock is moved past takenAlarmSeconds (90 s).
+        $realBellClock = $script:HordeDecisionsChannelBellClock
+        try {
+            $script:HordeDecisionsChannelBellClock = { return [datetime]::UtcNow.AddSeconds(120) }
+            $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
+            Check (@($ticks.lines | Where-Object { $_ -clike "decisions: notify: ALARM: bell notice * was NOT TAKEN by the warchief's session in *" }).Count -eq 1) ("a notice the warchief did not take: the run's log has one ALARM line (" + (@($ticks.lines) -join " | ") + ")")
+            $script:bellStage = "seen"
+            $script:HordeDecisionsChannelBellClock = { return [datetime]::UtcNow.AddSeconds(500) }
+            $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
+            Check (@($ticks.lines | Where-Object { $_ -clike "decisions: notify: TAKEN: bell notice * after the alarm: delivered" }).Count -eq 1) ("and when the session takes it the log says TAKEN, once (" + (@($ticks.lines) -join " | ") + ")")
+        } finally { $script:HordeDecisionsChannelBellClock = $realBellClock; $script:bellStage = "" }
         # IN ITS QUIET PERIOD an answer is not rung for yet, and the Tick asks to be turned again in time.
         $Q = New-World
         [System.IO.File]::WriteAllText((Join-Path $Q.home "settings\decisions-notify.json"), '{"schemaVersion": 1, "settings": {"quietSeconds": 20}}', $utf8)

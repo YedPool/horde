@@ -41,7 +41,10 @@
 # pass of takenAlarmSeconds. At most HordeChatTakenAsksPerTick marks are asked in one pass (a status is a process),
 # the longest-unasked first, so a long list cannot starve one.
 #
-# SHARED (T-0391 slice 3): the list's engine - add, remove, ask - is decisions/NoticeTaken.ps1, which the doorbell (Notify.ps1) uses too;\n# this file holds the ROUTED ANSWERS' kind of it (their file and their words) under the names Route.ps1 and its suites call.\n#\n# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
+# SHARED (T-0391 slice 3): the list's engine - add, remove, ask - is decisions/NoticeTaken.ps1, which the doorbell (Notify.ps1) uses too;
+# this file holds the ROUTED ANSWERS' kind of it (their file and their words) under the names Route.ps1 and its suites call.
+#
+# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 $script:HordeDecisionRouteTakenRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "NoticeTaken.ps1")
