@@ -38,11 +38,25 @@
 # in the scope this is called from, so the blocks a messenger registered still see its helpers. The
 # relay run's channels do it (channels/decisions and channels/chat load them at script level).
 #
+# THE NOTICE COUNTS AS TOLD ONLY WHEN THE WARCHIEF'S OWN SESSION TOOK IT (T-0391 slice 5; the chat's own rule, channels/chat/Taken.ps1,
+# and the routed answers', the doorbell's and the photo notice's: decisions/NoticeTaken.ps1, used as it is). The messenger ACCEPTING the
+# post was counted as the warchief being told, and the run said "the warchief was told" for a notice no session had taken. Now:
+#   - MARK FIRST, THEN POST. Send-HordeRelayFullNotice puts the notice on the awaiting list BEFORE it posts. A list that cannot be read or
+#     written means no post, the reason said, and the notice tried again on a later turn.
+#   - A post the messenger REFUSES (a known answer with another stage) takes its mark off; an UNKNOWN result keeps it, for a post that may
+#     have landed must stay watched.
+#   - DELIVERED is the session's own TAKEN (handed-over or seen), said by Invoke-HordeRelayRunTellTakenTick; accepted is not.
+#   - ONE ALARM at takenAlarmSeconds without a TAKEN, asked about every takenAfterAlarmSeconds after it, given up with a second ALARM
+#     when the notice is 7 days old. A restart does nothing twice: the list is a file, the alarm is in the mark, and the notice id is the
+#     same for the same mailbox on the same UTC day (wezfleet keeps one message per id, lib/MailPost.ps1 already-posted).
+#   - THE LINES REACH THE RUN'S LOG: the tick returns them, and cli/RelayRun.ps1 (Invoke-HordeRelayRunPutNotes) says each one.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\TextUuid.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Device.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "decisions\NoticeTaken.ps1")
 
 $script:HordeRelayRunTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeRelayRunTellRole = "warchief"
@@ -51,7 +65,10 @@ $script:HordeRelayRunTellRole = "warchief"
 $script:HordeRelayRunTellFrom = "horde-relay-run"
 # How long the notice may wait in a mailbox: the link's most, 7 days (messengers/Port.ps1).
 $script:HordeRelayRunTellTtlSeconds = 604800
+# What a post's stage must be for the messenger to have taken it; any other stage of a known answer is a refusal.
 $script:HordeRelayRunTellStages = @("accepted", "handed-over", "seen")
+# The awaiting list of these notices: one file under the home, the words its lines use (decisions/NoticeTaken.ps1).
+$script:HordeRelayRunTellTakenKind = New-HordeDecisionNoticeKind -Path @("relay", "run-full-taken.json") -TempPrefix "run-full-taken" -Ledger "the relay-full notices' awaiting ledger" -List "the awaiting list of relay-full notices" -Label "relay run" -Notice "relay-full notice" -Owner "the warchief's" -Detail { param($Entry) return "the relay refusing a mailbox of this horde" }
 # A mailbox as relays/Port.ps1 names one: nothing else is ever repeated in a notice.
 $script:HordeRelayRunTellMailboxPattern = '\A[a-z0-9][a-z0-9-]{0,62}/[a-z0-9][a-z0-9-]{0,62}\z'
 
@@ -89,11 +106,13 @@ function Test-HordeRelayRunHomeIsATests {
 }
 
 function Send-HordeRelayFullNotice {
-    # Post the notice for -Mailbox to the warchief's session: { told; problem } - told $true when a
-    # messenger took it, else problem says why not in one sentence. Never throws for the far end.
+    # Post the notice for -Mailbox to the warchief's session, marked first: { told; problem; lines } - told $true when a messenger
+    # took the post (it is then on the awaiting list, and only the session's own TAKEN makes it delivered), else problem says why
+    # not in one sentence. lines are for the run's log. Never throws for the far end.
     # -Seat, -TempRoot and -Day are for a suite that hands in its own.
     param([Parameter(Mandatory = $true)][string]$Mailbox, [Parameter(Mandatory = $true)][string]$HordeHome, [string]$FromLabel = "", [scriptblock]$Seat = $null, [string]$TempRoot = "", $Day = $null)
-    $done = { param([bool]$Told, [string]$Problem) return [pscustomobject]@{ told = $Told; problem = $Problem } }
+    $lines = New-Object System.Collections.ArrayList
+    $done = { param([bool]$Told, [string]$Problem) return [pscustomobject]@{ told = $Told; problem = $Problem; lines = @($lines.ToArray()) } }
     # BEFORE ANYTHING IS LOOKED FOR: a test's home tells nobody (header).
     if (Test-HordeRelayRunHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot) { return (& $done $false "this Horde home is under the temp folder, so it is a test's: nobody is told") }
     $found = Find-HordeMessenger -Require $script:HordeRelayRunTellNeeds
@@ -113,8 +132,34 @@ function Send-HordeRelayFullNotice {
         from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeRelayRunTellFrom; label = $FromLabel }
         body = (Format-HordeRelayFullNotice -Mailbox $Mailbox); ttlSeconds = $script:HordeRelayRunTellTtlSeconds
     }
+    # THE MARK IS WRITTEN BEFORE THE POST. A list that cannot be read or written means nothing is posted. A crash between the mark and
+    # the post only costs an alarm at takenAlarmSeconds: the next pass posts the same notice id, which the messenger keeps as one.
+    $at = $(if ($Day -is [datetime]) { $Day.ToUniversalTime() } else { [datetime]::UtcNow })
+    $awaited = Add-HordeDecisionNoticeTaken -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId ("" + $where.value.sessionId) -Now $at
+    foreach ($l in @($awaited.lines)) { [void]$lines.Add($l) }
+    if (-not $awaited.ok) { return (& $done $false ("the notice cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
     $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
     if ($posted.state -ceq "known" -and $script:HordeRelayRunTellStages -ccontains "$($posted.value.stage)") { return (& $done $true "") }
-    if ($posted.state -ceq "known") { return (& $done $false ("messenger " + $messenger.name + " answered " + $posted.value.stage)) }
+    # A REFUSED POST LEAVES NO MARK (the notice is in no mailbox, so a mark would alarm "not taken" for something never sent). ONLY A
+    # KNOWN REFUSAL removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched.
+    if ($posted.state -ceq "known") {
+        $why = "messenger " + $messenger.name + " answered " + $posted.value.stage
+        $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId
+        if (-not $removed.ok) { $why = $why + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
+        return (& $done $false $why)
+    }
     return (& $done $false ("messenger " + $messenger.name + " did not take it: " + $posted.reason))
+}
+
+function Invoke-HordeRelayRunTellTakenTick {
+    # Ask about the relay-full notices awaiting the warchief's own TAKEN and say what became of them (NoticeTaken.ps1): the lines, for
+    # the run's log. -Memory is the run's table between passes. The messenger is found as the notice was posted; when none can be had
+    # now the clock alone speaks. Never throws.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][hashtable]$Memory, [Parameter(Mandatory = $true)][datetime]$Now, [double]$AlarmSeconds = 90, [double]$AfterAlarmSeconds = 60)
+    $messenger = $null
+    try { $found = Find-HordeMessenger -Require $script:HordeRelayRunTellNeeds; if ($found.state -ceq "known") { $messenger = $found.value } } catch { $messenger = $null }
+    try {
+        $tick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -Messenger $messenger -Now $Now.ToUniversalTime() -AlarmSeconds $AlarmSeconds -AfterAlarmSeconds $AfterAlarmSeconds -TtlSeconds $script:HordeRelayRunTellTtlSeconds -Memory $Memory
+        return @($tick.lines)
+    } catch { return @("relay run: the awaiting list of relay-full notices could not be asked: " + $_.Exception.Message) }
 }
