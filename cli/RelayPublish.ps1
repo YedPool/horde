@@ -653,6 +653,8 @@ function Invoke-HordeRelayPublishStep {
                 try { $answer = @(& $Teller @($s.pending) $HordeHome $Policy) | Select-Object -Last 1 } catch { $answer = [pscustomobject]@{ told = @(); problem = $_.Exception.Message } }
                 $told = @()
                 if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["told"]) { $told = @($answer.told | ForEach-Object { "" + $_ }) }
+                # The teller's own lines (cli/ServicesTell.ps1) are the pass's too.
+                if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["lines"]) { foreach ($tl in @($answer.lines)) { [void]$lines.Add("" + $tl) } }
                 $left = @(@($s.pending) | Where-Object { $told -cnotcontains $_.id })
                 if ($left.Count -ne @($s.pending).Count) {
                     $s.pending = $left

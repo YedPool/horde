@@ -87,7 +87,7 @@ function Read-HordeInstalledCliState {
     # { lastFetchAt; said; told; failedTip }. A file that is missing or cannot be read is a new state:
     # the worst that costs is one more ask of the remote and one more tell.
     param([string]$HordeHome = "")
-    $s = [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = "" }
+    $s = [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = ""; pendingNotice = "" }
     $path = Get-HordeInstalledCliStatePath -HordeHome $HordeHome
     if (-not [System.IO.File]::Exists($path)) { return $s }
     try {
@@ -95,8 +95,8 @@ function Read-HordeInstalledCliState {
         # Kept as ticks, a whole number: a date written as text is turned into a local date by pwsh 7's
         # ConvertFrom-Json and read back as another instant.
         if ($null -ne $r.PSObject.Properties["lastFetchTicks"] -and $r.lastFetchTicks -is [int64] -and $r.lastFetchTicks -gt 0) { $s.lastFetchAt = [datetime]::new([int64]$r.lastFetchTicks, [System.DateTimeKind]::Utc) }
-        foreach ($k in @("said", "told", "failedTip", "triedTip", "broken")) { if ($null -ne $r.PSObject.Properties[$k]) { $s.$k = "" + $r.$k } }
-    } catch { return [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = "" } }
+        foreach ($k in @("said", "told", "failedTip", "triedTip", "broken", "pendingNotice")) { if ($null -ne $r.PSObject.Properties[$k]) { $s.$k = "" + $r.$k } }
+    } catch { return [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = ""; pendingNotice = "" } }
     return $s
 }
 
@@ -104,7 +104,7 @@ function Write-HordeInstalledCliState {
     param([Parameter(Mandatory = $true)]$State, [string]$HordeHome = "")
     $path = Get-HordeInstalledCliStatePath -HordeHome $HordeHome
     [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-    $row = [ordered]@{ lastFetchTicks = $(if ($State.lastFetchAt -is [datetime]) { [int64]$State.lastFetchAt.ToUniversalTime().Ticks } else { [int64]0 }); said = "" + $State.said; told = "" + $State.told; failedTip = "" + $State.failedTip; triedTip = "" + $State.triedTip; broken = "" + $State.broken }
+    $row = [ordered]@{ lastFetchTicks = $(if ($State.lastFetchAt -is [datetime]) { [int64]$State.lastFetchAt.ToUniversalTime().Ticks } else { [int64]0 }); said = "" + $State.said; told = "" + $State.told; failedTip = "" + $State.failedTip; triedTip = "" + $State.triedTip; broken = "" + $State.broken; pendingNotice = "" + $State.pendingNotice }
     $temp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
     [System.IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $row), (New-Object System.Text.UTF8Encoding($false)))
     try { Move-HordeFileAtomic -From $temp -To $path }
@@ -323,12 +323,16 @@ function Invoke-HordeInstalledCliFollow {
             $state.said = $code; $dirty = $true
         }
         if ($tellWhat -ne "" -and $state.told -cne $tellWhat) {
-            $notice = [pscustomobject]@{ id = [guid]::NewGuid().ToString(); kind = "cli"; text = $reason; at = $Now; service = $script:HordeInstalledCliService; what = $tellWhat }
+            # ONE ID FOR AS LONG AS THE NOTICE WAITS (cli/ServicesTell.ps1): a notice that could not be told is tried again under the same id, so
+            # a post that may have landed is never followed by a second message; a different trouble, or one told and over, gets a new id.
+            if ($state.pendingNotice -cnotmatch ('\A' + [regex]::Escape($tellWhat) + ':[0-9a-f-]{36}\z')) { $state.pendingNotice = $tellWhat + ':' + [guid]::NewGuid().ToString(); $dirty = $true }
+            $notice = [pscustomobject]@{ id = $state.pendingNotice.Substring($tellWhat.Length + 1); kind = "cli"; text = $reason; at = $Now; service = $script:HordeInstalledCliService; what = $tellWhat }
             $answer = $null
             if ($Policy.tellWarchief -ne $true -or $null -eq $Tell) { [void]$lines.Add("installed CLI: 1 notice waits untold: " + $(if ($Policy.tellWarchief -ne $true) { "telling is switched off (the setting tellWarchief)" } else { "nothing here can tell anyone" })) }
             else {
                 try { $answer = @(& $Tell @($notice) $HordeHome $Policy) | Select-Object -Last 1 } catch { [void]$lines.Add("installed CLI: the notice waits untold: " + (Protect-HordeServiceText $_.Exception.Message)) }
-                if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["told"] -and @($answer.told | ForEach-Object { "" + $_ }) -ccontains $notice.id) { $state.told = $tellWhat; $dirty = $true; [void]$lines.Add("installed CLI: told (" + $tellWhat + ")") }
+                if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["lines"]) { foreach ($tl in @($answer.lines)) { [void]$lines.Add("" + $tl) } }
+                if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["told"] -and @($answer.told | ForEach-Object { "" + $_ }) -ccontains $notice.id) { $state.told = $tellWhat; $state.pendingNotice = ""; $dirty = $true; [void]$lines.Add("installed CLI: posted (" + $tellWhat + ") - delivered only when the warchief's own session takes it") }
                 elseif ($null -ne $answer) { [void]$lines.Add("installed CLI: the notice waits untold" + $(if ($null -ne $answer.PSObject.Properties["problem"] -and "" + $answer.problem -ne "") { ": " + (Protect-HordeServiceText ("" + $answer.problem)) } else { "" }) + "; tried again next pass") }
             }
         }

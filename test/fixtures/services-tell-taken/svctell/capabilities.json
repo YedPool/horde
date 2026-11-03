@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "svctell",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture for test/test-services-tell-taken.ps1." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture for test/test-services-tell-taken.ps1." },
+    "receipt.receiver": { "support": "yes", "evidence": "A fixture for test/test-services-tell-taken.ps1: the supervisor needs it." },
+    "wake": { "support": "yes", "evidence": "A fixture for test/test-services-tell-taken.ps1." }
+  }
+}

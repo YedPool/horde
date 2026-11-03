@@ -31,8 +31,29 @@
 # messenger registered can still see its helpers (cli/commands/services.ps1 does it in the one block
 # that calls this, once a process).
 #
+# A NOTICE COUNTS AS TOLD ONLY WHEN THE WARCHIEF'S OWN SESSION TOOK IT (T-0391 slice 6; the chat's own rule, channels/chat/Taken.ps1,
+# and the routed answers', the doorbell's, the photo notice's and the relay-full notice's: decisions/NoticeTaken.ps1, used as it is). The
+# messenger ACCEPTING the post was counted as the warchief being told, and the notice was then forgotten for good. Now:
+#   - MARK FIRST, THEN POST. Send-HordeServiceNotices puts each notice on the awaiting list BEFORE it posts. A list that cannot be read
+#     or written means no post, the reason said, and the notice kept waiting in its state file for the next pass.
+#   - A post the messenger REFUSES (a known answer with another stage) takes its mark off; an UNKNOWN result keeps it, for a post that may
+#     have landed must stay watched.
+#   - DELIVERED is the session's own TAKEN (handed-over or seen), said by Invoke-HordeServiceTellTakenTick; accepted is not.
+#   - ONE ALARM at takenAlarmSeconds without a TAKEN, asked about every takenAfterAlarmSeconds after it, given up with a second ALARM
+#     when the notice is 7 days old. The pass is a new process every minute, so when each mark was last asked is kept in a small file.
+#   - A RESTART DOES NOTHING TWICE. The list is a file, the alarm is in the mark, and a notice keeps ONE id for as long as it waits (the
+#     state file's notice id, the page's pending id, the installed CLI's kept id), so wezfleet keeps one message (lib/MailPost.ps1
+#     already-posted). A new event is a new notice with a new id: a repeat of an old id would wake nobody.
+#   - THE LINES REACH THE PASS'S OUTPUT: the tick's lines, and the lines of a post (a full list given up, an already-posted copy), are
+#     returned to the supervisor (cli/ServicesTend.ps1), which says them with the rest of the pass.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "decisions\NoticeTaken.ps1")
+
+# The awaiting list of these notices: one file under the home, the words its lines use (decisions/NoticeTaken.ps1).
+$script:HordeServiceTellTakenKind = New-HordeDecisionNoticeKind -Path @("services", "tell-taken.json") -TempPrefix "services-tell-taken" -Ledger "the services notices' awaiting ledger" -List "the awaiting list of services notices" -Label "services" -Notice "services notice" -Owner "the warchief's" -Detail { param($Entry) return "from the supervisor of services" }
+$script:HordeServiceTellTakenAskedFile = "tell-taken-asked.txt"
 $script:HordeServiceTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeServiceTellRole = "warchief"
 # Who a notice is from: the supervisor is no session, so it names itself in a session id's shape, and
@@ -145,12 +166,14 @@ function Test-HordeServiceHomeIsATests {
 }
 
 function Send-HordeServiceNotices {
-    # Post each notice to the warchief's session: { told; problem }. told is the ids a messenger took;
-    # problem is why the rest were not, in one sentence, or "". Never throws for the far end.
+    # Post each notice to the warchief's session, marked first: { told; problem; lines }. told is the ids a messenger took (each is then
+    # on the awaiting list, and only the session's own TAKEN makes it delivered); problem is why the rest were not, in one sentence, or
+    # "". lines are for the pass's output. Never throws for the far end.
     # -Seat is for a suite that hands in its own.
-    param([Parameter(Mandatory = $true)]$Notices, [string]$HordeHome = "", [Parameter(Mandatory = $true)]$Policy, [scriptblock]$Seat = $null, [string]$TempRoot = "")
+    param([Parameter(Mandatory = $true)]$Notices, [string]$HordeHome = "", [Parameter(Mandatory = $true)]$Policy, [scriptblock]$Seat = $null, [string]$TempRoot = "", $Now = $null)
     $told = New-Object System.Collections.ArrayList
-    $done = { param([string]$Problem) return [pscustomobject]@{ told = [string[]]@($told.ToArray()); problem = $Problem } }
+    $lines = New-Object System.Collections.ArrayList
+    $done = { param([string]$Problem) return [pscustomobject]@{ told = [string[]]@($told.ToArray()); problem = $Problem; lines = [string[]]@($lines.ToArray()) } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     # BEFORE ANYTHING IS LOOKED FOR: a test's home tells nobody (header).
     if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot) { return (& $done "this Horde home is under the temp folder, so it is a test's: nobody is told") }
@@ -166,16 +189,103 @@ function Send-HordeServiceNotices {
     $deviceId = ""
     try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return (& $done ("this machine's device id could not be had: " + $_.Exception.Message)) }
     $problem = ""
+    $at = $(if ($Now -is [datetime]) { $Now.ToUniversalTime() } else { [datetime]::UtcNow })
     foreach ($n in @($Notices)) {
         $message = [pscustomobject]@{
             messageId = "" + $n.id; sessionId = "" + $where.value.sessionId
             from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeServiceTellFrom; label = "" + $Policy.fromLabel }
             body = (Format-HordeServiceNoticeBody -Notice $n); ttlSeconds = $script:HordeServiceTellTtlSeconds
         }
+        # THE MARK IS WRITTEN BEFORE THE POST. A list that cannot be read or written means nothing is posted (and none of the rest could
+        # be either, so the loop ends). A crash between the mark and the post only costs an alarm at takenAlarmSeconds: the next pass
+        # posts the same notice id, which the messenger keeps as one.
+        $wasListed = Test-HordeServiceNoticeListed -HordeHome $HordeHome -NoticeId $message.messageId
+        $awaited = Add-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId ("" + $where.value.sessionId) -Now $at
+        foreach ($l in @($awaited.lines)) { [void]$lines.Add($l) }
+        if (-not $awaited.ok) { $problem = "the notice cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be"; break }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
-        if ($posted.state -ceq "known" -and $script:HordeServiceTellStages -ccontains "$($posted.value.stage)") { [void]$told.Add("" + $n.id); continue }
-        if ($posted.state -ceq "known") { $problem = "messenger " + $messenger.name + " answered " + $posted.value.stage }
+        if ($posted.state -ceq "known" -and $script:HordeServiceTellStages -ccontains "$($posted.value.stage)") {
+            # ALREADY POSTED, AND THIS PASS WROTE A BRAND-NEW MARK: the messenger answered with the first copy's stage and woke nobody, so
+            # that stage says nothing of THIS post. It is never counted as fresh: the mark is taken off (or the next look would log a TAKEN
+            # for a notice never sent again), and the line says so plainly. The notice is not posted again (told), whatever the first copy became.
+            if ("$($posted.value.reason)" -clike "already-posted*" -and -not $wasListed) {
+                $null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId
+                [void]$lines.Add("services: the notice " + $message.messageId + " was NOT sent again: the messenger already held a copy of it from an earlier post and woke nobody, so it is not counted as delivered")
+            }
+            [void]$told.Add("" + $n.id)
+            continue
+        }
+        # A REFUSED POST LEAVES NO MARK (the notice is in no mailbox, so a mark would alarm "not taken" for something never sent). ONLY A
+        # KNOWN REFUSAL removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched.
+        if ($posted.state -ceq "known") {
+            $problem = "messenger " + $messenger.name + " answered " + $posted.value.stage
+            $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId
+            if (-not $removed.ok) { $problem = $problem + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
+        }
         else { $problem = "messenger " + $messenger.name + " did not take it: " + $posted.reason }
     }
     return (& $done $problem)
+}
+
+function Test-HordeServiceNoticeListed {
+    # Is the notice on the awaiting list now? $false too when the list cannot be read (Add then fails and nothing is posted).
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId)
+    $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return $false }
+    $id = $NoticeId.Replace("-", "")
+    foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e -and $e.messageId -ceq $id) { return $true } }
+    return $false
+}
+
+function Test-HordeServiceTellAwaiting {
+    # Is there an awaiting list to ask about at all? A quiet pass - nearly every pass - has none, and then loads no messenger.
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    return [bool][System.IO.File]::Exists((Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome))
+}
+
+function Read-HordeServiceTellAsked {
+    # When each mark was last asked about, by message id (UTC ms): the supervisor's pass is a new process every minute, so the
+    # cadence after an alarm needs it kept. A missing or unreadable file is an empty table (every mark is then simply asked).
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    $table = @{}
+    $path = [System.IO.Path]::Combine($HordeHome, "services", $script:HordeServiceTellTakenAskedFile)
+    try {
+        if (-not [System.IO.File]::Exists($path)) { return $table }
+        foreach ($line in @([System.IO.File]::ReadAllLines($path))) { if ($line -cmatch '\A([0-9a-f]{32}) ([0-9]{1,15})\z') { $table[$Matches[1]] = [long]$Matches[2] } }
+    } catch { return @{} }
+    return $table
+}
+
+function Write-HordeServiceTellAsked {
+    # The table, for the marks still awaiting only, replaced whole in one rename. $true when written; never throws.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][hashtable]$Table)
+    $path = [System.IO.Path]::Combine($HordeHome, "services", $script:HordeServiceTellTakenAskedFile)
+    $tmp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+    try {
+        $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome
+        if ($r.state -cne "known") { return $false }
+        $live = @{}
+        foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e) { $live[$e.messageId] = $true } }
+        $rows = @(foreach ($k in @($Table.Keys | Sort-Object)) { if ($live.ContainsKey($k) -and $Table[$k] -is [long]) { $k + " " + $Table[$k] } })
+        if ($rows.Count -eq 0) { if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }; return $true }
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
+        [System.IO.File]::WriteAllBytes($tmp, [System.Text.Encoding]::ASCII.GetBytes(($rows -join "`n") + "`n"))
+        Move-HordeFileAtomic -From $tmp -To $path
+        return $true
+    } catch { try { [System.IO.File]::Delete($tmp) } catch { }; return $false }
+}
+
+function Invoke-HordeServiceTellTakenTick {
+    # Ask about the services notices awaiting the warchief's own TAKEN and say what became of them (NoticeTaken.ps1): the lines, for the
+    # pass's output. The messenger is found as the notice was posted; when none can be had now the clock alone speaks. Never throws.
+    # The caller loads the messenger port (header, THE CALLER LOADS THE PORT) and calls only when Test-HordeServiceTellAwaiting.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][datetime]$Now, [double]$AlarmSeconds = 90, [double]$AfterAlarmSeconds = 300)
+    $messenger = $null
+    try { $found = Find-HordeMessenger -Require $script:HordeServiceTellNeeds; if ($found.state -ceq "known") { $messenger = $found.value } } catch { $messenger = $null }
+    try {
+        $memory = Read-HordeServiceTellAsked -HordeHome $HordeHome
+        $tick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome -Messenger $messenger -Now $Now.ToUniversalTime() -AlarmSeconds $AlarmSeconds -AfterAlarmSeconds $AfterAlarmSeconds -TtlSeconds $script:HordeServiceTellTtlSeconds -Memory $memory
+        [void](Write-HordeServiceTellAsked -HordeHome $HordeHome -Table $memory)
+        return @($tick.lines)
+    } catch { return @("services: the awaiting list of services notices could not be asked: " + $_.Exception.Message) }
 }

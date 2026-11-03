@@ -386,6 +386,22 @@ try {
     $told.ok = $true
     $null = Follow $w $pol $t0.AddSeconds(120) $told $probe
     Check ($told.notices.Count -eq 1) "and is tried again next pass, and goes through"
+    # T-0391 slice 6: a notice nobody took is tried again under the SAME id (a post that may have landed is never followed by a second
+    # message), and a trouble that comes back after it was told and over gets a NEW id.
+    $w = New-World "g2"
+    $pol = New-Policy $w
+    $ids = New-Object System.Collections.ArrayList
+    $capture = { param($Notices, $HordeHome, $Policy) foreach ($n in @($Notices)) { [void]$ids.Add("" + $n.id) }; return [pscustomobject]@{ told = @(); problem = "no session holds the role of warchief"; lines = @("the teller's own line") } }.GetNewClosure()
+    [System.IO.File]::WriteAllText((Join-Path $w.bin "n.txt"), "edit")
+    $null = Push-Commit $w $okScript
+    $gSaid = New-Object System.Collections.ArrayList
+    foreach ($sec in @(0, 120, 240)) {
+        $gNow = $t0.AddSeconds($sec)
+        $gOut = Quiet { Invoke-HordeInstalledCliFollow -HordeHome $w.home -Policy $pol -Now $gNow -Tell $capture -Tools (New-HordeInstalledCliTools) -NoFetch:($sec -gt 0) }
+        foreach ($gl in @($gOut)) { [void]$gSaid.Add("" + $gl) }
+    }
+    Check ($ids.Count -eq 3 -and @($ids | Select-Object -Unique).Count -eq 1 -and $ids[0] -cmatch '\A[0-9a-f-]{36}\z') ("T-0391: an untold notice keeps ONE id across passes (" + ($ids -join ",") + ")")
+    Check (@($gSaid | Where-Object { $_ -ceq "the teller's own line" }).Count -eq 3) "T-0391: the teller's own lines are the pass's lines"
     $w = New-World "h"
     $polOff = New-Policy $w -Follow $false
     $before = Head $w

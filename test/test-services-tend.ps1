@@ -258,7 +258,7 @@ try {
     Check ($order -ceq "stop 1000, retreat aaa, start") ("with no heartbeat of its own in 120 s it is stopped, the checkout goes back, and the previous revision is started (" + $order + ")")
     $kept = (Read-HordeServiceState -Name "svc" -HordeHome $h5).value
     Check ($kept.pinnedRevision -ceq $revB -and $kept.runningRevision -ceq $revA -and $W.head -ceq $revA -and $kept.phase -ceq "steady") "the bad revision is pinned, and the previous one is what runs"
-    Check ($W.told.Count -eq 1 -and $W.told[0].kind -ceq "escalate" -and $W.told[0].text -like "service svc:*bbbbbbbbb did not prove itself*" -and $W.told[0].service -ceq "svc" -and @($kept.notices).Count -eq 0 -and ($r.lines -join " ") -like "*told (escalate)*") "someone is told once, and the notice is forgotten once it is taken"
+    Check ($W.told.Count -eq 1 -and $W.told[0].kind -ceq "escalate" -and $W.told[0].text -like "service svc:*bbbbbbbbb did not prove itself*" -and $W.told[0].service -ceq "svc" -and @($kept.notices).Count -eq 0 -and ($r.lines -join " ") -like "*posted (escalate)*") "someone is told once, and the notice is forgotten from the state file once the teller took it"
     $W.now = $W.now.AddSeconds(600); $W.beat.value.at = $W.now.AddSeconds(-5); $W.calls.Clear()
     $r = Pass $h5
     Check ((Calls "verify*") -eq 0 -and (Calls "stop*") -eq 0 -and $W.told.Count -eq 1 -and $r.services[0].code -ceq "pinned") "later passes do not try the pinned revision again, and tell nobody again"

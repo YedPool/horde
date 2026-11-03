@@ -149,7 +149,13 @@ $script:HordeServiceSettings = New-HordeModuleSettings -Module "services" -Setti
     @{ name = "tellWarchief"; kind = "truefalse"; default = $true
        what = "Whether troubles, and recoveries from them, are told to the warchief's session through a messenger." },
     @{ name = "fromLabel"; kind = "label"; default = "SV"
-       what = "The hub label a notice from the supervisor wears, so a messenger can say who it is from." }
+       what = "The hub label a notice from the supervisor wears, so a messenger can say who it is from." },
+    # T-0391 slice 6: a notice is delivered only when the warchief's own session took it. 90 s is the chat's and the doorbell's
+    # alarm limit; the pass runs once a minute, so a notice is asked about at each pass and an alarmed one every 300 s (the doorbell's).
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600
+       what = "How long a notice the messenger accepted may wait to be taken by the warchief's own session before one ALARM line is raised and the notice is kept awaiting, in seconds." },
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 300; min = 5; max = 3600
+       what = "How often a notice already alarmed is asked about, until it is taken or 7 days old, in seconds." }
 )
 
 $script:HordeServiceNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'

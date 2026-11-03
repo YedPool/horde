@@ -50,6 +50,16 @@ $HordeCommand = @{
             foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
             return (Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy)
         }
+        # WHAT BECAME OF THE NOTICES ALREADY POSTED (cli/ServicesTell.ps1): loaded in its own block as the teller is, and only when a
+        # notice is awaiting, so a quiet pass never pays for the port.
+        $tools["TellTaken"] = {
+            param($HordeHome, $Policy)
+            if (-not (Test-HordeServiceTellAwaiting -HordeHome $HordeHome)) { return @() }
+            foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+            . (Join-Path $root "messengers\Port.ps1")
+            foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
+            return @(Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Policy.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Policy.takenAfterAlarmSeconds))
+        }
         if ($Verb -eq "stop" -or $Verb -eq "start") {
             if ($Target -eq "") { throw ("services " + $Verb + " needs the name of a service (horde services status lists them)") }
             $set = Set-HordeServiceHeld -Name $Target -Held:($Verb -eq "stop") -Tools $tools
