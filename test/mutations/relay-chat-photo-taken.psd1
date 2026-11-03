@@ -22,8 +22,8 @@
            Replace = '        $removed = [pscustomobject]@{ ok = $true; reason = "" }' }
         # An unknown result loses its mark (a notice that landed is no longer watched).
         @{ Name = "photo-unknown-loses-mark"
-           Find = '    $refused = ($posted.state -ceq "known")'
-           Replace = '    $refused = $true' }
+           Find = '    if ($refused) {'
+           Replace = '    if ($true) {' }
         # A known refusal is counted as the messenger having taken it (today's bug for a held post).
         @{ Name = "photo-refused-stage-counts-as-taken"
            Find = '$script:HordeChatPhotoPostStages = @("accepted", "handed-over", "seen")'
