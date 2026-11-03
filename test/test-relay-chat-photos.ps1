@@ -64,14 +64,30 @@ if ((Get-HordeRelayKeyStore).state -cne "known") {
 
 $script:pwshNotRun = $false
 $script:posts = @{}
+# T-0391 slice 4: nothing the stand-in accepted is TAKEN until the session's own hook says so. Most of this suite is about photos
+# landing, not about the Thrall's session, so by default (autoTake) the stand-in's status says handed-over for any post it holds; section 20
+# turns that off and sets each notice's stage itself, as the hook does. postSays is what a post answers: accepted, held (a known refusal)
+# or unknown.
+$script:autoTake = $true
+$script:postSays = "accepted"
+$script:stages = @{}
+$script:askedIds = @{}
 $postBlock = {
     param($Message)
     $id = "$($Message.messageId)"
     if (-not $script:posts.ContainsKey($id)) { $script:posts[$id] = @{ message = $Message; count = 0 } }
     $script:posts[$id].count++
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" }))
+    if ($script:postSays -ceq "unknown") { return (New-HordeUnknown -Reason "the stand-in could not tell") }
+    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = $script:postSays; at = [datetime]::UtcNow; reason = $(if ($script:postSays -ceq "held") { "the stand-in refused it" } else { "" }) }))
 }
-$statusBlock = { param([string]$MessageId) return (New-HordeAbsent -Note "not kept") }
+$statusBlock = {
+    param([string]$MessageId)
+    $script:askedIds["$MessageId"] = 1 + [int]$script:askedIds["$MessageId"]
+    $st = "$($script:stages["$MessageId"])"
+    if ($st -ceq "" -and $script:autoTake -and $script:posts.ContainsKey("$MessageId")) { $st = "handed-over" }
+    if ($st -ceq "") { return (New-HordeAbsent -Note "not kept") }
+    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$MessageId"; stage = $st; at = [datetime]::UtcNow; reason = $(if ($st -ceq "held") { "the stand-in holds it" } else { "" }) }))
+}
 $null = Register-HordeMessenger -Folder (Join-Path $fx "chat-wakes") -Post $postBlock -Status $statusBlock
 
 $settingsAll = '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 30, "photosPerDay": 1000}'
@@ -987,6 +1003,167 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $d1Closed = Join-Path $Y.home ("relay\chat\photos\closed\" + $D1.from + "-" + $D1.id + ".json")
     $d1Rec = $(if (Test-Path -LiteralPath $d1Closed) { Read-HordeChatPhotoRecord -Path $d1Closed } else { $null })
     Check ($null -ne $d1Rec -and $d1Rec.code -ceq "delivered" -and $d1Rec.key -ceq "") "THE KEY IS GONE: the closed record of a delivered photo has no part key"
+    # ======================================================================================================
+    # T-0391 SLICE 4: THE NOTICE TO THE THRALL IS DELIVERED ONLY WHEN THE THRALL'S OWN SESSION TOOK IT.
+    # Today's bug: the messenger ACCEPTING the post was counted as the Thrall told, and the phone was sent
+    # "delivered". The stand-in says nothing is taken until a test sets the stage, as the session's hook does.
+    # ======================================================================================================
+    Write-Host ""
+    Write-Host "--- 20. the photo notice is delivered only on the Thrall's own TAKEN (T-0391 slice 4) ---" -ForegroundColor Cyan
+    $script:autoTake = $false
+    $script:postSays = "accepted"
+    $marksOf = {
+        param($World)
+        $r = Read-HordeTakenLedgerFile -Path (Join-Path $World.home "relay\chat\photo-taken.json") -What "the photo notices" -Noun "notice"
+        if ($r.state -cne "known") { return @() }
+        return @(@($r.value.awaiting) | ForEach-Object { ConvertFrom-HordeChatTakenMark -Mark $_ })
+    }
+    $markOf = { param($World, [string]$Id) return @(& $marksOf $World | Where-Object { $_.messengerId -ceq $Id }) }
+    $noticeOf = { param($Photo) return (Get-HordeChatPhotoMessageId -From $Photo.from -PhotoId $Photo.id -Sha256 (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $Photo.image))) }
+    $postsFor = { param([string]$Id) if ($script:posts.ContainsKey($Id)) { return [int]$script:posts[$Id].count }; return 0 }
+    $openOf = { param($World, $Photo) return (Test-Path -LiteralPath (Join-Path $World.home ("relay\chat\photos\open\" + $Photo.from + "-" + $Photo.id))) }
+    $alarmsIn = { param([string]$Text) return ([regex]::Matches($Text, "ALARM: photo notice")).Count }
+    $wholePhoto = {
+        param($World, [datetime]$At)
+        $ph = New-Photo -World $World -Image (New-ImageBytes -Type "jpg" -Length 3000) -SignedAt $At
+        $null = Send-Manifest $World $ph
+        $null = Invoke-Turn $World
+        foreach ($pt in $ph.parts) { $null = Send-Part $World $pt }
+        return $ph
+    }
+    $t0 = [datetime]::UtcNow
+    $T = New-World
+    $null = Get-PhoneMail $T
+
+    # THE BUG: accepted by the messenger, never taken. Saved in the inbox, the Thrall posted, and NOT delivered.
+    $P1 = & $wholePhoto $T $t0
+    $id1 = & $noticeOf $P1
+    $l = Invoke-PhotoTick $T $t0
+    $m1 = @(& $markOf $T $id1)
+    Check ((& $postsFor $id1) -eq 1 -and $m1.Count -eq 1 -and -not $m1[0].alarmed) ("BUG: the notice is posted once and sits on the awaiting list, not told and forgotten (" + $l + ")")
+    Check ($m1.Count -eq 1 -and $m1[0].seq -eq 3000 -and $m1[0].session -ceq (Get-ThrallSession $T)) "the mark names the photo's size and the Thrall's session"
+    Check (@(Get-InboxFiles $T).Count -eq 1 -and (& $openOf $T $P1)) "the photo is in the inbox, and its record stays open: not finished until the Thrall has it"
+    Check (@(Get-PhotoReceipts $T | Where-Object { $_.photoId -ceq $P1.id -and $_.code -ceq "delivered" }).Count -eq 0 -and -not $l.Contains("delivered")) "the phone is NOT told delivered for a notice nobody took"
+
+    # ONE ALARM at takenAlarmSeconds (90), a re-ask cadence after it, never before.
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(60)
+    Check ((& $alarmsIn $l) -eq 0) ("no alarm before takenAlarmSeconds (" + $l + ")")
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(100)
+    Check ((& $alarmsIn $l) -eq 1 -and $l.Contains("NOT TAKEN") -and @(& $markOf $T $id1 | Where-Object { $_.alarmed }).Count -eq 1) ("ONE ALARM once it is not taken in time, kept in the mark (" + $l + ")")
+    $asks = [int]$script:askedIds[$id1]
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(110)
+    Check ((& $alarmsIn $l) -eq 0 -and [int]$script:askedIds[$id1] -eq $asks) "no second alarm, and it is not asked again before takenAfterAlarmSeconds"
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(170)
+    Check ((& $alarmsIn $l) -eq 0 -and [int]$script:askedIds[$id1] -eq ($asks + 1) -and (& $postsFor $id1) -eq 1) "after the alarm it is asked again at the cadence, and still posted once"
+
+    # A RESTART DOES NOTHING TWICE: the same notice id, the alarm is in the mark, the post is the messenger's to keep once.
+    $keepMark = @(& $markOf $T $id1)[0]
+    $T.ctx.state.Remove("chat")
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(240)
+    $mAfter = @(& $markOf $T $id1)
+    Check ((& $alarmsIn $l) -eq 0 -and $mAfter.Count -eq 1 -and $mAfter[0].postedMs -eq $keepMark.postedMs -and $mAfter[0].alarmed) ("RESTART: no second alarm, and the mark keeps its first clock (" + $l + ")")
+    Check (@($script:posts.Keys | Where-Object { $_ -ceq $id1 }).Count -eq 1 -and $script:posts[$id1].message.messageId -ceq (& $noticeOf $P1)) "RESTART: the notice id is the photo's own, the same on every pass, so the messenger keeps one message"
+
+    # DELIVERED ONLY ON THE TAKEN: handed-over, then the phone is told delivered, the mark goes, nothing is said twice.
+    $script:stages[$id1] = "handed-over"
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(300)
+    $rc = @(Get-PhotoReceipts $T | Where-Object { $_.photoId -ceq $P1.id })
+    Check ($l.Contains("TAKEN: photo notice " + $id1) -and $l.Contains("after the alarm") -and $l.Contains("delivered")) ("TAKEN is said, after the alarm (" + $l + ")")
+    Check ($rc.Count -eq 1 -and $rc[0].code -ceq "delivered" -and @(& $markOf $T $id1).Count -eq 0 -and -not (& $openOf $T $P1)) "and only then the phone is told delivered, the mark is gone, the photo is finished"
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(400)
+    Check ($l -ceq "" -and (& $postsFor $id1) -eq 2) "nothing is said or posted again (the 2 posts are the same id: one before the restart, one after it)"
+
+    # SEEN is taken too.
+    $P2 = & $wholePhoto $T $t0
+    $id2 = & $noticeOf $P2
+    $null = Invoke-PhotoTick $T $t0.AddSeconds(500)
+    $script:stages[$id2] = "seen"
+    $l = Invoke-PhotoTick $T $t0.AddSeconds(520)
+    Check ($l.Contains("TAKEN: photo notice " + $id2) -and @(Get-PhotoReceipts $T | Where-Object { $_.photoId -ceq $P2.id -and $_.code -ceq "delivered" }).Count -eq 1) ("TWIN: seen is taken too (" + $l + ")")
+
+    # MARK BEFORE POST: a list that cannot be read means no post, a stated reason, the photo still pending.
+    $U = New-World
+    $null = Get-PhoneMail $U
+    $P3 = & $wholePhoto $U $t0
+    $id3 = & $noticeOf $P3
+    $ledger3 = Join-Path $U.home "relay\chat\photo-taken.json"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $ledger3) -Force | Out-Null
+    [System.IO.File]::WriteAllText($ledger3, "this is not an awaiting list", $utf8)
+    $l = Invoke-PhotoTick $U $t0
+    Check ((& $postsFor $id3) -eq 0 -and $l.Contains("cannot be awaited") -and (& $openOf $U $P3) -and @(Get-InboxFiles $U).Count -eq 1) ("UNUSABLE LIST: nothing is posted, the reason is said, the photo stays pending (" + $l + ")")
+    $l2 = Invoke-PhotoTick $U $t0.AddSeconds(30)
+    Check ((& $postsFor $id3) -eq 0 -and -not $l2.Contains("cannot be awaited")) "the reason is said once, not at every turn"
+    Remove-Item -LiteralPath $ledger3 -Force
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(60)
+    Check ((& $postsFor $id3) -eq 1 -and @(& $markOf $U $id3).Count -eq 1) ("TWIN: once the list is usable the notice is marked, then posted (" + $l + ")")
+
+    # A KNOWN REFUSAL REMOVES THE MARK; AN UNKNOWN RESULT KEEPS IT.
+    $P4 = & $wholePhoto $U $t0
+    $id4 = & $noticeOf $P4
+    $script:postSays = "held"
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(100)
+    Check (@(& $markOf $U $id4).Count -eq 0 -and (& $openOf $U $P4) -and (& $postsFor $id4) -eq 1 -and -not $l.Contains("delivered")) ("REFUSED: a post the messenger refused is not delivered, leaves no mark, and is tried again (" + $l + ")")
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(200)
+    Check ((& $alarmsIn $l) -eq 0 -or -not $l.Contains($id4)) "and a refused post never alarms 'not taken' for something that was never sent"
+    $script:postSays = "accepted"
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(210)
+    Check (@(& $markOf $U $id4).Count -eq 1 -and (& $postsFor $id4) -eq 3) "TWIN: the next accepted post is marked and posted (the refused post was tried again each turn, the same id)"
+    $P5 = & $wholePhoto $U $t0
+    $id5 = & $noticeOf $P5
+    $script:postSays = "unknown"
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(300)
+    Check (@(& $markOf $U $id5).Count -eq 1 -and (& $openOf $U $P5)) ("UNKNOWN: a post whose result is not known keeps its mark, for it may have landed (" + $l + ")")
+    $l = Invoke-PhotoTick $U $t0.AddSeconds(400)
+    Check ((& $alarmsIn $l) -ge 1 -and $l.Contains($id5)) ("and, never taken, it alarms (" + $l + ")")
+    $script:postSays = "accepted"
+
+    # SIXTY MINUTES WITHOUT A TAKEN: the phone is told saved (the photo is in the inbox), the mark stays watched, and a late TAKEN is said.
+    $S = New-World
+    $null = Get-PhoneMail $S
+    $P6 = & $wholePhoto $S $t0
+    $id6 = & $noticeOf $P6
+    $null = Invoke-PhotoTick $S $t0
+    $l = Invoke-PhotoTick $S $t0.AddMinutes(61)
+    $rc = @(Get-PhotoReceipts $S | Where-Object { $_.photoId -ceq $P6.id -and $_.code -cne "receiving" })
+    Check ($rc.Count -eq 1 -and $rc[0].code -ceq "saved" -and -not (& $openOf $S $P6) -and @(& $markOf $S $id6).Count -eq 1) ("SAVED: after an hour without a TAKEN the phone is told saved, the notice stays watched (" + $l + ")")
+    $script:stages[$id6] = "handed-over"
+    $l = Invoke-PhotoTick $S $t0.AddMinutes(120)
+    Check ($l.Contains("TAKEN: photo notice " + $id6) -and @(& $markOf $S $id6).Count -eq 0 -and @(Get-PhotoReceipts $S | Where-Object { $_.photoId -ceq $P6.id }).Count -eq 0) ("a late TAKEN is still said, and the phone is not told twice (" + $l + ")")
+
+    # A NOTICE THE MESSENGER HOLDS FOR GOOD is given up with an ALARM, and the phone is told saved at once, not after the hour.
+    $P9 = & $wholePhoto $S $t0
+    $id9 = & $noticeOf $P9
+    $null = Invoke-PhotoTick $S $t0.AddMinutes(150)
+    $script:stages[$id9] = "held"
+    $l = Invoke-PhotoTick $S $t0.AddMinutes(150).AddSeconds(30)
+    Check ($l.Contains("holds it for good") -and @(& $markOf $S $id9).Count -eq 0 -and -not (& $openOf $S $P9) -and @(Get-PhotoReceipts $S | Where-Object { $_.photoId -ceq $P9.id -and $_.code -ceq "saved" }).Count -eq 1) ("HELD: a notice the messenger holds for good alarms, and the phone is told saved (" + $l + ")")
+
+    # NEVER DROPPED, THEN GIVEN UP AFTER ttlSeconds WITH AN ALARM.
+    $P7 = & $wholePhoto $S $t0
+    $id7 = & $noticeOf $P7
+    $null = Invoke-PhotoTick $S $t0.AddMinutes(200)
+    $l = Invoke-PhotoTick $S $t0.AddMinutes(200 + 1500)
+    Check ($l.Contains("NOT DELIVERED, given up") -and $l.Contains("ALARM:") -and @(& $markOf $S $id7).Count -eq 0) ("GIVE-UP: a notice not taken in ttlSeconds is given up with an ALARM (" + $l + ")")
+
+    # THE LINES REACH THE RUNNER'S LOG: through the channel's own Tick, which the relay runner prints.
+    $script:autoTake = $false
+    $R = New-World '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 30, "photosPerDay": 1000, "takenCheckSeconds": 1, "takenAfterAlarmSeconds": 5}'
+    $null = Get-PhoneMail $R
+    $P8 = & $wholePhoto $R ([datetime]::UtcNow)
+    $id8 = & $noticeOf $P8
+    $null = Invoke-Tick $R
+    Check (@(& $markOf $R $id8).Count -eq 1) "LOG: through the channel's Tick the photo is posted and awaited"
+    $old = @(& $markOf $R $id8)[0]
+    $old.postedMs = $old.postedMs - 600000
+    Write-HordeTakenLedgerFile -Path (Join-Path $R.home "relay\chat\photo-taken.json") -Ledger ([pscustomobject]@{ awaiting = @(ConvertTo-HordeChatTakenMark -Entry $old) }) -TempPrefix "test"
+    Start-Sleep -Milliseconds 1300
+    $t = Invoke-Tick $R
+    Check ($t.Contains("ALARM: photo notice " + $id8)) ("LOG: the ALARM is among the lines the channel's Tick returns for the runner's log (" + $t + ")")
+    $script:stages[$id8] = "handed-over"
+    Start-Sleep -Milliseconds 5300
+    $t = Invoke-Tick $R
+    Check ($t.Contains("TAKEN: photo notice " + $id8) -and $t.Contains("accepted (delivered)")) ("LOG: and the TAKEN, with the phone told (" + $t + ")")
+    $script:autoTake = $true
     foreach ($w in $script:worlds) { Close-HordeRelayRunContext -Context $w.ctx }
     $keys = New-Object System.Collections.ArrayList
     foreach ($h in $script:homes) {
