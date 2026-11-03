@@ -24,8 +24,8 @@
            Find = '$null = & $Watching.say ("MAILBOX FULL: the relay refuses what this machine sends to "'
            Replace = '$null = ("MAILBOX FULL: the relay refuses what this machine sends to "' }
         @{ Name = "told-claimed-when-not-posted"
-           Find = 'if ($sent.told) { $mine.told = $true; $mine.problem = ""; $null = & $Watching.say'
-           Replace = 'if ($true) { $mine.told = $true; $mine.problem = ""; $null = & $Watching.say' }
+           Find = 'if ($sent.told) {'
+           Replace = 'if ($true) {' }
         @{ Name = "why-not-told-is-not-said"
            Find = 'if ($sent.problem -cne $mine.problem) { $mine.problem = $sent.problem; $null = & $Watching.say'
            Replace = 'if ($false) { $mine.problem = $sent.problem; $null = & $Watching.say' }
