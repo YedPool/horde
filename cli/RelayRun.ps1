@@ -374,21 +374,25 @@ function Invoke-HordeRelayRunPutNotes {
     foreach ($box in @($notes.full.Keys | Sort-Object)) {
         if ($Context.full.ContainsKey($box)) { continue }
         $notes.full.Remove($box)
+        # The fill is over: the next one gets its own start, so its notice has its own id (cli/RelayRunTell.ps1, Get-HordeRelayFullNoticeId).
+        Clear-HordeRelayRunFill -HordeHome $Watching.hordeHome -Mailbox $box
         $null = & $Watching.say ("the relay takes mail for " + $box + " again: it is no longer full")
     }
     foreach ($box in @($Context.full.Keys | Sort-Object)) {
         if (-not $notes.full.ContainsKey($box)) {
-            $notes.full[$box] = @{ told = $false; problem = ""; nextTry = [datetime]::MinValue }
+            $notes.full[$box] = @{ told = $false; problem = ""; nextTry = [datetime]::MinValue; fill = [long]0 }
             $null = & $Watching.say ("MAILBOX FULL: the relay refuses what this machine sends to " + $box + ", so NOTHING NEW REACHES THE FOUNDER'S PHONE from this machine until that is put right. The run keeps trying. What the relay answered: " + $Context.full[$box].reason)
             if (-not $Watching.tell) { $null = & $Watching.say ("the warchief is not told of it: telling is switched off (the setting tellWarchief)") }
         }
         $mine = $notes.full[$box]
         if ($mine.told -or -not $Watching.tell -or $Now -lt $mine.nextTry) { continue }
-        $sent = Send-HordeRelayFullNotice -Mailbox $box -HordeHome $Watching.hordeHome -FromLabel $Watching.fromLabel -Seat $Seat -TempRoot $TempRoot -Day $Now
+        # THIS FILL'S START, kept in the home so a restart inside one fill posts the same notice id (and a refill posts a new one).
+        if ($mine.fill -eq 0) { $mine.fill = Get-HordeRelayRunFillStart -HordeHome $Watching.hordeHome -Mailbox $box -NowMs (Get-HordeDecisionNoticeTakenNowMs -Now $Now) }
+        $sent = Send-HordeRelayFullNotice -Mailbox $box -HordeHome $Watching.hordeHome -FromLabel $Watching.fromLabel -Seat $Seat -TempRoot $TempRoot -Day $Now -Fill $mine.fill
         foreach ($l in @($sent.lines)) { $null = & $Watching.say $l }
         if ($sent.told) {
             $mine.told = $true; $mine.problem = ""
-            $null = & $Watching.say ("the notice that " + $box + " is full was posted to the warchief's session; it is delivered only when that session takes it")
+            if (-not $sent.reposted) { $null = & $Watching.say ("the notice that " + $box + " is full was posted to the warchief's session; it is delivered only when that session takes it") }
             Invoke-HordeRelayRunTakenLook -Watching $Watching -Now $Now -Force:$true
             continue
         }

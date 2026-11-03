@@ -470,7 +470,7 @@ try {
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(200)
     Check ($script:posts.Count -eq 1 -and @($said | Where-Object { $_ -ceq "the notice that work/phone is full was posted to the warchief's session; it is delivered only when that session takes it" }).Count -eq 1) ("once there is a session to tell, the notice is posted (T-0391 slice 5: delivered only on the session's own TAKEN, test-relay-run-tell-taken.ps1) (" + $script:posts.Count + " post)")
     $notice = $script:posts[0]
-    Check ($notice.sessionId -ceq "warchief-session-1" -and $notice.from.label -ceq "SV" -and $notice.from.sessionId -ceq "horde-relay-run" -and $notice.messageId -ceq (Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "work/phone" -Day $now)) "the notice goes to the warchief's session, from the run, under an id made of the home, the mailbox and the day"
+    Check ($notice.sessionId -ceq "warchief-session-1" -and $notice.from.label -ceq "SV" -and $notice.from.sessionId -ceq "horde-relay-run" -and $notice.messageId -ceq (Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "work/phone" -Fill (Get-HordeDecisionNoticeTakenNowMs -Now $now))) "the notice goes to the warchief's session, from the run, under an id made of the home, the mailbox and the day"
     Check ($notice.body.Contains("work/phone") -and $notice.body.Contains("nothing new reaches the founder's phone") -and -not $notice.body.Contains("507") -and -not $notice.body.Contains("counting relay")) ("its words are fixed: the mailbox's name, and nothing the relay said (" + ($notice.body -replace "`n", " / ") + ")")
     foreach ($i in 1..5) {
         $null = Send-Snapshot $F
@@ -486,8 +486,8 @@ try {
     Add-Note $F "full a second time"
     $null = Send-Snapshot $F
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(1000)
-    Check ($script:posts.Count -eq 2 -and $script:posts[1].messageId -ceq $script:posts[0].messageId -and @($said | Where-Object { $_ -clike "MAILBOX FULL: *" }).Count -eq 2) "a mailbox that fills again the same day is said again, and its notice is the SAME notice: an idempotent messenger keeps it as one"
-    Check ((Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "work/phone" -Day $now.AddDays(1)) -cne $notice.messageId -and (Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "other/phone" -Day $now) -cne $notice.messageId) "another day, or another mailbox, is another notice"
+    Check ($script:posts.Count -eq 2 -and $script:posts[1].messageId -cne $script:posts[0].messageId -and @($said | Where-Object { $_ -clike "MAILBOX FULL: *" }).Count -eq 2) "a mailbox that fills again the same day is said again, and its notice is a NEW notice (each fill has its own id: a repeat of the first would wake nobody)"
+    Check ((Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "work/phone" -Fill (Get-HordeDecisionNoticeTakenNowMs -Now $now.AddDays(1))) -cne $notice.messageId -and (Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "other/phone" -Fill (Get-HordeDecisionNoticeTakenNowMs -Now $now)) -cne $notice.messageId) "another fill, or another mailbox, is another notice"
     # Switched off, and a test's home.
     $quiet = New-Object System.Collections.ArrayList
     $off = New-HordeRelayRunWatching -Say { param($Line) [void]$quiet.Add($Line) } -Sleep { param($Ms, $Fhy) } -StopPath (Join-Path $F.home "relay\run.stop") -StartedMs 0 -CheckMs 1000 -HordeHome $F.home -Tell $false -FromLabel "SV"

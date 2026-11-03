@@ -36,10 +36,13 @@
         @{ Name = "run-says-the-warchief-was-told"
            Find = '$null = & $Watching.say ("the notice that " + $box + " is full was posted to the warchief''s session; it is delivered only when that session takes it")'
            Replace = '$null = & $Watching.say ("the warchief was told that " + $box + " is full")' }
+        # The settings file's alarm limit never reaches the run's table (killed through Invoke-HordeRelayRun itself).
         @{ Name = "run-settings-not-handed-to-the-table"
            Find = '-TakenAlarmSeconds ([double]$set.takenAlarmSeconds) -TakenCheckSeconds'
-           Replace = '-TakenAlarmSeconds 90 -TakenCheckSeconds'
-           Expect = "survives"
-           Reason = "A run started by the suite is in a home under the temp folder, which posts no notice (cli/RelayRunTell.ps1, A TEST'S HOME TELLS NOBODY), so the settings the run hands its table cannot be seen through the run itself; the table's use of them is held on Invoke-HordeRelayRunPutNotes directly (run-asks-the-list-at-every-look, run-tell-alarm-limit-ignored with a table made at 30 s)." }
+           Replace = '-TakenAlarmSeconds 90 -TakenCheckSeconds' }
+        # A mailbox that emptied keeps its fill start, so the refill reuses the first fill's notice id.
+        @{ Name = "run-fill-not-cleared-when-the-mailbox-empties"
+           Find = '        Clear-HordeRelayRunFill -HordeHome $Watching.hordeHome -Mailbox $box'
+           Replace = '' }
     )
 }

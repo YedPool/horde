@@ -30,8 +30,30 @@
            Replace = '$script:HordeRelayRunTellStages = @("accepted", "handed-over", "seen", "held")' }
         # The notice id changes on every pass (a restart posts a second message).
         @{ Name = "run-tell-notice-id-not-stable"
-           Find = 'messageId = (Get-HordeRelayFullNoticeId -HordeHome $HordeHome -Mailbox $Mailbox -Day $Day);'
+           Find = 'messageId = (Get-HordeRelayFullNoticeId -HordeHome $HordeHome -Mailbox $Mailbox -Fill $Fill);'
            Replace = 'messageId = [guid]::NewGuid().ToString();' }
+        # Every fill gets the same id (a refill on the same day wakes nobody).
+        @{ Name = "run-tell-fill-not-in-the-id"
+           Find = 'messageId = (Get-HordeRelayFullNoticeId -HordeHome $HordeHome -Mailbox $Mailbox -Fill $Fill);'
+           Replace = 'messageId = (Get-HordeRelayFullNoticeId -HordeHome $HordeHome -Mailbox $Mailbox -Fill 0);' }
+        # A restart starts a new fill (the kept start is not read back), so a restart inside one fill posts a second notice.
+        @{ Name = "run-tell-fill-start-not-kept"
+           Find = 'if ($r.ok -and $r.fills.ContainsKey($Mailbox)) { return [long]$r.fills[$Mailbox] }'
+           Replace = '' }
+        # An already-posted answer for a brand-new mark is counted as fresh (a false TAKEN follows).
+        @{ Name = "run-tell-already-posted-counted-fresh"
+           Find = 'if ("$($posted.value.reason)" -clike "already-posted*" -and -not $wasListed) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "run-tell-already-posted-keeps-mark"
+           Find = '            $null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId'
+           Replace = '' }
+        @{ Name = "run-tell-already-posted-not-said"
+           Find = '            [void]$lines.Add("relay run: the notice " + $message.messageId'
+           Replace = '            $null = ("relay run: the notice " + $message.messageId' }
+        # A mark that was already listed (a restart inside one fill) is taken for a new one.
+        @{ Name = "run-tell-listed-mark-counts-fresh"
+           Find = '    $wasListed = Test-HordeRelayRunNoticeListed -HordeHome $HordeHome -NoticeId $message.messageId'
+           Replace = '    $wasListed = $false' }
         # The list is asked with no messenger: only the clock speaks, so a TAKEN is never seen.
         @{ Name = "run-tell-tick-never-asks-the-messenger"
            Find = 'if ($found.state -ceq "known") { $messenger = $found.value }'

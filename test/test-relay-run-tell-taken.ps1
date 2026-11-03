@@ -35,9 +35,17 @@ Check (@(Get-HordeMessengerNames).Count -eq 0) "CONTROL: no messenger is loaded 
 # THE STAND-IN MESSENGER: every post, one record per messageId (idempotent), and an answer this suite chooses.
 $script:posts = New-Object System.Collections.ArrayList
 $script:postSays = "accepted"
+# Ids the messenger already holds (posted before this pass): a repost of one answers already-posted with the first copy's stage and
+# wakes nobody, as wezfleet does (lib/MailPost.ps1).
+$script:held = @{}
 $stubPost = {
     param($Message)
     [void]$script:posts.Add($Message)
+    $mid = "$($Message.messageId)"
+    if ($script:held.ContainsKey($mid) -and $script:postSays -ceq "accepted") {
+        return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $mid; stage = "handed-over"; at = [datetime]::UtcNow; reason = "already-posted: already posted; nothing written and nobody woken again" }) -ObservedAt ([datetime]::UtcNow))
+    }
+    if ($script:postSays -ceq "accepted") { $script:held[$mid] = $true }
     if ($script:postSays -ceq "unknown") { return (New-HordeUnknown -Reason "the stand-in could not tell") }
     return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Message.messageId)"; stage = $script:postSays; at = [datetime]::UtcNow; reason = $(if ($script:postSays -ceq "held") { "the stand-in refused it" } else { "" }) }) -ObservedAt ([datetime]::UtcNow))
 }
@@ -92,7 +100,11 @@ function Get-Marks {
 function Marks-Of { param([string]$Home_, [string]$Id) return @(Get-Marks $Home_ | Where-Object { $_.messengerId -ceq $Id }) }
 function Posts-Of { param([string]$Id) return @($script:posts.ToArray() | Where-Object { "$($_.messageId)" -ceq $Id }).Count }
 function Alarms-In { param([string]$Text) return ([regex]::Matches($Text, "ALARM: relay-full notice")).Count }
-function Id-Of { param([string]$Home_, [string]$Box) return (Get-HordeRelayFullNoticeId -HordeHome $Home_ -Mailbox $Box -Day $t0) }
+function Id-Of {
+    # The notice id of the fill that began -StartSec seconds after t0 (the run's first look at the full mailbox).
+    param([string]$Home_, [string]$Box, [double]$StartSec = 0)
+    return (Get-HordeRelayFullNoticeId -HordeHome $Home_ -Mailbox $Box -Fill (Get-HordeDecisionNoticeTakenNowMs -Now $t0.AddSeconds($StartSec)))
+}
 
 Write-Host ""
 Write-Host "--- the settings: three numbers a person may tune ---" -ForegroundColor Cyan
@@ -114,7 +126,7 @@ $m = @(Marks-Of $H1 $id1)
 Check ((Posts-Of $id1) -eq 1 -and $m.Count -eq 1 -and -not $m[0].alarmed) ("BUG: the notice is posted once and sits on the awaiting list (" + $l + ")")
 Check ($m.Count -eq 1 -and $m[0].session -ceq "warchief-session-1") "the mark names the warchief's session"
 Check (-not $l.Contains("was told") -and -not $l.Contains("TAKEN:") -and $l.Contains("delivered only when that session takes it")) "the run does NOT say the warchief was told for a notice nobody took"
-Check ($script:posts[0].messageId -ceq $id1 -and $id1 -ceq (Get-HordeRelayFullNoticeId -HordeHome $H1 -Mailbox "work/phone" -Day $t0.AddHours(5))) "the notice id is the mailbox's and the day's own: the same on every pass"
+Check ($script:posts[0].messageId -ceq $id1 -and $id1 -ceq (Id-Of $H1 "work/phone" 0)) "the notice id is the mailbox's and its fill's own: the same on every pass"
 $asks0 = [int]$script:askedIds[$id1]
 $null = Look $run $ctx 12
 $null = Look $run $ctx 15
@@ -178,6 +190,43 @@ $old = @(1..200 | ForEach-Object { ConvertTo-HordeChatTakenMark -Entry ([pscusto
 Write-HordeTakenLedgerFile -Path (Join-Path $H10 "relay\run-full-taken.json") -Ledger ([pscustomobject]@{ awaiting = $old }) -TempPrefix "test"
 $l = Look $run (New-Ctx) 0
 Check ($l.Contains("ALARM: relay-full notice 00000000-0000-4000-8000-000000000001") -and $l.Contains("left the awaiting list because it is full") -and @(Marks-Of $H10 $id10).Count -eq 1) ("a full awaiting list gives up its oldest mark WITH a line in the run's log (" + $l + ")")
+
+Write-Host ""
+Write-Host "--- EACH FILL HAS ITS OWN NOTICE: a refill on the same day posts a new id and is not a false TAKEN ---" -ForegroundColor Cyan
+$H11 = New-Home
+$run = New-Run $H11
+$idA = Id-Of $H11 "work/phone" 0
+$null = Look $run (New-Ctx) 0
+$script:stages[$idA] = "seen"
+$l = Look $run (New-Ctx) 20
+Check ($l.Contains("TAKEN: relay-full notice " + $idA) -and @(Marks-Of $H11 $idA).Count -eq 0) ("the first fill's notice is taken (" + $l + ")")
+$l = Look $run (New-Ctx -Full @()) 30
+Check ($l.Contains("no longer full")) "the mailbox empties"
+$postsBefore = $script:posts.Count
+$l = Look $run (New-Ctx) 100
+$idB = Id-Of $H11 "work/phone" 100
+Check ($idB -cne $idA -and $script:posts.Count -eq ($postsBefore + 1) -and "$($script:posts[$script:posts.Count - 1].messageId)" -ceq $idB) ("a refill on the same day posts a NEW id, so the session is woken again (" + $l + ")")
+Check (@(Marks-Of $H11 $idB).Count -eq 1 -and -not $l.Contains("TAKEN:") -and -not $l.Contains("NOT sent again")) "and the refill's notice waits for ITS OWN TAKEN: no TAKEN is logged for a notice never taken"
+$l = Look $run (New-Ctx) 130
+Check (-not $l.Contains("TAKEN:") -and @(Marks-Of $H11 $idB).Count -eq 1) "the next look does not log a TAKEN either"
+# A restart inside one fill reuses the id (the fill start is kept in the home).
+$run = New-Run $H11
+$pre = $script:posts.Count
+$l = Look $run (New-Ctx) 400
+Check ("$($script:posts[$script:posts.Count - 1].messageId)" -ceq $idB -and (Posts-Of $idB) -eq 2 -and @(Marks-Of $H11 $idB).Count -eq 1) ("a restart inside one fill reuses the same id and keeps the mark (" + $l + ")")
+Check ((Get-HordeRelayRunFillStart -HordeHome $H11 -Mailbox "work/phone" -NowMs 5) -eq (Get-HordeDecisionNoticeTakenNowMs -Now $t0.AddSeconds(100))) "the fill start survives in the home"
+
+Write-Host ""
+Write-Host "--- ALREADY POSTED with a brand-new mark is never logged as delivered ---" -ForegroundColor Cyan
+$H12 = New-Home
+$idC = Id-Of $H12 "work/phone" 0
+$script:held[$idC] = $true
+$script:stages[$idC] = "seen"
+$run = New-Run $H12
+$l = Look $run (New-Ctx) 0
+Check ($l.Contains("was NOT sent again") -and -not $l.Contains("TAKEN:") -and @(Marks-Of $H12 $idC).Count -eq 0) ("the messenger answered already-posted for a mark this pass just wrote: said plainly, no mark, no TAKEN (" + $l + ")")
+$l = Look $run (New-Ctx) 30
+Check (-not $l.Contains("TAKEN:") -and (Posts-Of $idC) -eq 1) ("and the next look logs no delivery either, and the notice is not posted again (" + $l + ")")
 
 Write-Host ""
 Write-Host "--- the alarm limit is the setting's ---" -ForegroundColor Cyan
@@ -246,6 +295,37 @@ $null = Look $run (New-Ctx) 0
 $null = Look $run (New-Ctx) 100
 $l = Look $run (New-Ctx) (604800 + 200)
 Check ($l.Contains("NOT DELIVERED, given up") -and $l.Contains("ALARM:") -and @(Marks-Of $H8 $id8).Count -eq 0) ("GIVE-UP: a notice not taken in 7 days is given up with an ALARM (" + $l + ")")
+
+Write-Host ""
+Write-Host "--- through the run itself: the settings reach the list (the alarm limit of the settings file is the one used) ---" -ForegroundColor Cyan
+# The run's channels, keys and relay are stood in for (this suite has no key store); the loop, its settings and its look at the list are real.
+function Invoke-HordeRelayUnfinished { param($Context) return (New-HordeKnown -Value ([pscustomobject]@{ none = $true })) }
+function Get-HordeRelayRunLines { param($Report) return @() }
+function Invoke-HordeRelayChannelTicks { param($Context, $Only) return [pscustomobject]@{ lines = @(); failed = $false; againMs = 0 } }
+function Receive-HordeRelayInbox { param($Context, $TimeoutMs, $SliceMs, $Between, $With) return (New-HordeKnown -Value ([pscustomobject]@{ vouched = @(); joined = @(); refused = @(); held = @(); missing = @(); anomalies = @(); taken = @(); data = @(); opened = $null })) }
+function Close-HordeRelayRunContext { param($Context) }
+function Remove-HordeRelayRetiredAgreeKeys { param($HordeHome) return (New-HordeKnown -Value ([pscustomobject]@{ released = @() })) }
+function ConvertTo-HordeRelayRecordMs { return [long](Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)) }
+$openStub = { param($H, $C, $D) return (New-HordeKnown -Value ([pscustomobject]@{ mailbox = "work/phone"; full = @{}; untrimmed = @{}; refusedWith = @{} })) }
+$conn = [pscustomobject]@{ relay = [pscustomobject]@{ limits = [pscustomobject]@{ maxWatchMs = 60000 } } }
+function New-RunHome {
+    param([string]$SettingsJson)
+    $h = New-Home
+    [System.IO.File]::WriteAllText((Join-Path $h "settings\relay-run.json"), $SettingsJson)
+    $ageMs = [long](Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)) - 100000
+    $mark = ConvertTo-HordeChatTakenMark -Entry ([pscustomobject]@{ messageId = ("ab" * 16); messengerId = "abababab-abab-abab-abab-abababababab"; postedMs = $ageMs; from = "00000000000000000000000000000000"; seq = [long]0; alarmed = $false; woken = $false; session = "" })
+    Write-HordeTakenLedgerFile -Path (Join-Path $h "relay\run-full-taken.json") -Ledger ([pscustomobject]@{ awaiting = @($mark) }) -TempPrefix "test"
+    return $h
+}
+$base = '"minTurnMs": 50, "watchMs": 300, "sendCheckMs": 200'
+$HR1 = New-RunHome ('{"schemaVersion": 1, "settings": {' + $base + ', "takenAlarmSeconds": 3600}}')
+$ran1 = New-Object System.Collections.ArrayList
+$r1 = Invoke-HordeRelayRun -HordeHome $HR1 -Connection $conn -MaxTurns 1 -Say { param($Line) [void]$ran1.Add($Line) } -OpenContext $openStub
+Check ($r1.turns -eq 1 -and @($ran1 | Where-Object { $_ -clike "ALARM: relay-full notice*" }).Count -eq 0 -and @(Get-Marks $HR1 | Where-Object { $_.alarmed }).Count -eq 0) ("a notice 100 s old with takenAlarmSeconds 3600 in the settings file raises NO alarm (" + ($ran1 -join " | ") + ")")
+$HR2 = New-RunHome ('{"schemaVersion": 1, "settings": {' + $base + '}}')
+$ran2 = New-Object System.Collections.ArrayList
+$r2 = Invoke-HordeRelayRun -HordeHome $HR2 -Connection $conn -MaxTurns 1 -Say { param($Line) [void]$ran2.Add($Line) } -OpenContext $openStub
+Check ($r2.turns -eq 1 -and @($ran2 | Where-Object { $_ -clike "ALARM: relay-full notice*" }).Count -eq 1) ("CONTROL: the same notice with the default 90 s alarms once through the run (" + ($ran2 -join " | ") + ")")
 
 Write-Host ""
 Write-Host "--- another mailbox is another notice; a test's home still tells nobody ---" -ForegroundColor Cyan
