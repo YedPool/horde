@@ -41,6 +41,14 @@ function Test-HordeNightlyWindow {
     return ($m -ge $StartHour * 60 -or $m -lt $end)
 }
 
+function Get-HordeNightlyTaskBoundary {
+    # The StartBoundary of the scheduled task's daily trigger for a date: WALL-CLOCK time, no offset and no Z
+    # (T-0397). An offset pins one UTC instant, so the task registered with -05:00 on 10-23 fired at 21:00 on the
+    # nights after the clocks changed (11-01 to 11-03) and the run refused itself. No offset means 22:00 local, always.
+    param([datetime]$Date, [int]$Hour = 22)
+    return ($Date.Date.AddHours($Hour).ToString("yyyy-MM-dd'T'HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))
+}
+
 function Get-HordeNightlyDeadline {
     # The 06:30 this night ends at: the next one at or after Now (a Now before 06:30 means today's).
     param([datetime]$Now, [int]$EndHour = 6, [int]$EndMinute = 30)
