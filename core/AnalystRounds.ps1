@@ -104,7 +104,16 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
     @{ name = "relayEveryMinutes"; kind = "whole"; default = 5; min = 1; max = 120
        what = "How often, in minutes, the hosted relay is checked." },
     @{ name = "relayFailuresBeforeAlert"; kind = "whole"; default = 2; min = 1; max = 10
-       what = "How many failed checks in a row before the warchief is told the relay is down." }
+       what = "How many failed checks in a row before the warchief is told the relay is down." },
+    # THE OVERSEER WATCHER CHECK (core/WatcherHeartbeat.ps1, T-0388): the watcher's run.json must stay fresh.
+    @{ name = "watcherCheck"; kind = "truefalse"; default = $true
+       what = "Whether the overseer watcher's run file is checked, and the founder told when it goes stale." },
+    @{ name = "watcherRunFile"; kind = "text"; min = 0; max = 260; default = ""
+       what = "The watcher's run.json. Empty: <wezfleet root>\_home\orcs\overseer\run.json." },
+    @{ name = "watcherStaleMinutes"; kind = "whole"; default = 30; min = 5; max = 1440
+       what = "How old, in minutes, the watcher's last finished pass may be before it is called stopped." },
+    @{ name = "watcherHungMinutes"; kind = "whole"; default = 15; min = 5; max = 1440
+       what = "How long, in minutes, a pass may stay begun and unfinished before it is called hung." }
 )
 
 $script:HordeAnalystMarkerPattern = '\A[A-Z][A-Z0-9-]{1,23}\z'
