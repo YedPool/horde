@@ -688,7 +688,10 @@ function Get-HordeNightlyWatchVerdict {
     # (state.json pending, summed over repos), -FolderMissing that the work folder is not there at all.
     # { date; status; missed; detail; incomplete; incompleteWhy }. status is one of RAN, NOT STARTED, REFUSED, FAILED,
     # BUSY, NOT REPORTED, NOT TOLD; every one but RAN is MISSED. A night that RAN but headlines INCOMPLETE is not missed.
-    param([string]$Date, [string]$LogText = "", [string[]]$ReportNames = @(), [string]$ReportText = "", [int]$PendingCount = 0, [bool]$FolderMissing = $false)
+    # -BootTime is the PC's last boot (local time, injected so the suite can test it; $null when unknown). A NOT REPORTED night
+    # whose boot falls from the run's start to the window's end says the PC restarted and killed the run (rebootAt, "HH:mm");
+    # a boot before the run began or after the window (the last boot can be a later one) claims nothing.
+    param([string]$Date, [string]$LogText = "", [string[]]$ReportNames = @(), [string]$ReportText = "", [int]$PendingCount = 0, [bool]$FolderMissing = $false, $BootTime = $null)
     $names = @($ReportNames | ForEach-Object { ("" + $_).ToLowerInvariant() })
     $header = '\bnightly net (\d{4}-\d\d-\d\d): window (open|CLOSED)'
     $lines = @(("" + $LogText) -split "`r?`n")
@@ -712,7 +715,7 @@ function Get-HordeNightlyWatchVerdict {
     $haveFailed = ($names -contains ($Date + "-failed.txt"))
     $haveBusy = ($names -contains ($Date + "-busy.txt"))
     $haveRefused = ($names -contains ($Date + "-refused.txt"))
-    $status = ""; $detail = ""
+    $status = ""; $detail = ""; $rebootAt = ""
     if ($haveReport) {
         if ($sent) { $status = "RAN"; $detail = "the net started, wrote its report and the log shows it was sent to M" }
         else {
@@ -726,7 +729,22 @@ function Get-HordeNightlyWatchVerdict {
     }
     elseif ($haveFailed) { $status = "FAILED"; $detail = "the net started and failed: a FAILED report is in the report folder, and there is no report" }
     elseif ($haveBusy) { $status = "BUSY"; $detail = "the net found another run holding its lock and ran nothing (a run from an earlier night may be wedged)" }
-    elseif ($openAt -ge 0) { $status = "NOT REPORTED"; $detail = "the net started (the log shows the window open) but there is no report: it was killed or crashed midway, or the PC was switched off" }
+    elseif ($openAt -ge 0) {
+        $status = "NOT REPORTED"; $detail = "the net started (the log shows the window open) but there is no report: it was killed or crashed midway, or the PC was switched off"
+        $runStart = [datetime]::MinValue; $winEnd = [datetime]::MinValue; $dayStart = [datetime]::MinValue
+        $okDay = [datetime]::TryParseExact($Date, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$dayStart)
+        if ($okDay -and $null -ne $BootTime) {
+            $winEnd = $dayStart.AddDays(1).AddHours(6).AddMinutes(30)
+            $runStart = $dayStart.AddHours(22)
+            $ts = [regex]::Match($lines[$openAt], '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+            if ($ts.Success) { $t = [datetime]::MinValue; if ([datetime]::TryParseExact($ts.Groups[1].Value, "s", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$t)) { $runStart = $t } }
+            $boot = [datetime]$BootTime
+            if ($boot -ge $runStart -and $boot -le $winEnd) {
+                $rebootAt = $boot.ToString("HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
+                $detail = "the net started (the log shows the window open) but there is no report: the PC restarted at " + $rebootAt + " and killed the run"
+            }
+        }
+    }
     elseif ($closed -or $haveRefused) { $status = "REFUSED"; $detail = "the net was started outside its 22:00 to 06:30 window (the log shows the window CLOSED) and ran nothing" }
     else {
         $status = "NOT STARTED"
@@ -740,7 +758,7 @@ function Get-HordeNightlyWatchVerdict {
         $im = [regex]::Match($head, 'INCOMPLETE:.*?(?:\.(?:\s|$)|$)')
         if ($im.Success) { $inc = $true; $incWhy = ConvertTo-HordeNightlyText $im.Value.Trim() }
     }
-    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy }
+    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy; rebootAt = $rebootAt }
 }
 
 function Get-HordeNightlyWatchStreak {
@@ -822,7 +840,7 @@ function Format-HordeNightlyWatchMessage {
             # FAILED started, so "did not run" would be false for those three.
             $said = switch ($Verdict.status) {
                 "NOT TOLD" { "Nightly tests ran on the night of " + $date + ", but the report did not reach M." }
-                "NOT REPORTED" { "Nightly tests started on the night of " + $date + " but did not finish." }
+                "NOT REPORTED" { $(if ($Verdict.PSObject.Properties["rebootAt"] -and "" + $Verdict.rebootAt -ne "") { "Nightly tests started on the night of " + $date + " but the PC restarted at " + $Verdict.rebootAt + " and stopped them." } else { "Nightly tests started on the night of " + $date + " but did not finish." }) }
                 "FAILED" { "Nightly tests started on the night of " + $date + " but failed." }
                 "REFUSED" { "Nightly tests did not run for the night of " + $date + ": they were started outside their allowed hours." }
                 "BUSY" { "Nightly tests did not run for the night of " + $date + ": an earlier run was still in the way." }

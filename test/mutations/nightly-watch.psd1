@@ -105,6 +105,15 @@
         @{ Name = "phone-says-not-run-for-a-night-that-started"
            Find = '"NOT REPORTED" { "Nightly tests started on the night of "'
            Replace = '"NOT REPORTED" { "Nightly tests did not run for the night of "' }
+        @{ Name = "boot-before-the-run-is-a-restart"
+           Find = 'if ($boot -ge $runStart -and $boot -le $winEnd) {'
+           Replace = 'if ($boot -le $winEnd) {' }
+        @{ Name = "boot-after-the-window-is-a-restart"
+           Find = 'if ($boot -ge $runStart -and $boot -le $winEnd) {'
+           Replace = 'if ($boot -ge $runStart) {' }
+        @{ Name = "phone-ignores-the-restart"
+           Find = '-and "" + $Verdict.rebootAt -ne "")'
+           Replace = '-and $false)' }
         @{ Name = "all-failed-when-any-failed"
            Find = 'allFailed = ($results.Count -gt 0 -and $okCount -eq 0)'
            Replace = 'allFailed = ($okCount -lt $results.Count)' }
