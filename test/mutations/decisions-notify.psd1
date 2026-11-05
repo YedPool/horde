@@ -90,8 +90,8 @@
            Replace = 'signedBy = $held["signedBy"]; part = "" }' }
         # --- woken, or only queued (the founder's bug of 2026-10-12)
         @{ Name = "bell-does-not-say-whether-woken"
-           Find = '$posted.value.stage + $wake + ")"'
-           Replace = '$posted.value.stage + ")"' }
+           Find = '$posted.value.stage + $wake + "); SENT'
+           Replace = '$posted.value.stage + "); SENT' }
         # --- the founder, verified - or only his label (2026-10-12)
         @{ Name = "verified-never-put-on-the-notice"
            Find = 'if ($null -ne $who.verified) { $from | Add-Member'
@@ -146,8 +146,8 @@
            Replace = ') { $said = $said + "; " + $note.Value }' }
         # --- one turn of the bell, for the relay runner (the founder's bug of 2026-10-12)
         @{ Name = "turn-rings-beside-a-running-notify"
-           Find = 'if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }'
-           Replace = 'if ($false) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }' }
+           Find = 'if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; lines = @(); againMs = 0 } }'
+           Replace = 'if ($false) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; lines = @(); againMs = 0 } }' }
         @{ Name = "turn-reads-the-inbox-every-time"
            Find = 'if (-not $due) {'
            Replace = 'if ($false) {' }

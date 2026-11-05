@@ -295,10 +295,20 @@ try {
     # Review of 3d837f0: two runs on one home were let race on its state; now the second refuses. The stop
     # file still obeys every run started before it (review of 48bc492, finding 4).
     $runs = New-Object System.Collections.ArrayList
+    # A lock left by an earlier section is not held by anyone now; remove it so its appearing means the first run took the home.
+    $lockFile = Join-Path $hh "relay\run.lock"
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+    Check (-not (Test-Path -LiteralPath $lockFile)) "before the first run starts, no run.lock is left on the home (an earlier run still holds it if one is)"
+    try {
     foreach ($i in 1..2) {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "powershell.exe"
         $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
+        # TEST-ONLY KNOBS (read here only, default off; production code is untouched): they make the SECOND run slow
+        # to start (milliseconds of delay) or never end, to prove the wait below is on the run's exit and not a fixed sleep.
+        if ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_HANG -ceq "1") { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Seconds 600" }
+        elseif ($i -eq 2 -and $env:HORDE_TEST_SECOND_RUN_DELAY_MS -match '^[0-9]+$') { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Milliseconds " + $env:HORDE_TEST_SECOND_RUN_DELAY_MS + "; & powershell.exe " + $psi.Arguments }
+        elseif ($i -eq 1 -and $env:HORDE_TEST_FIRST_RUN_DELAY_MS -match '^[0-9]+$') { $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Milliseconds " + $env:HORDE_TEST_FIRST_RUN_DELAY_MS + "; & powershell.exe " + $psi.Arguments }
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -306,19 +316,37 @@ try {
         $psi.EnvironmentVariables["HORDE_HOME"] = $hh
         $p = [System.Diagnostics.Process]::Start($psi)
         [void]$runs.Add([pscustomobject]@{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
-        Start-Sleep -Milliseconds 1500
+        if ($i -eq 2) { $secondClock = [System.Diagnostics.Stopwatch]::StartNew() }
+        if ($i -eq 1) {
+            # Wait on the event, not a fixed head start: the first run has taken the home when it has created
+            # <home>\relay\run.lock (cli/RelayRun.ps1 opens it OpenOrCreate, no sharing, before its first turn).
+            $took = New-Object System.Diagnostics.Stopwatch
+            $took.Start()
+            while (-not (Test-Path -LiteralPath $lockFile) -and -not $p.HasExited -and $took.ElapsedMilliseconds -lt 20000) { Start-Sleep -Milliseconds 50 }
+            # run.lock stays on disk after a run exits, so the file alone is not proof: the run must still be alive.
+            $heldNow = (Test-Path -LiteralPath $lockFile) -and -not $p.HasExited
+            Check $heldNow $(if ($heldNow) { "the first run took the home (run.lock) before the second was started" } elseif ($p.HasExited) { "the first run ended before taking the home" } else { "the first run never took the home within 20 s" })
+        }
     }
-    try {
-        Start-Sleep -Milliseconds 3000
         $second = $runs[1]
-        Check (-not $runs[0].p.HasExited -and $second.p.HasExited -and $second.p.ExitCode -ne 0) "the first run is running; the second, started beside it on the same home, has ended with an error"
-        Check (($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) "and it says why, plainly"
+        # Wait on the event itself - the second run's exit - not a fixed sleep: a slow box needs longer to start it.
+        $secondEnded = $second.p.WaitForExit(20000)
+        Check ($secondEnded -and -not $runs[0].p.HasExited -and $second.p.ExitCode -ne 0) $(if ($secondEnded) { "the first run is running; the second, started beside it on the same home, has ended with an error" } else { "the first run is running; the second, started beside it on the same home, has ended with an error - but it had NOT ended 20 s after it started (a hang, not a slow start)" })
+        # A run 2 that has not ended is killed (its tree, by the PID started here) BEFORE its output is read: .Result on a
+        # redirected stream blocks until the stream closes, which for a hang is never. Never block forever on it.
+        if (-not $secondEnded) { try { & taskkill.exe /T /F /PID $second.p.Id *> $null } catch { } }
+        $outDone = $second.out.Wait(5000) -and $second.err.Wait(5000)
+        Check ($outDone -and ($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) $(if ($outDone) { "and it says why, plainly" } else { "and it says why, plainly - its output did not close within 5 s of killing it (skipped: it never ended)" })
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
         $ended = $runs[0].p.WaitForExit(30000)
         Check ($stop.code -eq 0 -and $ended -and $runs[0].p.ExitCode -eq 0 -and $runs[0].out.Result.Contains("stopped after") -and $runs[0].out.Result.Contains("stop file")) "horde relay stop ends the first within a turn; it exits 0 and says it stopped for the stop file"
         $next = Invoke-Run -Turns 1
         Check ($next.code -eq 0 -and $next.out.Contains("stopped after 1 turn(s): turns") -and $next.out.Contains("stop file from before")) "a run started after the stop does not obey it: it was a request to the runs before it, and it clears it"
-    } finally { foreach ($x in $runs) { if (-not $x.p.HasExited) { $x.p.Kill() }; $x.p.Dispose() } }
+    } finally {
+        # Kill the tree by the PID this test started (the delay/hang wrapper has the relay as a child); never by name.
+        foreach ($x in $runs) { if (-not $x.p.HasExited) { try { & taskkill.exe /T /F /PID $x.p.Id *> $null } catch { } }; $x.p.Dispose() }
+        if ($null -ne $secondClock) { Write-Host ("  [info] section 6 ran " + $secondClock.ElapsedMilliseconds + " ms from the second run's start to here") }
+    }
     }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin

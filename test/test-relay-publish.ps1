@@ -48,7 +48,7 @@ function Hash { param([string]$Path, [string]$Version) return ("h" + $Version + 
 # hosts every file it built (with the hash it answers) unless the suite says a file is hosted otherwise.
 function New-World {
     param([string]$HordeHome)
-    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true; bundles = @{}; bundleOk = $true; onMain = $true; movedTo = ""; propagateAfter = 0; sleeps = 0; staged = $null
+    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; headReason = "no revision tool"; diffs = @{}; diffOk = $true; diffReason = "bad revision"; upstreamReason = "origin could not be reached"; shippedOk = $true; bundles = @{}; bundleOk = $true; onMain = $true; ancestry = "behind"; ancestryReason = "git could not say"; movedTo = ""; propagateAfter = 0; sleeps = 0; staged = $null
         deploy = "ok"; built = $v2; serveAfter = $null; deploys = 0; calls = (New-Object System.Collections.ArrayList)
         hosted = @{ "app/sw.js" = [pscustomobject]@{ status = 200; body = (Sw $v1); sha256 = (Hash "app/sw.js" $v1) } }
         otherwise = @{}; changed = @("surfaces/pwa/page/app.js")
@@ -63,13 +63,20 @@ function New-Tools {
             $W.sleeps++; $W.now = $W.now.AddMilliseconds($Ms)
             if ($null -ne $W.staged -and $W.sleeps -ge $W.propagateAfter) { foreach ($k in @($W.staged.Keys)) { $W.hosted[$k] = $W.staged[$k] }; $W.staged = $null }
         }
-        Upstream = { param($Checkout, $Commit) [void]$W.calls.Add("upstream " + $Commit.Substring(0, 1)); if ($null -eq $W.onMain) { return (New-HordeUnknown -Reason "origin could not be reached") }; return (New-HordeKnown -Value ([bool]$W.onMain)) }
+        Upstream = { param($Checkout, $Commit) [void]$W.calls.Add("upstream " + $Commit.Substring(0, 1)); if ($null -eq $W.onMain) { return (New-HordeUnknown -Reason $W.upstreamReason) }; return (New-HordeKnown -Value ([bool]$W.onMain)) }
         NewId   = { return [guid]::NewGuid().ToString() }
-        Head    = { param($Checkout) [void]$W.calls.Add("head"); if (-not $W.headOk) { return (New-HordeUnknown -Reason "no revision tool") }; return (New-HordeKnown -Value ([pscustomobject]@{ commit = $W.head; clean = $W.clean })) }
+        Head    = { param($Checkout) [void]$W.calls.Add("head"); if (-not $W.headOk) { return (New-HordeUnknown -Reason $W.headReason) }; return (New-HordeKnown -Value ([pscustomobject]@{ commit = $W.head; clean = $W.clean })) }
+        # How the record relates to the checkout: "behind" (the record is in its history), "newer" (the checkout is in the record's), "diverged", "absent" (not in the clone); "fail" git cannot say.
+        Ancestry = {
+            param($Checkout, $Base, $Head)
+            [void]$W.calls.Add("ancestry " + $Base.Substring(0, 1) + ".." + $Head.Substring(0, 1))
+            if ($W.ancestry -ceq "fail") { return (New-HordeUnknown -Reason $W.ancestryReason) }
+            return (New-HordeKnown -Value ("" + $W.ancestry))
+        }
         Diff    = {
             param($Checkout, $Base, $Head)
             [void]$W.calls.Add("diff " + $Base.Substring(0, 1) + ".." + $Head.Substring(0, 1))
-            if (-not $W.diffOk -or -not $W.diffs.ContainsKey($Base + ".." + $Head)) { return (New-HordeUnknown -Reason "bad revision") }
+            if (-not $W.diffOk -or -not $W.diffs.ContainsKey($Base + ".." + $Head)) { return (New-HordeUnknown -Reason $W.diffReason) }
             return (New-HordeKnown -Value ([pscustomobject]@{ paths = [string[]]@($W.diffs[$Base + ".." + $Head]) }))
         }
         Load    = $null
@@ -333,6 +340,82 @@ try {
     Check ($W.deploys -eq 0 -and $W.told.Count -eq 0) "commits that change no file: nothing done, nobody told"
 
     Write-Host ""
+    Write-Host "--- a record newer than the checkout is current, never a failure and never a deploy (T-0333) ---" -ForegroundColor Cyan
+    # The hosted page is on cB (deployed by hand from a newer checkout); this checkout is still on cA.
+    # Absent: the diff would be "bad object".
+    $W = New-World (New-Home "newer-absent"); $W.head = $cA; $W.ancestry = "absent"; Seed -Commit $cB
+    $l = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and $W.tellCalls -le 2) "a record the checkout does not hold: nothing deployed, nobody told"
+    Check ((Says $l "current - the hosted page is on bbbbbbb, which this checkout does not hold yet (aaaaaaa); nothing to deploy until the checkout moves")) "it says so plainly"
+    Check (@($W.calls | Where-Object { $_ -like "diff*" -or $_ -ceq "shipped" -or $_ -like "bundle*" -or $_ -like "upstream*" }).Count -eq 0) "and reads no range, bundles nothing"
+    Check (-not [System.IO.File]::Exists((Get-HordeRelayPublishLogPath -HordeHome $W.home)) -or -not ([System.IO.File]::ReadAllText((Get-HordeRelayPublishLogPath -HordeHome $W.home)) -match "NOT DEPLOYED")) "and logs no failure"
+    # Present: the diff would list the newer commit's files and roll the page back.
+    $W = New-World (New-Home "newer-present"); $W.head = $cA; $W.ancestry = "newer"; Seed -Commit $cB
+    Range @("surfaces/pwa/page/app.js") -From $cB -To $cA
+    $null = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and @($W.calls | Where-Object { $_ -like "diff*" }).Count -eq 0) "a newer record whose commit is present is not diffed, and the older checkout is not deployed over it"
+    # THE LIVE SEQUENCE OF 2026-10-26 (18:32 UTC): the record names a commit the runner's clone lacks; a
+    # scratch-copy check then fetches it, so the next tick can read the range - and used to deploy the
+    # older checkout over the newer hosted page. Same home, same record, the object appearing between ticks.
+    $W = New-World (New-Home "live-1026"); $W.head = $cA; $W.ancestry = "absent"; Seed -Commit $cB
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0) "live 10-26 tick 1: the object is absent, the record is newer: nothing deployed, nobody told"
+    Range @("surfaces/pwa/page/app.js", "cli/RelayDeploy.ps1") -From $cB -To $cA
+    $W.ancestry = "newer"; $W.diffOk = $true; $null = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and @($W.calls | Where-Object { $_ -like "diff*" -or $_ -like "deploy*" }).Count -eq 0) "live 10-26 tick 2: the object is now present and the range reads as a page change, yet the record is newer: nothing deployed, never diffed"
+    $W.head = $cB; $W.ancestry = "behind"; $l = Pass
+    Check ($W.deploys -eq 0 -and (Says $l "current")) "live 10-26 tick 3: the runner moves to the record: current, nothing to deploy"
+    # An episode that was troubled ends, so a later trouble is told again.
+    $W = New-World (New-Home "newer-episode"); $W.head = $cA; $W.diffOk = $false; Seed -Commit $cC
+    $W.head = $cB; $W.ancestry = "behind"; $null = Pass
+    Check ((Whats) -ceq "unreadable") "CONTROL: a real diff failure on a record that is an ancestor stays unreadable"
+    $W.ancestry = "newer"; $null = Pass
+    Check ((Whats) -ceq "unreadable" -and $W.deploys -eq 0) "the record being newer queues nothing more and deploys nothing"
+    $W.ancestry = "behind"; $W.diffOk = $true; Range @("surfaces/pwa/page/app.js") -From $cC -To $cB
+    $null = Pass
+    Check ($W.deploys -eq 1) "the checkout catching up resumes the normal path: it deploys"
+    # An ancestor record is the normal diff.
+    $W = New-World (New-Home "ancestor"); Seed; Range @("surfaces/pwa/page/app.js")
+    $null = Pass
+    Check ($W.deploys -eq 1 -and @($W.calls | Where-Object { $_ -ceq "ancestry a..b" }).Count -eq 1 -and @($W.calls | Where-Object { $_ -like "diff*" }).Count -eq 1) "a record that is an ancestor is asked once and diffed as ever"
+    # Caught up: the checkout moves onto the record.
+    $W = New-World (New-Home "catch-up"); $W.head = $cA; $W.ancestry = "absent"; Seed -Commit $cB
+    $null = Pass
+    $W.head = $cB; $W.ancestry = "behind"; $l = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Says $l "current - the hosted page was deployed from this commit")) "the checkout reaching the record is current, as ever"
+    # The tool itself failing is not 'newer'.
+    $W = New-World (New-Home "ancestry-fails"); Seed; $W.ancestry = "fail"; Range @("surfaces/pwa/page/app.js")
+    $null = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "an ancestry that git cannot answer is unreadable, told once, not deployed"
+
+    # M1 (round 3): newer is quiet and logged; diverged is told at once; absent is quiet until it persists.
+    $W = New-World (New-Home "newer-logged"); $W.head = $cA; $W.ancestry = "newer"; Seed -Commit $cB
+    $null = Pass
+    Check ((Says ([System.IO.File]::ReadAllText((Get-HordeRelayPublishLogPath -HordeHome $W.home))) "newer than this checkout") -and $W.told.Count -eq 0) "a record the checkout is behind: one log line, nobody told"
+    $W = New-World (New-Home "diverged"); $W.head = $cA; $W.ancestry = "diverged"; Seed -Commit $cB
+    $l = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 1 -and (Whats) -ceq "diverged") "a record unrelated to the checkout: not deployed, told at once"
+    Check ((Says $l "unrelated to this checkout") -and (Says $l "bbbbbbb") -and (Says $l "aaaaaaa")) "and it names both commits and says someone must decide"
+    $null = Pass; $null = Pass
+    Check ($W.told.Count -eq 1 -and @($W.calls | Where-Object { $_ -like "diff*" }).Count -eq 0) "and the same pair is not told again, nor diffed"
+    $W.ancestry = "behind"; $W.head = $cB; $null = Pass
+    $W = New-World (New-Home "absent-persists"); $W.head = $cA; $W.ancestry = "absent"; Seed -Commit $cB
+    for ($k = 1; $k -le 4; $k++) { $null = Pass }
+    Check ($W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.absent -eq 4) "a record absent from the clone for 4 passes: quiet, and counted"
+    $null = Pass
+    Check ($W.told.Count -eq 1 -and (Whats) -ceq "record-absent" -and $W.deploys -eq 0) "still absent on the 5th pass: told once"
+    $null = Pass; $null = Pass
+    Check ($W.told.Count -eq 1) "and not told again while it stays absent"
+    $W = New-World (New-Home "absent-reset"); $W.head = $cA; $W.ancestry = "absent"; Seed -Commit $cB
+    for ($k = 1; $k -le 4; $k++) { $null = Pass }
+    $W.ancestry = "newer"; $null = Pass
+    Check ((Read-HordeRelayPublishState -HordeHome $W.home).value.absent -eq 0) "a pass where the record is present resets the count"
+    $W.ancestry = "absent"
+    for ($k = 1; $k -le 4; $k++) { $null = Pass }
+    Check ($W.told.Count -eq 0) "so four more absent passes are still quiet"
+
+
+    Write-Host ""
     Write-Host "--- a failed deploy warns once and is retried no sooner than an hour ---" -ForegroundColor Cyan
     $W = New-World (New-Home "failed"); Seed; $W.deploy = "fail"
     Range @("surfaces/pwa/page/app.js")
@@ -501,6 +584,70 @@ try {
     $W = New-World (New-Home "no-head"); Seed; $W.headOk = $false
     $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a commit that cannot be read is not deployed"
+    # T-0380: the 2026-10-28 05:41Z incident - the checkout's rev-parse did not finish in 20 s, the card said
+    # "needs attention", and the next pass (05:47Z) was fine. The reason is the exact text the real tool gives.
+    $slowWords = "the checkout's commit could not be read: its checkout X is not a checkout (git rev-parse: it did not finish within 20 s and was ended)"
+    $W = New-World (New-Home "slow-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $l = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0) "a git call that runs out of time, once: nothing deployed and nothing told"
+    $st = (Read-HordeRelayPublishState -HordeHome $W.home).value
+    Check ($st.troubled -ne $true -and @($st.told).Count -eq 0 -and $st.slow -eq 1) "and the episode is not troubled, no key is told, the slow pass is counted"
+    Check (Says $l "next pass looks again") "and the pass says it will look again"
+    $W.headOk = $true; $W.now = $t0.AddMinutes(6)
+    $l = Pass
+    Check ($W.deploys -eq 1 -and $W.told.Count -eq 1 -and (Whats) -ceq "deployed") "the next pass deploys, and only the deploy is told"
+    Check ((Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the count starts over"
+    $W = New-World (New-Home "slow-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "two passes in a row that run out of time: the second is told"
+    $null = Pass
+    Check ((Whats) -ceq "unreadable") "and a third is not told again in the same episode"
+    $W = New-World (New-Home "slow-reset"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = $slowWords
+    $null = Pass
+    $W.headOk = $true; $W.deploy = "fail"; $W.now = $t0.AddMinutes(6); $null = Pass
+    $W.headOk = $false; $W.headReason = $slowWords; $W.now = $t0.AddHours(2); $null = Pass
+    Check (-not (@($W.told | ForEach-Object { $_.what }) -ccontains "unreadable")) "a pass between two slow ones starts the count over: the second slow one is quiet again"
+    $W = New-World (New-Home "not-slow"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.headOk = $false; $W.headReason = "the checkout's commit could not be read: its checkout X is not a checkout (git rev-parse: fatal: not a git repository)"
+    $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a failure that is not a time-out is told at once, as before"
+    # The same three cases at the diff and at the origin/main fetch (round 2, S1).
+    $W = New-World (New-Home "slow-diff-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.diffOk = $false; $W.diffReason = $slowWords
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 1) "a diff that runs out of time, once: nothing deployed, nothing told"
+    $W.diffOk = $true; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed" -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the next pass deploys clean"
+    $W = New-World (New-Home "slow-diff-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.diffOk = $false; $W.diffReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "a diff that runs out of time twice in a row is told on the second"
+    $W = New-World (New-Home "slow-ancestry-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.ancestry = "fail"; $W.ancestryReason = $slowWords
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 1) "an ancestry check that runs out of time, once: nothing deployed, nothing told"
+    $W.ancestry = "behind"; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed") "and the next pass deploys clean"
+    $W = New-World (New-Home "slow-ancestry-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.ancestry = "fail"; $W.ancestryReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "an ancestry check that runs out of time twice in a row is told on the second"
+    $W = New-World (New-Home "slow-main-once"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.onMain = $null; $W.upstreamReason = $slowWords
+    $null = Pass
+    Check ($W.deploys -eq 0 -and $W.told.Count -eq 0 -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 1 -and $null -eq (Read-HordeRelayPublishState -HordeHome $W.home).value.failure) "an origin/main fetch that runs out of time, once: nothing deployed, nothing told, no failure kept"
+    $W.onMain = $true; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed" -and (Read-HordeRelayPublishState -HordeHome $W.home).value.slow -eq 0) "and the next pass deploys clean"
+    $W = New-World (New-Home "slow-main-twice"); Seed; Range @("surfaces/pwa/page/app.js")
+    $W.onMain = $null; $W.upstreamReason = $slowWords
+    $null = Pass; $W.now = $t0.AddMinutes(6); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable") "an origin/main fetch that runs out of time twice in a row is told on the second"
+    $W = New-World (New-Home "other-diff"); Seed; $W.diffOk = $false
+    $null = Pass
+    Check ($W.told.Count -eq 1) "a diff that fails for another reason is still told at once"
     $W = New-World (New-Home "interrupted"); Seed
     Range @("surfaces/pwa/page/app.js")
     $s0 = New-HordeRelayPublishState; $s0.attempt = [pscustomobject]@{ head = $cB; base = $cA; at = $t0.AddMinutes(-5) }
@@ -721,6 +868,39 @@ try {
     $c2 = ("" + (& git -C $git rev-parse HEAD)).Trim()
     $ch = Get-HordeRelayPublishChanged -Checkout $git -Base $c1 -Head $c2
     Check ($ch.state -ceq "known" -and (@($ch.value.paths) -ccontains "relays/zorb/a.js") -and (@($ch.value.paths) -ccontains "other/a.js")) "a file moved out of a folder is both its old path and its new one"
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c1 -Head $c2
+    Check ($bh.state -ceq "known" -and $bh.value -ceq "behind") "the real ancestry: an older commit is behind the head"
+    Check ((Test-HordeRelayPublishBehind -Checkout $git -Base $c2 -Head $c2).value -ceq "behind") "and the head is behind itself"
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c2 -Head $c1
+    Check ($bh.state -ceq "known" -and $bh.value -ceq "newer") "a newer commit the checkout holds is newer"
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base ("9" * 40) -Head $c2
+    Check ($bh.state -ceq "known" -and $bh.value -ceq "absent") "a commit the checkout does not hold is absent, and is no failure"
+    $c3 = ("" + (& git -C $git commit-tree ($c1 + "^{tree}") -p $c1 -m "side")).Trim()
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c3 -Head $c2
+    Check ($bh.state -ceq "known" -and $bh.value -ceq "diverged") "two commits neither of which holds the other are diverged"
+    $tree = ("" + (& git -C $git rev-parse ($c1 + "^{tree}"))).Trim()
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $tree -Head $c2
+    Check ($bh.state -ceq "unknown") "a tree id (present, not a commit) is unknown, not absent"
+    $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c1 -Head $tree
+    Check ($bh.state -ceq "unknown") "git failing in merge-base after cat-file succeeded is unknown, not diverged"
+    $bh = Test-HordeRelayPublishBehind -Checkout (New-Home "not-a-repo") -Base $c1 -Head $c2
+    Check ($bh.state -ceq "unknown") "git failing outright (not a repository) is unknown, not absent"
+    # The second merge-base (is the head in the record's history?) can itself time out or find no git: the
+    # port answers code -1, which is unknown (quiet once when it is a time-out), never diverged.
+    $realGit = (Get-Command Invoke-HordeServiceGit -CommandType Function).ScriptBlock
+    foreach ($case in @(@("time-out", "git merge-base: it did not finish within 20 s and was ended"), @("no git", "the revision tool (git) was not found on this machine"))) {
+        $script:gitStubCalls = 0; $script:gitStubDetail = $case[1]; $script:gitRealGit = $realGit
+        Set-Item -Path Function:Invoke-HordeServiceGit -Value {
+            param($Checkout, $Arguments, $TimeoutSeconds)
+            $script:gitStubCalls++
+            if ($script:gitStubCalls -ge 3) { return [pscustomobject]@{ ok = $false; code = -1; out = ""; detail = $script:gitStubDetail } }
+            return (& $script:gitRealGit -Checkout $Checkout -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds)
+        }
+        try { $bh = Test-HordeRelayPublishBehind -Checkout $git -Base $c3 -Head $c2 } finally { Set-Item -Path Function:Invoke-HordeServiceGit -Value $realGit }
+        Check ($bh.state -ceq "unknown" -and $script:gitStubCalls -eq 3) ("the head-in-record merge-base failing outright (" + $case[0] + ") is unknown, not diverged")
+        if ($case[0] -ceq "time-out") { Check ("" + $bh.reason -cmatch 'did not finish within [0-9]+ s and was ended') "and a time-out keeps the words the quiet-once rule reads" }
+    }
+    Check ((Test-HordeRelayPublishBehind -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool (ancestry)"
     Check ((Get-HordeRelayPublishChanged -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool"
     # Refused by their words, before any request: the addresses are this machine's closed port.
     Check ((Get-HordeRelayPublishUrl -Url "http://127.0.0.1:9/app/sw.js").reason -like "only an https address*") "an address that is not https is never asked"

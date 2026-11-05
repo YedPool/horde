@@ -30,6 +30,14 @@ Check ((Test-HordeNightlyMayStartRun -Now ([datetime]"2026-10-23 06:04:59") -Cut
 Check ((Test-HordeNightlyMayStartRun -Now ([datetime]"2026-10-23 06:05:01") -Cutoff $cut -RunSeconds 1500) -eq $false) "and not at 06:05:01"
 
 Write-Host ""
+Write-Host "--- T-0397: the schedule is wall-clock time, a boundary with no offset ---" -ForegroundColor Cyan
+$bd = Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04") -Hour 22
+Check ($bd -ceq "2026-11-04T22:00:00") ("the boundary reads 22:00:00 (" + $bd + ")")
+Check ($bd -notmatch '[Zz]$' -and $bd -notmatch '[+-]\d\d:\d\d$') "and carries no offset and no Z"
+Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04 15:45") -Hour 22) -ceq "2026-11-04T22:00:00") "a date with a time of day still gives 22:00:00"
+Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04")) -ceq "2026-11-04T22:00:00") "with no -Hour the boundary is 22:00:00 (the function's own default)"
+
+Write-Host ""
 Write-Host "--- text for a tell: no double quote, semicolon or angle bracket ---" -ForegroundColor Cyan
 $raw = "a ""quoted"" word; <tag> and `tick` and `$var`r`nnext" + [char]0xE9
 $c = ConvertTo-HordeNightlyText $raw
@@ -427,6 +435,12 @@ try {
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 3.25 GB free*")) "-MinFreeGB is the one setting that moves the day floor"
     Check ((($o -join "`n") -like "*PLAN apps: -NoCloseApps, nothing would be closed*")) "-NoCloseApps: -Plan says nothing would be closed"
+    # The registrar's own -Hour default, read from its dry run (-Plan registers nothing and returns before the scheduler is touched).
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\Register-NightlyTask.ps1") -Plan -HordeRoot $root)
+    $rtxt = $o -join "`n"
+    Check ($LASTEXITCODE -eq 0 -and $rtxt -like "*dry run: nothing registered*") ("the registrar -Plan registers nothing (" + $LASTEXITCODE + ")")
+    Check ($rtxt -match '<StartBoundary>\d{4}-\d\d-\d\dT22:00:00</StartBoundary>') "and with no -Hour the registrar's boundary is 22:00:00 (its own default)"
+    Check ($rtxt -like "*settings:*start on battery*not stopped on battery*") "and its settings line states that a run starts on battery and is not stopped when the PC goes onto battery"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
@@ -448,6 +462,25 @@ try {
     $bm = [regex]::Match($rt, '-MessageFile "?([^"\r\n]+?)"?\s*$', "Multiline")
     Check ($bm.Success -and $rt -like "*tell M -Kind report*" -and (Test-Path -LiteralPath $bm.Groups[1].Value) -and ([System.IO.File]::ReadAllText($bm.Groups[1].Value) -like "*NOT RUN, another nightly run still holds the lock*")) ("R4: and M is told the night did not run (" + $rt.Trim() + ")")
     Check ($rt -like "*GCM=never PROMPT=0*") "R4: the night runs with no git credential prompt of either kind (GCM_INTERACTIVE=never, GIT_TERMINAL_PROMPT=0)"
+    # T-0397: a start outside the window is never silent. It writes a report, tells the target and still exits 4;
+    # -NoTell keeps the report but tells nobody; a tell that fails leaves the exit at 4.
+    if (Test-Path -LiteralPath $rec) { Remove-Item -LiteralPath $rec -Force }
+    $rwr = Join-Path $work "wr-refused"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-11-01T21:00:00" -WorkRoot $rwr -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+    $rc = $LASTEXITCODE
+    $rt = $(if (Test-Path -LiteralPath $rec) { [System.IO.File]::ReadAllText($rec) } else { "" })
+    $rm = [regex]::Match($rt, '-MessageFile "?([^"\r\n]+?)"?\s*$', "Multiline")
+    Check ($rc -eq 4) ("T-0397: a start outside the window exits 4 (" + $rc + ")")
+    Check ($rm.Success -and $rt -like "*tell M -Kind report*" -and (Test-Path -LiteralPath $rm.Groups[1].Value) -and ([System.IO.File]::ReadAllText($rm.Groups[1].Value) -like "*NOT RUN*21:00*outside the night window*nothing ran*")) ("T-0397: and M is told, naming the start time, the window and that nothing ran (" + $rt.Trim() + ")")
+    if (Test-Path -LiteralPath $rec) { Remove-Item -LiteralPath $rec -Force }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-11-01T21:00:00" -NoTell -WorkRoot (Join-Path $work "wr-refused-nt") -TellProgram $stub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+    $nc = $LASTEXITCODE
+    Check ($nc -eq 4 -and -not (Test-Path -LiteralPath $rec)) ("T-0397: with -NoTell nobody is told and the exit is still 4 (" + $nc + ")")
+    Check (Test-Path -LiteralPath (Join-Path (Join-Path $work "wr-refused-nt") "reports\2026-11-01-REFUSED.txt")) "T-0397: and the report file is kept in the report folder"
+    $failStub = Join-Path $stubDir "tellfail.cmd"
+    [System.IO.File]::WriteAllText($failStub, "@echo off`r`nexit /b 1`r`n")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime "2026-11-01T21:00:00" -WorkRoot (Join-Path $work "wr-refused-f") -TellProgram $failStub -TellRetrySeconds 0 -Repos "Fix/Repo:pytest:main")
+    Check ($LASTEXITCODE -eq 4) ("T-0397: a tell that fails leaves the exit at 4 (" + $LASTEXITCODE + ")")
     # R5 (review of PR 380, finding 6): a work folder that cannot be made still ends in a FAILED line told to M, written
     # under the temp path, and the first log line is kept there. The child's temp path is pointed into this test's folder.
     $blocker = Join-Path $work "a-file"; [System.IO.File]::WriteAllText($blocker, "x")

@@ -150,6 +150,41 @@ function Add-HordeChatTaken {
     return $true
 }
 
+function Read-HordeTakenLedgerFile {
+    # A list of awaiting marks kept in its own file, for any caller whose list is not the chat state's (the
+    # answers to published items, channels/chat/Answer.ps1; the routed decisions, decisions/RouteTaken.ps1):
+    # known { awaiting }, the empty list when there is no file yet, unknown when the file cannot be read or does
+    # not hold together - never a guess, and never quietly started over. -What names the file in the words
+    # of a refusal ("the answers ledger"), -Noun one entry in them ("answer").
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][string]$Noun)
+    if (-not [System.IO.File]::Exists($Path)) { return (New-HordeKnown -Value ([pscustomobject]@{ awaiting = @() })) }
+    $why = $What + " " + $Path + " does not hold together"
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path); Assert-HordeAsciiBytes -Bytes $bytes -What ($What + " " + $Path); $text = [System.Text.Encoding]::ASCII.GetString($bytes) }
+    catch { return (New-HordeUnknown -Reason ($What + " " + $Path + " cannot be read: " + $_.Exception.Message)) }
+    if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (New-HordeUnknown -Reason ($why + ": a member is repeated")) }
+    try { $s = ConvertFrom-HordeJson $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
+    if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
+    $names = (@($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join ","
+    if ($names -cne "awaiting,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + $names)) }
+    if (-not ($s.v -is [int] -or $s.v -is [long]) -or $s.v -ne 1) { return (New-HordeUnknown -Reason ($why + ": it is not version 1")) }
+    foreach ($a in @($s.awaiting)) { if ($a -isnot [string] -or $a -cnotmatch $script:HordeChatTakenMarkPattern) { return (New-HordeUnknown -Reason ($why + ": an awaiting " + $Noun + " is not a mark")) } }
+    return (New-HordeKnown -Value ([pscustomobject]@{ awaiting = @($s.awaiting) }))
+}
+
+function Write-HordeTakenLedgerFile {
+    # The list of awaiting marks, replaced whole in one rename (core/FileAtomic.ps1). Throws when it cannot be
+    # written. -TempPrefix names the file it is written beside itself as.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Ledger, [Parameter(Mandatory = $true)][string]$TempPrefix)
+    $dir = [System.IO.Path]::GetDirectoryName($Path)
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    $marks = (@($Ledger.awaiting) | ForEach-Object { '"' + $_ + '"' }) -join ","
+    $text = '{"v":1,"awaiting":[' + $marks + ']}'
+    $tmp = [System.IO.Path]::Combine($dir, ($TempPrefix + "-" + [guid]::NewGuid().ToString("N") + ".tmp"))
+    $fs = New-Object System.IO.FileStream -ArgumentList $tmp, ([System.IO.FileMode]::CreateNew), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::None)
+    try { $b = [System.Text.Encoding]::ASCII.GetBytes($text); $fs.Write($b, 0, $b.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+    try { Move-HordeFileAtomic -From $tmp -To $Path } catch { try { [System.IO.File]::Delete($tmp) } catch { }; throw }
+}
+
 function Get-HordeChatTakenAction {
     # What to do with one awaiting line, from what the messenger says of it and how old it is. PURE: no
     # clock, no file. -Status is the messenger port's answer to a status (known with a stage, absent or
