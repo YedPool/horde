@@ -283,7 +283,9 @@ Check ((Alarms-In ($r.lines -join " | ")) -eq 0) "and the next pass does not say
 $script:stages[$idP] = "seen"
 $r = Invoke-HordeServiceSupervisor -HordeHome $HP -Tools @{ Now = { return [datetime]::UtcNow }; TellTaken = { param($HordeHome, $Policy) return @(Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow.AddSeconds(400)) -AlarmSeconds 90 -AfterAlarmSeconds 60) } }
 Check (($r.lines -join " | ").Contains("TAKEN: services notice " + $idP) -and @(Marks-Of $HP $idP).Count -eq 0) ("and the TAKEN is among them (" + ($r.lines -join " | ") + ")")
-$boom = Invoke-HordeServiceSupervisor -HordeHome $HP -Tools @{ Now = { return [datetime]::UtcNow }; TellTaken = { param($HordeHome, $Policy) throw "the look fell over" } }
+# A pass that throws is a failed check, not a broken suite (tools/Mutate.ps1 counts only a failed check as a catch).
+try { $boom = Invoke-HordeServiceSupervisor -HordeHome $HP -Tools @{ Now = { return [datetime]::UtcNow }; TellTaken = { param($HordeHome, $Policy) throw "the look fell over" } } }
+catch { $boom = [pscustomobject]@{ ran = $false; lines = @("IT THREW: " + $_.Exception.Message) } }
 Check ($boom.ran -and ($boom.lines -join " ").Contains("the awaiting notices could not be asked: the look fell over")) "a look that throws costs the look, not the pass"
 
 Write-Host ""
