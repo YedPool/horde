@@ -646,6 +646,28 @@ function New-HordeNightlyReport {
 # THE WATCHER NEVER SAYS A RUN WAS RIGHT: only whether it happened and was reported.
 # ---------------------------------------------------------------------------------------------------------------
 
+function Get-HordeNightlyRetryDecision {
+    # Should the logon retry run the net now? (T-0397; tools/nightly/NightlyRetry.ps1.) Decided from evidence only, in this
+    # order, and the first condition that fails decides: "outside the night window", "too little time" (fewer than
+    # -MinMinutes before the run cutoff: 180, because the net runs its units fewest first at up to 25 minutes each and a
+    # shorter run is a sliver that reads like a normal night), "report exists", "final report exists" (a FAILED, BUSY or
+    # REFUSED file for the night), "already retried" (a marker for the night exists, whatever it holds: an unreadable or
+    # corrupt one counts, so a broken marker can never make a loop), "net is running" (its lock is held; the net's own
+    # lock stays the real guard). { run; condition; night; minutesLeft }. Only a night with none of those runs.
+    param([datetime]$Now, [string[]]$ReportNames = @(), [bool]$MarkerExists = $false, [bool]$NetAlive = $false, [int]$MinMinutes = 180, [int]$ReportReserveMinutes = 15)
+    $night = Get-HordeNightlyNightLabel -Time $Now
+    $names = @($ReportNames | ForEach-Object { ("" + $_).ToLowerInvariant() })
+    $left = [int][math]::Floor((Get-HordeNightlyRunCutoff -Now $Now -ReportReserveMinutes $ReportReserveMinutes).Subtract($Now).TotalMinutes)
+    $cond = "run"
+    if (-not (Test-HordeNightlyWindow -Now $Now)) { $cond = "outside the night window" }
+    elseif ($left -lt $MinMinutes) { $cond = "too little time" }
+    elseif ($names -contains ($night + ".txt")) { $cond = "report exists" }
+    elseif ($names -contains ($night + "-failed.txt") -or $names -contains ($night + "-busy.txt") -or $names -contains ($night + "-refused.txt")) { $cond = "final report exists" }
+    elseif ($MarkerExists) { $cond = "already retried" }
+    elseif ($NetAlive) { $cond = "net is running" }
+    return [pscustomobject]@{ run = ($cond -ceq "run"); condition = $cond; night = $night; minutesLeft = $left }
+}
+
 function Get-HordeNightlyWatchNight {
     # The night to judge at -Now: the one that began yesterday at 22:00 LOCAL, by the calendar (a clock-change day is 23
     # or 25 hours long, so the date is walked, never a count of hours). Before 06:30 that night is still running, so the
@@ -727,6 +749,8 @@ function Get-HordeNightlyWatchVerdict {
     $haveBusy = ($names -contains ($Date + "-busy.txt"))
     $haveRefused = ($names -contains ($Date + "-refused.txt"))
     $status = ""; $detail = ""; $rebootAt = ""
+    # The restart retry (tools/nightly/NightlyRetry.ps1) logs "nightly retry <date>:" when it starts the net once more.
+    $retried = [regex]::IsMatch(("" + $LogText), ("(?m)\bnightly retry " + [regex]::Escape($Date) + ": "))
     if ($haveReport) {
         if ($sent) { $status = "RAN"; $detail = "the net started, wrote its report and the log shows it was sent to M" }
         else {
@@ -763,13 +787,14 @@ function Get-HordeNightlyWatchVerdict {
         if ($FolderMissing) { $detail += " (the work folder does not exist)" }
         elseif ("" + $LogText -eq "" -and $names.Count -eq 0) { $detail += " (the work folder holds no log and no report)" }
     }
+    if ($retried -and $status -cne "RAN") { $detail += " (a retry after a restart was also made that night)" }
     $inc = $false; $incWhy = ""
     if ($status -ceq "RAN") {
         $head = (("" + $ReportText) -split "`r?`n")[0]
         $im = [regex]::Match($head, 'INCOMPLETE:.*?(?:\.(?:\s|$)|$)')
         if ($im.Success) { $inc = $true; $incWhy = ConvertTo-HordeNightlyText $im.Value.Trim() }
     }
-    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy; rebootAt = $rebootAt }
+    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy; rebootAt = $rebootAt; retried = $retried }
 }
 
 function Get-HordeNightlyWatchStreak {
@@ -863,6 +888,7 @@ function Format-HordeNightlyWatchMessage {
             $lines += ("NIGHTLY WATCH " + $date + ": the night ran, but the scheduled task looks wrong.")
             $phone = "The nightly tests ran for " + $date + ", but their scheduled task looks wrong: " + $tasks[0] + "."
         }
+        if ($Verdict.missed -and $Verdict.PSObject.Properties["retried"] -and $Verdict.retried) { $phone += " A retry after the restart was made." }
         $phone += " Details are with M."
         foreach ($f in $tasks) { $lines += ("TASK: " + $f + ".") }
     }
