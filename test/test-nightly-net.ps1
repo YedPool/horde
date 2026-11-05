@@ -35,6 +35,25 @@ $bd = Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04") -Hour 22
 Check ($bd -ceq "2026-11-04T22:00:00") ("the boundary reads 22:00:00 (" + $bd + ")")
 Check ($bd -notmatch '[Zz]$' -and $bd -notmatch '[+-]\d\d:\d\d$') "and carries no offset and no Z"
 Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04 15:45") -Hour 22) -ceq "2026-11-04T22:00:00") "a date with a time of day still gives 22:00:00"
+
+Write-Host ""
+Write-Host "--- T-0397: a night is labelled by the date it began, one function for the net and the watcher ---" -ForegroundColor Cyan
+function Label { param([string]$T) return (Get-HordeNightlyNightLabel -Time ([datetime]$T)) }
+Check ((Label "2026-11-04 21:59") -ceq "2026-11-04") "21:59 is still the day's own label (the night has not begun; a refused start is named by that day)"
+Check ((Label "2026-11-04 22:00") -ceq "2026-11-04") "22:00 begins night 11-04"
+Check ((Label "2026-11-04 23:59") -ceq "2026-11-04") "23:59 is night 11-04"
+Check ((Label "2026-11-05 00:00") -ceq "2026-11-04") "00:00 is still night 11-04, not 11-05"
+Check ((Label "2026-11-05 01:00") -ceq "2026-11-04") "01:00 is night 11-04"
+Check ((Label "2026-11-05 06:29") -ceq "2026-11-04") "06:29 is the last minute of night 11-04"
+Check ((Label "2026-11-05 06:30") -ceq "2026-11-05") "06:30 is the next day's label"
+Check ((Label "2026-11-01 00:30") -ceq "2026-10-31" -and (Label "2026-11-01 06:29") -ceq "2026-10-31" -and (Label "2026-11-01 06:30") -ceq "2026-11-01") "fall-back day 2026-11-01 (25 hours): labelled by the calendar"
+Check ((Label "2027-03-14 01:00") -ceq "2027-03-13" -and (Label "2027-03-14 03:30") -ceq "2027-03-13" -and (Label "2027-03-14 06:29") -ceq "2027-03-13" -and (Label "2027-03-14 06:30") -ceq "2027-03-14") "spring-forward day 2027-03-14 (23 hours): labelled by the calendar"
+foreach ($now in @("2026-11-04 07:15", "2026-11-02 07:15", "2027-03-15 07:15", "2026-11-04 05:00")) {
+    $wn = Get-HordeNightlyWatchNight -Now ([datetime]$now)
+    $ok = $true
+    foreach ($t in @($wn.start, $wn.start.AddHours(1), $wn.start.Date.AddHours(23).AddMinutes(59), $wn.start.Date.AddDays(1), $wn.end.AddMinutes(-1))) { if ((Get-HordeNightlyNightLabel -Time $t) -cne $wn.date) { $ok = $false } }
+    Check $ok ("the net's label and the watcher's night agree for every minute of the night the watcher judges at " + $now)
+}
 Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04")) -ceq "2026-11-04T22:00:00") "with no -Hour the boundary is 22:00:00 (the function's own default)"
 
 Write-Host ""
@@ -443,6 +462,11 @@ try {
     Check ($rtxt -like "*settings:*start on battery*not stopped on battery*") "and its settings line states that a run starts on battery and is not stopped when the PC goes onto battery"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
+    # T-0397: a run started at 01:00 is night 11-04's run, with that morning's cutoff and its own report names.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-11-05T01:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*nightly net 2026-11-04: window open, cutoff 2026-11-05T06:15:00*")) "a start at 01:00 is labelled with the night's date and gets that morning's cutoff"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-11-04T23:30:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*nightly net 2026-11-04: window open, cutoff 2026-11-05T06:15:00*")) "and a start at 23:30 is the same night with the same cutoff"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")

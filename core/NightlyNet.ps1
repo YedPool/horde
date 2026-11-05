@@ -41,6 +41,17 @@ function Test-HordeNightlyWindow {
     return ($m -ge $StartHour * 60 -or $m -lt $end)
 }
 
+function Get-HordeNightlyNightLabel {
+    # The label (yyyy-MM-dd) of the night a moment belongs to: the date the night BEGAN, so 00:00 to 06:29 belong to the
+    # day before (T-0397). The net labels its log, reports and state with this and the watcher judges a night by it, so
+    # the two cannot disagree: before, a run started at 01:00 was labelled with the next day and the watcher read a
+    # NOT STARTED. A moment from 06:30 to 21:59 is labelled with its own date (a refused start is named by that day).
+    param([datetime]$Time, [int]$EndHour = 6, [int]$EndMinute = 30)
+    $d = $Time.Date
+    if ($Time -lt $d.AddHours($EndHour).AddMinutes($EndMinute)) { $d = $d.AddDays(-1) }
+    return $d.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-HordeNightlyTaskBoundary {
     # The StartBoundary of the scheduled task's daily trigger for a date: WALL-CLOCK time, no offset and no Z
     # (T-0397). An offset pins one UTC instant, so the task registered with -05:00 on 10-23 fired at 21:00 on the
@@ -640,8 +651,8 @@ function Get-HordeNightlyWatchNight {
     # or 25 hours long, so the date is walked, never a count of hours). Before 06:30 that night is still running, so the
     # one before it is judged. { date (yyyy-MM-dd); start; end }.
     param([datetime]$Now, [int]$EndHour = 6, [int]$EndMinute = 30)
-    $night = $Now.Date.AddDays(-1)
-    if ($Now -lt $Now.Date.AddHours($EndHour).AddMinutes($EndMinute)) { $night = $night.AddDays(-1) }
+    # The night that ended before Now is the one before the night Now belongs to (the same label the net writes).
+    $night = [datetime]::ParseExact((Get-HordeNightlyNightLabel -Time $Now -EndHour $EndHour -EndMinute $EndMinute), "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture).AddDays(-1)
     return [pscustomobject]@{
         date  = $night.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
         start = $night.AddHours(22)
