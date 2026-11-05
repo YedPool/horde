@@ -79,21 +79,56 @@ Check (Throws { ConvertFrom-HordeJson '{"a":' }) "text that is not JSON throws, 
 $caught = $false; try { $null = ConvertFrom-HordeJson 'not json' } catch { $caught = $true }
 Check ($caught -eq $true) "a caller's try catches the throw from inside the seam"
 
-# THE 7.0 TO 7.4 FALLBACK, IN THIS SHELL: the walk is given what such a shell's parser gives - [datetime]
-# values - and must give back the "o" text Horde wrote.
-$utc = [datetime]::new(2026, 10, 14, 12, 0, 0, [System.DateTimeKind]::Utc)
-$parsedAsDates = [pscustomobject]@{ at = $utc; list = @($utc); deep = [pscustomobject]@{ rows = @([pscustomobject]@{ at = $utc }) }; n = 5; s = "plain" }
-$walked = ConvertTo-HordeJsonDateText -Value $parsedAsDates
-Check ($walked.at -is [string] -and $walked.at -ceq $stamp) "the fallback turns a UTC [datetime] back into exactly the round-trip text Horde writes"
-Check (@($walked.list).Count -eq 1 -and $walked.list[0] -ceq $stamp -and $walked.deep.rows[0].at -ceq $stamp) "the fallback reaches into a one-item list and a nested object's list"
-Check ($walked.n -eq 5 -and $walked.s -ceq "plain") "the fallback leaves numbers and plain strings alone"
-$offset = [datetimeoffset]::new($utc)
-Check ((ConvertTo-HordeJsonDateText -Value $offset) -ceq "2026-10-14T12:00:00.0000000+00:00") "a [datetimeoffset] is written back as round-trip text too"
+# THE ONE STRICT PARSER (T-0366, M's option A): every case below has one answer, and each shell gives
+# it - this one here, and 5.1 and pwsh each in its own process (the probe below). A case is its name and
+# what came back: a type (an array as array[count](types)), or THROW.
+function Get-StrictSignature {
+    $deep = { param([int]$Levels) return (("[" * $Levels) + ("]" * $Levels)) }
+    $cases = [ordered]@{
+        "int" = '0'; "list" = '[5]'; "long" = '5000000000'; "fraction" = '1.5'; "written-point-zero" = '520.0'
+        "past-long" = '99999999999999999999'; "exponent" = '1e3'; "minus-zero" = '-0'
+        "too-large" = '1e400'; "trailing-comma-object" = '{"a":1,}'; "trailing-comma-array" = '[1,]'
+        "leading-zero" = '01'; "plus" = '+1'; "bare-point" = '.5'; "point-no-digits" = '1.'; "nan" = 'NaN'
+        "infinity" = 'Infinity'; "hex" = '0x10'; "single-quotes" = "{'a':1}"; "bare-key" = '{a:1}'
+        "raw-tab" = ('"a' + [char]9 + 'b"'); "bom" = ([char]0xFEFF + '{"a":1}'); "comment" = '{"a":1 /* c */}'
+        "nested-100" = (& $deep 100); "nested-101" = (& $deep 101); "spaced" = ' true '; "empty" = ''
+        "two-values" = '1 2'; "escape" = '"\u00e9\n"'; "bad-escape" = '"\x"'
+        "repeated-key" = '{"a":1,"a":"two"}'; "case-keys" = '{"a":1,"A":2}'; "empty-key" = '{"":1}'; "psobject-key" = '{"PSObject":1}'
+    }
+    $parts = foreach ($name in $cases.Keys) {
+        $got = try {
+            $r = ConvertFrom-HordeJson $cases[$name]
+            if ($null -eq $r) { "null" }
+            elseif ($r -is [array]) { "array[" + $r.Count + "](" + ((@($r) | ForEach-Object { if ($null -eq $_) { "null" } elseif ($_ -is [array]) { "array" } else { $_.GetType().Name } }) -join ",") + ")" }
+            elseif ($r -is [System.Management.Automation.PSCustomObject]) { "object(" + ((@($r.PSObject.Properties) | ForEach-Object { $_.Name + "=" + $_.Value.GetType().Name + ":" + $_.Value }) -join ",") + ")" }
+            elseif ($r -is [string]) { "String:" + ([int[]][char[]]$r -join ".") }
+            else { $r.GetType().Name }
+        } catch { "THROW" }
+        $name + "=" + $got
+    }
+    return ($parts -join ";")
+}
+$wantStrict = (@(
+    "int=Int32", "list=array[1](Int32)", "long=Int64", "fraction=Decimal", "written-point-zero=Decimal",
+    "past-long=Decimal", "exponent=Double", "minus-zero=Int32",
+    "too-large=THROW", "trailing-comma-object=THROW", "trailing-comma-array=THROW",
+    "leading-zero=THROW", "plus=THROW", "bare-point=THROW", "point-no-digits=THROW", "nan=THROW",
+    "infinity=THROW", "hex=THROW", "single-quotes=THROW", "bare-key=THROW",
+    "raw-tab=THROW", "bom=THROW", "comment=THROW",
+    "nested-100=array[1](array)", "nested-101=THROW", "spaced=Boolean", "empty=null",
+    "two-values=THROW", "escape=String:233.10", "bad-escape=THROW",
+    "repeated-key=object(a=String:two)", "case-keys=THROW", "empty-key=THROW", "psobject-key=THROW"
+) -join ";")
+$strictHere = Get-StrictSignature
+$strictMiss = @(Compare-Object @($wantStrict -split ";") @($strictHere -split ";") | ForEach-Object { $_.InputObject + " " + $_.SideIndicator })
+Check ($strictMiss.Count -eq 0) ("in this shell every strict case has its one answer (" + $(if ($strictMiss.Count -eq 0) { "all " + @($wantStrict -split ";").Count } else { "differs: " + ($strictMiss -join ", ") }) + ")")
+Check ((ConvertFrom-HordeJson '{"at":"2026-10-28T06:00:00Z","n":[1,{"x":2.50}]}').n[1].x -ceq [decimal]"2.50") "CONTROL: a nested fraction keeps the digits it was written with, as 5.1's Decimal did"
+Check (@(ConvertFrom-HordeJson @('{"a":', '1}')).Count -eq 1 -and (ConvertFrom-HordeJson @('{"a":', '1}')).a -eq 1) "lines given as a list are one text, as ConvertFrom-Json took them from the pipeline"
+Check (Throws { ConvertFrom-HordeJson $null }) "no text at all throws, as ConvertFrom-Json refused it"
 
 # EACH SHELL IN ITS OWN PROCESS: a child loads core/JsonText.ps1 and reports what the seam gives - the
-# type of a parsed timestamp and the shape of a top-level array. Windows PowerShell 5.1 runs it once;
-# pwsh, where the bug lives, runs it through its own -DateKind path and through the fallback path forced
-# on. Every shell must give 5.1's array shape. Without pwsh the 7 half is NOT RUN, said loudly, and the
+# type of a parsed timestamp, the shape of a top-level array and every strict case. Windows PowerShell 5.1
+# and pwsh each run it once, and each must give the one answer. Without pwsh the 7 half is NOT RUN, said loudly, and the
 # suite exits 3, not 0.
 $pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
 $partial = $false
@@ -102,40 +137,42 @@ $probe = Join-Path $env:TEMP ("horde-json-text-probe-" + [guid]::NewGuid().ToStr
 $sampleFile = $probe + ".json"
 [System.IO.File]::WriteAllText($sampleFile, $sample, (New-Object System.Text.UTF8Encoding($false)))
 $probeText = @(
-    'param([string]$Root, [string]$TextFile, [string]$Force)'
+    'param([string]$Root, [string]$TextFile)'
     '. (Join-Path $Root "core\JsonText.ps1")'
     ('function Get-ShapeSignature {' + ${function:Get-ShapeSignature}.ToString() + '}')
+    ('function Get-StrictSignature {' + ${function:Get-StrictSignature}.ToString() + '}')
     '$Text = [System.IO.File]::ReadAllText($TextFile)'
-    'if ($Force -eq "fallback") { $script:HordeJsonDateKind = $false }'
     '$o = ConvertFrom-HordeJson $Text'
     '$raw = $Text | ConvertFrom-Json'
     'Write-Output ("dates=raw=" + $raw.at.GetType().Name + ";at=" + $o.at.GetType().Name + "|" + $o.at + ";list=" + $o.list[0].GetType().Name + ";deep=" + $o.deep.rows[0].at)'
     'Write-Output ("shape=" + (Get-ShapeSignature))'
+    'Write-Output ("strict=" + (Get-StrictSignature))'
 ) -join "`r`n"
 [System.IO.File]::WriteAllText($probe, $probeText, (New-Object System.Text.UTF8Encoding($false)))
 function Invoke-Probe {
-    # { dates; shape } from the probe run by -Exe with -Force own or fallback.
-    param([string]$Exe, [string]$Force)
-    $out = @(& $Exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe -Root $root -TextFile $sampleFile -Force $Force)
+    # { dates; shape; strict } from the probe run by -Exe.
+    param([string]$Exe)
+    $out = @(& $Exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe -Root $root -TextFile $sampleFile)
     $d = "" + (@($out | Where-Object { "$_".StartsWith("dates=") }) | Select-Object -First 1)
     $s = "" + (@($out | Where-Object { "$_".StartsWith("shape=") }) | Select-Object -First 1)
-    return [pscustomobject]@{ dates = $d.Trim(); shape = $s.Trim() }
+    $t = "" + (@($out | Where-Object { "$_".StartsWith("strict=") }) | Select-Object -First 1)
+    return [pscustomobject]@{ dates = $d.Trim(); shape = $s.Trim(); strict = $t.Trim() }
 }
 try {
-    $r = Invoke-Probe -Exe "powershell.exe" -Force "own"
+    $r = Invoke-Probe -Exe "powershell.exe"
     Check ($r.dates -ceq ("dates=raw=String;at=String|" + $stamp + ";list=String;deep=" + $stamp)) ("under 5.1 in its own process, a timestamp is text from both the cmdlet and the seam (got '" + $r.dates + "')")
     Check ($r.shape -ceq ("shape=" + $wantShape)) ("under 5.1 in its own process, a top-level array is one array (got '" + $r.shape + "')")
+    Check ($r.strict -ceq ("strict=" + $wantStrict)) ("under 5.1 in its own process, every strict case has its one answer (got '" + $r.strict + "')")
     if ($null -eq $pwsh) {
         Write-Host "  [NOT RUN] POWERSHELL 7 IS NOT ON THIS MACHINE (no pwsh.exe): the parse under 7 was NOT checked here." -ForegroundColor Yellow
         $partial = $true
     } else {
-        foreach ($force in @("own", "fallback")) {
-            $r = Invoke-Probe -Exe $pwsh.Source -Force $force
-            Check ($r.dates -ceq ("dates=raw=DateTime;at=String|" + $stamp + ";list=String;deep=" + $stamp)) ("under pwsh, " + $force + " path: ConvertFrom-Json gives a DateTime and the seam gives the text (got '" + $r.dates + "')")
-            Check ($r.shape -ceq ("shape=" + $wantShape)) ("under pwsh, " + $force + " path: a top-level array is one array, the same shape as 5.1 (got '" + $r.shape + "')")
-        }
+        $r = Invoke-Probe -Exe $pwsh.Source
+        Check ($r.dates -ceq ("dates=raw=DateTime;at=String|" + $stamp + ";list=String;deep=" + $stamp)) ("under pwsh, ConvertFrom-Json gives a DateTime and the seam gives the text (got '" + $r.dates + "')")
+        Check ($r.shape -ceq ("shape=" + $wantShape)) ("under pwsh, a top-level array is one array, the same shape as 5.1 (got '" + $r.shape + "')")
+        Check ($r.strict -ceq ("strict=" + $wantStrict)) ("under pwsh, every strict case has the same one answer as under 5.1 (got '" + $r.strict + "')")
     }
 } finally { Remove-Item -LiteralPath $probe, $sampleFile -Force -ErrorAction SilentlyContinue }
 
 if ($partial) { Complete-HordeSuite -Success "the scanner and the parse hold in this shell; the parse under PowerShell 7 was NOT RUN (no pwsh)" -PassCode 3 }
-Complete-HordeSuite -Success "the one scanner finds every key written twice in one object, and nothing else; the one parse keeps every string a string under both shells"
+Complete-HordeSuite -Success "the one scanner finds every key written twice in one object, and nothing else; the one strict parse gives one answer under both shells"
