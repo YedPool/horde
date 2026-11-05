@@ -440,6 +440,7 @@ try {
     $rtxt = $o -join "`n"
     Check ($LASTEXITCODE -eq 0 -and $rtxt -like "*dry run: nothing registered*") ("the registrar -Plan registers nothing (" + $LASTEXITCODE + ")")
     Check ($rtxt -match '<StartBoundary>\d{4}-\d\d-\d\dT22:00:00</StartBoundary>') "and with no -Hour the registrar's boundary is 22:00:00 (its own default)"
+    Check ($rtxt -like "*settings:*start on battery*not stopped on battery*") "and its settings line states that a run starts on battery and is not stopped when the PC goes onto battery"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
