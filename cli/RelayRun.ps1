@@ -175,7 +175,15 @@ $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Set
        what = "Whether the warchief's session is told when the relay refuses this machine's mail because a mailbox or the account is full." },
     # SV: the label the supervisor of services wears (core/Services.ps1), which is what keeps this run going.
     @{ name = "fromLabel"; kind = "label"; default = "SV"
-       what = "The hub label that notice is from." }
+       what = "The hub label that notice is from." },
+    # T-0391 slice 5: the notice is delivered only when the warchief's own session took it. 90 s and 10 s and 60 s are the chat's own
+    # (channels/chat/Channel.ps1) and the doorbell's (decisions/Notify.ps1): an idle session takes a notice within seconds.
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600
+       what = "How long a notice the messenger accepted may wait to be taken by the warchief's own session before one ALARM line is raised and the notice is kept awaiting, in seconds." },
+    @{ name = "takenCheckSeconds"; kind = "whole"; default = 10; min = 1; max = 300
+       what = "How often a notice waiting to be taken is asked about, in seconds." },
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 60; min = 5; max = 3600
+       what = "How often a notice already alarmed is asked about, until it is taken or 7 days old, in seconds." }
 )
 # The longest one sleep of the loop: a stop is asked between slices (A CLEAN STOP, above).
 $script:HordeRelayRunSliceMs = 500
@@ -319,10 +327,27 @@ function New-HordeRelayRunWatching {
     # hordeHome, tell and fromLabel are for the notes below (A FULL MAILBOX IS SAID PLAINLY, in the
     # header); notes is what the run has already said and told, by mailbox.
     param([Parameter(Mandatory = $true)][scriptblock]$Say, [Parameter(Mandatory = $true)][scriptblock]$Sleep, [Parameter(Mandatory = $true)][string]$StopPath,
-        [Parameter(Mandatory = $true)][long]$StartedMs, [Parameter(Mandatory = $true)][int]$CheckMs, [string]$HordeHome = "", [bool]$Tell = $true, [string]$FromLabel = "")
+        [Parameter(Mandatory = $true)][long]$StartedMs, [Parameter(Mandatory = $true)][int]$CheckMs, [string]$HordeHome = "", [bool]$Tell = $true, [string]$FromLabel = "",
+        [double]$TakenAlarmSeconds = 90, [double]$TakenCheckSeconds = 10, [double]$TakenAfterAlarmSeconds = 60)
+    # taken* and takenMemory are for the notices awaiting the warchief's own TAKEN (Invoke-HordeRelayRunPutNotes); takenAt is when they
+    # were last asked about.
     return @{ say = $Say; sleep = $Sleep; stopPath = $StopPath; startedMs = $StartedMs; checkMs = $CheckMs
         failed = $false; said = @{}; sinceLook = [System.Diagnostics.Stopwatch]::StartNew()
-        hordeHome = $HordeHome; tell = $Tell; fromLabel = $FromLabel; notes = @{ full = @{}; untrimmed = @{} } }
+        hordeHome = $HordeHome; tell = $Tell; fromLabel = $FromLabel; notes = @{ full = @{}; untrimmed = @{} }
+        takenAlarmSeconds = $TakenAlarmSeconds; takenCheckSeconds = $TakenCheckSeconds; takenAfterAlarmSeconds = $TakenAfterAlarmSeconds
+        takenMemory = @{}; takenAt = [datetime]::MinValue; takenLast = @() }
+}
+
+function Invoke-HordeRelayRunTakenLook {
+    # Ask about the notices awaiting the warchief's own TAKEN and say each line the list has (cli/RelayRunTell.ps1): spaced by the
+    # setting takenCheckSeconds unless -Force (a notice was just posted). Never throws.
+    param([Parameter(Mandatory = $true)][hashtable]$Watching, [Parameter(Mandatory = $true)][datetime]$Now, [switch]$Force)
+    if (-not $Force -and ($Now - $Watching.takenAt).TotalSeconds -lt $Watching.takenCheckSeconds) { return }
+    $Watching.takenAt = $Now
+    $lines = @(Invoke-HordeRelayRunTellTakenTick -HordeHome $Watching.hordeHome -Memory $Watching.takenMemory -Now $Now -AlarmSeconds $Watching.takenAlarmSeconds -AfterAlarmSeconds $Watching.takenAfterAlarmSeconds)
+    # A line the last look said in the same words (an unreadable list, asked about every takenCheckSeconds) is not said again.
+    foreach ($l in $lines) { if ($Watching.takenLast -cnotcontains $l) { $null = & $Watching.say $l } }
+    $Watching.takenLast = $lines
 }
 
 function Invoke-HordeRelayRunPutNotes {
@@ -333,6 +358,9 @@ function Invoke-HordeRelayRunPutNotes {
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][hashtable]$Watching, [scriptblock]$Seat = $null, [string]$TempRoot = "", $Now = $null)
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $notes = $Watching.notes
+    # THE NOTICES AWAITING THE WARCHIEF'S OWN TAKEN are asked about on every look that is due, with or without a full mailbox: a late
+    # TAKEN, an alarm and a give-up are said even after the mailbox emptied, and after a restart (the list is a file).
+    Invoke-HordeRelayRunTakenLook -Watching $Watching -Now $Now -Force:$false
     foreach ($box in @($Context.untrimmed.Keys | Sort-Object)) {
         if ($notes.untrimmed.ContainsKey($box)) { continue }
         $notes.untrimmed[$box] = $true
@@ -346,18 +374,28 @@ function Invoke-HordeRelayRunPutNotes {
     foreach ($box in @($notes.full.Keys | Sort-Object)) {
         if ($Context.full.ContainsKey($box)) { continue }
         $notes.full.Remove($box)
+        # The fill is over: the next one gets its own start, so its notice has its own id (cli/RelayRunTell.ps1, Get-HordeRelayFullNoticeId).
+        Clear-HordeRelayRunFill -HordeHome $Watching.hordeHome -Mailbox $box
         $null = & $Watching.say ("the relay takes mail for " + $box + " again: it is no longer full")
     }
     foreach ($box in @($Context.full.Keys | Sort-Object)) {
         if (-not $notes.full.ContainsKey($box)) {
-            $notes.full[$box] = @{ told = $false; problem = ""; nextTry = [datetime]::MinValue }
+            $notes.full[$box] = @{ told = $false; problem = ""; nextTry = [datetime]::MinValue; fill = [long]0 }
             $null = & $Watching.say ("MAILBOX FULL: the relay refuses what this machine sends to " + $box + ", so NOTHING NEW REACHES THE FOUNDER'S PHONE from this machine until that is put right. The run keeps trying. What the relay answered: " + $Context.full[$box].reason)
             if (-not $Watching.tell) { $null = & $Watching.say ("the warchief is not told of it: telling is switched off (the setting tellWarchief)") }
         }
         $mine = $notes.full[$box]
         if ($mine.told -or -not $Watching.tell -or $Now -lt $mine.nextTry) { continue }
-        $sent = Send-HordeRelayFullNotice -Mailbox $box -HordeHome $Watching.hordeHome -FromLabel $Watching.fromLabel -Seat $Seat -TempRoot $TempRoot -Day $Now
-        if ($sent.told) { $mine.told = $true; $mine.problem = ""; $null = & $Watching.say ("the warchief was told that " + $box + " is full"); continue }
+        # THIS FILL'S START, kept in the home so a restart inside one fill posts the same notice id (and a refill posts a new one).
+        if ($mine.fill -eq 0) { $mine.fill = Get-HordeRelayRunFillStart -HordeHome $Watching.hordeHome -Mailbox $box -NowMs (Get-HordeDecisionNoticeTakenNowMs -Now $Now) }
+        $sent = Send-HordeRelayFullNotice -Mailbox $box -HordeHome $Watching.hordeHome -FromLabel $Watching.fromLabel -Seat $Seat -TempRoot $TempRoot -Day $Now -Fill $mine.fill
+        foreach ($l in @($sent.lines)) { $null = & $Watching.say $l }
+        if ($sent.told) {
+            $mine.told = $true; $mine.problem = ""
+            if (-not $sent.reposted) { $null = & $Watching.say ("the notice that " + $box + " is full was posted to the warchief's session; it is delivered only when that session takes it") }
+            Invoke-HordeRelayRunTakenLook -Watching $Watching -Now $Now -Force:$true
+            continue
+        }
         # NOT TOLD: tried again later, and why is said only when it is a new reason.
         $mine.nextTry = $Now.AddSeconds($script:HordeRelayRunTellRetrySeconds)
         if ($sent.problem -cne $mine.problem) { $mine.problem = $sent.problem; $null = & $Watching.say ("the warchief was NOT told that " + $box + " is full: " + $sent.problem + ". It is tried again.") }
@@ -457,7 +495,7 @@ function Invoke-HordeRelayRun {
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $HordeHome
     $beatTick = Get-HordeRelayRunTickSeconds -WatchMs $watchMs -Settings $set
     $beatFailed = $false
-    $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs) -HordeHome $HordeHome -Tell ([bool]$set.tellWarchief) -FromLabel ("" + $set.fromLabel)
+    $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs) -HordeHome $HordeHome -Tell ([bool]$set.tellWarchief) -FromLabel ("" + $set.fromLabel) -TakenAlarmSeconds ([double]$set.takenAlarmSeconds) -TakenCheckSeconds ([double]$set.takenCheckSeconds) -TakenAfterAlarmSeconds ([double]$set.takenAfterAlarmSeconds)
     try {
         while ($true) {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }

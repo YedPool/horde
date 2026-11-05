@@ -24,12 +24,12 @@
         @{ Name = "notice-does-not-name-the-mailbox"
            Find = 'if ($Mailbox -cmatch $script:HordeRelayRunTellMailboxPattern) { $where = "the mailbox " + $Mailbox }'
            Replace = '' }
-        @{ Name = "notice-id-the-same-every-day"
-           Find = '+ "`n" + $Mailbox + "`n" + $Day.ToUniversalTime().ToString("yyyy-MM-dd")))'
+        @{ Name = "notice-id-the-same-for-every-fill"
+           Find = '+ "`n" + $Mailbox + "`n" + $Fill))'
            Replace = '+ "`n" + $Mailbox + "`n"))' }
         @{ Name = "notice-id-the-same-for-every-mailbox"
-           Find = '.ToLowerInvariant() + "`n" + $Mailbox + "`n" + $Day'
-           Replace = '.ToLowerInvariant() + "`n" + "`n" + $Day' }
+           Find = '.ToLowerInvariant() + "`n" + $Mailbox + "`n" + $Fill'
+           Replace = '.ToLowerInvariant() + "`n" + "`n" + $Fill' }
         @{ Name = "no-seat-is-told-all-the-same"
            Find = 'if ($null -eq $where -or "$($where.state)" -ceq "absent") { return (& $done $false'
            Replace = 'if ($null -eq $where -or "$($where.state)" -ceq "absent") { return (& $done $true' }

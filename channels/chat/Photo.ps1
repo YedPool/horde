@@ -84,6 +84,21 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+# THE LINE TO THE THRALL COUNTS AS TOLD ONLY WHEN THE THRALL'S OWN SESSION TOOK IT (T-0391 slice 4; the chat's own rule, Taken.ps1, and
+# the routed answers' and the doorbell's: decisions/NoticeTaken.ps1, used as it is). The messenger ACCEPTING the post was counted as the
+# Thrall being told, and the phone was sent "delivered" for a line no session had taken. Now, in Send-HordeChatPhotoLine, the notice is put
+# on the awaiting list BEFORE it is posted (a list that cannot be read or written means no post, the reason said, the photo still saved and
+# asked again); a post the messenger REFUSES takes its mark off, an UNKNOWN result keeps it; and the phone is told "delivered" only on the
+# session's own TAKEN. Not taken inside takenAlarmSeconds: ONE line in capitals, then the mark is asked about every takenAfterAlarmSeconds
+# until it is taken or ttlSeconds old, when it is given up with a second line in capitals. The phone is told "saved" after
+# HordeChatPhotoTellMinutes without a TAKEN (the photo is in the inbox either way); the mark stays, so a late TAKEN is still said. The
+# notice id is the same for the same photo on every pass (Get-HordeChatPhotoMessageId), so a restart posts nothing twice: wezfleet keeps one
+# message per id (lib/MailPost.ps1 already-posted). The lines reach the relay runner's log: Invoke-HordeChatPhotoTick returns them.
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\NoticeTaken.ps1")
+$script:HordeChatPhotoTakenKind = New-HordeDecisionNoticeKind -Path @("relay", "chat", "photo-taken.json") -TempPrefix "photo-taken" -Ledger "the photo notices' awaiting ledger" -List "the awaiting list of photo notices" -Label "photo" -Notice "photo notice" -Owner "the Thrall's" -Detail { param($Entry) return ("a photo of " + $Entry.seq + " bytes from the phone") }
+# What a post's stage must be for the messenger to have taken it; any other stage of a known answer is a refusal.
+$script:HordeChatPhotoPostStages = @("accepted", "handed-over", "seen")
+
 $script:HordeChatPhotoMembers = @("v", "photoId", "horde", "machine", "mailbox", "from", "phoneKey", "seq", "session", "expiresAt", "bytes", "sha256", "key", "parts")
 $script:HordeChatPhotoPartPattern = '\A\{"v":1,"kind":"photo-part","from":"([0-9a-f]{32})","photo":"([0-9a-f]{32})","part":([1-9][0-9]{0,2}),"ct":"([A-Za-z0-9_-]{1,70000})"\}\z'
 $script:HordeChatPhotoPartAad = "horde-relay/chat/v1 photo part"
@@ -824,24 +839,91 @@ function Remove-HordeChatPhotoOld {
     return $gone
 }
 
+function Get-HordeChatPhotoTakenTable {
+    # The memory of the awaiting list between passes (NoticeTaken.ps1 -Memory): when each mark was last asked, what was alarmed or
+    # delivered in this process, and which notices this process posted ("posted-<id>"). Kept on the channel's memory, never on disk.
+    param($Mine)
+    if (-not $Mine.ContainsKey("photoTaken")) { $Mine["photoTaken"] = @{} }
+    return $Mine["photoTaken"]
+}
+
 function Send-HordeChatPhotoLine {
-    # Tell the Thrall: "" when the messenger took it, else why not (and it is asked again).
-    param($Context, $Record, $Settings)
+    # Tell the Thrall, marked first: { posted; why; lines }. posted is $true when the messenger took the notice now or this process
+    # posted it before (it is then on the awaiting list, and only the session's own TAKEN makes it delivered); else why not,
+    # and it is asked again. lines are for the runner's log.
+    param($Context, $Record, $Settings, $Mine, $Now = $null)
+    $lines = New-Object System.Collections.ArrayList
+    $result = { param([bool]$Posted, [string]$Why) return [pscustomobject]@{ posted = $Posted; why = $Why; lines = @($lines.ToArray()) } }
     $src = Find-HordeChatChannelSource -Context $Context
-    if ($src.state -cne "known") { return ("no Thrall of this horde is found now: " + $($src.reason)) }
+    if ($src.state -cne "known") { return (& $result $false ("no Thrall of this horde is found now: " + $($src.reason))) }
     $messenger = Find-HordeChatChannelMessenger
-    if ($messenger.state -cne "known") { return $messenger.reason }
+    if ($messenger.state -cne "known") { return (& $result $false $messenger.reason) }
     $deviceId = ""
-    try { $deviceId = Get-HordeDeviceId -HomeRoot (Get-HordeChatChannelHome $Context) } catch { return ("this machine's device id could not be had: " + $_.Exception.Message) }
+    try { $deviceId = Get-HordeDeviceId -HomeRoot (Get-HordeChatChannelHome $Context) } catch { return (& $result $false ("this machine's device id could not be had: " + $_.Exception.Message)) }
     $type = [System.IO.Path]::GetExtension($Record.file).TrimStart(".")
+    $noticeId = Get-HordeChatPhotoMessageId -From $Record.from -PhotoId $Record.photoId -Sha256 $Record.sha256
+    $table = Get-HordeChatPhotoTakenTable -Mine $Mine
+    # Posted by this process already, or already TAKEN: nothing is posted or listed again.
+    if ($table.ContainsKey("posted-" + $noticeId) -or $table.ContainsKey("delivered-" + $noticeId)) { return (& $result $true "") }
     $message = [pscustomobject]@{
-        messageId = (Get-HordeChatPhotoMessageId -From $Record.from -PhotoId $Record.photoId -Sha256 $Record.sha256); sessionId = $src.value.session
+        messageId = $noticeId; sessionId = $src.value.session
         from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeChatChannelFrom; label = $Settings.fromLabel; verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = $Record.from } }
         body = (Get-HordeChatPhotoThrallBody -PhotoId $Record.photoId -Path $Record.file -Bytes ([long]$Record.bytes) -Type $type); ttlSeconds = [int]$Settings.ttlSeconds
     }
+    # THE MARK IS WRITTEN BEFORE THE POST. A list that cannot be read or written means nothing is posted. A crash between the mark and
+    # the post only costs an alarm at takenAlarmSeconds: the next pass posts the same notice id, which the messenger keeps as one.
+    $homeDir = Get-HordeChatChannelHome $Context
+    $at = $(if ($null -eq $Now) { [datetime]::UtcNow } else { ([datetime]$Now).ToUniversalTime() })
+    $awaited = Add-HordeDecisionNoticeTaken -Kind $script:HordeChatPhotoTakenKind -HordeHome $homeDir -NoticeId $noticeId -Answer ([long]$Record.bytes) -SessionId "$($src.value.session)" -Now $at
+    foreach ($l in @($awaited.lines)) { [void]$lines.Add($l) }
+    if (-not $awaited.ok) { return (& $result $false ("the photo notice cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
     $posted = Send-HordeMessengerMessage -Messenger $messenger.value -Message $message
-    if ($posted.state -cne "known") { return ("messenger " + $messenger.value.name + " did not take it now: " + $posted.reason) }
-    return ""
+    if ($posted.state -ceq "known" -and $script:HordeChatPhotoPostStages -ccontains "$($posted.value.stage)") {
+        $table["posted-" + $noticeId] = $true
+        return (& $result $true "")
+    }
+    $refused = ($posted.state -ceq "known")
+    $why = $(if ($refused) { "messenger " + $messenger.value.name + " answered " + $posted.value.stage } else { "messenger " + $messenger.value.name + " did not take it now: " + $posted.reason })
+    # A REFUSED POST LEAVES NO MARK (the notice is in no mailbox, so a mark would alarm "not taken" for something never sent). ONLY A
+    # KNOWN REFUSAL removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched.
+    if ($refused) {
+        $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeChatPhotoTakenKind -HordeHome $homeDir -NoticeId $noticeId
+        if (-not $removed.ok) { $why = $why + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
+    }
+    return (& $result $false $why)
+}
+
+function Invoke-HordeChatPhotoTakenTick {
+    # Ask about the photo notices awaiting the Thrall's own TAKEN and say what became of them (NoticeTaken.ps1): the lines, for the
+    # runner's log. Spaced by takenCheckSeconds unless -Force (a notice was just posted).
+    param($Context, $Mine, $Settings, $Now = $null, [bool]$Force = $false)
+    $nowDt = $(if ($null -eq $Now) { [datetime]::UtcNow } else { ([datetime]$Now).ToUniversalTime() })
+    $nowMs = Get-HordeChatPhotoNow -Now $Now
+    $last = $(if ($Mine.ContainsKey("photoTakenAt")) { [long]$Mine["photoTakenAt"] } else { [long]0 })
+    if (-not $Force -and $nowMs - $last -lt [long]$Settings.takenCheckSeconds * 1000) { return @() }
+    $Mine["photoTakenAt"] = $nowMs
+    $found = Find-HordeChatChannelMessenger
+    $messenger = $(if ($found.state -ceq "known") { $found.value } else { $null })
+    $tick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeChatPhotoTakenKind -HordeHome (Get-HordeChatChannelHome $Context) -Messenger $messenger -Now $nowDt -AlarmSeconds ([double]$Settings.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Settings.takenAfterAlarmSeconds) -TtlSeconds ([double]$Settings.ttlSeconds) -Memory (Get-HordeChatPhotoTakenTable -Mine $Mine)
+    return @($tick.lines)
+}
+
+function Test-HordeChatPhotoNoticeListed {
+    # Is the photo's notice still on the awaiting list? $true too when the list cannot be read (never a guess that it is gone).
+    param([string]$HordeHome, [string]$NoticeId)
+    $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeChatPhotoTakenKind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return $true }
+    $id = $NoticeId.Replace("-", "")
+    foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e -and $e.messageId -ceq $id) { return $true } }
+    return $false
+}
+
+function Close-HordeChatPhotoTold {
+    # Close one saved photo and tell the phone (accepted delivered | saved): the line for the log.
+    param($Context, $Mine, [string]$HordeHome, $Record, [string]$Folder, [string]$Status, [string]$Code, [string]$Why)
+    try { Close-HordeChatPhotoRecord -HordeHome $HordeHome -Record $Record -Folder $Folder -Code $Code } catch { return ("photo " + $Record.photoId + " could not be closed: " + $_.Exception.Message) }
+    $sent = Send-HordeChatPhotoReceipt -Context $Context -Mine $Mine -PhotoId $Record.photoId -Status $Status -Code $Code -Session $Record.session -SentAt ([long]$Record.sentAt) -File $(if ($Record.file) { [System.IO.Path]::GetFileName($Record.file) } else { "" })
+    return ("photo " + $Record.photoId + ": " + $Status + " (" + $Code + ") - " + $Why + $(if ($sent -cne "") { "; " + $sent } else { "" }))
 }
 
 function Invoke-HordeChatPhotoTick {
@@ -852,6 +934,7 @@ function Invoke-HordeChatPhotoTick {
     $homeDir = Get-HordeChatChannelHome $Context
     $ps = Get-HordeChatPhotoSettingsOf -Settings $Settings -HordeHome $homeDir
     $lines = New-Object System.Collections.ArrayList
+    $waiting = New-Object System.Collections.ArrayList
     $root = Get-HordeChatPhotoRoot -HordeHome $homeDir
     $openDir = [System.IO.Path]::Combine($root, "open")
     $nowMs = Get-HordeChatPhotoNow -Now $Now
@@ -866,9 +949,7 @@ function Invoke-HordeChatPhotoTick {
             }
             $close = {
                 param([string]$Status, [string]$Code, [string]$Why)
-                try { Close-HordeChatPhotoRecord -HordeHome $homeDir -Record $rec -Folder $folder -Code $Code } catch { [void]$lines.Add("photo " + $rec.photoId + " could not be closed: " + $_.Exception.Message); return }
-                $sent = Send-HordeChatPhotoReceipt -Context $Context -Mine $Mine -PhotoId $rec.photoId -Status $Status -Code $Code -Session $rec.session -SentAt ([long]$rec.sentAt) -File $(if ($rec.file) { [System.IO.Path]::GetFileName($rec.file) } else { "" })
-                [void]$lines.Add("photo " + $rec.photoId + ": " + $Status + " (" + $Code + ") - " + $Why + $(if ($sent -cne "") { "; " + $sent } else { "" }))
+                [void]$lines.Add((Close-HordeChatPhotoTold -Context $Context -Mine $Mine -HordeHome $homeDir -Record $rec -Folder $folder -Status $Status -Code $Code -Why $Why))
             }
             if ($rec.stage -ceq "receiving") {
                 $live = Test-HordeChatPhotoSenderLive -HordeHome $homeDir -From $rec.from -PhoneKey $rec.phoneKey
@@ -890,11 +971,29 @@ function Invoke-HordeChatPhotoTick {
                 try { Write-HordeChatPhotoRecord -Path $recordPath -Record $rec } catch { [void]$lines.Add("photo " + $rec.photoId + " is in the inbox at " + $path + ", and its record could not be written: " + $_.Exception.Message); continue }
             }
             if ($rec.stage -ceq "saved") {
-                $why = Send-HordeChatPhotoLine -Context $Context -Record $rec -Settings $Settings
-                if ($why -ceq "") { & $close "accepted" "delivered" ("in the inbox at " + $rec.file + ", and the Thrall told") }
-                elseif ($nowMs - [long]$rec.savedAt -ge $script:HordeChatPhotoTellMinutes * 60000) { & $close "accepted" "saved" ("in the inbox at " + $rec.file + "; the Thrall could not be told: " + $why) }
+                $told = Send-HordeChatPhotoLine -Context $Context -Record $rec -Settings $Settings -Mine $Mine -Now $Now
+                foreach ($l in @($told.lines)) { [void]$lines.Add($l) }
+                if ($told.posted) { [void]$waiting.Add([pscustomobject]@{ rec = $rec; folder = $folder }) }
+                elseif ($nowMs - [long]$rec.savedAt -ge $script:HordeChatPhotoTellMinutes * 60000) { & $close "accepted" "saved" ("in the inbox at " + $rec.file + "; the Thrall could not be told: " + $told.why) }
+                elseif ($told.why -cne "") {
+                    # Said when it changes, not at every turn.
+                    $said = "photo/" + $rec.photoId
+                    if (-not $Mine.said.ContainsKey($said) -or $Mine.said[$said] -cne $told.why) { $Mine.said[$said] = $told.why; [void]$lines.Add("photo " + $rec.photoId + " is in the inbox at " + $rec.file + " and the Thrall is not told yet: " + $told.why + "; asked again") }
+                }
             }
         }
+    }
+    # THE NOTICES AWAITING THE THRALL'S OWN TAKEN are asked about (every pass, with or without an open photo: a late TAKEN is still said),
+    # then each saved photo whose notice was posted is settled: delivered on the TAKEN, saved when the notice left the list without
+    # one (its lines above say why) or after HordeChatPhotoTellMinutes.
+    foreach ($l in @(Invoke-HordeChatPhotoTakenTick -Context $Context -Mine $Mine -Settings $Settings -Now $Now -Force ($waiting.Count -gt 0))) { [void]$lines.Add($l) }
+    $table = Get-HordeChatPhotoTakenTable -Mine $Mine
+    foreach ($w in @($waiting.ToArray())) {
+        $noticeId = Get-HordeChatPhotoMessageId -From $w.rec.from -PhotoId $w.rec.photoId -Sha256 $w.rec.sha256
+        $in = "in the inbox at " + $w.rec.file
+        if ($table.ContainsKey("delivered-" + $noticeId)) { [void]$lines.Add((Close-HordeChatPhotoTold -Context $Context -Mine $Mine -HordeHome $homeDir -Record $w.rec -Folder $w.folder -Status "accepted" -Code "delivered" -Why ($in + ", and the Thrall's own session took it"))) }
+        elseif (-not (Test-HordeChatPhotoNoticeListed -HordeHome $homeDir -NoticeId $noticeId)) { [void]$lines.Add((Close-HordeChatPhotoTold -Context $Context -Mine $Mine -HordeHome $homeDir -Record $w.rec -Folder $w.folder -Status "accepted" -Code "saved" -Why ($in + "; the Thrall's session did not take the notice, and it is no longer watched"))) }
+        elseif ($nowMs - [long]$w.rec.savedAt -ge $script:HordeChatPhotoTellMinutes * 60000) { [void]$lines.Add((Close-HordeChatPhotoTold -Context $Context -Mine $Mine -HordeHome $homeDir -Record $w.rec -Folder $w.folder -Status "accepted" -Code "saved" -Why ($in + "; the Thrall's session has not taken the notice yet, and it is still watched"))) }
     }
     Remove-HordeChatPhotoPendingExpired -HordeHome $homeDir -WindowMs $ps.windowMs -Now $Now
     $swept = $(if ($Mine.ContainsKey("photoSweptAt")) { [long]$Mine["photoSweptAt"] } else { [long]0 })

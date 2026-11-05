@@ -97,6 +97,9 @@
         @{ Name = "bell-line-not-said"
            Find = 'if ("$($turn.said)" -cne "") { $lines = @("notify: " + $turn.said) }'
            Replace = 'if ($false) { $lines = @("notify: " + $turn.said) }' }
+        @{ Name = "bell-list-lines-not-said"
+           Find = '$lines = @(@($lines) + @(@($turn.lines) | ForEach-Object { "notify: " + $_ }))'
+           Replace = '$lines = @($lines)' }
         @{ Name = "bell-does-not-ask-for-its-turn"
            Find = 'failed = [bool]$out.failed; againMs = $bell.againMs }'
            Replace = 'failed = [bool]$out.failed; againMs = 0 }' }

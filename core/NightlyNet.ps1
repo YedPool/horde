@@ -41,6 +41,14 @@ function Test-HordeNightlyWindow {
     return ($m -ge $StartHour * 60 -or $m -lt $end)
 }
 
+function Get-HordeNightlyTaskBoundary {
+    # The StartBoundary of the scheduled task's daily trigger for a date: WALL-CLOCK time, no offset and no Z
+    # (T-0397). An offset pins one UTC instant, so the task registered with -05:00 on 10-23 fired at 21:00 on the
+    # nights after the clocks changed (11-01 to 11-03) and the run refused itself. No offset means 22:00 local, always.
+    param([datetime]$Date, [int]$Hour = 22, [int]$Minute = 0)
+    return ($Date.Date.AddHours($Hour).AddMinutes($Minute).ToString("yyyy-MM-dd'T'HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))
+}
+
 function Get-HordeNightlyDeadline {
     # The 06:30 this night ends at: the next one at or after Now (a Now before 06:30 means today's).
     param([datetime]$Now, [int]$EndHour = 6, [int]$EndMinute = 30)
@@ -616,4 +624,236 @@ function New-HordeNightlyReport {
         foreach ($n in @($r.notes)) { $lines += ("  note: " + $n) }
     }
     return ((@($lines | ForEach-Object { ConvertTo-HordeNightlyText $_ })) -join "`n")
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+# T-0397: THE MISSED-RUN WATCHER (tools/nightly/NightlyWatch.ps1). A separate checker, run once each morning by its
+# own scheduled task, that judges the night that began yesterday at 22:00 by the evidence the nightly net left on
+# disk, and raises it so a person hears when the night did not run. The net's own refused-start tell (PR 420) lives
+# inside the net, so it cannot catch a task that never fired, a disabled or deleted task, a PC that was off, a run
+# killed midway or a tell that failed. Everything impure (clock, files, the task XML, the senders) is injected.
+# THE WATCHER NEVER SAYS A RUN WAS RIGHT: only whether it happened and was reported.
+# ---------------------------------------------------------------------------------------------------------------
+
+function Get-HordeNightlyWatchNight {
+    # The night to judge at -Now: the one that began yesterday at 22:00 LOCAL, by the calendar (a clock-change day is 23
+    # or 25 hours long, so the date is walked, never a count of hours). Before 06:30 that night is still running, so the
+    # one before it is judged. { date (yyyy-MM-dd); start; end }.
+    param([datetime]$Now, [int]$EndHour = 6, [int]$EndMinute = 30)
+    $night = $Now.Date.AddDays(-1)
+    if ($Now -lt $Now.Date.AddHours($EndHour).AddMinutes($EndMinute)) { $night = $night.AddDays(-1) }
+    return [pscustomobject]@{
+        date  = $night.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
+        start = $night.AddHours(22)
+        end   = $night.AddDays(1).AddHours($EndHour).AddMinutes($EndMinute)
+    }
+}
+
+function Get-HordeNightlyWatchDates {
+    # -Count dates (yyyy-MM-dd), newest first, starting at -Date and walking back by the calendar.
+    param([string]$Date, [int]$Count = 14)
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    $d = [datetime]::ParseExact($Date, "yyyy-MM-dd", $inv)
+    $out = @()
+    for ($i = 0; $i -lt $Count; $i++) { $out += $d.AddDays(-$i).ToString("yyyy-MM-dd", $inv) }
+    return @($out)
+}
+
+function Get-HordeNightlyWatchTaskFindings {
+    # What is wrong with the scheduled task, from its XML (as schtasks /Query /XML or Export-ScheduledTask gives it).
+    # An empty -TaskXml means the task could not be read: missing. Findings count even on a night that ran, because the
+    # next night is what they threaten: a disabled task, a trigger that is off, no trigger, or a StartBoundary that
+    # carries an offset or a Z (it pins one UTC instant, so the start moves an hour at every clock change: 11-01 to 11-03).
+    param([string]$TaskXml = "")
+    if ("" + $TaskXml -eq "") { return @("the scheduled task is missing or could not be read") }
+    $doc = New-Object System.Xml.XmlDocument
+    try { $doc.LoadXml($TaskXml) } catch { return @("the scheduled task definition could not be parsed") }
+    $found = @()
+    $enabled = $doc.SelectSingleNode("//*[local-name()='Settings']/*[local-name()='Enabled']")
+    if ($null -ne $enabled -and $enabled.InnerText.Trim() -ieq "false") { $found += "the scheduled task is disabled" }
+    $triggers = @($doc.SelectNodes("//*[local-name()='Triggers']/*"))
+    if ($triggers.Count -eq 0) { $found += "the scheduled task has no trigger" }
+    foreach ($t in $triggers) {
+        $te = $t.SelectSingleNode("*[local-name()='Enabled']")
+        if ($null -ne $te -and $te.InnerText.Trim() -ieq "false") { $found += "a trigger of the scheduled task is disabled" }
+        $sb = $t.SelectSingleNode("*[local-name()='StartBoundary']")
+        if ($null -ne $sb -and $sb.InnerText.Trim() -match '(Z|[+-]\d\d:?\d\d)$') { $found += ("a trigger StartBoundary carries an offset (" + $sb.InnerText.Trim() + "), so the start moves at a clock change") }
+    }
+    return @($found | ForEach-Object { ConvertTo-HordeNightlyText $_ })
+}
+
+function Get-HordeNightlyWatchVerdict {
+    # What happened to the night -Date, from the evidence only. -LogText is nightly.log, -ReportNames the file names in the
+    # reports folder, -ReportText the night's report (for the headline), -PendingCount the findings M was not told
+    # (state.json pending, summed over repos), -FolderMissing that the work folder is not there at all.
+    # { date; status; missed; detail; incomplete; incompleteWhy }. status is one of RAN, NOT STARTED, REFUSED, FAILED,
+    # BUSY, NOT REPORTED, NOT TOLD; every one but RAN is MISSED. A night that RAN but headlines INCOMPLETE is not missed.
+    param([string]$Date, [string]$LogText = "", [string[]]$ReportNames = @(), [string]$ReportText = "", [int]$PendingCount = 0, [bool]$FolderMissing = $false)
+    $names = @($ReportNames | ForEach-Object { ("" + $_).ToLowerInvariant() })
+    $header = '\bnightly net (\d{4}-\d\d-\d\d): window (open|CLOSED)'
+    $lines = @(("" + $LogText) -split "`r?`n")
+    $openAt = -1; $closed = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $m = [regex]::Match($lines[$i], $header)
+        if (-not $m.Success -or $m.Groups[1].Value -cne $Date) { continue }
+        if ($m.Groups[2].Value -ceq "open") { $openAt = $i } else { $closed = $true }
+    }
+    # The run's own lines: from its window line to the next window line.
+    $segment = @()
+    if ($openAt -ge 0) {
+        for ($i = $openAt + 1; $i -lt $lines.Count; $i++) {
+            if ([regex]::IsMatch($lines[$i], $header)) { break }
+            $segment += $lines[$i]
+        }
+    }
+    $sent = (@($segment | Where-Object { $_ -match 'report sent to ' }).Count -gt 0)
+    $tellFailed = (@($segment | Where-Object { $_ -match 'the tell to .* (failed with exit|is unconfirmed|ran past)|is not on the PATH|the report was not told' }).Count -gt 0)
+    $haveReport = ($names -contains ($Date + ".txt"))
+    $haveFailed = ($names -contains ($Date + "-failed.txt"))
+    $haveBusy = ($names -contains ($Date + "-busy.txt"))
+    $haveRefused = ($names -contains ($Date + "-refused.txt"))
+    $status = ""; $detail = ""
+    if ($haveReport) {
+        if ($sent) { $status = "RAN"; $detail = "the net started, wrote its report and the log shows it was sent to M" }
+        else {
+            $status = "NOT TOLD"
+            $why = @()
+            if ($tellFailed) { $why += "the log shows the tell failed" }
+            if ($PendingCount -gt 0) { $why += ("" + $PendingCount + " findings are still pending in state.json") }
+            if ($why.Count -eq 0) { $why += "the log has no report sent line" }
+            $detail = "the net wrote its report but M was not told: " + ($why -join ", ")
+        }
+    }
+    elseif ($haveFailed) { $status = "FAILED"; $detail = "the net started and failed: a FAILED report is in the report folder, and there is no report" }
+    elseif ($haveBusy) { $status = "BUSY"; $detail = "the net found another run holding its lock and ran nothing (a run from an earlier night may be wedged)" }
+    elseif ($openAt -ge 0) { $status = "NOT REPORTED"; $detail = "the net started (the log shows the window open) but there is no report: it was killed or crashed midway, or the PC was switched off" }
+    elseif ($closed -or $haveRefused) { $status = "REFUSED"; $detail = "the net was started outside its 22:00 to 06:30 window (the log shows the window CLOSED) and ran nothing" }
+    else {
+        $status = "NOT STARTED"
+        $detail = "nightly.log has no line for this night with the window open: the task did not fire, or the PC was off"
+        if ($FolderMissing) { $detail += " (the work folder does not exist)" }
+        elseif ("" + $LogText -eq "" -and $names.Count -eq 0) { $detail += " (the work folder holds no log and no report)" }
+    }
+    $inc = $false; $incWhy = ""
+    if ($status -ceq "RAN") {
+        $head = (("" + $ReportText) -split "`r?`n")[0]
+        $im = [regex]::Match($head, 'INCOMPLETE:.*?(?:\.(?:\s|$)|$)')
+        if ($im.Success) { $inc = $true; $incWhy = ConvertTo-HordeNightlyText $im.Value.Trim() }
+    }
+    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy }
+}
+
+function Get-HordeNightlyWatchStreak {
+    # How many nights in a row, newest first, were missed: the count of leading verdicts that are missed.
+    param([object[]]$Verdicts = @())
+    $n = 0
+    foreach ($v in @($Verdicts)) { if (-not $v.missed) { break }; $n++ }
+    return $n
+}
+
+function Read-HordeNightlyWatchState {
+    # The watcher's own memory from its file text: { problem; signature; delivered; streak; noteDate }. Missing, empty or
+    # corrupt text is the empty state, never an error and never a reason to stay quiet (a lost memory means one more
+    # alarm, not none).
+    param([string]$Text = "")
+    $s = @{ problem = $false; signature = ""; delivered = $false; streak = 0; noteDate = "" }
+    if ("" + $Text -eq "") { return $s }
+    try {
+        $o = ConvertFrom-HordeJson $Text
+        if ($o.PSObject.Properties["problem"]) { $s.problem = [bool]$o.problem }
+        if ($o.PSObject.Properties["signature"]) { $s.signature = "" + $o.signature }
+        if ($o.PSObject.Properties["delivered"]) { $s.delivered = [bool]$o.delivered }
+        if ($o.PSObject.Properties["streak"]) { $s.streak = [int]$o.streak }
+        if ($o.PSObject.Properties["noteDate"]) { $s.noteDate = "" + $o.noteDate }
+    } catch { return @{ problem = $false; signature = ""; delivered = $false; streak = 0; noteDate = "" } }
+    return $s
+}
+
+function Get-HordeNightlyWatchDecision {
+    # What this morning does. kind: "alarm" (a missed night or a task finding: a person must hear), "recovered" (it was
+    # broken and now ran: said once), "note" (RAN but INCOMPLETE: M only, not a miss), "duplicate" (the same alarm,
+    # note or recovery already got through this morning: not sent again) or "quiet". The signature holds the date and the
+    # streak, so a still-broken night alarms again each morning, and the same morning only once.
+    param($Verdict, [int]$Streak = 0, [string[]]$TaskFindings = @(), $State = $null)
+    if ($null -eq $State) { $State = Read-HordeNightlyWatchState }
+    $findings = @($TaskFindings | Where-Object { "" + $_ -ne "" })
+    $problem = ($Verdict.missed -or $findings.Count -gt 0)
+    $sig = ""; $kind = "quiet"
+    if ($problem) {
+        $sig = "alarm|" + $Verdict.date + "|" + $Verdict.status + "|" + $Streak + "|" + ($findings -join "/")
+        $kind = "alarm"
+    }
+    elseif ($State.problem) { $sig = "recovered|" + $Verdict.date; $kind = "recovered" }
+    elseif ($Verdict.incomplete) { $sig = "note|" + $Verdict.date; $kind = "note" }
+    if ($kind -cne "quiet" -and $State.signature -ceq $sig -and $State.delivered) { $kind = "duplicate" }
+    return [pscustomobject]@{ kind = $kind; signature = $sig; problem = $problem; streak = $Streak; taskFindings = @($findings) }
+}
+
+function Update-HordeNightlyWatchState {
+    # The state to save after a morning: -Delivered is whether any channel got the message through. An alarm that got
+    # through stays remembered (the same morning does not repeat it); one that did not is sent again at the next run. A
+    # recovery that did not get through keeps the problem flag, so the next morning says it. Quiet and duplicate change nothing.
+    param($Decision, $Verdict, $State, [bool]$Delivered = $false)
+    $s = @{ problem = [bool]$State.problem; signature = "" + $State.signature; delivered = [bool]$State.delivered; streak = [int]$State.streak; noteDate = "" + $State.noteDate }
+    if ($Decision.kind -ceq "alarm") { $s.problem = $true; $s.signature = $Decision.signature; $s.delivered = $Delivered; $s.streak = [int]$Decision.streak }
+    elseif ($Decision.kind -ceq "recovered") {
+        $s.signature = $Decision.signature; $s.delivered = $Delivered
+        if ($Delivered) { $s.problem = $false; $s.streak = 0 }
+    }
+    elseif ($Decision.kind -ceq "note") { $s.signature = $Decision.signature; $s.delivered = $Delivered; $s.noteDate = $Verdict.date }
+    return $s
+}
+
+function Format-HordeNightlyWatchMessage {
+    # The two texts of a morning: .m for M (several lines) and .founder for the phone (one plain line, "" when the
+    # founder is not told: a note, or nothing). -Prior is the streak that was broken, said in a recovery. -Lookback is how
+    # far back nights were counted. Every line is ASCII with no double quote, semicolon or angle bracket.
+    param($Decision, $Verdict, [int]$Prior = 0, [int]$Lookback = 14, [string]$Evidence = "")
+    $lines = @(); $phone = ""
+    $date = $Verdict.date
+    $row = ""
+    if ($Decision.streak -gt 1) { $row = "That is " + $Decision.streak + " nights in a row" + $(if ($Decision.streak -ge $Lookback) { " or more (counted back " + $Lookback + " nights)" } else { "" }) + "." }
+    $tasks = @($Decision.taskFindings)
+    if ($Decision.kind -ceq "alarm") {
+        if ($Verdict.missed) {
+            $lines += ("NIGHTLY WATCH " + $date + ": MISSED, " + $Verdict.status + ". " + $Verdict.detail + ".")
+            if ($row -ne "") { $lines += $row }
+            $phone = "Nightly tests did not run for the night of " + $date + " (" + $Verdict.status + ")." + $(if ($row -ne "") { " " + $row } else { "" })
+            if ($tasks.Count -gt 0) { $phone += " The task also looks wrong: " + $tasks[0] + "." }
+        } else {
+            $lines += ("NIGHTLY WATCH " + $date + ": the night ran, but the scheduled task looks wrong.")
+            $phone = "The nightly tests ran for " + $date + ", but their scheduled task looks wrong: " + $tasks[0] + "."
+        }
+        $phone += " Details are with M."
+        foreach ($f in $tasks) { $lines += ("TASK: " + $f + ".") }
+    }
+    elseif ($Decision.kind -ceq "recovered") {
+        $lines += ("NIGHTLY WATCH " + $date + ": RECOVERED, the night ran and its report was sent" + $(if ($Prior -gt 0) { " (it had missed " + $Prior + " nights in a row)" } else { "" }) + ".")
+        $phone = "The nightly tests ran again for " + $date + $(if ($Prior -gt 0) { " after " + $Prior + " missed nights" } else { "" }) + "."
+    }
+    elseif ($Decision.kind -ceq "note") { $lines += ("NIGHTLY WATCH " + $date + ": the night ran.") }
+    if ($Verdict.incomplete -and $Decision.kind -cne "duplicate" -and $Decision.kind -cne "quiet") { $lines += ("NOTE for M only, not a miss: the night ran but was headed " + $Verdict.incompleteWhy) }
+    $lines += "The watcher only says whether a run happened and was reported. It does not say the run was right."
+    if ($Evidence -ne "") { $lines += ("Evidence: " + $Evidence) }
+    $m = (@($lines | ForEach-Object { ConvertTo-HordeNightlyText $_ }) -join "`n")
+    $p = ConvertTo-HordeNightlyText $phone
+    if ($p.Length -gt 260) { $p = $p.Substring(0, 257) + "..." }
+    return [pscustomobject]@{ m = $m; founder = $p }
+}
+
+function Invoke-HordeNightlyWatchSend {
+    # Run every channel, one after the other, whatever the earlier ones did: a channel is { name; send } where send is a
+    # scriptblock taking the results so far (an ordered table name -> $true or $false) and returning $true when it got
+    # through. A throw is a failure. { results; attempted; ok; allFailed } - allFailed only when something was
+    # attempted and nothing got through.
+    param([object[]]$Channels = @(), [scriptblock]$Say = { param($l) })
+    $results = [ordered]@{}
+    foreach ($ch in @($Channels)) {
+        $ok = $false
+        try { $ok = ((& $ch.send $results) -eq $true) } catch { & $Say ("channel " + $ch.name + " threw: " + $_.Exception.Message) }
+        $results[$ch.name] = $ok
+        & $Say ("channel " + $ch.name + ": " + $(if ($ok) { "sent" } else { "NOT sent" }))
+    }
+    $okCount = @($results.Values | Where-Object { $_ -eq $true }).Count
+    return [pscustomobject]@{ results = $results; attempted = $results.Count; ok = $okCount; allFailed = ($results.Count -gt 0 -and $okCount -eq 0) }
 }
