@@ -14,8 +14,8 @@
            Find = '.ToString("yyyy-MM-dd''T''HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))'
            Replace = '.ToString("yyyy-MM-dd''T''HH:mm:sszzz", [System.Globalization.CultureInfo]::InvariantCulture))' }
         @{ Name = "task-boundary-wrong-hour"
-           Find = 'param([datetime]$Date, [int]$Hour = 22)'
-           Replace = 'param([datetime]$Date, [int]$Hour = 21)' }
+           Find = 'param([datetime]$Date, [int]$Hour = 22, [int]$Minute = 0)'
+           Replace = 'param([datetime]$Date, [int]$Hour = 21, [int]$Minute = 0)' }
         @{ Name = "deadline-always-tomorrow"
            Find = '    if ($Now -lt $today) { return $today }'
            Replace = '    if ($false) { return $today }' }

@@ -35,6 +35,7 @@ $bd = Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04") -Hour 22
 Check ($bd -ceq "2026-11-04T22:00:00") ("the boundary reads 22:00:00 (" + $bd + ")")
 Check ($bd -notmatch '[Zz]$' -and $bd -notmatch '[+-]\d\d:\d\d$') "and carries no offset and no Z"
 Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04 15:45") -Hour 22) -ceq "2026-11-04T22:00:00") "a date with a time of day still gives 22:00:00"
+Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04")) -ceq "2026-11-04T22:00:00") "with no -Hour the boundary is 22:00:00 (the function's own default)"
 
 Write-Host ""
 Write-Host "--- text for a tell: no double quote, semicolon or angle bracket ---" -ForegroundColor Cyan
@@ -434,6 +435,11 @@ try {
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 3.25 GB free*")) "-MinFreeGB is the one setting that moves the day floor"
     Check ((($o -join "`n") -like "*PLAN apps: -NoCloseApps, nothing would be closed*")) "-NoCloseApps: -Plan says nothing would be closed"
+    # The registrar's own -Hour default, read from its dry run (-Plan registers nothing and returns before the scheduler is touched).
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\Register-NightlyTask.ps1") -Plan -HordeRoot $root)
+    $rtxt = $o -join "`n"
+    Check ($LASTEXITCODE -eq 0 -and $rtxt -like "*dry run: nothing registered*") ("the registrar -Plan registers nothing (" + $LASTEXITCODE + ")")
+    Check ($rtxt -match '<StartBoundary>\d{4}-\d\d-\d\dT22:00:00</StartBoundary>') "and with no -Hour the registrar's boundary is 22:00:00 (its own default)"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
