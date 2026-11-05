@@ -167,6 +167,23 @@ $msgN = Format-HordeNightlyWatchMessage -Decision $nt -Verdict $incv -Lookback 1
 Check ((G $msgN "founder") -ceq "" -and (G $msgN "m") -like "*NOTE for M only, not a miss*INCOMPLETE*") "an incomplete night goes to M only, as a note"
 $msgT = Format-HordeNightlyWatchMessage -Decision $tf -Verdict $okv -Lookback 14
 Check ((G $msgT "m") -like "*the night ran, but the scheduled task looks wrong*TASK: the scheduled task is disabled*" -and (G $msgT "founder") -like "*scheduled task looks wrong*disabled*") "a task finding on a ran night is told as such"
+# The phone sentence is true for each way a night can be missed (T-0397): a night whose tests ran must not be called a night they did not run.
+$phoneCases = @(
+    @{ status = "NOT STARTED"; log = ""; names = @(); say = "*did not run for the night of 2026-11-03*"; not = "*started*" },
+    @{ status = "REFUSED"; log = "2026-11-03T21:00:00 nightly net 2026-11-03: window CLOSED, x"; names = @(); say = "*did not run for the night of 2026-11-03*outside*hours*"; not = "*started but*" },
+    @{ status = "BUSY"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03-BUSY.txt"); say = "*did not run for the night of 2026-11-03*still*"; not = "*started but*" },
+    @{ status = "FAILED"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03-FAILED.txt"); say = "*started on the night of 2026-11-03*failed*"; not = "*did not run*" },
+    @{ status = "NOT REPORTED"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @(); say = "*started on the night of 2026-11-03 but did not finish*"; not = "*did not run*" },
+    @{ status = "NOT TOLD"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03.txt"); say = "*ran on the night of 2026-11-03*report did not reach M*"; not = "*did not run*" }
+)
+foreach ($pc in $phoneCases) {
+    $pv = Get-HordeNightlyWatchVerdict -Date $D -LogText $pc.log -ReportNames $pc.names
+    $pm = Format-HordeNightlyWatchMessage -Decision (Get-HordeNightlyWatchDecision -Verdict $pv -Streak 1 -State $empty) -Verdict $pv -Lookback 14
+    $pf = G $pm "founder"
+    Check ((G $pv "status") -ceq $pc.status) ("phone wording: the case really is " + $pc.status)
+    Check ($pf -like $pc.say -and $pf -notlike $pc.not -and $pf -like "*Details are with M.") ("phone wording for " + $pc.status + " is true and plain: " + $pf)
+    Check ($pf -cmatch '^[\x20-\x7E]*$' -and $pf -notmatch '["<>;]') ("phone wording for " + $pc.status + " is ASCII with no double quote, semicolon or angle bracket")
+}
 
 Write-Host ""
 Write-Host "--- two channels, each tried whatever the other did ---" -ForegroundColor Cyan
@@ -251,7 +268,7 @@ try {
     Check ($alarm -like "*NIGHTLY WATCH 2026-11-01: MISSED, REFUSED*" -and $alarm -notlike "*in a row*") "the alarm file names the night and REFUSED, and a single night is not a streak"
     Check ((Lines $rig.rec).Count -eq 1 -and (Lines $rig.rec)[0] -like "*tell M -Kind report -MessageFile*" ) "M was told with the message file"
     $h = Lines $rig.hrec
-    Check ($h.Count -eq 1 -and $h[0] -like "notify nightly-watch *service.secret | Nightly tests did not run for the night of 2026-11-01 (REFUSED)*") ("the phone line went through horde notify -Service with the secret FILE path (" + ($h -join " / ") + ")")
+    Check ($h.Count -eq 1 -and $h[0] -like "notify nightly-watch *service.secret | Nightly tests did not run for the night of 2026-11-01: they were started outside their allowed hours.*") ("the phone line went through horde notify -Service with the secret FILE path (" + ($h -join " / ") + ")")
     $everything = (Get-ChildItem -LiteralPath $rig.work -Recurse -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
     Check ($everything -notlike ("*" + $secretWord + "*") -and $r.out -notlike ("*" + $secretWord + "*")) "the secret's content is never read, logged or sent"
     Check ((Get-Content -LiteralPath (Join-Path $rig.work "nightly-watch.log") -Raw) -notlike "*nightly net 20*: window*" -and (Get-Content -LiteralPath (Join-Path $rig.work "nightly.log") -Raw) -notlike "*watch*") "the watcher keeps to its own log: nightly.log stays the net's evidence"

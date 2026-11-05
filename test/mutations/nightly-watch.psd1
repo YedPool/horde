@@ -99,6 +99,12 @@
         @{ Name = "phone-told-the-note"
            Find = '    elseif ($Decision.kind -ceq "note") { $lines += ("NIGHTLY WATCH " + $date + ": the night ran.") }'
            Replace = '    elseif ($Decision.kind -ceq "note") { $lines += ("NIGHTLY WATCH " + $date + ": the night ran."); $phone = "note" }' }
+        @{ Name = "phone-says-not-run-for-a-night-that-ran"
+           Find = '"NOT TOLD" { "Nightly tests ran on the night of "'
+           Replace = '"NOT TOLD" { "Nightly tests did not run for the night of "' }
+        @{ Name = "phone-says-not-run-for-a-night-that-started"
+           Find = '"NOT REPORTED" { "Nightly tests started on the night of "'
+           Replace = '"NOT REPORTED" { "Nightly tests did not run for the night of "' }
         @{ Name = "all-failed-when-any-failed"
            Find = 'allFailed = ($results.Count -gt 0 -and $okCount -eq 0)'
            Replace = 'allFailed = ($okCount -lt $results.Count)' }
