@@ -113,7 +113,9 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
     @{ name = "watcherStaleMinutes"; kind = "whole"; default = 30; min = 5; max = 1440
        what = "How old, in minutes, the watcher's last finished pass may be before it is called stopped." },
     @{ name = "watcherHungMinutes"; kind = "whole"; default = 15; min = 5; max = 1440
-       what = "How long, in minutes, a pass may stay begun and unfinished before it is called hung." }
+       what = "How long, in minutes, a pass may stay begun and unfinished before it is called hung." },
+    @{ name = "watcherReaderMinutes"; kind = "whole"; default = 120; min = 30; max = 1440
+       what = "How old, in minutes, unread mail in the alarm reader's inbox may be before the founder is told nobody is reading." }
 )
 
 $script:HordeAnalystMarkerPattern = '\A[A-Z][A-Z0-9-]{1,23}\z'

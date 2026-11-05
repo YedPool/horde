@@ -20,6 +20,13 @@
 # THE TELLERS ARE HANDED IN (Invoke-HordeWatcherHeartbeat -Tools), as in core/RelayWatch.ps1: a suite uses its
 # own recorders and never tells anyone. This file reads one file and starts nothing.
 #
+# THE READER CHECK (Invoke-HordeWatcherReaderCheck). A running watcher is not enough: its alarms go to one session.
+# A restart on 2026-11-05 left that session down 11.6 h while the watcher ran clean, and 9 alarm mails sat unread
+# with nobody told. So its inbox is read from here too: mail older than watcherReaderMinutes (120) means nobody is
+# reading the alarms. A reader that cannot be identified, or a mail folder that cannot be found, is the same alarm:
+# a source that cannot be read must not read as all quiet. One notice per episode, kept in a state file of its own
+# so neither check closes the other's episode. No "back" notice: the reader reading its mail needs no news.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
 . (Join-Path $PSScriptRoot "Tristate.ps1")
@@ -134,4 +141,49 @@ function Invoke-HordeWatcherHeartbeat {
         Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null })
     }
     return [pscustomobject]@{ lines = @($lines.ToArray()) }
+}
+
+function Get-HordeWatcherReaderVerdict {
+    # { stale; kind; why } for the reader named by -SelfPath (first word: its session id) at -Now. kind: "" |
+    # "unknown" (no usable id) | "nomail" (no mail folder) | "unread". A message whose time cannot be read counts
+    # by its file's time: it is still a message nobody took.
+    param([Parameter(Mandatory = $true)][string]$SelfPath, [Parameter(Mandatory = $true)][string]$MailRoot, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)]$Policy)
+    $sid = ""
+    try { $sid = (("" + (Read-HordeSharedText -Path $SelfPath)).Trim() -split '\s+')[0] } catch { }
+    if ($sid -cnotmatch '\A[A-Za-z0-9-]{8,80}\z') { return [pscustomobject]@{ stale = $true; kind = "unknown"; why = "the file naming the alarm reader is missing or unreadable (" + $SelfPath + ")" } }
+    if (-not [System.IO.Directory]::Exists($MailRoot)) { return [pscustomobject]@{ stale = $true; kind = "nomail"; why = "the fleet mail folder is missing (" + $MailRoot + ")" } }
+    $limit = [int]$Policy.watcherReaderMinutes
+    $utc = $Now.ToUniversalTime()
+    $inbox = [System.IO.Path]::Combine($MailRoot, $sid, "inbox")
+    $files = @(); if ([System.IO.Directory]::Exists($inbox)) { $files = @([System.IO.Directory]::GetFiles($inbox, "*.json")) }
+    $oldest = $null
+    foreach ($f in $files) {
+        $at = $null
+        try { $at = ConvertTo-HordeWatcherTime -Value (ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $f)).createdAt } catch { }
+        if ($null -eq $at) { $at = [System.IO.File]::GetLastWriteTimeUtc($f) }
+        if ($null -eq $oldest -or $at -lt $oldest) { $oldest = $at }
+    }
+    if ($null -eq $oldest) { return [pscustomobject]@{ stale = $false; kind = ""; why = "" } }
+    $age = [int][System.Math]::Floor(($utc - $oldest).TotalMinutes)
+    if ($age -le $limit) { return [pscustomobject]@{ stale = $false; kind = ""; why = "" } }
+    return [pscustomobject]@{ stale = $true; kind = "unread"; why = ("" + $files.Count + " unread, the oldest " + $age + " minutes old (more than " + $limit + "): it, or the whole fleet, may be down") }
+}
+
+function Invoke-HordeWatcherReaderCheck {
+    # One look at the alarm reader's inbox: { lines }. -Tools as Invoke-HordeWatcherHeartbeat. -Policy holds watcherReaderMinutes.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][string]$SelfPath, [Parameter(Mandatory = $true)][string]$MailRoot, [Parameter(Mandatory = $true)][string]$StatePath)
+    $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
+    $v = Get-HordeWatcherReaderVerdict -SelfPath $SelfPath -MailRoot $MailRoot -Now $now -Policy $Policy
+    $st = Read-HordeWatcherBeatState -Path $StatePath
+    if (-not $v.stale) {
+        if ($st.alerted) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null }) }
+        return [pscustomobject]@{ lines = @() }
+    }
+    if ($st.alerted) { return [pscustomobject]@{ lines = @() } }
+    $text = "Overseer alarms are not being read (" + $v.kind + "): " + $v.why + "."
+    $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text $text -Who "the founder's phone"
+    $w = Send-HordeWatcherWord -Tools $Tools -Name "Tell" -Text ("OVERSEER ALARMS UNREAD`n" + $text + "`nYou are not told again until this has cleared and comes back.") -Who "the warchief"
+    # TOLD ONLY WHEN TAKEN: when neither was taken, the next pass tries again.
+    if ($n.ok -or $w.ok) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true; since = $now }) }
+    return [pscustomobject]@{ lines = @(("watcher reader check: STALE (" + $v.kind + ") - " + $v.why), $n.line, $w.line) }
 }

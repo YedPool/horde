@@ -71,11 +71,13 @@ $HordeCommand = @{
         $beatRun = "" + $policy.values.watcherRunFile
         if ($beatRun -eq "") { $beatRun = [System.IO.Path]::Combine((Get-HordeWezfleetRoot), "_home", "orcs", "overseer", "run.json") }
         $beatTools = @{ Now = { return [datetime]::UtcNow }; Tell = $relayTools["Tell"]; Notify = $relayTools["Notify"] }
+        $readerArgs = @{ SelfPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($beatRun), "self.txt"); MailRoot = [System.IO.Path]::Combine((Get-HordeWezfleetRoot), "mail"); StatePath = [System.IO.Path]::Combine($hordeHome, "analyst", "watcher-reader.json") }
         if ($Verb -eq "tend") {
             $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
             foreach ($l in @($done.lines)) { Write-Output ("analyst: " + $l) }
             foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output $l }
             if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherHeartbeat -Tools $beatTools -Policy $policy.values -RunPath $beatRun -StatePath $beatState).lines)) { Write-Output $l } }
+            if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherReaderCheck -Tools $beatTools -Policy $policy.values @readerArgs).lines)) { Write-Output $l } }
             if ($done.problem -ne "") { throw $done.problem }
             return
         }
@@ -96,6 +98,7 @@ $HordeCommand = @{
                     $problem = $done.problem
                     foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) }
                     if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherHeartbeat -Tools $beatTools -Policy $policy.values -RunPath $beatRun -StatePath $beatState).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) } }
+                    if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherReaderCheck -Tools $beatTools -Policy $policy.values @readerArgs).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) } }
                 }
             } catch { $problem = "the pass failed: " + $_.Exception.Message }
             if ($problem -ne "") { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $problem) }
