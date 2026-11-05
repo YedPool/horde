@@ -818,7 +818,17 @@ function Format-HordeNightlyWatchMessage {
         if ($Verdict.missed) {
             $lines += ("NIGHTLY WATCH " + $date + ": MISSED, " + $Verdict.status + ". " + $Verdict.detail + ".")
             if ($row -ne "") { $lines += $row }
-            $phone = "Nightly tests did not run for the night of " + $date + " (" + $Verdict.status + ")." + $(if ($row -ne "") { " " + $row } else { "" })
+            # What really happened differs by status (T-0397): NOT TOLD ran and only the report failed, NOT REPORTED and
+            # FAILED started, so "did not run" would be false for those three.
+            $said = switch ($Verdict.status) {
+                "NOT TOLD" { "Nightly tests ran on the night of " + $date + ", but the report did not reach M." }
+                "NOT REPORTED" { "Nightly tests started on the night of " + $date + " but did not finish." }
+                "FAILED" { "Nightly tests started on the night of " + $date + " but failed." }
+                "REFUSED" { "Nightly tests did not run for the night of " + $date + ": they were started outside their allowed hours." }
+                "BUSY" { "Nightly tests did not run for the night of " + $date + ": an earlier run was still in the way." }
+                default { "Nightly tests did not run for the night of " + $date + "." }
+            }
+            $phone = $said + $(if ($row -ne "") { " " + $row } else { "" })
             if ($tasks.Count -gt 0) { $phone += " The task also looks wrong: " + $tasks[0] + "." }
         } else {
             $lines += ("NIGHTLY WATCH " + $date + ": the night ran, but the scheduled task looks wrong.")
