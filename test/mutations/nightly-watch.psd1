@@ -7,11 +7,11 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "night-is-two-days-back"
-           Find = '    $night = $Now.Date.AddDays(-1)'
-           Replace = '    $night = $Now.Date.AddDays(-2)' }
+           Find = 'InvariantCulture).AddDays(-1)'
+           Replace = 'InvariantCulture).AddDays(-2)' }
         @{ Name = "early-morning-judges-the-running-night"
-           Find = '    if ($Now -lt $Now.Date.AddHours($EndHour).AddMinutes($EndMinute)) { $night = $night.AddDays(-1) }'
-           Replace = '' }
+           Find = '(Get-HordeNightlyNightLabel -Time $Now -EndHour $EndHour -EndMinute $EndMinute), "yyyy-MM-dd"'
+           Replace = '$Now.ToString("yyyy-MM-dd"), "yyyy-MM-dd"' }
         @{ Name = "dates-skip-every-other-day"
            Find = '$d.AddDays(-$i).ToString('
            Replace = '$d.AddDays(-2 * $i).ToString(' }
