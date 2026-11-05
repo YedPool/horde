@@ -15,7 +15,8 @@
 #
 # THE NIGHT. It starts at 22:00 or later and everything is over by 06:30 (a run is never started if it could
 # end after 06:15, which leaves -ReportReserveMinutes for the report and the tell); started outside the window it refuses
-# with exit 4 and runs nothing. Every run goes through
+# with exit 4 and runs nothing, after telling M (T-0397: a refused start is never silent; the schedule is
+# tools/nightly/Register-NightlyTask.ps1, wall-clock time with no offset). Every run goes through
 # tools/HeavySlot.ps1 in slot runs of -RunSeconds (at most 1800) and a SHORT -SlotWaitSeconds (default 900: a
 # lane that waits is said unrun, it never queues for hours, 2026-10-22), so the slot is free between runs. HeavySlot
 # itself waits for idle-or-night, which holds all night. THIS FILE REGISTERS NOTHING: whoever owns the
@@ -131,7 +132,9 @@ $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.ex
 # -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
 # any run outside the night.
 $now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
-$Date = $now.ToString("yyyy-MM-dd")
+# The night's label (core Get-HordeNightlyNightLabel): the date it BEGAN, shared with the watcher. A start at 01:00 is the
+# night of yesterday's date; the cutoff, the window and the memory floors read the clock itself and are unaffected.
+$Date = Get-HordeNightlyNightLabel -Time $now
 $ReportDir = Join-Path $WorkRoot "reports"
 $RunDir = Join-Path (Join-Path $WorkRoot "runs") (Get-Date).ToString("yyyyMMdd-HHmmss")
 $LogFile = Join-Path $WorkRoot "nightly.log"
@@ -576,12 +579,23 @@ catch {
 $cutoff = Get-HordeNightlyRunCutoff -Now $now -ReportReserveMinutes $ReportReserveMinutes
 $inWindow = Test-HordeNightlyWindow -Now $now
 Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
-if (-not $inWindow -and -not $Plan) { Say "outside the night window (22:00 to 06:30): nothing run"; exit 4 }
 
 function Send-NightlyReport {
     # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
     return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -TimeoutSeconds 300 -Say { param($l) Say $l })
+}
+
+if (-not $inWindow -and -not $Plan) {
+    # Never a silent refusal (T-0397): three nights in a row (2026-11-01 to 11-03) started an hour early, ran nothing
+    # and told nobody. M hears it, and the exit stays 4 whether or not the tell gets through.
+    Say "outside the night window (22:00 to 06:30): nothing run"
+    try {
+        $refused = Join-Path $ReportDir ($Date + "-REFUSED.txt")
+        [System.IO.File]::WriteAllText($refused, (ConvertTo-HordeNightlyText ("NIGHTLY NET " + $Date + ": NOT RUN, started at " + $now.ToString("yyyy-MM-dd HH:mm", $Inv) + ", outside the night window (22:00 to 06:30), so nothing ran. Check the schedule's start time. Log: " + $LogFile)) + "`n")
+        [void](Send-NightlyReport $refused)
+    } catch { Say ("the refused-start report failed: " + $_.Exception.Message) }
+    exit 4
 }
 
 $mutex = $null

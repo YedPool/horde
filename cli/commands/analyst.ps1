@@ -65,10 +65,17 @@ $HordeCommand = @{
         if ($null -ne $tools["Tell"]) { $relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay" -Body $Body -Values $policy.values -HordeHome $hordeHome) } }
         if ($null -ne $tools["Notify"]) { $relayTools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) } }
         $relayState = [System.IO.Path]::Combine($hordeHome, "analyst", "relay-watch.json")
+        # THE OVERSEER WATCHER CHECK (core/WatcherHeartbeat.ps1, T-0388): the same two tellers, a file of its own.
+        . (Join-Path $root "core\WatcherHeartbeat.ps1")
+        $beatState = [System.IO.Path]::Combine($hordeHome, "analyst", "watcher-beat.json")
+        $beatRun = "" + $policy.values.watcherRunFile
+        if ($beatRun -eq "") { $beatRun = [System.IO.Path]::Combine((Get-HordeWezfleetRoot), "_home", "orcs", "overseer", "run.json") }
+        $beatTools = @{ Now = { return [datetime]::UtcNow }; Tell = $relayTools["Tell"]; Notify = $relayTools["Notify"] }
         if ($Verb -eq "tend") {
             $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
             foreach ($l in @($done.lines)) { Write-Output ("analyst: " + $l) }
             foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output $l }
+            if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherHeartbeat -Tools $beatTools -Policy $policy.values -RunPath $beatRun -StatePath $beatState).lines)) { Write-Output $l } }
             if ($done.problem -ne "") { throw $done.problem }
             return
         }
@@ -88,6 +95,7 @@ $HordeCommand = @{
                     foreach ($l in @($done.lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $l) }
                     $problem = $done.problem
                     foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) }
+                    if ($policy.values.watcherCheck) { foreach ($l in @((Invoke-HordeWatcherHeartbeat -Tools $beatTools -Policy $policy.values -RunPath $beatRun -StatePath $beatState).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) } }
                 }
             } catch { $problem = "the pass failed: " + $_.Exception.Message }
             if ($problem -ne "") { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $problem) }

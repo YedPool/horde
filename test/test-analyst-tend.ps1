@@ -531,6 +531,13 @@ try {
     Check ($x.code -eq 0 -and $x.out -like "*marked QUESTION*" -and @([System.IO.Directory]::GetFiles((Join-Path $e "analyst\mail"))).Count -eq 1) "mail leaves one file in the analyst folder, marked"
     $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
     Check ($x.code -eq 0 -and $x.out -like "*would tell the warchief (no-analyst), but telling is off*") "tend in a test's home finds no analyst and tells nobody"
+    Check ($x.out -like "*watcher check: STALE (missing)*" -and $x.out -like "*would tell the founder's phone, but telling is off*") "tend checks the overseer watcher's run.json: no file under the fleet root is stale (missing), and a test's home tells nobody (T-0388)"
+    $runDir = Join-Path $work "no-fleet-here\_home\orcs\overseer"
+    [void][System.IO.Directory]::CreateDirectory($runDir)
+    $nowIso = [datetime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+    [System.IO.File]::WriteAllText((Join-Path $runDir "run.json"), ('{"started":"' + $nowIso + '","finished":"' + $nowIso + '"}'), $utf8)
+    $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
+    Check ($x.code -eq 0 -and $x.out -cnotlike "*watcher check*") "and a fresh run.json at <fleet root>\_home\orcs\overseer says nothing"
     Write-Handover -Folder (Join-Path $e "analyst") -Sid $sidA -At ([datetime]::UtcNow)
     $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
     Check ($x.code -eq 0 -and $x.out -like ("*adopted session " + $sidA + "*")) "the next pass adopts the analyst its handover names"
