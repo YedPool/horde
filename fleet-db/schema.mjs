@@ -935,7 +935,7 @@ export const MIGRATIONS = [
     owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB '*[^!-~]*'),
     session_id TEXT ${uuid('session_id')},
     job TEXT NOT NULL CHECK (length(job) BETWEEN 1 AND 4000),
-    started_at INTEGER NOT NULL CHECK (started_at >= 0),
+    started_at INTEGER NOT NULL,
     due_at INTEGER CHECK (due_at >= 0),
     done_at INTEGER CHECK (done_at >= 0),
     done_proof TEXT CHECK (length(done_proof) BETWEEN 1 AND 4000),
@@ -943,6 +943,7 @@ export const MIGRATIONS = [
     -- Someone else is holding it up (the overseer does not nag an owner whose job waits on another: its IDLE-OPEN-JOB rule skips it).
     waiting_on TEXT CHECK (length(waiting_on) BETWEEN 1 AND 4000),
     created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 64 AND created_by NOT GLOB '*[^!-~]*'),
+    CHECK (started_at >= 0),
     CHECK (done_at IS NULL OR done_at >= started_at),
     CHECK ((done_at IS NULL) = (done_proof IS NULL)),
     CHECK ((done_at IS NULL) = (done_by IS NULL))
