@@ -40,7 +40,14 @@ $lines = @(& python -m pytest -q -p no:cacheprovider $baseTempArg --ignore=$Igno
 $code = $LASTEXITCODE
 Remove-Item -LiteralPath $baseTemp -Recurse -Force -ErrorAction SilentlyContinue
 $lines | ForEach-Object { Write-Output $_ }
-$failed = @($lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | ForEach-Object { ($_ -replace '^(FAILED|ERROR) ', '') -replace ' - .*$', '' } | Sort-Object -Unique)
+# ONLY THE SUMMARY NAMES A FAILED TEST. Text above it is captured output: on 2026-11-05 the log line
+# "ERROR    root:web_reader_dialog.py:2953 ..." was reported as a newly red test.
+$inSummary = $false
+$named = @(foreach ($l in $lines) {
+    if ($l -match '^=+ short test summary info =+$') { $inSummary = $true; continue }
+    if ($inSummary -and $l -match '^(FAILED|ERROR) ') { ($l -replace '^(FAILED|ERROR) ', '') -replace ' - .*$', '' }
+})
+$failed = @($named | Sort-Object -Unique)
 if ($code -eq 0) { [System.IO.File]::WriteAllText($NodesFile, "`n"); exit 0 }
 if ($code -eq 1 -and $failed.Count -gt 0) { [System.IO.File]::WriteAllText($NodesFile, (($failed -join "`n") + "`n")); exit 1 }
 Write-Output ("pytest-wrap: pytest exited " + $code + " with " + $failed.Count + " failing nodes named: not a verdict")
