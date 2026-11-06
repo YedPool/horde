@@ -93,7 +93,7 @@ test('a version 2 file holding rows is brought to the current version, every row
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(SCHEMA_VERSION, 8);
+  assert.equal(SCHEMA_VERSION, 9);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const rows = db.prepare('SELECT id, kind, created_at FROM entity ORDER BY created_at').all().map((r) => ({ ...r }));
   assert.deepEqual(rows, [{ id: node, kind: 'node', created_at: 11 }, { id: orc, kind: 'orc', created_at: 22 },

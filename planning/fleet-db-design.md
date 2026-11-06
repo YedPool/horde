@@ -627,6 +627,10 @@ and the first stop after that checks again at once (a nudge a little early, neve
 
 **Reading it.** `horde db status` counts both tables like every other; `horde db check` needs no new rule (the CHECKs and triggers hold the shape of one row, and no row points at another table).
 
+## Task state (migration 9; T-0299)
+
+`task_now` follows `task.py` exactly, because the ledger is what the fleet has run on and a reader of fleet.db must see the same answer. The opened line counts first, whatever its time. `resumed` and `reopened` read `started`; `handed` reads `opened`, since the new owner has not begun; `progress` on an opened task means it began. Priority and owner come from the newest `priority` or `handed` event, else the opened line. The view of migration 1 took the newest event's word as the state and disagreed on 31 of 415 real tasks. `promise` and `kept` do not reach fleet.db at all (T-0416), and neither moves a state in the ledger.
+
 ## One allocator of T-numbers (T-0299; Orc M's order 2026-11-06)
 
 `task.py open` used to give max+1 from its own file while fleet.db saw that file minutes later, so two allocators could give one number to two sessions, and `label_seq` still read 1 after the importer had brought 414 tasks in. Now `node fleet-db/label-cli.mjs take-task --above <highest in the ledger>` is the only allocator: under one write lock it raises the counter past the task rows and `--above`, never lowers it, and takes one. `task.py` still writes its file, and the sync brings that row in, as before.

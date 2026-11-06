@@ -56,7 +56,7 @@ const row = (w, table, where, ...args) => ({ ...w.db.prepare('SELECT * FROM ' + 
 // --- migration 8 -------------------------------------------------------------------------------------------------------
 
 test('migration 8 on a schema 7 file: the tables and indexes come, every old row stays, check says ok', () => {
-  assert.equal(SCHEMA_VERSION, 8);
+  assert.equal(SCHEMA_VERSION, 9);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-db-jobs-mig-'));
   dirs.push(dir);
   const file = path.join(dir, 'fleet.db');
@@ -68,7 +68,7 @@ test('migration 8 on a schema 7 file: the tables and indexes come, every old row
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.equal(db.prepare('SELECT count(*) AS n FROM node').get().n, 1);
   const names = db.prepare("SELECT name FROM sqlite_master WHERE name IN ('job', 'signal', 'job_open_due', 'signal_open_last', 'signal_closed')").all().map((r) => r.name).sort();
   assert.deepEqual(names, ['job', 'job_open_due', 'signal', 'signal_closed', 'signal_open_last']);
@@ -586,10 +586,10 @@ test('cli: a relative home is exit 2', () => {
 
 test('cli: a newer or an older schema is refused in words, not migrated and not written', () => {
   const w = world();
-  w.db.exec('PRAGMA user_version = 9');
+  w.db.exec('PRAGMA user_version = 99');
   w.db.close();
   const newer = cli(w, ['job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S']);
-  assert.deepEqual([newer.code, newer.err], [1, ['fleet.db: fleet.db is version 9, newer than this code (8): update Horde']]);
+  assert.deepEqual([newer.code, newer.err], [1, ['fleet.db: fleet.db is version 99, newer than this code (9): update Horde']]);
   const raw = new DatabaseSync(w.file);
   raw.exec('PRAGMA user_version = 7');
   raw.exec('DROP TABLE job; DROP TABLE signal');

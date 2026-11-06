@@ -995,6 +995,34 @@ export const MIGRATIONS = [
   WHEN NEW.last_at < OLD.last_at OR NEW.count < OLD.count
   BEGIN SELECT RAISE(ABORT, 'signal: last_at and count never go back'); END;
   `,
+
+  // 9: task_now by the ledger's own rule (T-0299; design: planning/fleet-db-design.md, "Task state"). The view of migration 1 took
+  // the newest event's word as the state, and disagreed with task.py on 31 of 415 real tasks: T-0299 itself read opened. Now: the
+  // opened line counts first whatever its time, so a late one takes neither priority nor owner; resumed and reopened read started;
+  // handed reads opened, since the new owner has not begun; progress on an opened task means it began. task_tree reads task_now
+  // by name, so it is not touched. Only the view changes, so no row moves and a reader of the old words is the only thing affected.
+  `
+  DROP VIEW task_now;
+  CREATE VIEW task_now AS
+  SELECT t.id, t.key, t.title, t.source, t.parent_id, t.created_at,
+    CASE
+      WHEN m.kind IN ('resumed', 'reopened') THEN 'started'
+      WHEN m.kind IS NOT NULL AND m.kind <> 'handed' THEN m.kind
+      WHEN NOT EXISTS (SELECT 1 FROM task_event e WHERE e.task_id = t.id) THEN NULL
+      WHEN EXISTS (SELECT 1 FROM task_event p WHERE p.task_id = t.id AND p.kind = 'progress'
+        AND (m.id IS NULL OR p.at > m.at OR (p.at = m.at AND p.id > m.id))) THEN 'started'
+      ELSE 'opened'
+    END AS state,
+    (SELECT e.prio FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'priority')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS prio,
+    (SELECT e.to_orc_id FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'handed')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS owner_orc_id,
+    (SELECT max(e.at) FROM task_event e WHERE e.task_id = t.id) AS last_event_at
+  FROM task t
+  LEFT JOIN task_event m ON m.id = (SELECT e.id FROM task_event e WHERE e.task_id = t.id
+    AND e.kind IN ('started', 'waiting', 'resumed', 'handed', 'done', 'verified', 'reopened', 'dropped', 'superseded')
+    ORDER BY e.at DESC, e.id DESC LIMIT 1);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
