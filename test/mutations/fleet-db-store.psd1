@@ -5,6 +5,9 @@
     Target = "fleet-db\store.mjs"
     Suite  = "test\test-fleet-db.ps1"
     Mutations = @(
+        @{ Name = "failed-open-keeps-the-handle"
+           Find = "} catch (e) { db.close(); throw e; }"
+           Replace = "} catch (e) { throw e; }" }
         @{ Name = "label-off-by-one"
            Find = "RETURNING next - 1 AS n"
            Replace = "RETURNING next AS n" }

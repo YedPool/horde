@@ -1000,7 +1000,7 @@ export const MIGRATIONS = [
   // the newest event's word as the state, and disagreed with task.py on 31 of 415 real tasks: T-0299 itself read opened. Now: the
   // opened line counts first whatever its time, so a late one takes neither priority nor owner; resumed and reopened read started;
   // handed reads opened, since the new owner has not begun; progress on an opened task means it began. task_tree: a closed parent
-  // took its live subtasks off the list with it, 21 of 128 live tasks on the real data, three at priority 1. A live task whose parent
+  // took its live subtasks off the list with it, 21 of 128 live tasks on the real data, four at priority 1. A live task whose parent
   // is closed now stands at the top of its own owner's list. Only views change, so no row moves.
   `
   DROP VIEW task_now;

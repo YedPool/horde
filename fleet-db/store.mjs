@@ -58,28 +58,29 @@ export function openStore(file, { readOnly = false, busyMs = 5000 } = {}) {
   if (readOnly && !fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; open it for writing once');
   if (!readOnly) fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file, { readOnly, enableForeignKeyConstraints: true });
-  db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
-  if (!readOnly) {
-    enterWal(db, busyMs);
-    db.exec('PRAGMA synchronous = NORMAL');
-  }
-  db.exec('PRAGMA foreign_keys = ON');
-  db.exec('PRAGMA recursive_triggers = ON');
-  const on = (p) => db.prepare('PRAGMA ' + p).get()[p] === 1;
-  if (!on('foreign_keys') || !on('recursive_triggers')) {
-    db.close();
-    throw new Error('fleet.db: foreign keys and recursive triggers could not be turned on');
-  }
-  const have = db.prepare('PRAGMA user_version').get().user_version;
-  if (have > SCHEMA_VERSION) {
-    db.close();
-    throw new Error('fleet.db is version ' + have + ', newer than this code (' + SCHEMA_VERSION + '): update Horde');
-  }
-  if (have < SCHEMA_VERSION) {
-    if (readOnly) { db.close(); throw new Error('fleet.db is version ' + have + ' and needs migrating; open it for writing once'); }
-    migrate(db, have);
-  }
-  return db;
+  // Any failure closes the handle: a locked file would otherwise stay held, and a caller that retries would hold one per try.
+  try {
+    db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
+    if (!readOnly) {
+      enterWal(db, busyMs);
+      db.exec('PRAGMA synchronous = NORMAL');
+    }
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA recursive_triggers = ON');
+    const on = (p) => db.prepare('PRAGMA ' + p).get()[p] === 1;
+    if (!on('foreign_keys') || !on('recursive_triggers')) {
+      throw new Error('fleet.db: foreign keys and recursive triggers could not be turned on');
+    }
+    const have = db.prepare('PRAGMA user_version').get().user_version;
+    if (have > SCHEMA_VERSION) {
+      throw new Error('fleet.db is version ' + have + ', newer than this code (' + SCHEMA_VERSION + '): update Horde');
+    }
+    if (have < SCHEMA_VERSION) {
+      if (readOnly) throw new Error('fleet.db is version ' + have + ' and needs migrating; open it for writing once');
+      migrate(db, have);
+    }
+    return db;
+  } catch (e) { db.close(); throw e; }
 }
 
 // The version is read again inside the write lock: several hooks open a brand-new file at once, and each

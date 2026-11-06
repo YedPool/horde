@@ -633,7 +633,15 @@ and the first stop after that checks again at once (a nudge a little early, neve
 
 ### The task tree keeps every live task
 
-`task_tree` is also redefined by migration 9. A closed parent used to take its live subtasks off the list with it: 21 of the 128 live tasks on the real data, three at priority 1. Now a live task whose parent is closed stands at the top of its own owner's list, with its own subtasks still under it. It does not climb to a live grandparent. While its parent is live, a subtask is numbered in the parent's list even when another Orc owns it (12 tasks on the real data), so a reader of one Orc's work reads the task's own owner from `task_now` as well.
+`task_tree` is also redefined by migration 9. A closed parent used to take its live subtasks off the list with it: 21 of the 128 live tasks on the real data, four at priority 1. Now a live task whose parent is closed stands at the top of its own owner's list, with its own subtasks still under it. It does not climb to a live grandparent. While its parent is live, a subtask is numbered in the parent's list even when another Orc owns it (12 tasks on the real data), so a reader of one Orc's work reads the task's own owner from `task_now` as well.
+
+### The list verb
+
+`horde task list [-Orc <letter or lane folder>] [-Json]` (`fleet-db/task-cli.mjs`) prints `task_tree`, one numbered list per Orc, and only reads. It is the first reader of tasks in fleet.db; `add`, `sub`, `move`, `set` and `checkin` wait until a reader needs them (Orc M, 2026-11-06).
+
+- Nothing live is left out. `-Orc` also shows what that Orc owns inside another Orc's list, marked `owner=`. Tasks with no Orc to name come out in a list called `no Orc`. Done tasks take no number, since they wait for verification, and the last line counts them.
+- `task.py` counts done as open and this does not: on 2026-11-06 its 215 was this list's 128 plus its 87 done.
+- The ledger stays the source of tasks, and reaches fleet.db by the sync every 5 minutes, so a task opened this minute can be missing here.
 
 ## One allocator of T-numbers (T-0299; Orc M's order 2026-11-06)
 
