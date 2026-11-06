@@ -878,6 +878,9 @@ Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on stack: fetching stack failed
 Check ((Said ("STAYS OWED: YedPool/horde#100 (mergeSha " + $h.shas[0] + ") is tried again in every run. If it can never run*give it up by adding this line to *guards-checked.jsonl: {*" + $h.shas[0] + "*given-up*")) -and (Said ("STAYS OWED: YedPool/horde#101 (mergeSha " + $h.shas[1] + ")*"))) "  and it prints the way out for each owed merge, the line that gives it up"
 $wayOut = @($script:said | Where-Object { $_ -clike "STAYS OWED: *#100 *" })[0]
 $wayLine = $wayOut.Substring($wayOut.IndexOf(": {") + 2)
+$wayOut2 = @($script:said | Where-Object { $_ -clike "STAYS OWED: *#101 *" })[0]
+$wayLine2 = $wayOut2.Substring($wayOut2.IndexOf(": {") + 2)
+Check ((ConvertFrom-HordeJson -Text $wayLine).mergeSha -ceq $h.shas[0] -and (ConvertFrom-HordeJson -Text $wayLine2).mergeSha -ceq $h.shas[1]) ("  each merge's line gives up that merge's own sha, not the first one's: " + $wayLine + " | " + $wayLine2)
 Check (@(Read-CheckedLines $h.c).Count -eq 0) "  nothing was marked checked: the merges are not dropped"
 $null = Add-HordeMergeLine -Path (Join-Path $h.c.owed "guards-checked.jsonl") -Line $wayLine
 $run = Invoke-OwedRun -Case $h.c
