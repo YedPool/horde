@@ -337,10 +337,59 @@ function Open-HordeWeztermFleet {
     return (New-HordeKnown -Value ([pscustomobject]@{ spawn = $spawn; paneOf = $paneOf; terminal = ("gui " + $own.value.guiPid) }))
 }
 
+function Get-HordeWeztermFleetPanes {
+    # The port's Panes (fleet/Port.ps1): the live panes of EVERY terminal of this user, one entry per terminal,
+    # for the fleet.db sessions step. known list of { instance; state; panes; reason }:
+    #   instance  the socket file's name, which is what the fleet registry stores for a terminal
+    #   listed    the terminal answered, and `panes` are its pane numbers
+    #   closed    its gui is not running (a socket file stays behind when a gui closes, so the file alone proves
+    #             nothing): none of its panes is live
+    #   unknown   it runs and did not give a list - a timeout, a refusal, output that is not a list - so what sat in
+    #             it is NOT known gone; `reason` says why
+    # EACH CALL HAS A LIMIT OF ITS OWN (-CallMs) and kills only the child it started (Act.ps1's Invoke-HordeWeztermAct:
+    # a process object of its own, never a kill by name), and the whole pass has one budget (-BudgetMs): a terminal
+    # the budget ran out before is unknown, not skipped. Every call names its terminal (Act.ps1), so this never
+    # reaches the terminal the environment points at. The whole answer is unknown when the socket folder cannot be
+    # listed. -SockDir, -Runner and -ProcessStart stand in for the real ones in a test.
+    param([string]$SockDir = (Get-HordeWeztermSockDir), [int]$CallMs = 8000, [int]$BudgetMs = 30000, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
+    if (-not (Test-Path -LiteralPath $SockDir -PathType Container)) { return (New-HordeUnknown -Reason ("there is no terminal socket folder at " + $SockDir + ", so the live panes cannot be listed")) }
+    $socks = @()
+    try { $socks = @(Get-ChildItem -LiteralPath $SockDir -ErrorAction Stop | Where-Object { -not $_.PSIsContainer -and $_.Name -cmatch $script:HordeWeztermSocketLeaf } | Sort-Object Name) }
+    catch { return (New-HordeUnknown -Reason ("the terminal socket folder " + $SockDir + " could not be listed: " + $_.Exception.Message)) }
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $out = New-Object System.Collections.ArrayList
+    foreach ($s in $socks) {
+        $inst = "" + $s.Name
+        $gui = [long]([regex]::Match($inst, $script:HordeWeztermSocketLeaf).Groups[1].Value)
+        $start = $null
+        if ($null -ne $ProcessStart) { $start = & $ProcessStart $gui } else { $start = Get-HordeWeztermProcessStart -ProcessId $gui }
+        if ($null -eq $start) {
+            # No start time is "not running" only when no such process exists: one that runs and will not tell its start is unknown.
+            $runs = ($null -eq $ProcessStart -and $null -ne (Get-Process -Id $gui -ErrorAction SilentlyContinue))
+            if ($runs) { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "unknown"; panes = @(); reason = ("the gui " + $gui + " runs but its start time cannot be read") }) }
+            else { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "closed"; panes = @(); reason = ("the gui " + $gui + " is not running") }) }
+            continue
+        }
+        if ($watch.ElapsedMilliseconds -gt $BudgetMs) { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "unknown"; panes = @(); reason = "not listed: the pass budget for pane lists ran out" }); continue }
+        $target = New-HordeWeztermTarget -Socket $s.FullName -ProcessStart $ProcessStart
+        if ($target.state -ne "known") { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "unknown"; panes = @(); reason = ("" + $target.reason) }); continue }
+        $rest = @("list", "--format", "json")
+        $call = $null
+        if ($null -ne $Runner) { $call = & $Runner $rest @{} $target.value } else { $call = Invoke-HordeWeztermAct -Rest $rest -Target $target.value -TimeoutMs $CallMs -Utf8 }
+        if ($call.code -ne 0) { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "unknown"; panes = @(); reason = ("the terminal did not list its panes (exit " + $call.code + "): " + ("" + $call.err).Trim()) }); continue }
+        $list = Read-HordeWeztermPaneList -Raw $call.out
+        if ($list.state -ne "known") { [void]$out.Add([pscustomobject]@{ instance = $inst; state = "unknown"; panes = @(); reason = ("" + $list.reason) }); continue }
+        $nos = @(@($list.value) | ForEach-Object { [int]("" + $_.pane) })
+        [void]$out.Add([pscustomobject]@{ instance = $inst; state = "listed"; panes = $nos; reason = "" })
+    }
+    return (New-HordeKnown -Value $out.ToArray())
+}
+
 Register-HordeFleetHost -Name "wezterm" `
     -Placement { param($refs) $st = Get-HordeWeztermFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { New-HordeUnknown -Reason ("the fleet's terminal settings are refused: " + (@($st.findings) -join "; ")) } else { Get-HordeWeztermFleetPlacement -Refs $refs -SockDir (Get-HordeWeztermFleetSockDir -Settings $st) } } `
     -Open { Open-HordeWeztermFleet } `
     -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request } `
     -Release { param($sessionId) Remove-HordeWeztermFleetNoRestore -SessionId $sessionId } `
     -Mark { param($sessionId, $reason, $at) Write-HordeWeztermFleetNoRestore -SessionId $sessionId -Reason $reason -At $at } `
-    -Unmark { param($sessionId, $reason) Remove-HordeWeztermFleetNoRestoreIf -SessionId $sessionId -Reason $reason }
+    -Unmark { param($sessionId, $reason) Remove-HordeWeztermFleetNoRestoreIf -SessionId $sessionId -Reason $reason } `
+    -Panes { $st = Get-HordeWeztermFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { New-HordeUnknown -Reason ("the fleet's terminal settings are refused: " + (@($st.findings) -join "; ")) } else { Get-HordeWeztermFleetPanes -SockDir (Get-HordeWeztermFleetSockDir -Settings $st) } }

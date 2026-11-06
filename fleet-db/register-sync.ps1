@@ -9,7 +9,7 @@
 #
 # WHY ONE TASK, EVERY MINUTE (T-0389, M's order 2026-11-02). One tick is the clock for every fleet.db feed: the files step
 # (task events, changelog, Orc cards) keeps its own five-minute pace in HORDE_HOME\fleet-db-sync-state.json, and the
-# sessions step a later piece adds runs on every tick, in this same task. A minute is the shortest repeat the Windows
+# sessions step (T-0409: session state, panes, process liveness) runs on every tick, in this same task. A minute is the shortest repeat the Windows
 # scheduler allows. The task's whole action is `horde db sync`; all other policy lives in code that can be tested
 # (fleet-db\sync.mjs, fleet-db\Sync.ps1), not in the task's settings.
 #

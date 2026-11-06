@@ -2,7 +2,7 @@
 // refuses naming the -Save form; the files step runs only when its last good run is 5 minutes old (or with --force);
 // a second sync adds nothing; a new ledger line, changelog line or card appears after one sync; a failed run keeps
 // lastOkAt and records itself; a timeout noted by the caller is recorded without moving lastOkAt; the state keeps keys
-// it does not know (piece 2's sessions step); `db status` says when the files were last synced. Temp homes only: the
+// it does not know (a later step; the sessions step has its own tests in sessions.test.mjs); `db status` says when the files were last synced. Temp homes only: the
 // real files are never named and the real home is never read.
 import './own-profile.mjs';
 import { test, after } from 'node:test';
@@ -148,7 +148,7 @@ test('arguments: source flags only with --save, none twice, no registry, decisio
     assert.throws(() => parseSyncArgs(['--save', '--ledger', 'a', flag, 'x']), /unknown argument/, flag);
   }
   assert.throws(() => parseSyncArgs(['--note-timeout', 'soon']), /needs the milliseconds/);
-  assert.deepEqual(parseSyncArgs(['--force']), { force: true, save: false, sources: {}, noteTimeoutMs: null });
+  assert.deepEqual(parseSyncArgs(['--force']), { force: true, save: false, sources: {}, noteTimeoutMs: null, snapshot: null, snapshotError: null });
 });
 
 test('cadence: the files step is skipped under 5 minutes, runs at 5, and always runs with --force', () => {
@@ -263,13 +263,13 @@ test('--note-timeout records the kill without moving lastOkAt and without openin
   assert.equal(fs.existsSync(path.join(w.home, 'fleet.db')), false);
 });
 
-test('the state keeps keys it does not know, so a later step (sessions) is not wiped by the files step', () => {
+test('the state keeps keys it does not know, so a later step is not wiped by the files step', () => {
   const w = world();
   saveSettings(w.home, w.sources);
-  fs.writeFileSync(stateFile(w.home), JSON.stringify({ schema: 1, sessions: { lastOkAt: 7 }, files: {} }));
+  fs.writeFileSync(stateFile(w.home), JSON.stringify({ schema: 1, jobs: { lastOkAt: 7 }, files: {} }));
   run(w.env, [], T0);
   const raw = JSON.parse(fs.readFileSync(stateFile(w.home), 'utf8'));
-  assert.deepEqual(raw.sessions, { lastOkAt: 7 });
+  assert.deepEqual(raw.jobs, { lastOkAt: 7 });
   assert.equal(raw.files.lastResult, 'ok');
   assert.equal(raw.files.lastOkAt, T0);
   assert.equal(raw.schema, 1);

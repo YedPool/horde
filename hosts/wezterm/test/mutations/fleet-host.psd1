@@ -99,5 +99,17 @@
         @{ Name = "unmark-never-registered"
            Find = '-Unmark { param($sessionId, $reason) Remove-HordeWeztermFleetNoRestoreIf -SessionId $sessionId -Reason $reason }'
            Replace = '-Unmark $null' }
+        @{ Name = "panes-silent-terminal-is-closed"
+           Find = 'state = "unknown"; panes = @(); reason = ("the terminal did not list its panes (exit "'
+           Replace = 'state = "closed"; panes = @(); reason = ("the terminal did not list its panes (exit "' }
+        @{ Name = "panes-budget-ignored"
+           Find = 'if ($watch.ElapsedMilliseconds -gt $BudgetMs) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "panes-missing-folder-is-no-terminal"
+           Find = 'return (New-HordeUnknown -Reason ("there is no terminal socket folder at " + $SockDir + ", so the live panes cannot be listed"))'
+           Replace = 'return (New-HordeKnown -Value @())' }
+        @{ Name = "panes-wrong-argv"
+           Find = '$rest = @("list", "--format", "json")'
+           Replace = '$rest = @("list")' }
     )
 }

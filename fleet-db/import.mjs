@@ -490,6 +490,20 @@ function stepSessions(ctx, data) {
   for (const row of order) put(row);
 }
 
+// THE SESSIONS STEP OF `horde db sync` (T-0409) FILES ITS RECORDS THROUGH THIS, so there is one rule for how a registry
+// record becomes a session row (rank, Orc, seat, parent links, stubs), not a second copy that drifts. `records` are
+// { file: '<session id>.json', rec } as the registry folder gives them; the caller (fleet-db/sessions.mjs) builds the file
+// name from the id. Call it inside the caller's own inWrite: it opens no transaction, so the session rows and the pane rows
+// of one tick land together or not at all. A row already there is kept as it is, as in a full import.
+export function importSessionRecords(db, records) {
+  const rep = new Report();
+  const ctx = { db, rep, seen: new Set() };
+  ctx.nodeId = stepNode(ctx);
+  loadOrcMaps(ctx);
+  stepSessions(ctx, { sessions: records });
+  return { nodeId: ctx.nodeId, report: rep.result(false) };
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // pr
 
