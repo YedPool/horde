@@ -84,7 +84,7 @@
            Replace = '$null = 0' }
         # A quiet pass loads the port for nothing.
         @{ Name = "services-tell-always-awaiting"
-           Find = 'return [bool][System.IO.File]::Exists((Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome))'
-           Replace = 'return $true' }
+           Find = 'if (-not [System.IO.File]::Exists($path)) { return $false }'
+           Replace = 'if (-not [System.IO.File]::Exists($path)) { return $true }' }
     )
 }
