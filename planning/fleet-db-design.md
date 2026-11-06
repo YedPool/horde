@@ -555,3 +555,15 @@ IsPathRooted accepts) are refused by `core/Home.ps1` through `Test-HordeHomeRoot
 **The hook's throttle state.** The turn-duty hook keeps its state under `<resolved home>\turn-duty`. When the home changes, or
 the pointer is bad or cleared and the folder falls back to the profile's, the state is not carried over: the throttle resets
 and the first stop after that checks again at once (a nudge a little early, never a lost one).
+
+## Keeping the file-fed tables current (T-0389, Orc M's order 2026-11-02)
+
+**Why.** Every row of `task_event`, `changelog_entry` and `orc_status` was `backfill = 1` from hand imports on 10-21 and 10-22: the importer was the only writer and nothing ran it. Phase 3's dual write is still the plan; until then one scheduled task keeps them at most about 5 minutes behind their files.
+
+**`horde db sync`.** `\Horde\Fleet db sync` (`fleet-db/register-sync.ps1`) ticks every minute at below-normal priority, one instance, 2 minute limit. `fleet-db/Sync.ps1` holds `HORDE_HOME\fleet-db-sync.lock` open with no sharing for the whole run (the OS frees it if the process dies, so no lock goes stale), starts node at below-normal priority, and kills that child at its time limit (default 50 s). The import is one transaction, so a killed run changes nothing. One ASCII line per run goes to `HORDE_HOME\logs\fleet-db-sync.log`, because the task's own last result says nothing (conhost --headless exits 0).
+
+**Settings and cadence.** Sources are never defaulted (the import rule): they live in `HORDE_HOME\settings\fleet-db-sync.json`, written by `horde db sync -Save`, and a sync without that file refuses. The files step runs when its last success is 5 minutes old or more, or with `-Force`; `HORDE_HOME\fleet-db-sync-state.json` holds one entry per step so the sessions step can run on every tick of the same task.
+
+**Rows from the sync stay `backfill = 1`.** They still come from files, and the row hash includes `backfill`, so changing it would insert every old `task_event` a second time.
+
+**`horde status set` writes its `orc_status` row live** (`orc-cli.mjs ensure --card`, `backfill = 0`, `at` = the card's mtime, in the same transaction as the orc row). The importer's `stepStatus` skips a card when that Orc already has a row at that time, whatever its backfill, or the sync would add a duplicate of every live status.
