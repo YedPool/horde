@@ -251,6 +251,18 @@ test('a missing fleet.db is a failed run that says to run horde db init, and mak
   assert.equal(readState(w.home).files.lastResult, 'failed');
 });
 
+test('the sessions step never makes a missing fleet.db either: it fails, says so, and leaves no database', () => {
+  const w = world();
+  fs.rmSync(path.join(w.home, 'fleet.db'));
+  const snap = path.join(w.files, 'snapshot.json');
+  fs.writeFileSync(snap, JSON.stringify({ v: 1, at: T0, registry: { complete: true, sessions: [] }, panes: { state: 'unknown', sockets: [] }, processes: { state: 'unknown', running: [] } }));
+  const r = run(w.env, ['--snapshot', snap], T0);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /sessions: fleet\.db does not exist yet/);
+  assert.equal(fs.existsSync(path.join(w.home, 'fleet.db')), false);
+  assert.equal(readState(w.home).sessions.lastResult, 'failed');
+});
+
 test('--note-timeout records the kill without moving lastOkAt and without opening the database', () => {
   const w = world();
   saveSettings(w.home, w.sources);

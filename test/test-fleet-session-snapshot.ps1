@@ -19,7 +19,7 @@ trap { Register-HordeSuiteError $_; continue }
 function Section { param([string]$Title) Write-Host ""; Write-Host ("--- " + $Title + " ---") -ForegroundColor Cyan }
 
 $at = [datetime]::new(2026, 11, 2, 12, 0, 0, [System.DateTimeKind]::Utc)
-$id1 = "11111111-0000-4000-8000-000000000001"
+$id1 = "aaaaaaaa-0000-4000-8000-000000000001"  # letters, or upper-casing it below would prove nothing
 $id2 = "11111111-0000-4000-8000-000000000002"
 
 function New-FakeRegistry {

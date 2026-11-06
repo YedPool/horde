@@ -280,6 +280,16 @@ test('offset: a line longer than the largest read is stepped over, not waited fo
   assert.equal(r.offset, 1000);
 });
 
+test('step: a read stops at what is left of the budget, even when the session could read more', () => {
+  const w = fresh();
+  const r = rec(w, 1, { pane: '1' });
+  write(r.transcriptPath, lines([user(ago(HOUR)), asst(ago(HOUR), 'end_turn')]));
+  const size = fs.statSync(r.transcriptPath).size;
+  const out = runSessionsStep(w.db, snapshot([r], { sockets: listed(1), running: [r.sid] }), { now: T0, stepBytes: 10, sessionBytes: size + 5 });
+  assert.ok(size > 10, 'CONTROL: the transcript is larger than the budget');
+  assert.equal(out.bytes, 10);
+});
+
 test('step: the budget of a tick is shared, so catching up takes several ticks and every session gets there', () => {
   const w = fresh();
   const recs = [1, 2, 3].map((n) => rec(w, n, { pane: String(n) }));
