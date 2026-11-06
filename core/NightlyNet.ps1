@@ -41,6 +41,17 @@ function Test-HordeNightlyWindow {
     return ($m -ge $StartHour * 60 -or $m -lt $end)
 }
 
+function Get-HordeNightlyNightLabel {
+    # The label (yyyy-MM-dd) of the night a moment belongs to: the date the night BEGAN, so 00:00 to 06:29 belong to the
+    # day before (T-0397). The net labels its log, reports and state with this and the watcher judges a night by it, so
+    # the two cannot disagree: before, a run started at 01:00 was labelled with the next day and the watcher read a
+    # NOT STARTED. A moment from 06:30 to 21:59 is labelled with its own date (a refused start is named by that day).
+    param([datetime]$Time, [int]$EndHour = 6, [int]$EndMinute = 30)
+    $d = $Time.Date
+    if ($Time -lt $d.AddHours($EndHour).AddMinutes($EndMinute)) { $d = $d.AddDays(-1) }
+    return $d.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-HordeNightlyTaskBoundary {
     # The StartBoundary of the scheduled task's daily trigger for a date: WALL-CLOCK time, no offset and no Z
     # (T-0397). An offset pins one UTC instant, so the task registered with -05:00 on 10-23 fired at 21:00 on the
@@ -523,10 +534,28 @@ function Update-HordeNightlyState {
     return @{ lastTip = $last; units = $units; pending = @($pending) }
 }
 
+function Get-HordeNightlyCoverageFindings {
+    # THE COVERAGE FLOOR (2026-11-06). On the night of 2026-11-05 YedPool/horde ran 10 of 476 units and no guards, and the
+    # net exited 0. The reports of 2026-10-23 to 11-05 read 5, 0, 0, 99.8, 56.8, 88, 100, 100, 100 and 2.1 percent. The list
+    # of findings, "" free: a repo whose run share is under -FloorPercent, or that has no unit that ran at all, and a repo
+    # whose guards could not run. Skipped units are outside the count, as they are outside the run count. -FloorPercent 0: none.
+    param([object[]]$Repos, [int]$FloorPercent = 0)
+    $out = @()
+    if ($FloorPercent -le 0) { return $out }
+    foreach ($r in @($Repos)) {
+        $ran = [int]$r.suiteCount; $all = $ran + [int]$r.unrunCount
+        $pct = $(if ($all -gt 0) { [int][math]::Floor(100.0 * $ran / $all) } else { 0 })
+        if ($ran -le 0 -or $pct -lt $FloorPercent) { $out += ("" + $r.repo + " ran " + $ran + " of " + $all + " units (" + $pct + " percent)") }
+        $gs = "" + $r.guards.state
+        if ($gs -cne "green" -and $gs -cne "RED" -and $gs -notlike "no repo-wide guard*") { $out += ("" + $r.repo + " ran no guards") }
+    }
+    return $out
+}
+
 function Get-HordeNightlyHeadlineStatus {
     # COMPLETE, or INCOMPLETE with why: units not run, an incomplete repo, guards that did not run (T-0331 N4/N5), a
-    # bisect that named no merge.
-    param([object[]]$Repos)
+    # bisect that named no merge. Under the coverage floor it first says so, in the words the watcher reads as a miss.
+    param([object[]]$Repos, [int]$CoverageFloorPercent = 0)
     $why = @()
     $unrun = 0; $inc = @(); $gbad = @(); $gred = @(); $hung = 0; $unnamed = 0
     foreach ($r in @($Repos)) {
@@ -544,7 +573,11 @@ function Get-HordeNightlyHeadlineStatus {
     # A newly red unit whose bisect named no merge (capped, inconclusive or flaky) is not a finished answer: COMPLETE
     # read as every new red has a name (review of PR 380, finding 11).
     if ($unnamed -gt 0) { $why += ("" + $unnamed + " bisects named no merge (capped, inconclusive or flaky)") }
+    $thin = @(Get-HordeNightlyCoverageFindings -Repos $Repos -FloorPercent $CoverageFloorPercent)
+    # A night below the floor is never COMPLETE: a repo with no units has no other reason to say so, and readers trust the word.
+    if ($thin.Count -gt 0 -and $why.Count -eq 0) { $why += "nothing ran" }
     $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
+    if ($thin.Count -gt 0) { $t = "BELOW THE COVERAGE FLOOR of " + $CoverageFloorPercent + " percent: " + ($thin -join ", ") + ". " + $t }
     if ($gred.Count -gt 0) { $t += " GUARDS RED in " + ($gred -join ", ") + "." }
     if ($hung -gt 0) { $t += " HUNG: " + $hung + " units ran past their time limit." }
     # Skipped units are not INCOMPLETE (the night lacks the same thing every night, so it would never read COMPLETE), but
@@ -583,10 +616,10 @@ function New-HordeNightlyReport {
     # -Memory (optional): { giveUps; minFreeGB; minCommitGB; holders = [{ name; count; gb }] } - when a gate gave up
     # waiting for memory, one line says how often and names the top 3 holders of the last give-up.
     # -AppLines (optional): the lines of the night's app closer (tools/nightly/AppCloser.ps1), CLOSED first.
-    param([string]$Date, [object[]]$Repos, $Memory = $null, [string[]]$AppLines = @())
+    param([string]$Date, [object[]]$Repos, $Memory = $null, [string[]]$AppLines = @(), [int]$CoverageFloorPercent = 0)
     $lines = @()
     $newly = 0; foreach ($r in @($Repos)) { $newly += @($r.compare.newlyRed).Count }
-    $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos. " + (Get-HordeNightlyHeadlineStatus -Repos $Repos))
+    $lines += ("Nightly net " + $Date + ": " + $newly + " newly red across " + @($Repos).Count + " repos. " + (Get-HordeNightlyHeadlineStatus -Repos $Repos -CoverageFloorPercent $CoverageFloorPercent))
     foreach ($a in @($AppLines)) { if ("" + $a -ne "") { $lines += ("" + $a) } }
     if ($null -ne $Memory -and [int]$Memory.giveUps -gt 0) {
         $inv = [System.Globalization.CultureInfo]::InvariantCulture
@@ -635,13 +668,35 @@ function New-HordeNightlyReport {
 # THE WATCHER NEVER SAYS A RUN WAS RIGHT: only whether it happened and was reported.
 # ---------------------------------------------------------------------------------------------------------------
 
+function Get-HordeNightlyRetryDecision {
+    # Should the logon retry run the net now? (T-0397; tools/nightly/NightlyRetry.ps1.) Decided from evidence only, in this
+    # order, and the first condition that fails decides: "outside the night window", "too little time" (fewer than
+    # -MinMinutes before the run cutoff: 180, because the net runs its units fewest first at up to 25 minutes each and a
+    # shorter run is a sliver that reads like a normal night), "report exists", "final report exists" (a FAILED, BUSY or
+    # REFUSED file for the night), "already retried" (a marker for the night exists, whatever it holds: an unreadable or
+    # corrupt one counts, so a broken marker can never make a loop), "net is running" (its lock is held; the net's own
+    # lock stays the real guard). { run; condition; night; minutesLeft }. Only a night with none of those runs.
+    param([datetime]$Now, [string[]]$ReportNames = @(), [bool]$MarkerExists = $false, [bool]$NetAlive = $false, [int]$MinMinutes = 180, [int]$ReportReserveMinutes = 15)
+    $night = Get-HordeNightlyNightLabel -Time $Now
+    $names = @($ReportNames | ForEach-Object { ("" + $_).ToLowerInvariant() })
+    $left = [int][math]::Floor((Get-HordeNightlyRunCutoff -Now $Now -ReportReserveMinutes $ReportReserveMinutes).Subtract($Now).TotalMinutes)
+    $cond = "run"
+    if (-not (Test-HordeNightlyWindow -Now $Now)) { $cond = "outside the night window" }
+    elseif ($left -lt $MinMinutes) { $cond = "too little time" }
+    elseif ($names -contains ($night + ".txt")) { $cond = "report exists" }
+    elseif ($names -contains ($night + "-failed.txt") -or $names -contains ($night + "-busy.txt") -or $names -contains ($night + "-refused.txt")) { $cond = "final report exists" }
+    elseif ($MarkerExists) { $cond = "already retried" }
+    elseif ($NetAlive) { $cond = "net is running" }
+    return [pscustomobject]@{ run = ($cond -ceq "run"); condition = $cond; night = $night; minutesLeft = $left }
+}
+
 function Get-HordeNightlyWatchNight {
     # The night to judge at -Now: the one that began yesterday at 22:00 LOCAL, by the calendar (a clock-change day is 23
     # or 25 hours long, so the date is walked, never a count of hours). Before 06:30 that night is still running, so the
     # one before it is judged. { date (yyyy-MM-dd); start; end }.
     param([datetime]$Now, [int]$EndHour = 6, [int]$EndMinute = 30)
-    $night = $Now.Date.AddDays(-1)
-    if ($Now -lt $Now.Date.AddHours($EndHour).AddMinutes($EndMinute)) { $night = $night.AddDays(-1) }
+    # The night that ended before Now is the one before the night Now belongs to (the same label the net writes).
+    $night = [datetime]::ParseExact((Get-HordeNightlyNightLabel -Time $Now -EndHour $EndHour -EndMinute $EndMinute), "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture).AddDays(-1)
     return [pscustomobject]@{
         date  = $night.ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
         start = $night.AddHours(22)
@@ -687,8 +742,12 @@ function Get-HordeNightlyWatchVerdict {
     # reports folder, -ReportText the night's report (for the headline), -PendingCount the findings M was not told
     # (state.json pending, summed over repos), -FolderMissing that the work folder is not there at all.
     # { date; status; missed; detail; incomplete; incompleteWhy }. status is one of RAN, NOT STARTED, REFUSED, FAILED,
-    # BUSY, NOT REPORTED, NOT TOLD; every one but RAN is MISSED. A night that RAN but headlines INCOMPLETE is not missed.
-    param([string]$Date, [string]$LogText = "", [string[]]$ReportNames = @(), [string]$ReportText = "", [int]$PendingCount = 0, [bool]$FolderMissing = $false)
+    # BUSY, NOT REPORTED, NOT TOLD, TOO FEW; every one but RAN is MISSED. A night that RAN but headlines INCOMPLETE is not
+    # missed; one whose headline says it is below the coverage floor is TOO FEW, and a person must hear.
+    # -BootTime is the PC's last boot (local time, injected so the suite can test it; $null when unknown). A NOT REPORTED night
+    # whose boot falls from the run's start to the window's end says the PC restarted and killed the run (rebootAt, "HH:mm");
+    # a boot before the run began or after the window (the last boot can be a later one) claims nothing.
+    param([string]$Date, [string]$LogText = "", [string[]]$ReportNames = @(), [string]$ReportText = "", [int]$PendingCount = 0, [bool]$FolderMissing = $false, $BootTime = $null)
     $names = @($ReportNames | ForEach-Object { ("" + $_).ToLowerInvariant() })
     $header = '\bnightly net (\d{4}-\d\d-\d\d): window (open|CLOSED)'
     $lines = @(("" + $LogText) -split "`r?`n")
@@ -712,7 +771,9 @@ function Get-HordeNightlyWatchVerdict {
     $haveFailed = ($names -contains ($Date + "-failed.txt"))
     $haveBusy = ($names -contains ($Date + "-busy.txt"))
     $haveRefused = ($names -contains ($Date + "-refused.txt"))
-    $status = ""; $detail = ""
+    $status = ""; $detail = ""; $rebootAt = ""
+    # The restart retry (tools/nightly/NightlyRetry.ps1) logs "nightly retry <date>:" when it starts the net once more.
+    $retried = [regex]::IsMatch(("" + $LogText), ("(?m)\bnightly retry " + [regex]::Escape($Date) + ": "))
     if ($haveReport) {
         if ($sent) { $status = "RAN"; $detail = "the net started, wrote its report and the log shows it was sent to M" }
         else {
@@ -726,7 +787,22 @@ function Get-HordeNightlyWatchVerdict {
     }
     elseif ($haveFailed) { $status = "FAILED"; $detail = "the net started and failed: a FAILED report is in the report folder, and there is no report" }
     elseif ($haveBusy) { $status = "BUSY"; $detail = "the net found another run holding its lock and ran nothing (a run from an earlier night may be wedged)" }
-    elseif ($openAt -ge 0) { $status = "NOT REPORTED"; $detail = "the net started (the log shows the window open) but there is no report: it was killed or crashed midway, or the PC was switched off" }
+    elseif ($openAt -ge 0) {
+        $status = "NOT REPORTED"; $detail = "the net started (the log shows the window open) but there is no report: it was killed or crashed midway, or the PC was switched off"
+        $runStart = [datetime]::MinValue; $winEnd = [datetime]::MinValue; $dayStart = [datetime]::MinValue
+        $okDay = [datetime]::TryParseExact($Date, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$dayStart)
+        if ($okDay -and $null -ne $BootTime) {
+            $winEnd = $dayStart.AddDays(1).AddHours(6).AddMinutes(30)
+            $runStart = $dayStart.AddHours(22)
+            $ts = [regex]::Match($lines[$openAt], '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+            if ($ts.Success) { $t = [datetime]::MinValue; if ([datetime]::TryParseExact($ts.Groups[1].Value, "s", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$t)) { $runStart = $t } }
+            $boot = [datetime]$BootTime
+            if ($boot -ge $runStart -and $boot -le $winEnd) {
+                $rebootAt = $boot.ToString("HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
+                $detail = "the net started (the log shows the window open) but there is no report: the PC restarted at " + $rebootAt + " and killed the run"
+            }
+        }
+    }
     elseif ($closed -or $haveRefused) { $status = "REFUSED"; $detail = "the net was started outside its 22:00 to 06:30 window (the log shows the window CLOSED) and ran nothing" }
     else {
         $status = "NOT STARTED"
@@ -734,13 +810,18 @@ function Get-HordeNightlyWatchVerdict {
         if ($FolderMissing) { $detail += " (the work folder does not exist)" }
         elseif ("" + $LogText -eq "" -and $names.Count -eq 0) { $detail += " (the work folder holds no log and no report)" }
     }
+    if ($retried -and $status -cne "RAN") { $detail += " (a retry after a restart was also made that night)" }
+    if ($status -ceq "RAN") {
+        $thinHead = [regex]::Match((("" + $ReportText) -split "`r?`n")[0], 'BELOW THE COVERAGE FLOOR.*?(?:\.(?:\s|$)|$)')
+        if ($thinHead.Success) { $status = "TOO FEW"; $detail = "the net ran and reported, but too little of it: " + $thinHead.Value.Trim().TrimEnd(".") }
+    }
     $inc = $false; $incWhy = ""
     if ($status -ceq "RAN") {
         $head = (("" + $ReportText) -split "`r?`n")[0]
         $im = [regex]::Match($head, 'INCOMPLETE:.*?(?:\.(?:\s|$)|$)')
         if ($im.Success) { $inc = $true; $incWhy = ConvertTo-HordeNightlyText $im.Value.Trim() }
     }
-    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy }
+    return [pscustomobject]@{ date = $Date; status = $status; missed = ($status -cne "RAN"); detail = (ConvertTo-HordeNightlyText $detail); incomplete = $inc; incompleteWhy = $incWhy; rebootAt = $rebootAt; retried = $retried }
 }
 
 function Get-HordeNightlyWatchStreak {
@@ -822,7 +903,8 @@ function Format-HordeNightlyWatchMessage {
             # FAILED started, so "did not run" would be false for those three.
             $said = switch ($Verdict.status) {
                 "NOT TOLD" { "Nightly tests ran on the night of " + $date + ", but the report did not reach M." }
-                "NOT REPORTED" { "Nightly tests started on the night of " + $date + " but did not finish." }
+                "TOO FEW" { "Nightly tests on the night of " + $date + " ran too few tests to count as a pass." }
+                "NOT REPORTED" { $(if ($Verdict.PSObject.Properties["rebootAt"] -and "" + $Verdict.rebootAt -ne "") { "Nightly tests started on the night of " + $date + " but the PC restarted at " + $Verdict.rebootAt + " and stopped them." } else { "Nightly tests started on the night of " + $date + " but did not finish." }) }
                 "FAILED" { "Nightly tests started on the night of " + $date + " but failed." }
                 "REFUSED" { "Nightly tests did not run for the night of " + $date + ": they were started outside their allowed hours." }
                 "BUSY" { "Nightly tests did not run for the night of " + $date + ": an earlier run was still in the way." }
@@ -834,6 +916,7 @@ function Format-HordeNightlyWatchMessage {
             $lines += ("NIGHTLY WATCH " + $date + ": the night ran, but the scheduled task looks wrong.")
             $phone = "The nightly tests ran for " + $date + ", but their scheduled task looks wrong: " + $tasks[0] + "."
         }
+        if ($Verdict.missed -and $Verdict.PSObject.Properties["retried"] -and $Verdict.retried) { $phone += " A retry after the restart was made." }
         $phone += " Details are with M."
         foreach ($f in $tasks) { $lines += ("TASK: " + $f + ".") }
     }

@@ -895,6 +895,246 @@ export const MIGRATIONS = [
   CREATE TRIGGER work_unit_no_delete BEFORE DELETE ON work_unit
   BEGIN SELECT RAISE(ABORT, 'work_unit: a unit is never deleted'); END;
   `,
+  // 7: session state, kept current by the sessions step of `horde db sync` (T-0409, piece 2 of T-0299; design: planning/
+  // fleet-db-design.md, "Keeping the file-fed tables current"). One writer (the sync), many readers: the overseer and the
+  // analyst read these columns instead of each judging every transcript on its own. All nullable: NULL is "not read yet".
+  // The times are the transcript RECORDS' own timestamps (UTC ms), never a file's modified time, which moves with mode and
+  // hook lines and no work. No stall is judged here (no threshold): a reader compares last_activity_at with its own clock.
+  //   last_activity_at   newest timestamped turn record of the session, its subagents' records folded in
+  //   last_assistant_at  newest assistant record
+  //   in_turn            1 while a turn is open (a prompt or tool result nobody has answered)
+  //   waits_person       1 when the open turn's last tool call asks a person (a plan to approve, a question)
+  //   state              live | idle | waiting-person | dead. 'waiting-job' is RESERVED for piece 3 and is never set here.
+  //   state_checked_at   when the sync last judged the state: a reader that sees an old value knows the sync was blind
+  //   transcript_offset  bytes of the transcript already read, always at a line end; the next read starts there
+  `
+  ALTER TABLE session ADD COLUMN last_activity_at INTEGER CHECK (last_activity_at >= 0);
+  ALTER TABLE session ADD COLUMN last_assistant_at INTEGER CHECK (last_assistant_at >= 0);
+  ALTER TABLE session ADD COLUMN in_turn INTEGER ${flag('in_turn')};
+  ALTER TABLE session ADD COLUMN waits_person INTEGER ${flag('waits_person')};
+  ALTER TABLE session ADD COLUMN state TEXT CHECK (state IN ('live', 'idle', 'waiting-person', 'waiting-job', 'dead'));
+  ALTER TABLE session ADD COLUMN state_checked_at INTEGER CHECK (state_checked_at >= 0);
+  ALTER TABLE session ADD COLUMN transcript_offset INTEGER CHECK (transcript_offset >= 0);
+  `,
+  // 8: job and signal (T-0412, piece 3 of T-0299; design: planning/fleet-db-design.md, "Jobs and signals"). What the overseer
+  // kept in jobs.json and signals.jsonl moves here, so the overseer and the analyst detect a stall once, from one place. The
+  // overseer writes only through `horde job` and `horde signal` (fleet-db/jobs.mjs); Orc N stays the only schema owner.
+  // NO ENTITY ROW for either table, on purpose: an entity row is the registry of objects with a ULID or uuid of their own that
+  // links and the phone's lists point at, and both tables are keyed by a text the overseer chose (a job id, a signal key) that
+  // nothing else in the database points at. Registering them would need a made-up second id per row for no reader.
+  // NO FOREIGN KEY from job.session_id to session: a job may name a session fleet.db has not seen yet (the importer and the
+  // sync lag the live fleet), and a refused job would be a job nobody watches. The shape (a lower-case uuid) is still checked.
+  // Neither table has a file behind it: fleet.db is their only home, so a backup of the file is their backup.
+  `
+  -- A piece of promised work somebody is on. Open while done_at is NULL. due_at is optional: a job with no due time is
+  -- never overdue, but it is still listed. done_proof is what shows it is done (a PR, a path, a line) and done_by who closed it (both set
+  -- exactly when done_at is); a job is never
+  -- closed without one.
+  CREATE TABLE job (
+    id TEXT NOT NULL PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 120 AND id NOT GLOB '*[^!-~]*'),
+    owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB '*[^!-~]*'),
+    session_id TEXT ${uuid('session_id')},
+    job TEXT NOT NULL CHECK (length(job) BETWEEN 1 AND 4000),
+    started_at INTEGER NOT NULL,
+    due_at INTEGER CHECK (due_at >= 0),
+    done_at INTEGER CHECK (done_at >= 0),
+    done_proof TEXT CHECK (length(done_proof) BETWEEN 1 AND 4000),
+    done_by TEXT CHECK (length(done_by) BETWEEN 1 AND 64 AND done_by NOT GLOB '*[^!-~]*'),
+    -- Someone else is holding it up (the overseer does not nag an owner whose job waits on another: its IDLE-OPEN-JOB rule skips it).
+    waiting_on TEXT CHECK (length(waiting_on) BETWEEN 1 AND 4000),
+    created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 64 AND created_by NOT GLOB '*[^!-~]*'),
+    CHECK (started_at >= 0),
+    CHECK (done_at IS NULL OR done_at >= started_at),
+    CHECK ((done_at IS NULL) = (done_proof IS NULL)),
+    CHECK ((done_at IS NULL) = (done_by IS NULL))
+  ) STRICT;
+  -- What the overseer reads: the open jobs, soonest due first (NULLs, which have no due time, sort first and are skipped).
+  CREATE INDEX job_open_due ON job (due_at) WHERE done_at IS NULL;
+
+  -- The first time a job was started, who made it, and what it is called never change; a done job keeps its time and proof.
+  CREATE TRIGGER job_identity_fixed BEFORE UPDATE ON job
+  WHEN NEW.id IS NOT OLD.id OR NEW.started_at IS NOT OLD.started_at OR NEW.created_by IS NOT OLD.created_by
+  BEGIN SELECT RAISE(ABORT, 'job: id, started_at and created_by never change'); END;
+  CREATE TRIGGER job_done_is_final BEFORE UPDATE ON job
+  WHEN OLD.done_at IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'job: a done job is final'); END;
+
+  -- A problem the overseer saw, one row per key. A key seen again is the same problem: last_at moves forward and count
+  -- grows. A closed one raised again is reopened (closed_at and closed_by cleared), so a problem that came back wakes
+  -- the overseer again. woke_at is the time the overseer last TRIED to wake someone about it (it backs off from it);
+  -- woke_ok_at is the last wake the overseer CONFIRMED worked, so a wake that failed stays unwoken and is retried.
+  -- urgent skips the overseer's one-hour gap between wakes; quiet logs the signal and wakes nobody. A reopen clears both
+  -- wake times: a problem that came back needs a new wake. owner is a person or a path as the overseer writes it, so it
+  -- may hold spaces (one printable ASCII line, up to 120).
+  CREATE TABLE signal (
+    key TEXT NOT NULL PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200 AND key NOT GLOB '*[^!-~]*'),
+    kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64 AND kind NOT GLOB '*[^!-~]*'),
+    owner TEXT CHECK (length(owner) BETWEEN 1 AND 120 AND owner NOT GLOB '*[^ -~]*'),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4000),
+    first_at INTEGER NOT NULL CHECK (first_at >= 0),
+    last_at INTEGER NOT NULL,
+    count INTEGER NOT NULL CHECK (count >= 1),
+    woke_at INTEGER CHECK (woke_at >= 0),
+    woke_ok_at INTEGER CHECK (woke_ok_at >= 0),
+    urgent INTEGER NOT NULL DEFAULT 0 ${flag('urgent')},
+    quiet INTEGER NOT NULL DEFAULT 0 ${flag('quiet')},
+    closed_at INTEGER CHECK (closed_at >= 0),
+    closed_by TEXT CHECK (length(closed_by) BETWEEN 1 AND 64 AND closed_by NOT GLOB '*[^!-~]*'),
+    CHECK (last_at >= first_at),
+    CHECK ((closed_at IS NULL) = (closed_by IS NULL))
+  ) STRICT;
+  -- What is read: the open signals by when they last happened, and the closed ones by when they closed (the prune).
+  CREATE INDEX signal_open_last ON signal (last_at) WHERE closed_at IS NULL;
+  CREATE INDEX signal_closed ON signal (closed_at) WHERE closed_at IS NOT NULL;
+
+  -- A signal's key, kind and first time never change, and its last time and count never go back.
+  CREATE TRIGGER signal_identity_fixed BEFORE UPDATE ON signal
+  WHEN NEW.key IS NOT OLD.key OR NEW.kind IS NOT OLD.kind OR NEW.first_at IS NOT OLD.first_at
+  BEGIN SELECT RAISE(ABORT, 'signal: key, kind and first_at never change'); END;
+  CREATE TRIGGER signal_never_back BEFORE UPDATE ON signal
+  WHEN NEW.last_at < OLD.last_at OR NEW.count < OLD.count
+  BEGIN SELECT RAISE(ABORT, 'signal: last_at and count never go back'); END;
+  `,
+
+  // 9: task_now by the ledger's own rule (T-0299; design: planning/fleet-db-design.md, "Task state"). The view of migration 1 took
+  // the newest event's word as the state, and disagreed with task.py on 31 of 415 real tasks: T-0299 itself read opened. Now: the
+  // opened line counts first whatever its time, so a late one takes neither priority nor owner; resumed and reopened read started;
+  // handed reads opened, since the new owner has not begun; progress on an opened task means it began. task_tree: a closed parent
+  // took its live subtasks off the list with it, 21 of 128 live tasks on the real data, four at priority 1. A live task whose parent
+  // is closed now stands at the top of its own owner's list. Only views change, so no row moves.
+  `
+  DROP VIEW task_now;
+  CREATE VIEW task_now AS
+  SELECT t.id, t.key, t.title, t.source, t.parent_id, t.created_at,
+    CASE
+      WHEN m.kind IN ('resumed', 'reopened') THEN 'started'
+      WHEN m.kind IS NOT NULL AND m.kind <> 'handed' THEN m.kind
+      WHEN NOT EXISTS (SELECT 1 FROM task_event e WHERE e.task_id = t.id) THEN NULL
+      WHEN EXISTS (SELECT 1 FROM task_event p WHERE p.task_id = t.id AND p.kind = 'progress'
+        AND (m.id IS NULL OR p.at > m.at OR (p.at = m.at AND p.id > m.id))) THEN 'started'
+      ELSE 'opened'
+    END AS state,
+    (SELECT e.prio FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'priority')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS prio,
+    (SELECT e.to_orc_id FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'handed')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS owner_orc_id,
+    (SELECT max(e.at) FROM task_event e WHERE e.task_id = t.id) AS last_event_at
+  FROM task t
+  LEFT JOIN task_event m ON m.id = (SELECT e.id FROM task_event e WHERE e.task_id = t.id
+    AND e.kind IN ('started', 'waiting', 'resumed', 'handed', 'done', 'verified', 'reopened', 'dropped', 'superseded')
+    ORDER BY e.at DESC, e.id DESC LIMIT 1);
+  DROP VIEW task_tree;
+  CREATE VIEW task_tree AS
+  WITH RECURSIVE live AS (
+    SELECT t.id, t.key, t.title, t.parent_id, t.position, t.due_at, t.created_at, n.state, n.prio, n.owner_orc_id
+    FROM task t JOIN task_now n ON n.id = t.id
+    WHERE n.state NOT IN ('done', 'verified', 'dropped', 'superseded') OR n.state IS NULL),
+  sib AS (
+    SELECT x.id, row_number() OVER (PARTITION BY x.parent_id ORDER BY x.position IS NULL, x.position, x.created_at, x.id) AS n
+    FROM live x WHERE x.parent_id IS NOT NULL),
+  top AS (
+    SELECT x.id, row_number() OVER (PARTITION BY x.owner_orc_id ORDER BY x.prio IS NULL, x.prio, x.position IS NULL, x.position, x.created_at, x.id) AS n
+    FROM live x WHERE x.parent_id IS NULL OR x.parent_id NOT IN (SELECT id FROM live)),
+  tree (id, owner_orc_id, depth, path, sort) AS (
+    SELECT top.id, l.owner_orc_id, 0, CAST(top.n AS TEXT), printf('%06d', top.n)
+    FROM top JOIN live l ON l.id = top.id
+    UNION ALL
+    SELECT c.id, tree.owner_orc_id, tree.depth + 1, tree.path || '.' || s.n, tree.sort || '.' || printf('%06d', s.n)
+    FROM live c JOIN sib s ON s.id = c.id JOIN tree ON tree.id = c.parent_id)
+  SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
+  FROM tree JOIN live l ON l.id = tree.id;
+  `,
+
+  // 10: what task_event has no place for (T-0416, T-0417; design: planning/fleet-db-design.md, "Lines task_event has no place for").
+  // A promise or a kept line: neither kind is allowed there. A hand-over to no Orc row: task_event requires an Orc. A side table and
+  // not a new column, because appendHistory hashes every column of a table: a new column would change the hash of each line, and
+  // the next sync would write every event again. task_now reads the table, so state and owner follow task.py: a hand-over to no Orc
+  // row means nobody has begun, and the owner is no Orc, unless the line names nobody, which leaves the owner as it was.
+  // task_promise_open (Orc M, 2026-11-06). A promise's id is its number on its task, P1, P2, counted by order in the ledger file:
+  // short to type, and the file is append-only, so it never changes. A kept may name the promise it closes (closes_no) and a promise
+  // the one it replaces (replaces_no); a promise so named reads closed. A kept naming nothing closes the oldest still open that
+  // nobody named. A promise wrongly closed vanishes and nobody chases it; one wrongly left open is seen and costs a line. Old lines
+  // name nothing and nothing is guessed, so an old re-date reads open: task_state and later_promises show that at a glance.
+  `
+  CREATE TABLE task_event_extra (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    task_id TEXT NOT NULL REFERENCES task (id),
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('promise', 'kept', 'handed')),
+    by_orc_id TEXT REFERENCES orc (id),
+    by_text TEXT CHECK (length(by_text) <= 64),
+    due_at INTEGER,
+    promise_no INTEGER CHECK (promise_no >= 1),
+    replaces_no INTEGER CHECK (replaces_no >= 1),
+    closes_no INTEGER CHECK (closes_no >= 1),
+    to_text TEXT CHECK (length(to_text) <= 120),
+    proof TEXT CHECK (length(proof) <= 4000),
+    reason TEXT CHECK (length(reason) <= 4000),
+    backfill INTEGER NOT NULL DEFAULT 0 ${flag('backfill')},
+    sha256 TEXT NOT NULL UNIQUE ${sha('sha256')},
+    CHECK (due_at IS NULL OR kind = 'promise'),
+    CHECK ((promise_no IS NOT NULL) = (kind = 'promise')),
+    CHECK (replaces_no IS NULL OR kind = 'promise'),
+    CHECK (closes_no IS NULL OR kind = 'kept'),
+    CHECK (kind <> 'promise' OR due_at IS NOT NULL OR backfill = 1),
+    CHECK (to_text IS NULL OR kind = 'handed')
+  ) STRICT;
+  CREATE INDEX task_event_extra_task ON task_event_extra (task_id, kind, at);
+  CREATE UNIQUE INDEX task_event_extra_promise ON task_event_extra (task_id, promise_no) WHERE promise_no IS NOT NULL;
+  ${appendOnly('task_event_extra')}
+
+  CREATE VIEW task_promise_open AS
+  WITH RECURSIVE named (task_id, no) AS (
+    SELECT c.task_id, c.closes_no FROM task_event_extra c WHERE c.closes_no IS NOT NULL
+    UNION SELECT r.task_id, r.replaces_no FROM task_event_extra r WHERE r.replaces_no IS NOT NULL),
+  line AS (
+    SELECT x.task_id, x.kind, row_number() OVER (PARTITION BY x.task_id ORDER BY x.at, x.id) AS n
+    FROM task_event_extra x
+    WHERE (x.kind = 'kept' AND x.closes_no IS NULL)
+      OR (x.kind = 'promise' AND NOT EXISTS (SELECT 1 FROM named a WHERE a.task_id = x.task_id AND a.no = x.promise_no))),
+  walk (task_id, n, promised, closed) AS (
+    SELECT l.task_id, 1, l.kind = 'promise', 0 FROM line l WHERE l.n = 1
+    UNION ALL
+    SELECT w.task_id, l.n, w.promised + (l.kind = 'promise'), w.closed + (l.kind = 'kept' AND w.closed < w.promised)
+    FROM walk w JOIN line l ON l.task_id = w.task_id AND l.n = w.n + 1),
+  closed AS (SELECT task_id, max(closed) AS n FROM walk GROUP BY task_id),
+  numbered AS (
+    SELECT p.*, row_number() OVER (PARTITION BY p.task_id ORDER BY p.at, p.id) AS i, count(*) OVER (PARTITION BY p.task_id) AS total
+    FROM task_event_extra p WHERE p.kind = 'promise'
+      AND NOT EXISTS (SELECT 1 FROM named b WHERE b.task_id = p.task_id AND b.no = p.promise_no))
+  SELECT p.id, p.task_id, t.key, t.title, s.state AS task_state, p.promise_no, p.at, p.due_at, p.by_orc_id, p.by_text, p.reason, p.total - p.i AS later_promises
+  FROM numbered p JOIN closed c ON c.task_id = p.task_id JOIN task t ON t.id = p.task_id JOIN task_now s ON s.id = p.task_id
+  WHERE p.i > c.n;
+
+  DROP VIEW task_now;
+  CREATE VIEW task_now AS
+  SELECT t.id, t.key, t.title, t.source, t.parent_id, t.created_at,
+    CASE
+      WHEN hx.id IS NOT NULL AND EXISTS (SELECT 1 FROM task_event qg WHERE qg.task_id = t.id AND qg.kind = 'progress'
+        AND (qg.at > hx.at OR (qg.at = hx.at AND qg.id > hx.id))) THEN 'started'
+      WHEN hx.id IS NOT NULL THEN 'opened'
+      WHEN mv.kind IN ('resumed', 'reopened') THEN 'started'
+      WHEN mv.kind IS NOT NULL AND mv.kind <> 'handed' THEN mv.kind
+      WHEN NOT EXISTS (SELECT 1 FROM task_event ev WHERE ev.task_id = t.id) THEN NULL
+      WHEN EXISTS (SELECT 1 FROM task_event pg WHERE pg.task_id = t.id AND pg.kind = 'progress'
+        AND (mv.id IS NULL OR pg.at > mv.at OR (pg.at = mv.at AND pg.id > mv.id))) THEN 'started'
+      ELSE 'opened'
+    END AS state,
+    (SELECT ev.prio FROM task_event ev WHERE ev.task_id = t.id AND ev.kind IN ('opened', 'priority')
+       ORDER BY ev.kind = 'opened', ev.at DESC, ev.id DESC LIMIT 1) AS prio,
+    CASE WHEN EXISTS (SELECT 1 FROM task_event_extra ox WHERE ox.task_id = t.id AND ox.kind = 'handed' AND ox.to_text IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM task_event ol WHERE ol.task_id = t.id AND ol.kind = 'handed' AND (ol.at > ox.at OR (ol.at = ox.at AND ol.id > ox.id)))) THEN NULL
+      ELSE (SELECT ev.to_orc_id FROM task_event ev WHERE ev.task_id = t.id AND ev.kind IN ('opened', 'handed')
+       ORDER BY ev.kind = 'opened', ev.at DESC, ev.id DESC LIMIT 1) END AS owner_orc_id,
+    (SELECT max(ev.at) FROM task_event ev WHERE ev.task_id = t.id) AS last_event_at
+  FROM task t
+  LEFT JOIN task_event mv ON mv.id = (SELECT ev.id FROM task_event ev WHERE ev.task_id = t.id
+    AND ev.kind IN ('started', 'waiting', 'resumed', 'handed', 'done', 'verified', 'reopened', 'dropped', 'superseded')
+    ORDER BY ev.at DESC, ev.id DESC LIMIT 1)
+  LEFT JOIN task_event_extra hx ON hx.id = (SELECT y.id FROM task_event_extra y WHERE y.task_id = t.id AND y.kind = 'handed'
+    ORDER BY y.at DESC, y.id DESC LIMIT 1)
+    AND (mv.id IS NULL OR hx.at > mv.at OR (hx.at = mv.at AND hx.id > mv.id));
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

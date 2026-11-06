@@ -6,6 +6,12 @@
     Target = "tools\HeavySlot.ps1"
     Suite  = "test\test-heavy-slot.ps1"
     Mutations = @(
+        @{ Name = "the-net-waits-for-its-own-claim"
+           Find = '$claimCheck = $(if ($NetRun) { $null } else {'
+           Replace = '$claimCheck = $(if ($false) { $null } else {' }
+        @{ Name = "the-claim-is-not-per-slot"
+           Find = '$claimName = $SlotName + "-NetClaim"'
+           Replace = '$claimName = "Local\HordeTheOneClaim"' }
         @{ Name = "slot-never-released"
            Find = '    if ($held) { $mutex.ReleaseMutex() }'
            Replace = '    if ($false) { $mutex.ReleaseMutex() }' }

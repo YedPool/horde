@@ -38,32 +38,49 @@ export function dbPathFor(home) {
   return path.join(path.resolve(h), DB_FILE);
 }
 
+// Turning a new file to WAL can say "database is locked" at once, with busy_timeout unused, when another process is doing the
+// same: measured 2026-11-06 (T-0408), 23 failures in 2108 rounds of six processes opening one new file, all on this pragma. So it
+// is retried for as long as the caller would wait for a lock. On a file already in WAL it changes nothing and takes no such lock.
+export function enterWal(db, busyMs, { now = Date.now, pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  const giveUp = now() + Number(busyMs);
+  for (;;) {
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      return;
+    } catch (e) {
+      if (!/database is locked/i.test(String(e && e.message)) || now() >= giveUp) throw e;
+      pause(25);
+    }
+  }
+}
+
 export function openStore(file, { readOnly = false, busyMs = 5000 } = {}) {
   if (readOnly && !fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; open it for writing once');
   if (!readOnly) fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file, { readOnly, enableForeignKeyConstraints: true });
-  db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
-  if (!readOnly) {
-    db.exec('PRAGMA journal_mode = WAL');
-    db.exec('PRAGMA synchronous = NORMAL');
-  }
-  db.exec('PRAGMA foreign_keys = ON');
-  db.exec('PRAGMA recursive_triggers = ON');
-  const on = (p) => db.prepare('PRAGMA ' + p).get()[p] === 1;
-  if (!on('foreign_keys') || !on('recursive_triggers')) {
-    db.close();
-    throw new Error('fleet.db: foreign keys and recursive triggers could not be turned on');
-  }
-  const have = db.prepare('PRAGMA user_version').get().user_version;
-  if (have > SCHEMA_VERSION) {
-    db.close();
-    throw new Error('fleet.db is version ' + have + ', newer than this code (' + SCHEMA_VERSION + '): update Horde');
-  }
-  if (have < SCHEMA_VERSION) {
-    if (readOnly) { db.close(); throw new Error('fleet.db is version ' + have + ' and needs migrating; open it for writing once'); }
-    migrate(db, have);
-  }
-  return db;
+  // Any failure closes the handle: a locked file would otherwise stay held, and a caller that retries would hold one per try.
+  try {
+    db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
+    if (!readOnly) {
+      enterWal(db, busyMs);
+      db.exec('PRAGMA synchronous = NORMAL');
+    }
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA recursive_triggers = ON');
+    const on = (p) => db.prepare('PRAGMA ' + p).get()[p] === 1;
+    if (!on('foreign_keys') || !on('recursive_triggers')) {
+      throw new Error('fleet.db: foreign keys and recursive triggers could not be turned on');
+    }
+    const have = db.prepare('PRAGMA user_version').get().user_version;
+    if (have > SCHEMA_VERSION) {
+      throw new Error('fleet.db is version ' + have + ', newer than this code (' + SCHEMA_VERSION + '): update Horde');
+    }
+    if (have < SCHEMA_VERSION) {
+      if (readOnly) throw new Error('fleet.db is version ' + have + ' and needs migrating; open it for writing once');
+      migrate(db, have);
+    }
+    return db;
+  } catch (e) { db.close(); throw e; }
 }
 
 // The version is read again inside the write lock: several hooks open a brand-new file at once, and each

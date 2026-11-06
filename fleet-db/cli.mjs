@@ -1,4 +1,4 @@
-// Entry point of fleet.db:  node cli.mjs init | status | check | import [sources] [--dry-run]
+// Entry point of fleet.db:  node cli.mjs init | status | check | import [sources] [--dry-run] | sync [--force]
 // Run by `horde db ...` (cli/commands/db.ps1). Exit codes: 0 done, 1 failed or a problem found, 2 no home.
 //
 //   init    make fleet.db in HORDE_HOME, or bring it to this code's schema; safe to run any number of times
@@ -8,6 +8,9 @@
 //           --registry, --decisions and --lots (every path explicit, none defaulted to the real files) into fleet.db, in one
 //           transaction; prints one line per table (added / already there) and what could not be linked;
 //           --dry-run does everything and rolls it back. fleet.db must exist (run init first)
+//   sync    import the sources saved in HORDE_HOME\settings\fleet-db-sync.json when the files step is due
+//           (sync.mjs: every 5 minutes, or --force); run every minute by a scheduled task through
+//           fleet-db/Sync.ps1, which holds the lock and the time limit
 //   check   SQLite's integrity and foreign-key checks, plus the rules a single row cannot hold by itself
 //           (every decisions list has all its lines); each problem is one line, and any problem exits 1
 //
@@ -19,8 +22,9 @@ import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { SCHEMA_VERSION, ENTITY_KINDS } from './schema.mjs';
 import { decisionsHash } from './write.mjs';
 import { importFleet } from './import.mjs';
+import { describeSessions, describeSync, syncMain } from './sync.mjs';
 
-export const VERBS = ['init', 'status', 'check', 'import'];
+export const VERBS = ['init', 'status', 'check', 'import', 'sync'];
 
 // import's flags, each with the source it names (importFleet's sources).
 const SOURCE_FLAGS = { '--ledger': 'ledger', '--pr-cache': 'prCache', '--changelog': 'changelog', '--cards': 'cards', '--thrall-card': 'thrallCard', '--registry': 'registry', '--decisions': 'decisions', '--lots': 'lots' };
@@ -108,8 +112,10 @@ function openForReading(file) {
 
 export function main(argv, env = process.env, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n')) {
   const verb = argv[0];
+  // sync reads its own flags and its own home, and never makes the database (sync.mjs).
+  if (verb === 'sync') return syncMain(argv.slice(1), env, out, err);
   if (!VERBS.includes(verb) || (verb !== 'import' && argv.length !== 1)) {
-    err('usage: cli.mjs init | status | check | import [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f] [--registry dir] [--decisions dir] [--lots dir] [--dry-run]' + (VERBS.includes(verb) && argv.length > 1 ? ' (nothing may follow init, status or check)' : ''));
+    err('usage: cli.mjs init | status | check | sync [--force | --save <source flags>] | import [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f] [--registry dir] [--decisions dir] [--lots dir] [--dry-run]' + (VERBS.includes(verb) && argv.length > 1 ? ' (nothing may follow init, status or check)' : ''));
     return 1;
   }
   let request;
@@ -148,6 +154,8 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     if (verb === 'status') {
       out('database: ' + file + ' (schema ' + db.prepare('PRAGMA user_version').get().user_version + ', ' + fs.statSync(file).size + ' bytes)');
       for (const t of tableRows(db)) out(t.name + ': ' + t.rows + ' rows');
+      out(describeSessions(homeFromEnv(env)));
+      out(describeSync(homeFromEnv(env)));
       return 0;
     }
     const problems = findProblems(db);

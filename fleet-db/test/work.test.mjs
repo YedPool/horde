@@ -66,10 +66,10 @@ const warg = (over = {}) => ({ kind: 'warg', agent_id: null, agent_type: null, s
 // ---------------------------------------------------------------------------------------------------------
 // the migration
 
-test('work_unit: the schema is version 6 and the table, its three indexes and its four triggers are there', () => {
+test('work_unit: the schema is version 10 (work_unit came in 6) and the table, its three indexes and its four triggers are there', () => {
   const w = world();
-  assert.equal(SCHEMA_VERSION, 6);
-  assert.equal(w.db.prepare('PRAGMA user_version').get().user_version, 6);
+  assert.equal(SCHEMA_VERSION, 10);
+  assert.equal(w.db.prepare('PRAGMA user_version').get().user_version, 10);
   const idx = w.db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'work_unit' AND name LIKE 'work_unit_%' ORDER BY name").all().map((r) => r.name);
   assert.deepEqual(idx, ['work_unit_orc', 'work_unit_running', 'work_unit_task']);
   const trg = w.db.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'work_unit' ORDER BY name").all().map((r) => r.name);
@@ -228,7 +228,7 @@ test('a schema 5 file keeps every row, gains work_unit, and checks ok', () => {
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.equal(db.prepare('SELECT count(*) AS n FROM session').get().n, 1);
   assert.equal(db.prepare('SELECT count(*) AS n FROM task').get().n, 1);
   assert.equal(db.prepare('SELECT count(*) AS n FROM work_unit').get().n, 0);

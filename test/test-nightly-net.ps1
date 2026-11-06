@@ -35,6 +35,25 @@ $bd = Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04") -Hour 22
 Check ($bd -ceq "2026-11-04T22:00:00") ("the boundary reads 22:00:00 (" + $bd + ")")
 Check ($bd -notmatch '[Zz]$' -and $bd -notmatch '[+-]\d\d:\d\d$') "and carries no offset and no Z"
 Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04 15:45") -Hour 22) -ceq "2026-11-04T22:00:00") "a date with a time of day still gives 22:00:00"
+
+Write-Host ""
+Write-Host "--- T-0397: a night is labelled by the date it began, one function for the net and the watcher ---" -ForegroundColor Cyan
+function Label { param([string]$T) return (Get-HordeNightlyNightLabel -Time ([datetime]$T)) }
+Check ((Label "2026-11-04 21:59") -ceq "2026-11-04") "21:59 is still the day's own label (the night has not begun; a refused start is named by that day)"
+Check ((Label "2026-11-04 22:00") -ceq "2026-11-04") "22:00 begins night 11-04"
+Check ((Label "2026-11-04 23:59") -ceq "2026-11-04") "23:59 is night 11-04"
+Check ((Label "2026-11-05 00:00") -ceq "2026-11-04") "00:00 is still night 11-04, not 11-05"
+Check ((Label "2026-11-05 01:00") -ceq "2026-11-04") "01:00 is night 11-04"
+Check ((Label "2026-11-05 06:29") -ceq "2026-11-04") "06:29 is the last minute of night 11-04"
+Check ((Label "2026-11-05 06:30") -ceq "2026-11-05") "06:30 is the next day's label"
+Check ((Label "2026-11-01 00:30") -ceq "2026-10-31" -and (Label "2026-11-01 06:29") -ceq "2026-10-31" -and (Label "2026-11-01 06:30") -ceq "2026-11-01") "fall-back day 2026-11-01 (25 hours): labelled by the calendar"
+Check ((Label "2027-03-14 01:00") -ceq "2027-03-13" -and (Label "2027-03-14 03:30") -ceq "2027-03-13" -and (Label "2027-03-14 06:29") -ceq "2027-03-13" -and (Label "2027-03-14 06:30") -ceq "2027-03-14") "spring-forward day 2027-03-14 (23 hours): labelled by the calendar"
+foreach ($now in @("2026-11-04 07:15", "2026-11-02 07:15", "2027-03-15 07:15", "2026-11-04 05:00")) {
+    $wn = Get-HordeNightlyWatchNight -Now ([datetime]$now)
+    $ok = $true
+    foreach ($t in @($wn.start, $wn.start.AddHours(1), $wn.start.Date.AddHours(23).AddMinutes(59), $wn.start.Date.AddDays(1), $wn.end.AddMinutes(-1))) { if ((Get-HordeNightlyNightLabel -Time $t) -cne $wn.date) { $ok = $false } }
+    Check $ok ("the net's label and the watcher's night agree for every minute of the night the watcher judges at " + $now)
+}
 Check ((Get-HordeNightlyTaskBoundary -Date ([datetime]"2026-11-04")) -ceq "2026-11-04T22:00:00") "with no -Hour the boundary is 22:00:00 (the function's own default)"
 
 Write-Host ""
@@ -265,6 +284,25 @@ try {
 } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
+Write-Host "--- the coverage floor: a share of the units that ran, and guards ---" -ForegroundColor Cyan
+function Cov { param([int]$Ran, [int]$Unrun, [string]$Guards = "green", [string]$Repo = "a/b") return [pscustomobject]@{ repo = $Repo; suiteCount = $Ran; unrunCount = $Unrun; guards = [pscustomobject]@{ state = $Guards; text = "" } } }
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 10 466) -FloorPercent 90)[0] -ceq "a/b ran 10 of 476 units (2 percent)") "the night of 11-05 is below it, in numbers"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 0 0) -FloorPercent 90)[0] -ceq "a/b ran 0 of 0 units (0 percent)") "a repo with nothing to count ran nothing: below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 396 54) -FloorPercent 90).Count -eq 1) "the night of 10-28, 88 percent, is below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 90 10) -FloorPercent 90).Count -eq 0) "exactly 90 percent is not below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 89 11) -FloorPercent 90).Count -eq 1) "89 percent is"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 899 101) -FloorPercent 90).Count -eq 1) "and 89.9 percent is not rounded up to 90"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0) -FloorPercent 90).Count -eq 0) "a whole night is not"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "not run") -FloorPercent 90)[0] -ceq "a/b ran no guards") "a whole night with no guards run is below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "RED") -FloorPercent 90).Count -eq 0) "guards that ran red are a finding of their own, not thin coverage"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "no repo-wide guard list (flake8 critical is a unit below)") -FloorPercent 90).Count -eq 0) "a repo with no guard list owes none"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 1 99) -FloorPercent 0).Count -eq 0) "-FloorPercent 0 finds nothing"
+$zeroHead = Get-HordeNightlyHeadlineStatus -Repos @([pscustomobject]@{ repo = "a/b"; suiteCount = 0; unrunCount = 0; guards = [pscustomobject]@{ state = "green"; text = "" }; compare = [pscustomobject]@{}; incomplete = "" }) -CoverageFloorPercent 90
+Check ($zeroHead -cnotmatch '\bCOMPLETE\.' -and $zeroHead -clike "BELOW THE COVERAGE FLOOR*INCOMPLETE: nothing ran*") ("a repo with nothing to run is never headed COMPLETE: the old net's alarm reads that word as cover (" + $zeroHead + ")")
+$covHead = Get-HordeNightlyHeadlineStatus -Repos @([pscustomobject]@{ repo = "a/b"; suiteCount = 10; unrunCount = 466; guards = [pscustomobject]@{ state = "not run"; text = "" }; compare = [pscustomobject]@{}; incomplete = "" }) -CoverageFloorPercent 90
+Check ($covHead -clike "BELOW THE COVERAGE FLOOR of 90 percent: a/b ran 10 of 476 units (2 percent), a/b ran no guards. INCOMPLETE: *") ("the headline leads with it, the rest still follows (" + $covHead + ")")
+
+Write-Host ""
 Write-Host "--- R5: a missing exit code, a skip in a bisect, the report reserve, an unnamed bisect in the headline ---" -ForegroundColor Cyan
 Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false })) -ceq "red") "R5: a run with no exit code is red, never green"
 Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false }) -AtTip) -ceq "red") "R5: at the tip too"
@@ -431,7 +469,11 @@ try {
     Check ($text -like "*memory floor pytest 4.5 GB free, 2 GB commit headroom (night floors 22:00 to 07:00, by day 4.5 GB free and 2 GB commit headroom)*slot wait 900 s, 120 s after a memory give-up*") "-Plan by day states the day floor (default 4.5 GB), the commit floor and both slot waits"
     Check ($text -like "*PLAN apps (named list: chrome, Slack, WhatsApp, WhatsApp.Root, ClickUp, ms-teams, Teams, Zoom*force-quit only Slack, WhatsApp, WhatsApp.Root, ClickUp*WOULD CLOSE (dry run, nothing closed)*WOULD FORCE-QUIT*") "-Plan lists, dry, what the app closer would close and force-quit"
     Check ($text -like "*CHROME RESTORE*") "and the Chrome restore setting, read only"
-    Check ($text -like "*PLAN time: suite phase 22:00 to 04:45 = 24300 s for 2 gate runs*") ("and the time budget of the suite phase (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
+    Check ($text -like "*PLAN time: suite phase 22:00 to 05:45 = 27900 s for 2 gate runs*") ("and the time budget of the suite phase (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
+    # -AtTime stands in for the clock in the budget too: on 2026-11-06 at 02:16 the check above was red only because the
+    # budget read the real clock, which was inside the window. These two hold at any real hour.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:10:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*PLAN time: suite phase 23:10 to 05:45 = 23700 s for 2 gate runs*")) ("-AtTime inside the window starts the budget at that time (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 3.25 GB free*")) "-MinFreeGB is the one setting that moves the day floor"
     Check ((($o -join "`n") -like "*PLAN apps: -NoCloseApps, nothing would be closed*")) "-NoCloseApps: -Plan says nothing would be closed"
@@ -443,6 +485,11 @@ try {
     Check ($rtxt -like "*settings:*start on battery*not stopped on battery*") "and its settings line states that a run starts on battery and is not stopped when the PC goes onto battery"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 2.5 GB free, 1 GB commit headroom (night floors*floor: 2.5 GB free, 1 GB commit headroom (night floor)*")) "at 23:00 the night floor of the kind stands, whatever -MinFreeGB says"
+    # T-0397: a run started at 01:00 is night 11-04's run, with that morning's cutoff and its own report names.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-11-05T01:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*nightly net 2026-11-04: window open, cutoff 2026-11-05T06:15:00*")) "a start at 01:00 is labelled with the night's date and gets that morning's cutoff"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-11-04T23:30:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*nightly net 2026-11-04: window open, cutoff 2026-11-05T06:15:00*")) "and a start at 23:30 is the same night with the same cutoff"
     # A failed night is never silent: a bad -Repos entry is an error, and it ends exit 1 saying FAILED.
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -NoTell -WorkRoot $wr -Repos "not-a-spec" 2>&1)
     Check ($LASTEXITCODE -eq 1 -and (($o -join "`n") -like "*nightly net FAILED*")) ("an error ends exit 1 and says FAILED (" + $LASTEXITCODE + ")")
@@ -518,6 +565,8 @@ Write-Output "heavy-slot: memory held by delta, 1 processes, 0.50 GB"
 Write-Output "heavy-slot: released exit=125"
 exit 125
 '@)
+    $thinGate = Join-Path $hn "thin-gate.ps1"
+    [System.IO.File]::WriteAllText($thinGate, ('param([string]$Script, [string]$Worktree, [string]$Out)' + "`r`n" + '[System.IO.File]::WriteAllText($Out, "")' + "`r`n" + 'Write-Output "heavy-slot: gave up after 1 s waiting for the slot; nothing was run"' + "`r`n" + 'Write-Output "heavy-slot: released exit=125"' + "`r`n" + 'exit 125' + "`r`n"))
     $hwr = Join-Path $hn "wr"
     $horigin = Join-Path $hn "horigin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $horigin "test\lib"))
     [void](Git $horigin @("init", "-q", "-b", "main"))
@@ -528,7 +577,7 @@ exit 125
     & git.exe clone -q $origin (Join-Path $hwr "Fix__Py\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
     # Tonight at 23:00 is inside the window, and the real clock is always well before its cutoff.
     $night = (Get-Date).Date.AddHours(23)
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $hwr -HeavySlotScript $gateStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main,Fix/Py:pytest:main")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $hwr -HeavySlotScript $gateStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main,Fix/Py:pytest:main")
     $nc = $LASTEXITCODE
     $callsFile = Join-Path $hn "calls.txt"
     $calls = @(); if (Test-Path -LiteralPath $callsFile) { $calls = @(Get-Content -LiteralPath $callsFile) }
@@ -574,7 +623,7 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     [void](Git $sorigin @("add", "-A")); [void](Git $sorigin @("commit", "-q", "-m", "base"))
     $swr = Join-Path $sn "wr"
     & git.exe clone -q $sorigin (Join-Path $swr "Fix__Need\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $okGate -ProbesFile $probesJson -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Need:horde:main")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $okGate -ProbesFile $probesJson -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Need:horde:main")
     $snc = $LASTEXITCODE
     $scalls = @(); if (Test-Path -LiteralPath (Join-Path $sn "calls.txt")) { $scalls = @(Get-Content -LiteralPath (Join-Path $sn "calls.txt")) }
     Check ($snc -eq 0) ("the night with needs ends exit 0 (" + $snc + ")")
@@ -617,6 +666,77 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     Check (@($bts | Where-Object { $_ -like "*pytest-of-*" -or (Split-Path -Parent $_) -ne $btDir }).Count -eq 0 -and $bts.Count -eq 2) ("the basetemp is beside the nodes file, never the shared pytest-of folder (" + ($bts -join ", ") + ")")
     Check ($bts.Count -eq 2 -and $bts[0] -ne $bts[1]) "each run gets a basetemp of its own"
     Check (@(Get-ChildItem -LiteralPath $btDir -Directory).Count -eq 0) "and the wrap leaves no basetemp folder behind"
+    # A NIGHT THAT RAN FEW UNITS IS A FAILURE (2026-11-05: 10 of 476 Horde units, no guards, exit 0). The first rig ran 1 of 7.
+    $thinWr = Join-Path $work "thin"
+    & git.exe clone -q $horigin (Join-Path $thinWr "Fix__Hord\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 6) ("a night with no unit run ends exit 6, not 0 (" + $LASTEXITCODE + ")")
+    $thinFile = @(Get-ChildItem -LiteralPath (Join-Path $thinWr "reports") -Filter "*.txt")[0].FullName
+    $thinHead = (Get-Content -LiteralPath $thinFile)[0]
+    Check ($thinHead -like "*BELOW THE COVERAGE FLOOR of 90 percent: Fix/Hord ran 0 of *") ("and the report's first line says so (" + $thinHead + ")")
+    Check ([System.IO.File]::ReadAllText((Join-Path $thinWr "nightly.log")) -like "*below the coverage floor of 90 percent*") "and the log"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-CoverageFloorPercent 0 is the one setting that turns it off (" + $LASTEXITCODE + ")")
+
+    # A run asked for a subset is not a thin night: -Only and -Limit shrink the list on purpose.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -Limit 1 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-Limit: no coverage floor, exit 0 (" + $LASTEXITCODE + ")")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -Only "test-a" -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-Only: no coverage floor, exit 0 (" + $LASTEXITCODE + ")")
+
+    # THE NET'S FIRST CLAIM ON THE SLOT: held through every gate call of the suite phase, each gate told it is the net's.
+    $cn = Join-Path $work "claim"; [void][System.IO.Directory]::CreateDirectory($cn)
+    $claimStub = Join-Path $cn "gate.ps1"
+    $claimName = "Local\horde-nightly-claim-" + [guid]::NewGuid().ToString("N")
+    $claimStubLines = @(
+        'param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)',
+        '$c = $null',
+        ('$seen = [System.Threading.Mutex]::TryOpenExisting("' + $claimName + '", [ref]$c)'),
+        'Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ("claim=" + $seen + " netrun=" + (@($args) -contains "-NetRun"))',
+        '[System.IO.File]::WriteAllText($Out, "")',
+        'Write-Output "heavy-slot: released exit=125"',
+        'exit 125')
+    [System.IO.File]::WriteAllText($claimStub, ($claimStubLines -join "`r`n"))
+    $cwr = Join-Path $cn "wr"
+    & git.exe clone -q $origin (Join-Path $cwr "Fix__Py\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -NetClaimName $claimName -WorkRoot $cwr -HeavySlotScript $claimStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Py:pytest:main")
+    $claimCalls = @(Get-Content -LiteralPath (Join-Path $cn "calls.txt"))
+    Check ($claimCalls.Count -ge 2 -and @($claimCalls | Where-Object { $_ -cne "claim=True netrun=True" }).Count -eq 0) ("every gate of the suite phase saw the claim standing and passed -NetRun (" + ($claimCalls -join " | ") + ")")
+    $claimLog = [System.IO.File]::ReadAllText((Join-Path $cwr "nightly.log"))
+    $iTaken = $claimLog.IndexOf("first claim on the heavy slot taken"); $iOrder = $claimLog.IndexOf(" order: "); $iGone = $claimLog.IndexOf("suite phase over: first claim on the heavy slot released")
+    Check ($iTaken -ge 0 -and $iOrder -gt $iTaken) "the claim is taken before the night's first git work"
+    Check ($iGone -gt $iOrder) "and released when the suite phase is over"
+    $probe = $null
+    Check (-not [System.Threading.Mutex]::TryOpenExisting($claimName, [ref]$probe)) "and no claim is left once the net has ended"
+    $netSource = [System.IO.File]::ReadAllText((Join-Path $root "tools\NightlyNet.ps1"))
+    $iPhase = $netSource.IndexOf('Invoke-NightlyPhaseOne -Ctx $c'); $iRelease = $netSource.IndexOf('$claim.Dispose()'); $iBisect = $netSource.IndexOf('Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff')
+    Check ($iPhase -ge 0 -and $iRelease -gt $iPhase -and $iBisect -gt $iRelease) "the release stands between the suite phase and the bisects: the claim covers the suite phase only"
+    # A plan, and a suite run that names no claim, take none of the machine's.
+    $machineClaim = "Global\HordeHeavySlot-NetClaim"; $probe = $null
+    if (-not [System.Threading.Mutex]::TryOpenExisting($machineClaim, [ref]$probe)) {
+        Check ($netSource -like '*if ($NetClaimName -eq "" -and $AtTime -eq "" -and $HeavySlotScript -eq "") { $NetClaimName = "Global\HordeHeavySlot-NetClaim" }*') "a real run takes the machine's claim, a suite run never does"
+    } else { $probe.Dispose(); Check ($true) "(the real net is running now: the machine's claim stands, not this suite's)" }
+
+    # ONLY PYTEST'S SUMMARY NAMES A FAILED TEST (2026-11-05: the night's report listed a captured log line,
+    # "ERROR    root:web_reader_dialog.py:2953 ...", as a newly red test). A fake python replays that shape.
+    $replay = Join-Path $work "replay"
+    [void][System.IO.Directory]::CreateDirectory($replay)
+    function Invoke-WrapReplay { param([string[]]$Output, [int]$Code)
+        $txt = Join-Path $replay "out.txt"
+        [System.IO.File]::WriteAllText($txt, (($Output -join "`r`n") + "`r`n"))
+        [System.IO.File]::WriteAllText((Join-Path $replay "python.cmd"), ("@echo off" + "`r`n" + "type """ + $txt + """" + "`r`n" + "exit /b " + $Code + "`r`n"))
+        $nf = Join-Path $replay ("n" + [guid]::NewGuid().ToString("N") + ".txt")
+        try {
+            $env:PATH = $replay + ";" + $oldPath
+            [void]@(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode all -NodesFile $nf); $wc = $LASTEXITCODE
+        } finally { $env:PATH = $oldPath }
+        return [pscustomobject]@{ code = $wc; wrote = (Test-Path -LiteralPath $nf); nodes = @($(if (Test-Path -LiteralPath $nf) { Get-Content -LiteralPath $nf | Where-Object { $_.Trim() -ne "" } } else { @() })) }
+    }
+    $body = @(".F", "=================== ERRORS ===================", "___ ERROR collecting tools/a/test_c.py ___", "E   ModuleNotFoundError: No module named 'tests.test_c'", "=================== FAILURES ===================", "___ test_b ___", "------ Captured log call ------", "ERROR    root:web_reader_dialog.py:2953 could not reconcile the stored credential", "ERROR root:one_space.py:1 a log line with one space", "FAILED to reach the mailbox, printed by the code under test")
+    $w = Invoke-WrapReplay -Output ($body + @("========= short test summary info =========", "FAILED tests/test_a.py::test_b - AssertionError: x", "ERROR tools/a/test_c.py", "1 failed, 1 error in 3.00s")) -Code 1
+    Check ($w.code -eq 1 -and (@($w.nodes) -join ",") -ceq "tests/test_a.py::test_b,tools/a/test_c.py") ("only the summary's FAILED and ERROR lines are failing nodes, never captured log or printed text (" + (@($w.nodes) -join ",") + ")")
+    $w = Invoke-WrapReplay -Output $body -Code 1
+    Check ($w.code -eq 70 -and -not $w.wrote) ("exit 1 with no summary names no test: not a verdict, 70, and no nodes file (" + $w.code + ")")
 } finally {
     $env:HORDE_HOME = $oldHome
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

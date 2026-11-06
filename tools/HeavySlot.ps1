@@ -4,7 +4,7 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\HeavySlot.ps1 -Script <suite, relative to -Worktree> [-Worktree <path>]
 #       [-ScriptArgs <a>,<b> | -ArgsFile <args.json>] [-Out <log>] [-MinFreeGB 3] [-MinCommitHeadroomGB 0] [-WaitSeconds 7200]
-#       [-RunSeconds 3600]
+#       [-RunSeconds 3600] [-NetRun]
 # A RUN STARTS ONLY WHEN THE PC IS IDLE OR IT IS NIGHT (founder rule, 2026-10-22): 10 minutes without keyboard
 # or mouse input, or 22:00 to 07:00 local; core/IdleState.ps1 says what counts, and <HORDE_HOME>\settings\idle.json
 # sets the thresholds. There is no switch to skip it: a suite that must stand clear of the machine's clock points
@@ -59,6 +59,11 @@
 # (CONTRIBUTING 15, rule 7: a run without its closing line proves nothing), written to the console's own
 # output so a stopped pipeline cannot swallow it.
 #
+# THE NET'S FIRST CLAIM (2026-11-06): the nightly net holds the named mutex <SlotName>-NetClaim open from its start until
+# its suite phase ends. While that name exists, a gate without -NetRun waits, holding nothing, and gives up with 125 in
+# its own words, never taking the slot. Only the net passes -NetRun. A mutex name lasts only while a process holds it, so a
+# killed net or a restart leaves no claim behind. Derived from -SlotName, so a suite with a slot of its own is not held up.
+#
 # EXIT CODES: the script's own; 124 the run passed -RunSeconds; 125 the slot, a killed holder's run or
 # the memory (or the commit headroom) was not had within -WaitSeconds (nothing was run); 128 the PC was not idle and it was not night within -WaitSeconds (nothing was run, nothing held); 126 the script is not there; 127 an
 # error the gate did not plan for. 126 also means the run's arguments were refused (THE RUN'S
@@ -78,7 +83,8 @@ param(
     [int]$WaitSeconds = 7200,
     [int]$RunSeconds = 3600,
     [string]$SlotName = "Global\HordeHeavySlot",
-    [string]$HolderFile = ""
+    [string]$HolderFile = "",
+    [switch]$NetRun
 )
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\IdleState.ps1")
@@ -173,6 +179,16 @@ function Get-HordeHeavySlotLiveRun {
     return [pscustomobject]@{ pid = $runPid; script = $rec[2].Trim(); process = $p }
 }
 
+function Test-HordeHeavySlotNetClaim {
+    # Does the net's first claim exist? A name we may not open still exists, so it counts; any other error is no claim:
+    # refusing on it would block every run for ever.
+    param([string]$Name)
+    $claim = $null
+    try { if ([System.Threading.Mutex]::TryOpenExisting($Name, [ref]$claim)) { $claim.Dispose(); return $true } return $false }
+    catch [System.UnauthorizedAccessException] { return $true }
+    catch { return $false }
+}
+
 function ConvertTo-HordeHeavySlotArg { param([string]$A) if ($A -match '\s') { return ('"' + $A + '"') } return $A }
 
 if ($Worktree -eq "") { $Worktree = (Get-Location).Path }
@@ -231,7 +247,9 @@ $main = {
     # checked again after the take; nothing is held while waiting for any of them, and -WaitSeconds
     # bounds the whole. The slot itself is waited for in slices, so Ctrl+C is seen between them: one long
     # WaitOne cannot be broken.
-    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice `
+    $claimName = $SlotName + "-NetClaim"
+    $claimCheck = $(if ($NetRun) { $null } else { { Test-HordeHeavySlotNetClaim -Name $claimName } })
+    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice -GetNetClaim $claimCheck `
         -GetIdle { Get-HordeIdleState -Config $idleCfg } `
         -GetFreeGB { Get-HordeHeavySlotFreeGB } `
         -GetCommitHeadroomGB { Get-HordeHeavySlotCommitHeadroomGB } `
@@ -247,6 +265,7 @@ $main = {
         -Say { param($line) Write-HordeHeavySlotLine $line }
     if ($got.state -cne "held") {
         if ($got.blocker -ceq "idle") { $script:code = 128; Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the PC to be idle or for night; nothing was run"); return }
+        if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its suite phase ends, at the latest about 05:45; nothing was run. Try again after that."); return }
         if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")

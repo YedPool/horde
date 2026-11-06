@@ -95,8 +95,8 @@
            Find = ' OR NEW.session_id IS NOT OLD.session_id'
            Replace = '' }
         @{ Name = "identity-start-may-change"
-           Find = ' OR NEW.started_at IS NOT OLD.started_at'
-           Replace = '' }
+           Find = ' OR NEW.session_id IS NOT OLD.session_id OR NEW.started_at IS NOT OLD.started_at'
+           Replace = ' OR NEW.session_id IS NOT OLD.session_id' }
         @{ Name = "ended-outcome-may-change"
            Find = 'WHEN OLD.outcome <> ''running'' AND (NEW.outcome IS NOT OLD.outcome OR NEW.ended_at IS NOT OLD.ended_at)'
            Replace = 'WHEN OLD.outcome <> ''running'' AND (NEW.ended_at IS NOT OLD.ended_at)' }

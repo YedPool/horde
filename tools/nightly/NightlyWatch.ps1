@@ -1,7 +1,7 @@
 # tools/nightly/NightlyWatch.ps1 - the missed-run watcher of the nightly net. T-0397.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\nightly\NightlyWatch.ps1 [-Plan] [-WorkRoot <dir>]
-#       [-NoticeService <name> -NoticeSecretFile <path>] [-AtTime <datetime>] [-TaskXmlFile <file>]
+#       [-NoticeService <name> -NoticeSecretFile <path>] [-AtTime <datetime>] [-BootTime <datetime>|none] [-TaskXmlFile <file>]
 #
 # WHY IT EXISTS. On 2026-11-01 to 11-03 the nightly task fired an hour early, the net refused and nobody heard. PR 420
 # made a refused start tell M, but that lives INSIDE the net: it cannot catch a task that never fired, a disabled or
@@ -14,7 +14,8 @@
 #   NOT STARTED    nightly.log has no line for that date with the window open (also: no work folder, an empty one).
 #   REFUSED        a -REFUSED report or a window CLOSED line, and no run.
 #   FAILED, BUSY   those report files, and no report.
-#   NOT REPORTED   it started but there is no reports\<date>.txt.
+#   NOT REPORTED   it started but there is no reports\<date>.txt. If the PC's last boot (Win32_OperatingSystem; -BootTime
+#                  overrides it for a suite, "none" means unknown) falls inside that run, the text says the PC restarted.
 #   NOT TOLD       the report exists but the log has no report sent line.
 # Every one but RAN is a MISSED night. A night that RAN but headed INCOMPLETE is a lower-level note to M only. The
 # scheduled task itself is read too (missing, disabled, a trigger whose StartBoundary carries an offset): a finding even
@@ -35,6 +36,7 @@
 param(
     [string]$WorkRoot = "",
     [string]$AtTime = "",
+    [string]$BootTime = "",
     [string]$TellProgram = "wezfleet",
     [string]$Target = "M",
     [string]$HordeScript = "",
@@ -55,11 +57,16 @@ if ($WorkRoot -eq "") { $WorkRoot = Join-Path (Join-Path $env:LOCALAPPDATA "hord
 if ($HordeScript -eq "") { $HordeScript = Join-Path $root "horde.ps1" }
 $now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
 $ReportDir = Join-Path $WorkRoot "reports"
+# The PC's last boot, local time; $null when it cannot be read (the verdict then claims no restart).
+$boot = $null
+if ($BootTime -eq "none") { }
+elseif ($BootTime -ne "") { $boot = [datetime]::Parse($BootTime, [System.Globalization.CultureInfo]::InvariantCulture) }
+else { try { $boot = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime } catch { $boot = $null } }
 $WatchLog = Join-Path $WorkRoot "nightly-watch.log"
 $StateFile = Join-Path $WorkRoot "watch-state.json"
 $Fallback = Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"
 
-function Say {
+function Write-NightlyWatchLine {
     param([string]$Line)
     $l = (Get-Date).ToString("s") + " " + ($Line -replace "[^\x20-\x7E]", "?")
     # Its own log: nightly.log is the net's evidence and must hold only the net's lines.
@@ -85,7 +92,7 @@ function Write-WatchFile {
             $f = Join-Path $dir $Name
             [System.IO.File]::WriteAllText($f, $Text + "`n")
             return $f
-        } catch { Say ("could not write " + $Name + " in " + $dir + ": " + $_.Exception.Message) }
+        } catch { Write-NightlyWatchLine ("could not write " + $Name + " in " + $dir + ": " + $_.Exception.Message) }
     }
     return ""
 }
@@ -96,9 +103,9 @@ function Get-WatchTaskXml {
     if ($TaskXmlFile -ne "") { return (Read-WatchText $TaskXmlFile) }
     try {
         $r = Invoke-HordeNightlyProcess -FilePath (Join-Path $env:SystemRoot "System32\schtasks.exe") -ArgumentList @("/Query", "/TN", $TaskName, "/XML") -TimeoutSeconds 60
-        if ($r.timedOut -or $r.code -ne 0) { Say ("schtasks could not read " + $TaskName + " (exit " + $r.code + ")"); return "" }
+        if ($r.timedOut -or $r.code -ne 0) { Write-NightlyWatchLine ("schtasks could not read " + $TaskName + " (exit " + $r.code + ")"); return "" }
         return (@($r.lines) -join "`n")
-    } catch { Say ("schtasks failed: " + $_.Exception.Message); return "" }
+    } catch { Write-NightlyWatchLine ("schtasks failed: " + $_.Exception.Message); return "" }
 }
 
 function Get-WatchPending {
@@ -108,7 +115,7 @@ function Get-WatchPending {
         $f = Join-Path $d.FullName "state.json"
         $t = Read-WatchText $f
         if ($t -eq "") { continue }
-        try { $o = ConvertFrom-HordeJson $t; if ($o.PSObject.Properties["pending"]) { $n += @(@($o.pending) | Where-Object { "" + $_ -ne "" }).Count } } catch { Say ("state unreadable, ignored: " + $f) }
+        try { $o = ConvertFrom-HordeJson $t; if ($o.PSObject.Properties["pending"]) { $n += @(@($o.pending) | Where-Object { "" + $_ -ne "" }).Count } } catch { Write-NightlyWatchLine ("state unreadable, ignored: " + $f) }
     }
     return $n
 }
@@ -124,7 +131,7 @@ function Send-WatchFounder {
     } finally { if ($HordeHome -ne "") { if ($null -eq $old) { Remove-Item Env:HORDE_HOME -ErrorAction SilentlyContinue } else { $env:HORDE_HOME = $old } } }
     $first = ConvertTo-HordeNightlyText ((@($r.lines) -join " "))
     if ($first.Length -gt 300) { $first = $first.Substring(0, 300) }
-    Say ("founder notify exit " + $(if ($r.timedOut) { "TIMEOUT" } else { $r.code }) + ": " + $first)
+    Write-NightlyWatchLine ("founder notify exit " + $(if ($r.timedOut) { "TIMEOUT" } else { $r.code }) + ": " + $first)
     return (-not $r.timedOut -and $r.code -eq 0)
 }
 
@@ -140,8 +147,9 @@ try {
     # Nights back from the one judged, until one that ran: the streak comes from the evidence, never from memory.
     $verdicts = @()
     foreach ($d in @(Get-HordeNightlyWatchDates -Date $date -Count $Lookback)) {
-        $rt = $(if ($d -ceq $date) { Read-WatchText (Join-Path $ReportDir ($d + ".txt")) } else { "" })
-        $v = Get-HordeNightlyWatchVerdict -Date $d -LogText $logText -ReportNames $reportNames -ReportText $rt -PendingCount $pending -FolderMissing $folderMissing
+        # Every night's own report, so a thin night further back still counts in the streak.
+        $rt = Read-WatchText (Join-Path $ReportDir ($d + ".txt"))
+        $v = Get-HordeNightlyWatchVerdict -Date $d -LogText $logText -ReportNames $reportNames -ReportText $rt -PendingCount $pending -FolderMissing $folderMissing -BootTime $boot
         $verdicts += $v
         if (-not $v.missed) { break }
     }
@@ -150,7 +158,7 @@ try {
     $taskFindings = @(Get-HordeNightlyWatchTaskFindings -TaskXml (Get-WatchTaskXml))
     $state = Read-HordeNightlyWatchState -Text (Read-WatchText $StateFile)
     $decision = Get-HordeNightlyWatchDecision -Verdict $verdict -Streak $streak -TaskFindings $taskFindings -State $state
-    Say ("watch " + $now.ToString("yyyy-MM-dd HH:mm") + ": night " + $date + " is " + $verdict.status + " (" + $verdict.detail + "), streak " + $streak + ", task findings " + $taskFindings.Count + ", decision " + $decision.kind)
+    Write-NightlyWatchLine ("watch " + $now.ToString("yyyy-MM-dd HH:mm") + ": night " + $date + " is " + $verdict.status + " (" + $verdict.detail + "), streak " + $streak + ", task findings " + $taskFindings.Count + ", decision " + $decision.kind)
     if ($Plan) {
         Write-Host ("PLAN night " + $date + ": " + $verdict.status + "; " + $verdict.detail)
         Write-Host ("PLAN missed in a row: " + $streak + "; incomplete note: " + $verdict.incomplete + "; decision: " + $decision.kind)
@@ -174,27 +182,27 @@ try {
             $text = $msg.m + $(if ($phoneNote -ne "") { "`n" + (ConvertTo-HordeNightlyText $phoneNote) } else { "" })
             $f = Write-WatchFile -Name $alarmName -Text $text
             if ($f -eq "") { return $false }
-            return ((Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $f -Tries $TellTries -RetrySeconds $TellRetrySeconds -Say { param($l) Say $l }) -eq 0)
+            return ((Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $f -Tries $TellTries -RetrySeconds $TellRetrySeconds -Say { param($l) Write-NightlyWatchLine $l }) -eq 0)
         } }
-    $sent = Invoke-HordeNightlyWatchSend -Channels $channels -Say { param($l) Say $l }
+    $sent = Invoke-HordeNightlyWatchSend -Channels $channels -Say { param($l) Write-NightlyWatchLine $l }
     $delivered = ($sent.ok -gt 0)
     # The state is saved whatever happened: a failed save only costs one more alarm.
     try {
         $next = Update-HordeNightlyWatchState -Decision $decision -Verdict $verdict -State $state -Delivered $delivered
         [System.IO.File]::WriteAllText($StateFile, ($next | ConvertTo-Json -Depth 3))
-    } catch { Say ("the watch state was not saved: " + $_.Exception.Message) }
+    } catch { Write-NightlyWatchLine ("the watch state was not saved: " + $_.Exception.Message) }
     if ($sent.allFailed) {
-        Say ("EVERY channel failed: the alarm is in " + $alarm)
+        Write-NightlyWatchLine ("EVERY channel failed: the alarm is in " + $alarm)
         exit 3
     }
     exit 0
 } catch {
     $why = ConvertTo-HordeNightlyText ("" + $_.Exception.Message)
-    Say ("the nightly watch FAILED: " + $why)
+    Write-NightlyWatchLine ("the nightly watch FAILED: " + $why)
     if (-not $Plan) {
         $d = $(if ($date -ne "") { $date } else { $now.ToString("yyyy-MM-dd") })
         $f = Write-WatchFile -Name ($d + "-WATCH-ERROR.txt") -Text (ConvertTo-HordeNightlyText ("NIGHTLY WATCH " + $d + ": the watcher itself FAILED, so nobody checked last night. Error: " + $why + ". Log: " + $WatchLog))
-        if ($f -ne "") { try { [void](Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $f -Tries 1 -RetrySeconds 0 -Say { param($l) Say $l }) } catch { } }
+        if ($f -ne "") { try { [void](Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $f -Tries 1 -RetrySeconds 0 -Say { param($l) Write-NightlyWatchLine $l }) } catch { } }
     }
     exit 1
 }

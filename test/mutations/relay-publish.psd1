@@ -273,5 +273,9 @@
         @{ Name = "also-own-home"
            Find = 'if ($p.value.Equals($mineFull, [System.StringComparison]::OrdinalIgnoreCase)) {'
            Replace = 'if ($false) {' }
+        # T-0391 slice 6: the teller's own lines are the pass's lines.
+        @{ Name = "teller-lines-dropped"
+           Find = 'foreach ($tl in @($answer.lines)) { [void]$lines.Add("" + $tl) }'
+           Replace = '$null = 0' }
     )
 }

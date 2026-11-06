@@ -358,7 +358,7 @@ test('task_now derives state, priority and owner from events', () => {
   event(w.db, { task_id: w.task, kind: 'priority', prio: 1 });
   event(w.db, { task_id: w.task, kind: 'handed', to_orc_id: w.m });
   const t = w.db.prepare('SELECT state, prio, owner_orc_id FROM task_now WHERE id = ?').get(w.task);
-  assert.deepEqual({ ...t }, { state: 'started', prio: 1, owner_orc_id: w.m });
+  assert.deepEqual({ ...t }, { state: 'opened', prio: 1, owner_orc_id: w.m }, 'just handed: the new owner has not begun, as task.py says');
 });
 
 test('task_now breaks a same-millisecond tie by row id', () => {

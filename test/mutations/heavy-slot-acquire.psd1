@@ -4,6 +4,12 @@
     Target = "core\HeavySlotAcquire.ps1"
     Suite  = "test\test-heavy-slot-acquire.ps1"
     Mutations = @(
+        @{ Name = "the-claim-is-not-checked-before-the-take"
+           Find = '} elseif ($null -ne $GetNetClaim -and (& $GetNetClaim)) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "the-claim-is-not-checked-after-the-take"
+           Find = '$claimNow = ($null -ne $GetNetClaim -and (& $GetNetClaim))'
+           Replace = '$claimNow = $false' }
         @{ Name = "memory-not-waited-for-before-the-slot"
            Find = '            if ($free -lt $MinFreeGB) {'
            Replace = '            if ($false) {' }

@@ -454,11 +454,13 @@ test('task_event: opened takes prio and owner from its lane (a letter or a lane 
   assert.equal(unlinked(report, 'ledger', 'lane zzz names no Orc row').examples[0], 'T-0004');
 });
 
-test('task_event: handed takes the Orc named by a lane folder; one with no known target is reported, not imported', () => {
+test('task_event: handed takes the Orc named by a lane folder; one with no known target is reported, and kept in task_event_extra', () => {
   const { db, report } = imported();
-  assert.equal(one(db, "SELECT o.letter FROM task_now n JOIN orc o ON o.id = n.owner_orc_id WHERE n.key = 'T-0003'").letter, 'K', 'sleeping-sessions is K');
+  assert.equal(one(db, "SELECT o.letter FROM task_event e JOIN task t ON t.id = e.task_id JOIN orc o ON o.id = e.to_orc_id WHERE t.key = 'T-0003' AND e.kind = 'handed'").letter, 'K', 'sleeping-sessions is K');
+  assert.equal(one(db, "SELECT owner_orc_id FROM task_now WHERE key = 'T-0003'").owner_orc_id, null, 'then it went to T-0036, no Orc, as task.py reads it; the line naming nobody leaves that');
+  assert.deepEqual(rows(db, "SELECT x.to_text FROM task_event_extra x JOIN task t ON t.id = x.task_id WHERE t.key = 'T-0003' AND x.kind = 'handed' ORDER BY x.at"), [{ to_text: 'T-0036' }, { to_text: null }]);
   assert.equal(one(db, "SELECT count(*) AS n FROM task_event e JOIN task t ON t.id = e.task_id WHERE t.key = 'T-0003' AND e.kind = 'handed'").n, 1);
-  assert.equal(unlinked(report, 'ledger', 'handed to T-0036 names no Orc row (event not imported; needs a person)').count, 1);
+  assert.equal(unlinked(report, 'ledger', 'handed to T-0036 names no Orc row (kept in task_event_extra; needs a person)').count, 1);
   assert.match(unlinked(report, 'ledger', 'handed has no to').reason, /needs a person/);
 });
 
@@ -827,7 +829,8 @@ test('sub-session labels: C1, C13 and M2 resolve to their lead letter, the label
   assert.deepEqual(ev('waiting'), { by_text: 'analyst', by_letter: null, on_letter: 'C', to_letter: null, on_kind: 'orc' });
   assert.equal(ev('waiting', 1).by_letter, null, 'analyst-arrival stays by_text');
   assert.equal(ev('waiting', 1).on_letter, null, 'Q is no Orc');
-  assert.equal(count(db, 'task_event'), 4, 'the two handed lines with no target are not imported');
+  assert.equal(count(db, 'task_event'), 4, 'the two handed lines with no target are not in task_event');
+  assert.equal(count(db, 'task_event_extra'), 2, 'they are kept here');
   assert.equal(unlinked(r, 'ledger', 'handed to Q9').count, 1);
   assert.match(unlinked(r, 'ledger', 'handed has no to').reason, /needs a person/);
   assert.match(unlinked(r, 'ledger', 'handed to Q9').reason, /needs a person/);
@@ -968,6 +971,120 @@ test('a wait on lane:C1 (a sub-session label) resolves to the Orc of its lead le
   assert.deepEqual(waits.map((w) => [w.on_text, w.on_kind, w.on_orc_id]), [['lane:C1', 'orc', c], ['lane:ZZ9', 'orc', null]]);
   assert.equal(unlinked(r, 'ledger', 'on lane:ZZ9 names no Orc row').count, 1);
   assert.equal(unlinked(r, 'ledger', 'on lane:C1 names no Orc row'), undefined);
+});
+
+// --- the lines task_event has no place for (migration 10) ---
+
+function ledgerOf(lines) {
+  const { db } = fresh();
+  const dir = tempDir();
+  const ledger = path.join(dir, 'l.jsonl');
+  fs.writeFileSync(ledger, jl(lines));
+  return { db, ledger, opts: { ledger, cards: cardsOf() } };
+}
+const OPENED = { ts: '2026-10-05T17:00:00Z', task: 'T-0001', event: 'opened', title: 'a', source: 'orc', lane: 'C', prio: 1, by: 'C' };
+
+test('promise and kept reach task_event_extra, with due, reason, proof and writer, and move nothing', () => {
+  const w = ledgerOf([OPENED,
+    { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'promise', by: 'C', due: '2026-10-07T03:00:00Z', reason: 'run it tonight' },
+    { ts: '2026-10-07T17:00:00Z', task: 'T-0001', event: 'kept', by: 'analyst', proof: 'it ran' }]);
+  const r = importFleet(w.db, w.opts);
+  assert.equal(r.tables.task_event_extra.added, 2);
+  const ex = rows(w.db, `SELECT x.kind, x.at, x.due_at, x.reason, x.proof, x.by_text, o.letter FROM task_event_extra x LEFT JOIN orc o ON o.id = x.by_orc_id ORDER BY x.at`);
+  assert.deepEqual(ex, [
+    { kind: 'promise', at: ms('2026-10-06T17:00:00Z'), due_at: ms('2026-10-07T03:00:00Z'), reason: 'run it tonight', proof: null, by_text: null, letter: 'C' },
+    { kind: 'kept', at: ms('2026-10-07T17:00:00Z'), due_at: null, reason: null, proof: 'it ran', by_text: 'analyst', letter: null },
+  ]);
+  assert.equal(count(w.db, 'task_event'), 1);
+  assert.equal(one(w.db, 'SELECT state FROM task_now').state, 'opened');
+  assert.equal(unlinked(r, 'ledger', 'event kind'), undefined, 'neither is an unknown kind any more');
+});
+
+test('importing the same ledger again writes no extra line twice', () => {
+  const w = ledgerOf([OPENED,
+    { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'promise', by: 'C', due: '2026-10-07T03:00:00Z', reason: 'r' },
+    { ts: '2026-10-06T18:00:00Z', task: 'T-0001', event: 'handed', to: 'voiceovers', by: 'C' }]);
+  importFleet(w.db, w.opts);
+  const again = importFleet(w.db, w.opts);
+  assert.equal(again.tables.task_event_extra.added, 0);
+  assert.equal(count(w.db, 'task_event_extra'), 2);
+  assert.deepEqual(findProblems(w.db), []);
+});
+
+const PROMISE = (ts, reason, more) => ({ ts, task: 'T-0001', event: 'promise', by: 'C', due: '2026-12-01T00:00:00Z', reason, ...more });
+
+test('a promise number is its place in the file on its task, even when the file is out of time order', () => {
+  const w = ledgerOf([OPENED,
+    { ts: '2026-10-05T17:00:00Z', task: 'T-0002', event: 'opened', title: 'b', source: 'orc', lane: 'C', prio: 1, by: 'C' },
+    PROMISE('2026-10-07T17:00:00Z', 'first written, later in time'),
+    { ...PROMISE('2026-10-07T18:00:00Z', 'on the other task'), task: 'T-0002' },
+    PROMISE('2026-10-06T17:00:00Z', 'second written, earlier in time')]);
+  importFleet(w.db, w.opts);
+  assert.deepEqual(rows(w.db, 'SELECT t.key, x.promise_no, x.reason FROM task_event_extra x JOIN task t ON t.id = x.task_id ORDER BY t.key, x.promise_no'), [
+    { key: 'T-0001', promise_no: 1, reason: 'first written, later in time' },
+    { key: 'T-0001', promise_no: 2, reason: 'second written, earlier in time' },
+    { key: 'T-0002', promise_no: 1, reason: 'on the other task' },
+  ]);
+});
+
+test('a line that cannot be read for its time still counts: the number does not shift, as in task.py', () => {
+  const w = ledgerOf([OPENED, PROMISE('not a time', 'bad time'), PROMISE('2026-10-06T17:00:00Z', 'good')]);
+  importFleet(w.db, w.opts);
+  assert.deepEqual(rows(w.db, 'SELECT promise_no, reason FROM task_event_extra'), [{ promise_no: 2, reason: 'good' }]);
+});
+
+test('--replaces and --closes arrive by number and close what they name; a word that is no number is said, and names nothing', () => {
+  const w = ledgerOf([OPENED,
+    PROMISE('2026-10-06T17:00:00Z', 'old'),
+    PROMISE('2026-10-07T17:00:00Z', 'new', { replaces: 'P1' }),
+    PROMISE('2026-10-08T17:00:00Z', 'finished'),
+    { ts: '2026-10-09T17:00:00Z', task: 'T-0001', event: 'kept', by: 'C', proof: 'done', closes: 'P3' },
+    PROMISE('2026-10-10T17:00:00Z', 'bad name', { replaces: 'the old one' }),
+    { ts: '2026-10-11T17:00:00Z', task: 'T-0001', event: 'kept', by: 'C', proof: 'p', closes: 'x7' }]);
+  const r = importFleet(w.db, w.opts);
+  assert.deepEqual(rows(w.db, 'SELECT replaces_no, closes_no FROM task_event_extra WHERE replaces_no IS NOT NULL OR closes_no IS NOT NULL ORDER BY at'), [{ replaces_no: 1, closes_no: null }, { replaces_no: null, closes_no: 3 }]);
+  assert.deepEqual(rows(w.db, 'SELECT reason FROM task_promise_open ORDER BY at').map((x) => x.reason), ['bad name'], 'the kept naming x7 fell back to the oldest standing, new');
+  assert.equal(unlinked(r, 'ledger', 'replaces names no promise number').count, 1);
+  assert.equal(unlinked(r, 'ledger', 'closes names no promise number').count, 1);
+});
+
+test('a promise with no usable due is kept, and said', () => {
+  const w = ledgerOf([OPENED, { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'promise', by: 'C', due: 'soon', reason: 'r' }]);
+  const r = importFleet(w.db, w.opts);
+  assert.equal(one(w.db, 'SELECT due_at FROM task_event_extra').due_at, null);
+  assert.equal(unlinked(r, 'ledger', 'promise has no usable due').count, 1);
+});
+
+test('a promise naming a PR says the PR is not linked', () => {
+  const w = ledgerOf([OPENED, { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'promise', by: 'C', due: '2026-10-07T03:00:00Z', reason: 'r', pr: 'yedpool/horde#8' }]);
+  const r = importFleet(w.db, w.opts);
+  assert.equal(unlinked(r, 'ledger', 'promise line names a PR').count, 1);
+  assert.equal(count(w.db, 'task_pr'), 0);
+});
+
+test('two identical extra lines are one event, and said', () => {
+  const line = { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'kept', by: 'C', proof: 'p' };
+  const w = ledgerOf([OPENED, line, line]);
+  const r = importFleet(w.db, w.opts);
+  assert.equal(count(w.db, 'task_event_extra'), 1);
+  assert.equal(unlinked(r, 'ledger', 'line is identical').count, 1);
+});
+
+test('a hand-over to no Orc row: the state is opened, the owner is no Orc, and the words are kept', () => {
+  const w = ledgerOf([OPENED, { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'started', by: 'C' },
+    { ts: '2026-10-07T17:00:00Z', task: 'T-0001', event: 'handed', to: 'voiceovers', by: 'C' }]);
+  importFleet(w.db, w.opts);
+  assert.deepEqual(one(w.db, 'SELECT state, owner_orc_id FROM task_now'), { state: 'opened', owner_orc_id: null });
+  assert.equal(one(w.db, 'SELECT to_text FROM task_event_extra').to_text, 'voiceovers');
+});
+
+test('a hand-over naming nobody: the state is opened and the owner stays, as in task.py', () => {
+  const w = ledgerOf([OPENED, { ts: '2026-10-06T17:00:00Z', task: 'T-0001', event: 'started', by: 'C' },
+    { ts: '2026-10-07T17:00:00Z', task: 'T-0001', event: 'handed', by: 'C' }]);
+  importFleet(w.db, w.opts);
+  const t = one(w.db, 'SELECT n.state, o.letter FROM task_now n JOIN orc o ON o.id = n.owner_orc_id');
+  assert.deepEqual(t, { state: 'opened', letter: 'C' });
+  assert.equal(one(w.db, 'SELECT to_text FROM task_event_extra').to_text, null);
 });
 
 test('pr: a ledger line the importer drops does not date a PR; with no accepted line and no mergedAt the time is the import, never 1970', () => {

@@ -289,10 +289,12 @@ function Send-HordeServicePending {
     $told = @()
     if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["told"]) { $told = @($answer.told | ForEach-Object { "" + $_ }) }
     $lines = New-Object System.Collections.ArrayList
+    # The teller's own lines (a full awaiting list given up, an already-posted copy) are the pass's too.
+    if ($null -ne $answer -and $null -ne $answer.PSObject.Properties["lines"]) { foreach ($l in @($answer.lines)) { [void]$lines.Add("" + $l) } }
     foreach ($name in @($states.Keys | Sort-Object)) {
         $s = Copy-HordeServiceState -State $states[$name]
         $kept = @($s.notices | Where-Object { $told -cnotcontains $_.id })
-        foreach ($n in @($s.notices | Where-Object { $told -ccontains $_.id })) { [void]$lines.Add("told (" + $n.kind + "): " + $n.text) }
+        foreach ($n in @($s.notices | Where-Object { $told -ccontains $_.id })) { [void]$lines.Add("posted (" + $n.kind + "): " + $n.text + " - delivered only when the warchief's own session takes it") }
         if ($kept.Count -ne @($s.notices).Count) { $s.notices = $kept; Write-HordeServiceState -State $s -HordeHome $HordeHome }
     }
     $untold = $waiting.Count - @($told).Count
@@ -371,6 +373,12 @@ function Invoke-HordeServiceSupervisor {
             $null = Invoke-HordeServiceTool -Tools $Tools -Name "Sleep" -With @(2000)
         }
         foreach ($l in @(Send-HordeServicePending -Definitions $chosen -Tools $Tools -Policy $policy -HordeHome $HordeHome)) { [void]$lines.Add($l) }
+        # WHAT BECAME OF THE NOTICES ALREADY POSTED (cli/ServicesTell.ps1): the warchief's own session took them, or an ALARM says it did
+        # not. Every pass, whatever it tended, and the lines are the pass's own output. Its failure is its own.
+        if ($null -ne $Tools["TellTaken"]) {
+            try { foreach ($l in @(& $Tools["TellTaken"] $HordeHome $policy)) { [void]$lines.Add("" + $l) } }
+            catch { [void]$lines.Add("services: the awaiting notices could not be asked: " + (Protect-HordeServiceText $_.Exception.Message)) }
+        }
         # THE HOSTED PHONE PAGE, once a whole pass, after the services (cli/RelayPublish.ps1): a pass for
         # chosen services only - a person's start or rollout of one - leaves it to the next whole pass.
         # Its failure is its own, as one service's is.

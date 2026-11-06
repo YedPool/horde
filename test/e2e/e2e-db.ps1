@@ -71,7 +71,7 @@ Check (-not (Test-Path -LiteralPath $dbFile)) "neither made the file"
 Write-Host ""
 Write-Host "=== init, twice ===" -ForegroundColor Cyan
 $i1 = Invoke-Db @("init")
-Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 6, created\)') ("init creates the file at schema 6 (" + $i1.out.Trim() + ")")
+Check ($i1.code -eq 0 -and $i1.out -cmatch 'fleet\.db: .+fleet\.db \(schema 10, created\)') ("init creates the file at schema 10 (" + $i1.out.Trim() + ")")
 Check (Test-Path -LiteralPath $dbFile -PathType Leaf) "under the home it was given"
 $i2 = Invoke-Db @("init")
 Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init again keeps it"
@@ -79,7 +79,7 @@ Check ($i2.code -eq 0 -and $i2.out -like "*already there, now current*") "init a
 Write-Host ""
 Write-Host "=== status ===" -ForegroundColor Cyan
 $s1 = Invoke-Db @("status")
-Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 6, \d+ bytes\)') "status names the file, its schema and its size"
+Check ($s1.code -eq 0 -and $s1.out -cmatch 'database: .+fleet\.db \(schema 10, \d+ bytes\)') "status names the file, its schema and its size"
 Check ($s1.out -cmatch '(?m)^decisions_snapshot: 0 rows\r?$' -and $s1.out -cmatch '(?m)^task_event: 0 rows\r?$' -and $s1.out -cmatch '(?m)^orc: 0 rows\r?$') "and counts the rows of every table"
 
 Write-Host ""
@@ -312,6 +312,24 @@ $wbad = Invoke-Work @("list", "-Kind", "agent")
 Check ($wbad.code -ne 0 -and $wbad.out -like "*-Kind does not belong to work list*") "a flag of another verb is refused"
 $wck = Invoke-HordeCliProcess -Root $root -HordeArgs @("db", "check") -Env $workEnv
 Check ($wck.code -eq 0 -and $wck.out -cmatch '(?m)^check: ok\r?$') "horde db check says ok on the file the work verbs made"
+
+Write-Host ""
+Write-Host "=== the task list through horde task ===" -ForegroundColor Cyan
+function Invoke-TaskList { param([string[]]$TaskArgs, [hashtable]$Env = $workEnv) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("task") + $TaskArgs) -Env $Env) }
+$tn = Invoke-TaskList @("list") @{ HORDE_HOME = ""; USERPROFILE = $fakeProfile }
+Check ($tn.code -ne 0 -and $tn.out -like "*horde task needs HORDE_HOME set*") "task with HORDE_HOME unset is refused, naming the home"
+$tl = Invoke-TaskList @("list")
+Check ($tl.code -eq 0 -and $tl.out -cmatch '(?m)^0 open, and 0 done, not yet verified, not listed\r?$') ("an empty list says so in its counts (" + $tl.code + ")")
+$tj = Invoke-TaskList @("list", "-Json")
+Check ($tj.code -eq 0 -and $tj.out -like '*{"tasks":`[`],"done_not_verified":0}*') "task list -Json reaches the verb"
+$to = Invoke-TaskList @("list", "-Orc", "nobody")
+Check ($to.code -ne 0 -and $to.out -like "*refused: no Orc is called nobody*") ("-Orc reaches the verb, and a name it does not know is refused (" + $to.code + ")")
+$tp = Invoke-TaskList @("list") @{ HORDE_HOME = ""; USERPROFILE = $pointerProfile }
+Check ($tp.code -eq 0 -and $tp.out -like "*0 open*") ("with HORDE_HOME unset, task list finds the home by the pointer (" + $tp.code + ")")
+$tv = Invoke-TaskList @("add")
+Check ($tv.code -ne 0) ("a verb that is not list is refused (" + $tv.code + ")")
+$tx = Invoke-TaskList @("list") @{ HORDE_HOME = (Join-Path $script:work "home-no-db"); USERPROFILE = $fakeProfile }
+Check ($tx.code -ne 0 -and $tx.out -like "*fleet.db does not exist yet*" -and -not (Test-Path (Join-Path $script:work "home-no-db\fleet.db"))) ("a home with no fleet.db is told so, and none is made (" + $tx.code + ")")
 
 Write-Host ""
 Write-Host "=== refusals ===" -ForegroundColor Cyan

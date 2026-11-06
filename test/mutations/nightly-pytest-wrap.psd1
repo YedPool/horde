@@ -16,5 +16,11 @@
         @{ Name = "basetemp-in-the-shared-pytest-of-folder"
            Find = '$tmpParent = Split-Path -Parent ([System.IO.Path]::GetFullPath($NodesFile))'
            Replace = '$tmpParent = Join-Path ([System.IO.Path]::GetTempPath()) ("pytest-of-" + $env:USERNAME)' }
+        @{ Name = "log-lines-before-the-summary-count-as-tests"
+           Find = '$inSummary = $false'
+           Replace = '$inSummary = $true' }
+        @{ Name = "error-lines-of-the-summary-are-dropped"
+           Find = '$l -match ''^(FAILED|ERROR) '''
+           Replace = '$l -match ''^FAILED ''' }
     )
 }

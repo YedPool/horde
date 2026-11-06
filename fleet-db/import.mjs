@@ -32,6 +32,9 @@ import { inWrite } from './store.mjs';
 import { appendHistory, newId } from './write.mjs';
 import { ensureOrcRow } from './orc-row.mjs';
 import { RANKS, TASK_EVENT_KINDS, CHANGELOG_KINDS } from './schema.mjs';
+
+// The ledger's kinds that go only to task_event_extra (migration 10). A hand-over goes there too, when it names no Orc.
+const EXTRA_ONLY_KINDS = ['promise', 'kept'];
 import { canonical } from './ids.mjs';
 
 const EXAMPLES = 5;
@@ -41,7 +44,7 @@ const PR_REF = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
 const TASK_KEY = /^T-\d{4,}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA40 = /^[0-9a-f]{40}$/;
-const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
+const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'task_event_extra', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
   'question', 'question_event', 'answer', 'answer_extra', 'answer_route', 'answer_route_extra', 'decisions_read',
   'parking_lot', 'parking_lot_member', 'wake', 'wake_member'];
 
@@ -261,19 +264,24 @@ function loadSources(src, rep) {
   return d;
 }
 
+// THE ONE READER OF A STATUS CARD FILE, shared by the importer (readCard) and `horde status set` (orc-cli.mjs --card),
+// so a card is parsed, and its folder and its time judged, by the same code on both paths. Returns { card } or
+// { error }, the error being the reason in the importer's own words. mtime is the file's modified time in whole
+// milliseconds, which is the status row's `at`.
+export function readStatusCard(file, folder, isThrall) {
+  const card = parseCard(fs.readFileSync(file));
+  if (card.error) return { error: 'card is not valid, no Orc row made: ' + card.error };
+  if (!/^[a-z0-9-]{1,64}$/.test(folder)) return { error: 'folder name cannot be a lane_dir (no Orc row made)' };
+  return { card: { ...card, folder, mtime: Math.floor(fs.statSync(file).mtimeMs), isThrall } };
+}
+
 function readCard(file, folder, rep, isThrall) {
-  const buf = fs.readFileSync(file);
-  const card = parseCard(buf);
-  const source = isThrall ? 'thrall-card' : 'cards';
-  if (card.error) {
-    rep.unlink(source, 'card is not valid, no Orc row made: ' + card.error, folder);
+  const r = readStatusCard(file, folder, isThrall);
+  if (r.error) {
+    rep.unlink(isThrall ? 'thrall-card' : 'cards', r.error, folder);
     return null;
   }
-  if (!/^[a-z0-9-]{1,64}$/.test(folder)) {
-    rep.unlink(source, 'folder name cannot be a lane_dir (no Orc row made)', folder);
-    return null;
-  }
-  return { ...card, folder, mtime: Math.floor(fs.statSync(file).mtimeMs), isThrall };
+  return r.card;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -485,6 +493,20 @@ function stepSessions(ctx, data) {
   for (const row of order) put(row);
 }
 
+// THE SESSIONS STEP OF `horde db sync` (T-0409) FILES ITS RECORDS THROUGH THIS, so there is one rule for how a registry
+// record becomes a session row (rank, Orc, seat, parent links, stubs), not a second copy that drifts. `records` are
+// { file: '<session id>.json', rec } as the registry folder gives them; the caller (fleet-db/sessions.mjs) builds the file
+// name from the id. Call it inside the caller's own inWrite: it opens no transaction, so the session rows and the pane rows
+// of one tick land together or not at all. A row already there is kept as it is, as in a full import.
+export function importSessionRecords(db, records) {
+  const rep = new Report();
+  const ctx = { db, rep, seen: new Set() };
+  ctx.nodeId = stepNode(ctx);
+  loadOrcMaps(ctx);
+  stepSessions(ctx, { sessions: records });
+  return { nodeId: ctx.nodeId, report: rep.result(false) };
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // pr
 
@@ -560,14 +582,20 @@ function stepLedger(ctx, data) {
   if (data.ledger === null) return;
   const { rep } = ctx;
   const events = [];
+  const promisesSeen = new Map(); // task key -> how many promise lines so far, in file order: a promise's number (design, task.py)
   for (const { n, obj } of data.ledger) {
+    let promiseNumber = null;
+    if (obj.event === 'promise' && typeof obj.task === 'string') {
+      promiseNumber = (promisesSeen.get(obj.task) ?? 0) + 1;
+      promisesSeen.set(obj.task, promiseNumber);
+    }
     const at = parseTime(obj.ts);
     if (at === null || typeof obj.task !== 'string' || !TASK_KEY.test(obj.task) || typeof obj.event !== 'string') {
       rep.unlink('ledger', 'line lacks a usable ts, task or event (not imported)', 'line ' + (n + 1));
       continue;
     }
-    if (!TASK_EVENT_KINDS.includes(obj.event)) { rep.unlink('ledger', 'event kind ' + obj.event + ' is not known (not imported)', 'line ' + (n + 1)); continue; }
-    events.push({ n, at, ev: obj });
+    if (!TASK_EVENT_KINDS.includes(obj.event) && !EXTRA_ONLY_KINDS.includes(obj.event)) { rep.unlink('ledger', 'event kind ' + obj.event + ' is not known (not imported)', 'line ' + (n + 1)); continue; }
+    events.push({ n, at, ev: obj, promiseNo: promiseNumber });
   }
   // By time; two lines of one time keep file order. The file itself is not in time order (backfills).
   events.sort((a, b) => a.at - b.at || a.n - b.n);
@@ -637,6 +665,21 @@ function prFor(ctx, ev, at) {
   return insertPr(ctx, m.key, m.repo, m.number, 'open', null, null, at, null);
 }
 
+// P3 to 3. Anything else is reported and names nothing, so the line falls back to what a line naming nothing does.
+function promiseNo(rep, text, flag, task) {
+  const m = /^P([1-9]\d{0,5})$/.exec(String(text));
+  if (!m) { rep.unlink('ledger', flag + ' names no promise number (read as naming nothing)', task); return null; }
+  return Number(m[1]);
+}
+
+// A line task_event has no place for (migration 10). Its row holds by_orc_id, by_text and the columns of its kind.
+function putExtra(ctx, e, row) {
+  const r = appendHistory(ctx.db, 'task_event_extra', row);
+  if (!r.inserted && ctx.seen.has(r.id)) ctx.rep.unlink('ledger', 'line is identical to an earlier line (one event)', e.ev.task + ' ' + e.ev.event);
+  else ctx.rep.count('task_event_extra', r.inserted);
+  ctx.seen.add(r.id);
+}
+
 function putEvent(ctx, e) {
   const { db, rep } = ctx;
   const ev = e.ev;
@@ -655,6 +698,22 @@ function putEvent(ctx, e) {
     else rep.unlink('ledger', 'by ' + by + ' names no Orc row (kept as by_text)', ev.task);
   }
 
+  if (EXTRA_ONLY_KINDS.includes(ev.event)) {
+    if (ev.event === 'promise') {
+      const due = parseTime(ev.due);
+      if (due === null) rep.unlink('ledger', 'promise has no usable due (kept with no due time)', ev.task);
+      else row.due_at = due;
+      row.promise_no = e.promiseNo;
+      if (nz(ev.replaces)) row.replaces_no = promiseNo(rep, ev.replaces, 'replaces', ev.task);
+    } else if (nz(ev.closes)) {
+      row.closes_no = promiseNo(rep, ev.closes, 'closes', ev.task);
+    }
+    if (nz(ev.proof)) row.proof = fit(rep, 'ledger', 'proof', ev.proof, 4000, ev.task);
+    if (nz(ev.reason)) row.reason = fit(rep, 'ledger', 'reason', ev.reason, 4000, ev.task);
+    if (nz(ev.pr)) rep.unlink('ledger', ev.event + ' line names a PR (the PR is not linked from it)', ev.task);
+    putExtra(ctx, e, row);
+    return;
+  }
   if (ev.event === 'opened' || ev.event === 'priority') {
     const prio = Number.isInteger(ev.prio) && ev.prio >= 0 && ev.prio <= 9 ? ev.prio : null;
     if (prio === null) {
@@ -672,7 +731,9 @@ function putEvent(ctx, e) {
     const to = nz(ev.to);
     const target = to === null ? null : (orcRef(ctx, to) ?? labelOrc(ctx, to));
     if (target === null) {
-      rep.unlink('ledger', to === null ? 'handed has no to (event not imported; needs a person to say who took it)' : 'handed to ' + to + ' names no Orc row (event not imported; needs a person)', ev.task);
+      rep.unlink('ledger', to === null ? 'handed has no to (kept in task_event_extra; needs a person to say who took it)' : 'handed to ' + to + ' names no Orc row (kept in task_event_extra; needs a person)', ev.task);
+      if (to !== null) row.to_text = fit(rep, 'ledger', 'to', to, 120, ev.task);
+      putExtra(ctx, e, row);
       return;
     }
     row.to_orc_id = target;
@@ -797,22 +858,35 @@ function tagEntry(ctx, entryId, lane, at, legacy) {
 // ---------------------------------------------------------------------------------------------------------
 // orc_status
 
+// THE ONE RULE FOR A CARD'S STATUS ROW, shared by the importer (stepStatus) and `horde status set` (orc-cli.mjs --card).
+// Returns { row: { at, doing, blocked } } or { skip } with the reason in the importer's words (the card then has no
+// status row; its Orc row is still made).
+export function statusRowFor(c) {
+  const doing = c.doing;
+  if (doing.length < 1 || doing.length > 120) return { skip: 'doing is empty or over 120 characters (no status row)' };
+  // 'no' (any case) is "not blocked"; 'none' and every other sentence is kept as the words it is.
+  const blocked = /^no$/i.test(c.blocked) || c.blocked === '' ? null : c.blocked;
+  if (blocked !== null && blocked.length > 200) return { skip: 'blocked is over 200 characters (no status row)' };
+  return { row: { at: c.mtime, doing, blocked } };
+}
+
+// A card whose Orc already has a status row at the card's own time is counted as there and not written again,
+// WHATEVER that row's backfill. WHY: `horde status set` now writes the same status live, with backfill 0 and the
+// card's mtime as `at`, and the content hash includes backfill, so a backfill 1 row for the same card is a different
+// hash: without this skip the sync (which re-reads every card every few minutes) would add a duplicate of every
+// live row. orc-cli.mjs checks the same thing the other way round, so whichever path sees a card first wins.
 function stepStatus(ctx) {
   const { db, rep } = ctx;
+  const there = db.prepare('SELECT 1 FROM orc_status WHERE orc_id = ? AND at = ? LIMIT 1');
   for (const c of ctx.cards) {
     const orcId = ctx.cardOrc.get(c);
-    const doing = c.doing;
-    if (doing.length < 1 || doing.length > 120) {
-      rep.unlink('cards', 'doing is empty or over 120 characters (no status row)', c.folder);
+    const s = statusRowFor(c);
+    if (s.skip) {
+      rep.unlink('cards', s.skip, c.folder);
       continue;
     }
-    // 'no' (any case) is "not blocked"; 'none' and every other sentence is kept as the words it is.
-    const blocked = /^no$/i.test(c.blocked) || c.blocked === '' ? null : c.blocked;
-    if (blocked !== null && blocked.length > 200) {
-      rep.unlink('cards', 'blocked is over 200 characters (no status row)', c.folder);
-      continue;
-    }
-    const r = appendHistory(db, 'orc_status', { orc_id: orcId, at: c.mtime, doing, blocked, backfill: 1 });
+    if (there.get(orcId, s.row.at)) { rep.count('orc_status', false); continue; }
+    const r = appendHistory(db, 'orc_status', { orc_id: orcId, at: s.row.at, doing: s.row.doing, blocked: s.row.blocked, backfill: 1 });
     rep.count('orc_status', r.inserted);
   }
 }

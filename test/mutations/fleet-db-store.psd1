@@ -5,6 +5,9 @@
     Target = "fleet-db\store.mjs"
     Suite  = "test\test-fleet-db.ps1"
     Mutations = @(
+        @{ Name = "failed-open-keeps-the-handle"
+           Find = "} catch (e) { db.close(); throw e; }"
+           Replace = "} catch (e) { throw e; }" }
         @{ Name = "label-off-by-one"
            Find = "RETURNING next - 1 AS n"
            Replace = "RETURNING next AS n" }
@@ -29,6 +32,15 @@
         @{ Name = "no-wal"
            Find = "db.exec('PRAGMA journal_mode = WAL');"
            Replace = "" }
+        @{ Name = "wal-lock-not-retried"
+           Find = "if (!/database is locked/i.test(String(e && e.message)) || now() >= giveUp) throw e;"
+           Replace = "throw e;" }
+        @{ Name = "wal-any-error-retried"
+           Find = "if (!/database is locked/i.test(String(e && e.message)) || now() >= giveUp) throw e;"
+           Replace = "if (now() >= giveUp) throw e;" }
+        @{ Name = "wal-wait-ignored"
+           Find = "const giveUp = now() + Number(busyMs);"
+           Replace = "const giveUp = now() + 5000;" }
         @{ Name = "replace-erases-history"
            Find = "db.exec('PRAGMA recursive_triggers = ON');"
            Replace = "db.exec('PRAGMA recursive_triggers = OFF');" }
