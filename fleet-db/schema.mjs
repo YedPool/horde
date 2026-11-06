@@ -916,6 +916,73 @@ export const MIGRATIONS = [
   ALTER TABLE session ADD COLUMN state_checked_at INTEGER CHECK (state_checked_at >= 0);
   ALTER TABLE session ADD COLUMN transcript_offset INTEGER CHECK (transcript_offset >= 0);
   `,
+  // 8: job and signal (T-0412, piece 3 of T-0299; design: planning/fleet-db-design.md, "Jobs and signals"). What the overseer
+  // kept in jobs.json and signals.jsonl moves here, so the overseer and the analyst detect a stall once, from one place. The
+  // overseer writes only through `horde job` and `horde signal` (fleet-db/jobs.mjs); Orc N stays the only schema owner.
+  // NO ENTITY ROW for either table, on purpose: an entity row is the registry of objects with a ULID or uuid of their own that
+  // links and the phone's lists point at, and both tables are keyed by a text the overseer chose (a job id, a signal key) that
+  // nothing else in the database points at. Registering them would need a made-up second id per row for no reader.
+  // NO FOREIGN KEY from job.session_id to session: a job may name a session fleet.db has not seen yet (the importer and the
+  // sync lag the live fleet), and a refused job would be a job nobody watches. The shape (a lower-case uuid) is still checked.
+  // Neither table has a file behind it: fleet.db is their only home, so a backup of the file is their backup.
+  `
+  -- A piece of promised work somebody is on. Open while done_at is NULL. due_at is optional: a job with no due time is
+  -- never overdue, but it is still listed. done_proof is what shows it is done (a PR, a path, a line); a job is never
+  -- closed without one.
+  CREATE TABLE job (
+    id TEXT NOT NULL PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 120 AND id NOT GLOB '*[^!-~]*'),
+    owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB '*[^!-~]*'),
+    session_id TEXT ${uuid('session_id')},
+    job TEXT NOT NULL CHECK (length(job) BETWEEN 1 AND 4000),
+    started_at INTEGER NOT NULL CHECK (started_at >= 0),
+    due_at INTEGER CHECK (due_at >= 0),
+    done_at INTEGER CHECK (done_at >= 0),
+    done_proof TEXT CHECK (length(done_proof) BETWEEN 1 AND 4000),
+    created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 64 AND created_by NOT GLOB '*[^!-~]*'),
+    CHECK (done_at IS NULL OR done_at >= started_at),
+    CHECK ((done_at IS NULL) = (done_proof IS NULL))
+  ) STRICT;
+  -- What the overseer reads: the open jobs, soonest due first (NULLs, which have no due time, sort first and are skipped).
+  CREATE INDEX job_open_due ON job (due_at) WHERE done_at IS NULL;
+
+  -- The first time a job was started, who made it, and what it is called never change; a done job keeps its time and proof.
+  CREATE TRIGGER job_identity_fixed BEFORE UPDATE ON job
+  WHEN NEW.id IS NOT OLD.id OR NEW.started_at IS NOT OLD.started_at OR NEW.created_by IS NOT OLD.created_by
+  BEGIN SELECT RAISE(ABORT, 'job: id, started_at and created_by never change'); END;
+  CREATE TRIGGER job_done_is_final BEFORE UPDATE ON job
+  WHEN OLD.done_at IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'job: a done job is final'); END;
+
+  -- A problem the overseer saw, one row per key. A key seen again is the same problem: last_at moves forward and count
+  -- grows. A closed one raised again is reopened (closed_at and closed_by cleared), so a problem that came back wakes
+  -- the overseer again. woke_at is the time the overseer last TRIED to wake someone about it (a failed wake is retried
+  -- from it, with a back-off of its own).
+  CREATE TABLE signal (
+    key TEXT NOT NULL PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200 AND key NOT GLOB '*[^!-~]*'),
+    kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64 AND kind NOT GLOB '*[^!-~]*'),
+    owner TEXT CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB '*[^!-~]*'),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4000),
+    first_at INTEGER NOT NULL CHECK (first_at >= 0),
+    last_at INTEGER NOT NULL,
+    count INTEGER NOT NULL CHECK (count >= 1),
+    woke_at INTEGER CHECK (woke_at >= 0),
+    closed_at INTEGER CHECK (closed_at >= 0),
+    closed_by TEXT CHECK (length(closed_by) BETWEEN 1 AND 64 AND closed_by NOT GLOB '*[^!-~]*'),
+    CHECK (last_at >= first_at),
+    CHECK ((closed_at IS NULL) = (closed_by IS NULL))
+  ) STRICT;
+  -- What is read: the open signals by when they last happened, and the closed ones by when they closed (the prune).
+  CREATE INDEX signal_open_last ON signal (last_at) WHERE closed_at IS NULL;
+  CREATE INDEX signal_closed ON signal (closed_at) WHERE closed_at IS NOT NULL;
+
+  -- A signal's key, kind and first time never change, and its last time and count never go back.
+  CREATE TRIGGER signal_identity_fixed BEFORE UPDATE ON signal
+  WHEN NEW.key IS NOT OLD.key OR NEW.kind IS NOT OLD.kind OR NEW.first_at IS NOT OLD.first_at
+  BEGIN SELECT RAISE(ABORT, 'signal: key, kind and first_at never change'); END;
+  CREATE TRIGGER signal_never_back BEFORE UPDATE ON signal
+  WHEN NEW.last_at < OLD.last_at OR NEW.count < OLD.count
+  BEGIN SELECT RAISE(ABORT, 'signal: last_at and count never go back'); END;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

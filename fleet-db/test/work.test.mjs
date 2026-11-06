@@ -66,10 +66,10 @@ const warg = (over = {}) => ({ kind: 'warg', agent_id: null, agent_type: null, s
 // ---------------------------------------------------------------------------------------------------------
 // the migration
 
-test('work_unit: the schema is version 7 (work_unit came in 6) and the table, its three indexes and its four triggers are there', () => {
+test('work_unit: the schema is version 8 (work_unit came in 6) and the table, its three indexes and its four triggers are there', () => {
   const w = world();
-  assert.equal(SCHEMA_VERSION, 7);
-  assert.equal(w.db.prepare('PRAGMA user_version').get().user_version, 7);
+  assert.equal(SCHEMA_VERSION, 8);
+  assert.equal(w.db.prepare('PRAGMA user_version').get().user_version, 8);
   const idx = w.db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'work_unit' AND name LIKE 'work_unit_%' ORDER BY name").all().map((r) => r.name);
   assert.deepEqual(idx, ['work_unit_orc', 'work_unit_running', 'work_unit_task']);
   const trg = w.db.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'work_unit' ORDER BY name").all().map((r) => r.name);
