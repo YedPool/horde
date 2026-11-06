@@ -75,7 +75,10 @@ try {
     Check ($r.code -eq 0) "CONTROL: horde db init makes the test home's fleet.db"
     $r = Invoke-Db @("sync")
     Check ($r.code -ne 0 -and $r.out -like "*no sources are saved*" -and $r.out -like "*db sync -Save*") "no saved sources: refused, and the line names the -Save form"
-    Check (-not (Test-Path -LiteralPath $stateFile)) "   and a refusal leaves no state"
+    # The sessions step ran beside the refusal and wrote its own key; the refused files step must have left nothing of its own.
+    $refused = $null
+    if (Test-Path -LiteralPath $stateFile) { $refused = [System.IO.File]::ReadAllText($stateFile) | ConvertFrom-Json }
+    Check ($null -eq $refused -or $null -eq $refused.files -or ($null -eq $refused.files.lastRunAt -and $null -eq $refused.files.lastOkAt)) "   and a refusal leaves no state for the files step"
     Check ((Get-LogLines | Where-Object { $_ -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ failed \d+ ms \| ' }).Count -eq 1) "   and the log has one line for it: UTC time, failed, ms, the reason"
     Check ((Get-StatusLine "sync:") -ceq "sync: never synced") "db status says never synced"
 
