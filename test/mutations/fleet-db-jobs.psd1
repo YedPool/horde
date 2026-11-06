@@ -101,21 +101,51 @@
         @{ Name = "older-raise-moves-last-at-back"
            Find = 'if (at <= row.last_at) return { action: ''kept'', count: row.count };'
            Replace = '' }
+        @{ Name = "reopen-keeps-the-wake-times"
+           Find = 'woke_at = NULL, woke_ok_at = NULL, closed_at = NULL, closed_by = NULL WHERE key = ?'
+           Replace = 'closed_at = NULL, closed_by = NULL WHERE key = ?' }
+        @{ Name = "reopen-keeps-the-confirmed-wake"
+           Find = 'woke_at = NULL, woke_ok_at = NULL, closed_at = NULL, closed_by = NULL WHERE key = ?'
+           Replace = 'woke_at = NULL, closed_at = NULL, closed_by = NULL WHERE key = ?' }
+        @{ Name = "reopen-with-an-old-time-moves-last-at-back"
+           Find = '.run(Math.max(at, row.last_at), text,'
+           Replace = '.run(at, text,' }
+        @{ Name = "closed-signal-with-an-old-time-stays-closed"
+           Find = 'if (row.closed_at !== null) {'
+           Replace = 'if (row.closed_at !== null && at > row.last_at) {' }
         @{ Name = "reopen-keeps-it-closed"
            Find = ', closed_at = NULL, closed_by = NULL WHERE key = ?'
            Replace = ' WHERE key = ?' }
         @{ Name = "reopen-not-told"
-           Find = 'action: row.closed_at === null ? ''updated'' : ''reopened'''
-           Replace = 'action: ''updated''' }
+           Find = 'return { action: ''reopened'', count: row.count + 1 };'
+           Replace = 'return { action: ''updated'', count: row.count + 1 };' }
+        @{ Name = "urgent-not-set-by-raise"
+           Find = 'const urgent = req.urgent === true ? 1 : 0;'
+           Replace = 'const urgent = 0;' }
+        @{ Name = "quiet-not-set-by-raise"
+           Find = 'const quiet = req.quiet === true ? 1 : 0;'
+           Replace = 'const quiet = 0;' }
+        @{ Name = "owner-padded-with-spaces-accepted"
+           Find = 'if (v !== v.trim()) throw refuse(what + '' may not start or end with a space'');'
+           Replace = '' }
+        @{ Name = "owner-takes-non-ascii"
+           Find = 'const bad = /[^ -~]/.exec(v);'
+           Replace = 'const bad = null;' }
+        @{ Name = "owner-length-not-checked"
+           Find = 'if (v.length > LIMITS.signalOwner) throw refuse('
+           Replace = 'if (false) throw refuse(' }
+        @{ Name = "woke-moves-back"
+           Find = 'if (row.woke_ok_at !== null && at <= row.woke_ok_at) return { action: ''kept'' };'
+           Replace = '' }
         @{ Name = "key-of-another-kind-merged"
            Find = 'if (row.kind !== kind) throw refuse('
            Replace = 'if (false) throw refuse(' }
         @{ Name = "raise-without-owner-clears-it"
-           Find = '.run(at, text, owner ?? row.owner, key);'
-           Replace = '.run(at, text, owner, key);' }
+           Find = '.run(at, text, owner ?? row.owner, urgent, quiet, key);'
+           Replace = '.run(at, text, owner, urgent, quiet, key);' }
         @{ Name = "raise-owner-never-changes"
-           Find = '.run(at, text, owner ?? row.owner, key);'
-           Replace = '.run(at, text, row.owner, key);' }
+           Find = '.run(at, text, owner ?? row.owner, urgent, quiet, key);'
+           Replace = '.run(at, text, row.owner, urgent, quiet, key);' }
         @{ Name = "close-before-last-at"
            Find = 'Math.max(clock, row.last_at), by, key)'
            Replace = 'clock, by, key)' }
@@ -129,8 +159,17 @@
            Find = 'if (at !== null && !markWoke) throw refuse('
            Replace = 'if (false) throw refuse(' }
         @{ Name = "unwoken-ignores-a-later-happening"
-           Find = '(woke_at IS NULL OR woke_at < last_at)'
-           Replace = '(woke_at IS NULL)' }
+           Find = '(woke_ok_at IS NULL OR woke_ok_at < last_at)'
+           Replace = '(woke_ok_at IS NULL)' }
+        @{ Name = "unwoken-trusts-the-attempt-time"
+           Find = '(woke_ok_at IS NULL OR woke_ok_at < last_at)'
+           Replace = '(woke_at IS NULL OR woke_at < last_at)' }
+        @{ Name = "unwoken-includes-quiet-signals"
+           Find = 'closed_at IS NULL AND quiet = 0 AND ('
+           Replace = 'closed_at IS NULL AND (' }
+        @{ Name = "mark-woke-stamps-every-open-signal"
+           Find = 'const need = unwoken || markWoke;'
+           Replace = 'const need = unwoken;' }
         @{ Name = "mark-not-written"
            Find = 'for (const r of got) { mark.run(wokeAt, r.key); r.woke_at = wokeAt; }'
            Replace = 'for (const r of got) { r.woke_at = wokeAt; }' }

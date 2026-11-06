@@ -60,8 +60,26 @@
            Find = 'kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64 AND kind NOT GLOB ''*[^!-~]*''),'
            Replace = 'kind TEXT NOT NULL,' }
         @{ Name = "signal-owner-any-text"
-           Find = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB ''*[^!-~]*''),'
+           Find = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 120 AND owner NOT GLOB ''*[^ -~]*''),'
            Replace = 'owner TEXT,' }
+        @{ Name = "signal-owner-over-120"
+           Find = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 120 AND owner NOT GLOB ''*[^ -~]*''),'
+           Replace = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 500 AND owner NOT GLOB ''*[^ -~]*''),' }
+        @{ Name = "signal-owner-takes-line-breaks"
+           Find = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 120 AND owner NOT GLOB ''*[^ -~]*''),'
+           Replace = 'owner TEXT CHECK (length(owner) BETWEEN 1 AND 120),' }
+        @{ Name = "signal-negative-confirmed-wake"
+           Find = 'woke_ok_at INTEGER CHECK (woke_ok_at >= 0),'
+           Replace = 'woke_ok_at INTEGER,' }
+        @{ Name = "signal-urgent-any-number"
+           Find = 'urgent INTEGER NOT NULL DEFAULT 0 ${flag(''urgent'')},'
+           Replace = 'urgent INTEGER NOT NULL DEFAULT 0,' }
+        @{ Name = "signal-quiet-any-number"
+           Find = 'quiet INTEGER NOT NULL DEFAULT 0 ${flag(''quiet'')},'
+           Replace = 'quiet INTEGER NOT NULL DEFAULT 0,' }
+        @{ Name = "signal-quiet-defaults-on"
+           Find = 'quiet INTEGER NOT NULL DEFAULT 0 ${flag(''quiet'')},'
+           Replace = 'quiet INTEGER NOT NULL DEFAULT 1 ${flag(''quiet'')},' }
         @{ Name = "signal-text-any-length"
            Find = 'text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4000),'
            Replace = 'text TEXT NOT NULL,' }

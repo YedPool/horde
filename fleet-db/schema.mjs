@@ -961,17 +961,23 @@ export const MIGRATIONS = [
 
   -- A problem the overseer saw, one row per key. A key seen again is the same problem: last_at moves forward and count
   -- grows. A closed one raised again is reopened (closed_at and closed_by cleared), so a problem that came back wakes
-  -- the overseer again. woke_at is the time the overseer last TRIED to wake someone about it (a failed wake is retried
-  -- from it, with a back-off of its own).
+  -- the overseer again. woke_at is the time the overseer last TRIED to wake someone about it (it backs off from it);
+  -- woke_ok_at is the last wake the overseer CONFIRMED worked, so a wake that failed stays unwoken and is retried.
+  -- urgent skips the overseer's one-hour gap between wakes; quiet logs the signal and wakes nobody. A reopen clears both
+  -- wake times: a problem that came back needs a new wake. owner is a person or a path as the overseer writes it, so it
+  -- may hold spaces (one printable ASCII line, up to 120).
   CREATE TABLE signal (
     key TEXT NOT NULL PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200 AND key NOT GLOB '*[^!-~]*'),
     kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64 AND kind NOT GLOB '*[^!-~]*'),
-    owner TEXT CHECK (length(owner) BETWEEN 1 AND 64 AND owner NOT GLOB '*[^!-~]*'),
+    owner TEXT CHECK (length(owner) BETWEEN 1 AND 120 AND owner NOT GLOB '*[^ -~]*'),
     text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 4000),
     first_at INTEGER NOT NULL CHECK (first_at >= 0),
     last_at INTEGER NOT NULL,
     count INTEGER NOT NULL CHECK (count >= 1),
     woke_at INTEGER CHECK (woke_at >= 0),
+    woke_ok_at INTEGER CHECK (woke_ok_at >= 0),
+    urgent INTEGER NOT NULL DEFAULT 0 ${flag('urgent')},
+    quiet INTEGER NOT NULL DEFAULT 0 ${flag('quiet')},
     closed_at INTEGER CHECK (closed_at >= 0),
     closed_by TEXT CHECK (length(closed_by) BETWEEN 1 AND 64 AND closed_by NOT GLOB '*[^!-~]*'),
     CHECK (last_at >= first_at),

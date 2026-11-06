@@ -47,9 +47,28 @@ function Invoke-HordeJobsCli {
     }
     foreach ($s in $Switches) { $nodeArgs += $s }
 
+    # THE CALL IS MADE WITH A PROCESS OF OUR OWN, not with &, so both shells quote alike (fleet-db/Sync.ps1 does the same): every
+    # argument is quoted, and backslashes just before the closing quote are doubled, or a value ending in one (an owner that is a
+    # folder, C:\x\) would escape that quote in 5.1 and swallow the next argument.
     $script = Join-Path $Root "fleet-db\jobs-cli.mjs"
-    $before = $env:HORDE_HOME
-    $env:HORDE_HOME = $resolved.path
-    try { & $node.Source $script @nodeArgs } finally { $env:HORDE_HOME = $before }
-    if ($LASTEXITCODE -ne 0) { throw ("horde " + $Noun + " " + $Verb + " stopped with exit code " + $LASTEXITCODE) }
+    $quoted = @(@($script) + $nodeArgs | ForEach-Object { '"' + ($_ -replace '(\\+)$', '$1$1') + '"' })
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $node.Source
+    $psi.Arguments = $quoted -join " "
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $resolved.path
+    $child = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $errTask = $child.StandardError.ReadToEndAsync()
+        $outText = $child.StandardOutput.ReadToEnd()
+        $child.WaitForExit()
+        $code = $child.ExitCode
+        $errText = $errTask.Result
+    } finally { $child.Dispose() }
+    if ($outText.Trim() -ne "") { foreach ($line in ($outText.TrimEnd() -split "`r?`n")) { Write-Output $line } }
+    if ($errText.Trim() -ne "") { foreach ($line in ($errText.TrimEnd() -split "`r?`n")) { [Console]::Error.WriteLine($line) } }
+    if ($code -ne 0) { throw ("horde " + $Noun + " " + $Verb + " stopped with exit code " + $code) }
 }

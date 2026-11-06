@@ -167,11 +167,19 @@ foreach ($sh in $shells) {
     $s3 = Invoke-Verb @("signal", "raise", "-Key", "ALARM:T-1", "-Kind", "alarm", "-Text", "T-1 is still stuck", "-At", $later)
     Check ($s3.code -eq 0 -and $s3.out -cmatch '(?m)^updated ALARM:T-1 \(count 2\)\r?$') "a later raise counts"
     $sl = Invoke-Verb @("signal", "list", "-Open")
-    Check ($sl.code -eq 0 -and $sl.out -cmatch '(?m)^ALARM:T-1 alarm O open count=2 first=\S+ last=\S+ woke=- \| T-1 is still stuck\r?$') "signal list is one plain line per signal, the owner kept from the first raise"
-    $mw = Invoke-Verb @("signal", "list", "-Open", "-Unwoken", "-MarkWoke", "-Json")
-    Check ($mw.code -eq 0 -and $mw.out -like '*"key":"ALARM:T-1"*' -and $mw.out -cmatch '"woke_at":\d{13}') "signal list -MarkWoke records the wake attempt on the signals it returns"
+    Check ($sl.code -eq 0 -and $sl.out -cmatch '(?m)^ALARM:T-1 alarm O open count=2 first=\S+ last=\S+ woke=- ok=- \| T-1 is still stuck\r?$') "signal list is one plain line per signal, the owner kept from the first raise"
+    $mw = Invoke-Verb @("signal", "list", "-Open", "-MarkWoke", "-Json")
+    Check ($mw.code -eq 0 -and $mw.out -like '*"key":"ALARM:T-1"*' -and $mw.out -cmatch '"woke_at":\d{13}') "signal list -MarkWoke (which implies -Unwoken) records the wake attempt on the signals it returns"
     $uw = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
-    Check ($uw.code -eq 0 -and $uw.out -like "*no signals*") "and they are no longer unwoken"
+    Check ($uw.code -eq 0 -and $uw.out -like "*ALARM:T-1 *") "an attempted wake is not a confirmed one: the signal is still unwoken, so a failed wake is retried"
+    $wk = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1")
+    Check ($wk.code -eq 0 -and $wk.out -cmatch '(?m)^woke ALARM:T-1\r?$') "signal woke records that the wake worked"
+    $wk2 = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1")
+    Check ($wk2.code -eq 0 -and $wk2.out -cmatch '(?m)^kept ALARM:T-1\r?$') "and a repeat says kept"
+    $uw2 = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
+    Check ($uw2.code -eq 0 -and $uw2.out -like "*no signals*") "after a confirmed wake the signal is no longer unwoken"
+    $wk3 = Invoke-Verb @("signal", "woke", "-Key", "no-such-key")
+    Check ($wk3.code -eq 1 -and $wk3.out -like "*refused: no signal is called no-such-key*") "signal woke on an unknown key is refused"
     $mwBad = Invoke-Verb @("signal", "list", "-MarkWoke")
     Check ($mwBad.code -eq 1 -and $mwBad.out -like "*MarkWoke needs Open*") "-MarkWoke without -Open is refused"
     $c1 = Invoke-Verb @("signal", "close", "-Key", "ALARM:T-1", "-By", "S")
@@ -191,6 +199,31 @@ foreach ($sh in $shells) {
     Check ($s6.code -eq 0 -and $s6.out -cmatch '(?m)^raised ALARM:T-2 \(count 1\)\r?$') "signal raise -File takes long text"
     $localAt = Invoke-Verb @("signal", "raise", "-Key", "ALARM:T-3", "-Kind", "alarm", "-Text", "x", "-At", "2026-11-06T09:00:00")
     Check ($localAt.code -eq 1 -and $localAt.out -like "*refused: At has no time zone*") "a signal time with no zone is refused"
+    # --- quiet, urgent, owners with spaces and paths, a value ending in a backslash, a reopen by an old -At ---
+    $q1 = Invoke-Verb @("signal", "raise", "-Key", "Q:1", "-Kind", "alarm", "-Text", "quiet one", "-Quiet", "-At", $pastMs)
+    $u1 = Invoke-Verb @("signal", "raise", "-Key", "U:1", "-Kind", "alarm", "-Owner", "parent e9932755", "-Text", "urgent one", "-Urgent", "-At", $pastMs)
+    $pth = Invoke-Verb @("signal", "raise", "-Key", "P:1", "-Kind", "alarm", "-Owner", "C:\Windows\system32\cmd.exe", "-Text", "path owner", "-At", $pastMs)
+    $bsl = Invoke-Verb @("signal", "raise", "-Key", "B:1", "-Kind", "alarm", "-Owner", "C:\My Folder\\", "-Text", "owner ending in a backslash", "-At", $pastMs)
+    Check ($q1.code -eq 0 -and $u1.code -eq 0 -and $pth.code -eq 0 -and $bsl.code -eq 0) "-Quiet, -Urgent, an owner with spaces, a path and a value ending in a backslash are all accepted"
+    $oj = Invoke-Verb @("signal", "list", "-Json")
+    Check ($oj.out -like '*"owner":"parent e9932755"*' -and $oj.out -like '*"owner":"C:\\Windows\\system32\\cmd.exe"*') "an owner with spaces and an owner that is a path arrive whole"
+    Check ($oj.out -like '*"owner":"C:\\My Folder\\"*') "a value ending in a backslash arrives whole (the closing quote was not eaten)"
+    Check ($oj.out -like '*"key":"U:1"*"urgent":1*' -and $oj.out -like '*"key":"Q:1"*"quiet":1*') "urgent and quiet are carried"
+    $un = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
+    Check ($un.code -eq 0 -and $un.out -like "*U:1 *" -and $un.out -like "*P:1 *" -and $un.out -notlike "*Q:1 *") "a quiet signal is never unwoken"
+    $mk = Invoke-Verb @("signal", "list", "-Open", "-MarkWoke", "-Json", "-Owner", "parent e9932755")
+    Check ($mk.code -eq 0 -and $mk.out -like '*"key":"U:1"*' -and $mk.out -cmatch '"woke_at":\d{13}') "MarkWoke stamps the signal it lists"
+    $uok = Invoke-Verb @("signal", "woke", "-Key", "U:1")
+    $mk2 = Invoke-Verb @("signal", "list", "-Open", "-MarkWoke", "-Json")
+    Check ($mk2.code -eq 0 -and $mk2.out -like '*"key":"P:1"*' -and $mk2.out -notlike '*"key":"U:1"*' -and $mk2.out -notlike '*"key":"Q:1"*') "MarkWoke without -Unwoken still stamps only what needs a wake: not the confirmed one, not the quiet one"
+    $ucl = Invoke-Verb @("signal", "close", "-Key", "U:1", "-By", "S")
+    $uro = Invoke-Verb @("signal", "raise", "-Key", "U:1", "-Kind", "alarm", "-Text", "back again", "-At", $pastMs)
+    Check ($uro.code -eq 0 -and $uro.out -cmatch '(?m)^reopened U:1 \(count 2\)\r?$') "a closed signal raised with an old -At is reopened"
+    $urj = Invoke-Verb @("signal", "list", "-Json", "-Owner", "parent e9932755")
+    Check ($urj.out -like '*"last_at":1700000000000,"count":2,"woke_at":null,"woke_ok_at":null,"urgent":0*') "last_at did not move back, both wake times are cleared, urgent is back to 0"
+    $ushow = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
+    Check ($ushow.out -like "*U:1 *") "and it needs a wake again"
+
     $p0 = Invoke-Verb @("signal", "prune")
     Check ($p0.code -eq 1 -and $p0.out -like "*--days is required*") "prune without -Days is refused"
     $p00 = Invoke-Verb @("signal", "prune", "-Days", "0")
@@ -200,7 +233,7 @@ foreach ($sh in $shells) {
 
     # --- the reading side ---
     $st = Invoke-Verb @("db", "status")
-    Check ($st.code -eq 0 -and $st.out -cmatch '(?m)^job: 5 rows\r?$' -and $st.out -cmatch '(?m)^signal: 2 rows\r?$') "db status counts the two tables like every other"
+    Check ($st.code -eq 0 -and $st.out -cmatch '(?m)^job: 5 rows\r?$' -and $st.out -cmatch '(?m)^signal: 6 rows\r?$') "db status counts the two tables like every other"
     $ck = Invoke-Verb @("db", "check")
     Check ($ck.code -eq 0 -and $ck.out -cmatch '(?m)^check: ok\r?$') "db check still says ok on a file the verbs wrote"
 }

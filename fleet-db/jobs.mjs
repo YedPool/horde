@@ -26,7 +26,7 @@
 import { refuse } from './work.mjs';
 import { inWrite } from './store.mjs';
 
-export const LIMITS = { id: 120, key: 200, owner: 64, kind: 64, by: 64, text: 4000, fileBytes: 65536 };
+export const LIMITS = { id: 120, key: 200, owner: 64, signalOwner: 120, kind: 64, by: 64, text: 4000, fileBytes: 65536 };
 // A time named on purpose may not be more than this far ahead: a signal's last_at never goes back, so one typo'd
 // millisecond count would otherwise freeze the signal's last_at in the future for good.
 const MAX_AHEAD_MS = 24 * 60 * 60 * 1000;
@@ -39,6 +39,17 @@ export function wordOf(v, what, max) {
   if (v.length > max) throw refuse(what + ' is ' + v.length + ' characters; the most is ' + max);
   const bad = /[^!-~]/.exec(v);
   if (bad) throw refuse(what + ' must be printable ASCII with no spaces (character ' + (bad.index + 1) + ' is not)');
+  return v;
+}
+
+// A signal's owner is a person or a path as the overseer writes it ('parent e9932755', 'founder via M only', a program's
+// path), so it may hold single spaces: one printable ASCII line, not padded, 1 to 120. A job's owner stays a word.
+export function signalOwnerOf(v, what = 'Owner') {
+  if (typeof v !== 'string' || v.length < 1) throw refuse(what + ' is required');
+  if (v.length > LIMITS.signalOwner) throw refuse(what + ' is ' + v.length + ' characters; the most is ' + LIMITS.signalOwner);
+  const bad = /[^ -~]/.exec(v);
+  if (bad) throw refuse(what + ' must be one line of printable ASCII (character ' + (bad.index + 1) + ' is not)');
+  if (v !== v.trim()) throw refuse(what + ' may not start or end with a space');
   return v;
 }
 
@@ -178,26 +189,51 @@ export function listJobs(db, { open = false, owner = null, overdue = false, notW
 
 // --- signals -------------------------------------------------------------------------------------------------------
 
-// Raise a signal. Returns { action: 'raised' | 'updated' | 'reopened' | 'kept', count }.
+// Raise a signal. urgent and quiet are set by every EFFECTIVE raise to what it was given (absent = 0); a raise that changes
+// nothing leaves them alone. A CLOSED signal is reopened by any raise, even one with a time that is not after last_at (last_at
+// then stays where it is): the problem is back, whatever the report's clock says. Every reopen clears both wake times.
+// Returns { action: 'raised' | 'updated' | 'reopened' | 'kept', count }.
 export function raiseSignal(db, req, { now = Date.now } = {}) {
   const key = wordOf(req.key, 'Key', LIMITS.key);
   const kind = wordOf(req.kind, 'Kind', LIMITS.kind);
-  const owner = given(req.owner) ? wordOf(req.owner, 'Owner', LIMITS.owner) : null;
+  const owner = given(req.owner) ? signalOwnerOf(req.owner) : null;
   const text = textOf(req.text, 'Text');
+  const urgent = req.urgent === true ? 1 : 0;
+  const quiet = req.quiet === true ? 1 : 0;
   const clock = now();
   const at = given(req.at) ? whenOf(req.at, 'At', { now: clock, ahead: true }) : clock;
   return inWrite(db, () => {
     const row = db.prepare('SELECT kind, owner, last_at, count, closed_at FROM signal WHERE key = ?').get(key);
     if (!row) {
-      db.prepare('INSERT INTO signal (key, kind, owner, text, first_at, last_at, count) VALUES (?, ?, ?, ?, ?, ?, 1)').run(key, kind, owner, text, at, at);
+      db.prepare('INSERT INTO signal (key, kind, owner, text, first_at, last_at, count, urgent, quiet) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)').run(key, kind, owner, text, at, at, urgent, quiet);
       return { action: 'raised', count: 1 };
     }
     if (row.kind !== kind) throw refuse('signal ' + key + ' is of kind ' + row.kind + ', not ' + kind + '; a key is one kind of problem');
-    // Not after the last time: a retry of a raise already counted (or an older report). Nothing changes, closed or not.
+    if (row.closed_at !== null) {
+      db.prepare('UPDATE signal SET last_at = ?, count = count + 1, text = ?, owner = ?, urgent = ?, quiet = ?, woke_at = NULL, woke_ok_at = NULL, closed_at = NULL, closed_by = NULL WHERE key = ?')
+        .run(Math.max(at, row.last_at), text, owner ?? row.owner, urgent, quiet, key);
+      return { action: 'reopened', count: row.count + 1 };
+    }
+    // Not after the last time: a retry of a raise already counted (or an older report). Nothing changes.
     if (at <= row.last_at) return { action: 'kept', count: row.count };
-    db.prepare('UPDATE signal SET last_at = ?, count = count + 1, text = ?, owner = ?, closed_at = NULL, closed_by = NULL WHERE key = ?')
-      .run(at, text, owner ?? row.owner, key);
-    return { action: row.closed_at === null ? 'updated' : 'reopened', count: row.count + 1 };
+    db.prepare('UPDATE signal SET last_at = ?, count = count + 1, text = ?, owner = ?, urgent = ?, quiet = ? WHERE key = ?')
+      .run(at, text, owner ?? row.owner, urgent, quiet, key);
+    return { action: 'updated', count: row.count + 1 };
+  });
+}
+
+// Record that a wake WORKED (the overseer confirmed someone was reached): woke_ok_at, never moved back. A repeat is kept; an
+// unknown key is refused. Until this is called a wake that was only attempted (signal list -MarkWoke) is still unwoken.
+export function wokeSignal(db, req, { now = Date.now } = {}) {
+  const key = wordOf(req.key, 'Key', LIMITS.key);
+  const clock = now();
+  const at = given(req.at) ? whenOf(req.at, 'At', { now: clock, ahead: true }) : clock;
+  return inWrite(db, () => {
+    const row = db.prepare('SELECT woke_ok_at FROM signal WHERE key = ?').get(key);
+    if (!row) throw refuse('no signal is called ' + key);
+    if (row.woke_ok_at !== null && at <= row.woke_ok_at) return { action: 'kept' };
+    db.prepare('UPDATE signal SET woke_ok_at = ? WHERE key = ?').run(at, key);
+    return { action: 'woke' };
   });
 }
 
@@ -215,18 +251,20 @@ export function closeSignal(db, req, { now = Date.now } = {}) {
   });
 }
 
-// The signals, newest first. unwoken = open ones that need a wake (never tried, or happened again since the last try).
-// markWoke records the attempt (woke_at = at, default now) on exactly the rows returned, in the same transaction, and
-// returns them as marked; it needs open, because a closed signal has nothing to wake.
+// The signals, newest first. unwoken = open, not quiet, and no CONFIRMED wake since it last happened (woke_ok_at NULL or older
+// than last_at): a wake that was attempted and failed stays unwoken and is retried. markWoke implies unwoken: it records the
+// attempt (woke_at = at, default now) on exactly the rows that need a wake, in the same transaction, and returns them as
+// marked; it needs open, because a closed signal has nothing to wake.
 export function listSignals(db, { open = false, owner = null, unwoken = false, markWoke = false, at = null } = {}, { now = Date.now } = {}) {
-  if (owner !== null) wordOf(owner, 'Owner', LIMITS.owner);
+  if (owner !== null) signalOwnerOf(owner);
   if (markWoke && !open) throw refuse('MarkWoke needs Open: only an open signal is woken for');
   if (at !== null && !markWoke) throw refuse('At on signal list is the time MarkWoke records; it needs MarkWoke');
   const clock = now();
   const wokeAt = markWoke ? (at === null ? clock : whenOf(at, 'At', { now: clock, ahead: true })) : null;
-  const select = () => db.prepare(`SELECT key, kind, owner, text, first_at, last_at, count, woke_at, closed_at, closed_by FROM signal
-    WHERE (?1 = 0 OR closed_at IS NULL) AND (?2 IS NULL OR owner = ?2) AND (?3 = 0 OR (closed_at IS NULL AND (woke_at IS NULL OR woke_at < last_at)))
-    ORDER BY last_at DESC, key`).all(open ? 1 : 0, owner, unwoken ? 1 : 0).map((r) => ({ ...r }));
+  const need = unwoken || markWoke;
+  const select = () => db.prepare(`SELECT key, kind, owner, text, first_at, last_at, count, woke_at, woke_ok_at, urgent, quiet, closed_at, closed_by FROM signal
+    WHERE (?1 = 0 OR closed_at IS NULL) AND (?2 IS NULL OR owner = ?2) AND (?3 = 0 OR (closed_at IS NULL AND quiet = 0 AND (woke_ok_at IS NULL OR woke_ok_at < last_at)))
+    ORDER BY last_at DESC, key`).all(open ? 1 : 0, owner, need ? 1 : 0).map((r) => ({ ...r }));
   const rows = markWoke
     ? inWrite(db, () => {
       const got = select();
@@ -235,7 +273,7 @@ export function listSignals(db, { open = false, owner = null, unwoken = false, m
       return got;
     })
     : select();
-  return rows.map((r) => ({ ...r, first: iso(r.first_at), last: iso(r.last_at), woke: iso(r.woke_at), closed: iso(r.closed_at), state: r.closed_at === null ? 'open' : 'closed' }));
+  return rows.map((r) => ({ ...r, first: iso(r.first_at), last: iso(r.last_at), woke: iso(r.woke_at), woke_ok: iso(r.woke_ok_at), closed: iso(r.closed_at), state: r.closed_at === null ? 'open' : 'closed' }));
 }
 
 // Delete the CLOSED signals closed more than days days ago. An open signal is never touched. days is required (1 or more):

@@ -19,11 +19,14 @@
         @{ Name = "bare-flags-dropped"
            Find = 'foreach ($s in $Switches) { $nodeArgs += $s }'
            Replace = 'foreach ($s in @()) { $nodeArgs += $s }' }
+        @{ Name = "trailing-backslash-not-doubled"
+           Find = '$_ -replace ''(\\+)$'', ''$1$1'''
+           Replace = '$_' }
         @{ Name = "node-failure-not-reported"
-           Find = 'if ($LASTEXITCODE -ne 0) { throw ('
+           Find = 'if ($code -ne 0) { throw ('
            Replace = 'if ($false) { throw (' }
         @{ Name = "node-exit-code-not-named"
-           Find = '" stopped with exit code " + $LASTEXITCODE'
+           Find = '" stopped with exit code " + $code'
            Replace = '" stopped"' }
     )
 }

@@ -10,7 +10,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../store.mjs';
 import { MIGRATIONS, SCHEMA_VERSION } from '../schema.mjs';
-import { upsertJob, doneJob, listJobs, raiseSignal, closeSignal, listSignals, pruneSignals, whenOf } from '../jobs.mjs';
+import { upsertJob, doneJob, listJobs, raiseSignal, wokeSignal, closeSignal, listSignals, pruneSignals, whenOf } from '../jobs.mjs';
 import { main, parseFlags } from '../jobs-cli.mjs';
 import { findProblems } from '../cli.mjs';
 
@@ -90,7 +90,7 @@ function rawJob(db, over = {}) {
   return db.prepare('INSERT INTO job (' + cols.join(', ') + ') VALUES (' + cols.map(() => '?').join(', ') + ')').run(...cols.map((c) => r[c]));
 }
 function rawSignal(db, over = {}) {
-  const r = { key: 'K-9', kind: 'alarm', owner: null, text: 'x', first_at: NOW, last_at: NOW, count: 1, woke_at: null, closed_at: null, closed_by: null, ...over };
+  const r = { key: 'K-9', kind: 'alarm', owner: null, text: 'x', first_at: NOW, last_at: NOW, count: 1, woke_at: null, woke_ok_at: null, urgent: 0, quiet: 0, closed_at: null, closed_by: null, ...over };
   const cols = Object.keys(r);
   return db.prepare('INSERT INTO signal (' + cols.join(', ') + ') VALUES (' + cols.map(() => '?').join(', ') + ')').run(...cols.map((c) => r[c]));
 }
@@ -127,16 +127,22 @@ test('job: its start, its maker and its id never change, and a done job is final
 
 test('signal: the CHECKs refuse each bad row, and the good ones are written', () => {
   const { db } = world();
-  rawSignal(db, { key: 'ok-1', owner: 'O', woke_at: NOW, last_at: NOW + 1, count: 5, closed_at: NOW + 2, closed_by: 'S' });
+  rawSignal(db, { key: 'ok-1', owner: 'O', woke_at: NOW, woke_ok_at: NOW, urgent: 1, quiet: 1, last_at: NOW + 1, count: 5, closed_at: NOW + 2, closed_by: 'S' });
+  rawSignal(db, { key: 'ok-2', owner: 'parent e9932755' });
+  rawSignal(db, { key: 'ok-3', owner: 'C:\\Windows\\system32\\cmd.exe' });
+  rawSignal(db, { key: 'ok-4', owner: 'o'.repeat(120) });
   for (const bad of [
-    { key: '' }, { key: 'has space' }, { key: 'k'.repeat(201) }, { key: 'caf\u00e9' }, { kind: '' }, { kind: 'two words' }, { owner: '' }, { owner: 'a b' },
-    { text: '' }, { text: 't'.repeat(4001) }, { first_at: -1, last_at: 0 }, { last_at: NOW - 1 }, { count: 0 }, { count: -1 }, { woke_at: -1 },
+    { key: '' }, { key: 'has space' }, { key: 'k'.repeat(201) }, { key: 'caf\u00e9' }, { kind: '' }, { kind: 'two words' }, { owner: '' }, { owner: 'o'.repeat(121) },
+    { owner: 'caf\u00e9' }, { owner: 'two\nlines' }, { owner: 'tab\there' },
+    { text: '' }, { text: 't'.repeat(4001) }, { first_at: -1, last_at: 0 }, { last_at: NOW - 1 }, { count: 0 }, { count: -1 }, { woke_at: -1 }, { woke_ok_at: -1 },
+    { urgent: 2 }, { urgent: -1 }, { quiet: 2 }, { urgent: null }, { quiet: null },
     { closed_at: NOW }, { closed_by: 'S' }, { closed_at: NOW, closed_by: '' }, { closed_at: -1, closed_by: 'S' },
   ]) sqlRefuses(() => rawSignal(db, bad), /CHECK|NOT NULL/);
   sqlRefuses(() => rawSignal(db, { key: 'ok-1' }), /UNIQUE|PRIMARY/);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM signal').get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM signal').get().n, 4);
+  const d = db.prepare("INSERT INTO signal (key, kind, text, first_at, last_at, count) VALUES ('dflt', 'k', 't', 1, 1, 1) RETURNING urgent, quiet").get();
+  assert.deepEqual([d.urgent, d.quiet], [0, 0], 'urgent and quiet default to 0');
 });
-
 test('signal: key, kind and first_at never change; last_at and count never go back', () => {
   const { db } = world();
   rawSignal(db, { key: 'a', last_at: NOW + 10, count: 3 });
@@ -270,14 +276,13 @@ test('signal raise: a new key is first_at = last_at and count 1; an open key mov
   const w = world();
   const t = NOW - 2 * MIN;
   assert.deepEqual(sig(w, { at: t, owner: 'O' }), { action: 'raised', count: 1 });
-  assert.deepEqual(row(w, 'signal', "key = 'ALARM:A'"), { key: 'ALARM:A', kind: 'alarm', owner: 'O', text: 'something is stuck', first_at: t, last_at: t, count: 1, woke_at: null, closed_at: null, closed_by: null });
+  assert.deepEqual(row(w, 'signal', "key = 'ALARM:A'"), { key: 'ALARM:A', kind: 'alarm', owner: 'O', text: 'something is stuck', first_at: t, last_at: t, count: 1, woke_at: null, woke_ok_at: null, urgent: 0, quiet: 0, closed_at: null, closed_by: null });
   assert.deepEqual(sig(w, { at: t + MIN, text: 'still stuck' }), { action: 'updated', count: 2 });
   const r = row(w, 'signal', "key = 'ALARM:A'");
   assert.deepEqual([r.first_at, r.last_at, r.count, r.text, r.owner], [t, t + MIN, 2, 'still stuck', 'O'], 'a raise without an owner keeps the owner');
   assert.equal(sig(w, { at: t + 2 * MIN, owner: 'P' }).action, 'updated');
   assert.equal(row(w, 'signal', "key = 'ALARM:A'").owner, 'P');
 });
-
 test('signal raise: the same key and the same -At is a retry and does not count twice; an older time changes nothing, last_at never goes back', () => {
   const w = world();
   sig(w, { at: NOW });
@@ -298,7 +303,7 @@ test('signal raise: a key is one kind; a time far ahead is refused', () => {
   assert.equal(row(w, 'signal', "key = 'ALARM:A'").count, 1);
 });
 
-test('signal close and reopen: close is kept when repeated, an unknown key is refused, a raise reopens and keeps counting', () => {
+test('signal close and reopen: close is kept when repeated, an unknown key is refused, ANY raise reopens a closed one and keeps counting', () => {
   const w = world();
   sig(w, { at: NOW - 10 * MIN });
   sig(w, { at: NOW - 5 * MIN });
@@ -309,9 +314,6 @@ test('signal close and reopen: close is kept when repeated, an unknown key is re
   w.now = NOW + MIN;
   assert.equal(closeSignal(w.db, { key: 'ALARM:A', by: 'T' }, clock(w)).action, 'kept');
   assert.deepEqual([row(w, 'signal', "key = 'ALARM:A'").closed_at, row(w, 'signal', "key = 'ALARM:A'").closed_by], [NOW, 'S'], 'the first close stands');
-  // A stale raise (not after the last time) does not reopen it.
-  assert.equal(sig(w, { at: NOW - 5 * MIN }).action, 'kept');
-  assert.notEqual(row(w, 'signal', "key = 'ALARM:A'").closed_at, null);
   // A later raise is the same problem come back.
   assert.deepEqual(sig(w, { at: NOW + 2 * MIN }), { action: 'reopened', count: 3 });
   const r = row(w, 'signal', "key = 'ALARM:A'");
@@ -319,6 +321,24 @@ test('signal close and reopen: close is kept when repeated, an unknown key is re
   assert.equal(closeSignal(w.db, { key: 'ALARM:A', by: 'S' }, clock(w)).action, 'closed');
 });
 
+test('signal reopen by an OLD -At: it reopens, last_at does not move back, both wake times are cleared; an open one with an old -At stays kept', () => {
+  const w = world();
+  sig(w, { at: NOW - 10 * MIN });
+  listSignals(w.db, { open: true, markWoke: true }, clock(w));
+  wokeSignal(w.db, { key: 'ALARM:A' }, clock(w));
+  const before = row(w, 'signal', "key = 'ALARM:A'");
+  assert.deepEqual([before.woke_at, before.woke_ok_at], [NOW, NOW]);
+  assert.deepEqual(sig(w, { at: NOW - 20 * MIN }), { action: 'kept', count: 1 }, 'open + old time: kept');
+  assert.deepEqual(row(w, 'signal', "key = 'ALARM:A'"), before);
+  closeSignal(w.db, { key: 'ALARM:A', by: 'S' }, clock(w));
+  w.now = NOW + MIN;
+  assert.deepEqual(sig(w, { at: NOW - 20 * MIN, text: 'it is back' }), { action: 'reopened', count: 2 });
+  const r = row(w, 'signal', "key = 'ALARM:A'");
+  assert.deepEqual([r.last_at, r.first_at, r.count, r.text, r.closed_at, r.closed_by, r.woke_at, r.woke_ok_at], [NOW - 10 * MIN, NOW - 10 * MIN, 2, 'it is back', null, null, null, null]);
+  assert.deepEqual(listSignals(w.db, { open: true, unwoken: true }, clock(w)).map((x) => x.key), ['ALARM:A'], 'and it needs a wake again');
+  // The same old raise again is now a retry on an open signal.
+  assert.equal(sig(w, { at: NOW - 20 * MIN }).action, 'kept');
+});
 test('signal close: closed_at is never before the last time even when the clock is behind', () => {
   const w = world();
   sig(w, { at: NOW + 3 * MIN });
@@ -326,7 +346,7 @@ test('signal close: closed_at is never before the last time even when the clock 
   assert.equal(row(w, 'signal', "key = 'ALARM:A'").closed_at, NOW + 3 * MIN);
 });
 
-test('signal list: newest first; -Open, -Owner; -Unwoken; -MarkWoke marks exactly the rows it lists and needs -Open', () => {
+test('signal list: newest first; -Open, -Owner; -Unwoken needs a CONFIRMED wake; -MarkWoke stamps only what needs a wake and needs -Open', () => {
   const w = world();
   sig(w, { key: 'a', at: NOW - 3 * MIN, owner: 'O' });
   sig(w, { key: 'b', at: NOW - 2 * MIN });
@@ -345,18 +365,78 @@ test('signal list: newest first; -Open, -Owner; -Unwoken; -MarkWoke marks exactl
   assert.equal(row(w, 'signal', "key = 'a'").woke_at, NOW);
   assert.equal(row(w, 'signal', "key = 'b'").woke_at, null);
   assert.equal(row(w, 'signal', "key = 'c'").woke_at, null);
+  // A FAILED wake (attempted, never confirmed) is still unwoken, and is returned and stamped again.
+  assert.deepEqual(keys({ open: true, unwoken: true }), ['b', 'a']);
+  w.now = NOW + MIN;
+  assert.deepEqual(listSignals(w.db, { open: true, markWoke: true }, clock(w)).map((r) => [r.key, r.woke_at]), [['b', NOW + MIN], ['a', NOW + MIN]]);
+  // Confirmed: no longer unwoken, and a MarkWoke leaves it alone.
+  assert.equal(wokeSignal(w.db, { key: 'a' }, clock(w)).action, 'woke');
   assert.deepEqual(keys({ open: true, unwoken: true }), ['b']);
-  // It happens again after the wake: it needs a wake again, which a reopened signal does too.
+  w.now = NOW + 2 * MIN;
+  assert.deepEqual(listSignals(w.db, { open: true, markWoke: true }, clock(w)).map((r) => r.key), ['b']);
+  assert.equal(row(w, 'signal', "key = 'a'").woke_at, NOW + MIN, 'a was not stamped again');
+  // It happens again after the confirmed wake: it needs a wake again, which a reopened signal does too.
   w.now = NOW + 10 * MIN;
   sig(w, { key: 'a', at: NOW + 5 * MIN });
   assert.deepEqual(keys({ open: true, unwoken: true }), ['a', 'b']);
   sig(w, { key: 'c', at: NOW + 6 * MIN });
   assert.deepEqual(keys({ open: true, unwoken: true }), ['c', 'a', 'b']);
-  const all = listSignals(w.db, { open: true, unwoken: true, markWoke: true, at: NOW + 7 * MIN }, clock(w));
+  const all = listSignals(w.db, { open: true, markWoke: true, at: NOW + 7 * MIN }, clock(w));
   assert.deepEqual(all.map((r) => r.woke_at), [NOW + 7 * MIN, NOW + 7 * MIN, NOW + 7 * MIN]);
-  assert.deepEqual(keys({ open: true, unwoken: true }), []);
 });
 
+test('signal list: a quiet signal is never unwoken and never stamped; -Urgent and -Quiet are set by an effective raise and left alone by a kept one', () => {
+  const w = world();
+  sig(w, { key: 'q', at: NOW - MIN, quiet: true });
+  sig(w, { key: 'u', at: NOW - 2 * MIN, urgent: true });
+  const keys = (q) => listSignals(w.db, q, clock(w)).map((r) => r.key);
+  assert.deepEqual(keys({ open: true, unwoken: true }), ['u']);
+  assert.deepEqual(keys({ open: true }), ['q', 'u']);
+  assert.deepEqual(keys({ open: true, markWoke: true }), ['u']);
+  assert.equal(row(w, 'signal', "key = 'q'").woke_at, null);
+  assert.deepEqual([row(w, 'signal', "key = 'q'").quiet, row(w, 'signal', "key = 'q'").urgent, row(w, 'signal', "key = 'u'").urgent], [1, 0, 1]);
+  // A kept raise (old time) with other flags changes nothing.
+  assert.equal(sig(w, { key: 'u', at: NOW - 9 * MIN, quiet: true }).action, 'kept');
+  assert.deepEqual([row(w, 'signal', "key = 'u'").urgent, row(w, 'signal', "key = 'u'").quiet], [1, 0]);
+  // An effective raise sets both to what it was given, absent = 0.
+  assert.equal(sig(w, { key: 'u', at: NOW, quiet: true }).action, 'updated');
+  assert.deepEqual([row(w, 'signal', "key = 'u'").urgent, row(w, 'signal', "key = 'u'").quiet], [0, 1]);
+  assert.deepEqual(keys({ open: true, unwoken: true }), []);
+  // A reopen sets them too.
+  closeSignal(w.db, { key: 'q', by: 'S' }, clock(w));
+  sig(w, { key: 'q', at: NOW + MIN });
+  assert.deepEqual([row(w, 'signal', "key = 'q'").urgent, row(w, 'signal', "key = 'q'").quiet], [0, 0]);
+});
+
+test('signal woke: sets woke_ok_at, never moves it back, a repeat is kept, an unknown key is refused, a far-ahead time is refused', () => {
+  const w = world();
+  sig(w, { at: NOW - MIN });
+  assert.equal(wokeSignal(w.db, { key: 'ALARM:A', at: NOW - 30000 }, clock(w)).action, 'woke');
+  assert.equal(row(w, 'signal', "key = 'ALARM:A'").woke_ok_at, NOW - 30000);
+  assert.equal(wokeSignal(w.db, { key: 'ALARM:A', at: NOW - 30000 }, clock(w)).action, 'kept');
+  assert.equal(wokeSignal(w.db, { key: 'ALARM:A', at: NOW - 40000 }, clock(w)).action, 'kept');
+  assert.equal(row(w, 'signal', "key = 'ALARM:A'").woke_ok_at, NOW - 30000);
+  assert.equal(wokeSignal(w.db, { key: 'ALARM:A' }, clock(w)).action, 'woke');
+  assert.equal(row(w, 'signal', "key = 'ALARM:A'").woke_ok_at, NOW);
+  refuses(() => wokeSignal(w.db, { key: 'nope' }, clock(w)), /no signal is called nope/);
+  refuses(() => wokeSignal(w.db, { key: 'ALARM:A', at: NOW + 3 * DAY }, clock(w)), /more than a day in the future/);
+});
+
+test('signal owner: a person with spaces and a path pass; a padded, multi-line, non-ASCII or over-long owner is refused in words; a job owner stays a word', () => {
+  const w = world();
+  for (const [i, o] of ['parent e9932755', 'founder via M only', 'C:\\Windows\\system32\\cmd.exe', 'o'.repeat(120)].entries()) {
+    assert.equal(sig(w, { key: 'k' + i, owner: o }).action, 'raised');
+    assert.equal(row(w, 'signal', "key = 'k" + i + "'").owner, o);
+  }
+  assert.deepEqual(listSignals(w.db, { owner: 'parent e9932755' }, clock(w)).map((r) => r.key), ['k0']);
+  refuses(() => sig(w, { key: 'x', owner: ' padded' }), /may not start or end with a space/);
+  refuses(() => sig(w, { key: 'x', owner: 'padded ' }), /may not start or end with a space/);
+  refuses(() => sig(w, { key: 'x', owner: 'two\nlines' }), /one line of printable ASCII/);
+  refuses(() => sig(w, { key: 'x', owner: 'caf\u00e9' }), /one line of printable ASCII/);
+  refuses(() => sig(w, { key: 'x', owner: 'o'.repeat(121) }), /121 characters; the most is 120/);
+  refuses(() => sig(w, { key: 'x', owner: '' }), /Owner is required/);
+  refuses(() => job(w, { owner: 'two words' }), /Owner must be printable ASCII with no spaces/);
+});
 test('signal prune: needs Days (1 or more), deletes only closed signals closed longer ago than that, never open ones, says how many', () => {
   const w = world();
   for (const bad of [undefined, null, '', '0', '-3', '1.5', 'x', '1 ', '100000']) refuses(() => pruneSignals(w.db, { days: bad }, clock(w)), /Days is required/);
@@ -401,8 +481,13 @@ test('cli: a full round through the verbs, one ASCII line each, exit 0 for repea
   assert.deepEqual(run('signal', 'raise', '--key', 'K:1', '--kind', 'alarm', '--text', 'stuck', '--at', '2026-11-06T12:00:00Z').out, ['raised K:1 (count 1)']);
   assert.deepEqual(run('signal', 'raise', '--key', 'K:1', '--kind', 'alarm', '--text', 'stuck', '--at', '2026-11-06T12:00:00Z').out, ['kept K:1']);
   assert.deepEqual(run('signal', 'raise', '--key', 'K:1', '--kind', 'alarm', '--text', 'stuck', '--at', '2026-11-06T12:01:00Z').out, ['updated K:1 (count 2)']);
-  assert.match(run('signal', 'list', '--open', '--mark-woke').out[0], /^K:1 alarm - open count=2 first=.* woke=2026-11-06T15:00:00.000Z \| stuck$/);
+  assert.match(run('signal', 'list', '--open', '--mark-woke').out[0], /^K:1 alarm - open count=2 first=.* woke=2026-11-06T15:00:00.000Z ok=- \| stuck$/);
+  // The attempt is not a confirmed wake: it is still unwoken until signal woke says it worked.
+  assert.equal(run('signal', 'list', '--open', '--unwoken').out.length, 1);
+  assert.deepEqual(run('signal', 'woke', '--key', 'K:1').out, ['woke K:1']);
+  assert.deepEqual(run('signal', 'woke', '--key', 'K:1').out, ['kept K:1']);
   assert.deepEqual(run('signal', 'list', '--open', '--unwoken').out, ['no signals']);
+  assert.match(run('signal', 'woke', '--key', 'nope').err[0], /^refused: no signal is called nope$/);
   assert.deepEqual(run('signal', 'close', '--key', 'K:1', '--by', 'S').out, ['closed K:1']);
   assert.deepEqual(run('signal', 'close', '--key', 'K:1', '--by', 'S').out, ['kept K:1']);
   assert.deepEqual(run('signal', 'raise', '--key', 'K:1', '--kind', 'alarm', '--text', 'back', '--at', '2026-11-06T14:30:00Z').out, ['reopened K:1 (count 3)']);
@@ -605,4 +690,19 @@ test('cli: job upsert --waiting-on / --not-waiting and job list --not-waiting', 
   assert.deepEqual([both.code, both.err.length], [1, 1]);
   assert.deepEqual(run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--not-waiting').out, ['updated J-1 (waiting_on)']);
   assert.match(run('job', 'list', '--not-waiting').out[0], /^J-1 R open /);
+});
+
+test('cli: signal raise --urgent --quiet, an owner with spaces and with a path, and the plain line', () => {
+  const w = world();
+  w.db.close();
+  const run = (...a) => cli(w, a);
+  assert.deepEqual(run('signal', 'raise', '--key', 'k1', '--kind', 'alarm', '--text', 'x', '--owner', 'founder via M only', '--urgent').out, ['raised k1 (count 1)']);
+  assert.deepEqual(run('signal', 'raise', '--key', 'k2', '--kind', 'alarm', '--text', 'y', '--owner', 'C:\\Windows\\system32\\cmd.exe', '--quiet').out, ['raised k2 (count 1)']);
+  const list = run('signal', 'list', '--open', '--owner', 'founder via M only');
+  assert.match(list.out[0], /^k1 alarm founder_via_M_only open count=1 urgent first=/);
+  const json = JSON.parse(run('signal', 'list', '--json').out[0]).signals;
+  assert.deepEqual(json.map((r) => [r.key, r.owner, r.urgent, r.quiet]), [['k1', 'founder via M only', 1, 0], ['k2', 'C:\\Windows\\system32\\cmd.exe', 0, 1]]);
+  assert.deepEqual(run('signal', 'list', '--open', '--unwoken').out.map((l) => l.split(' ')[0]), ['k1']);
+  assert.match(run('signal', 'raise', '--key', 'k3', '--kind', 'alarm', '--text', 'z', '--owner', ' padded').err[0], /^refused: Owner may not start or end with a space$/);
+  assert.match(run('signal', 'raise', '--key', 'k3', '--kind', 'alarm', '--text', 'z', '--urgent', '--urgent').err[0], /--urgent given twice/);
 });

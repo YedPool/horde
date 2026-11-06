@@ -2,9 +2,10 @@
 //   node jobs-cli.mjs job upsert --id <id> --owner <o> (--job <text> | --file <path>) [--session <uuid>] [--started <ms or ISO>] [--due <ms or ISO>] [--waiting-on <text> | --not-waiting] --by <who>
 //   node jobs-cli.mjs job done   --id <id> (--proof <text> | --file <path>) --by <who> [--at <ms or ISO>]
 //   node jobs-cli.mjs job list   [--open] [--owner <o>] [--overdue] [--not-waiting] [--json]
-//   node jobs-cli.mjs signal raise --key <k> --kind <kind> [--owner <o>] (--text <text> | --file <path>) [--at <ms or ISO>]
+//   node jobs-cli.mjs signal raise --key <k> --kind <kind> [--owner <o>] (--text <text> | --file <path>) [--at <ms or ISO>] [--urgent] [--quiet]
+//   node jobs-cli.mjs signal woke  --key <k> [--at <ms or ISO>]
 //   node jobs-cli.mjs signal close --key <k> --by <who>
-//   node jobs-cli.mjs signal list  [--open] [--owner <o>] [--unwoken] [--mark-woke [--at <ms or ISO>]] [--json]
+//   node jobs-cli.mjs signal list  [--open] [--owner <o>] [--unwoken] [--mark-woke [--at <ms or ISO>]] [--json]   (--mark-woke implies --unwoken)
 //   node jobs-cli.mjs signal prune --days <n>
 // The overseer's write path: one short transaction per call, ASCII output, one line per outcome (the rules are in jobs.mjs).
 // NEVER MAKES OR MIGRATES THE DATABASE, as orc-cli.mjs: a missing fleet.db is exit 4, and a file older or newer than this
@@ -19,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { refuse } from './work.mjs';
-import { LIMITS, upsertJob, doneJob, listJobs, raiseSignal, closeSignal, listSignals, pruneSignals } from './jobs.mjs';
+import { LIMITS, upsertJob, doneJob, listJobs, raiseSignal, wokeSignal, closeSignal, listSignals, pruneSignals } from './jobs.mjs';
 
 const BUSY_MS_DEFAULT = 3000;
 
@@ -28,7 +29,8 @@ const FLAGS = {
   'job upsert': { value: ['--id', '--owner', '--job', '--file', '--session', '--started', '--due', '--waiting-on', '--by'], bare: ['--not-waiting'] },
   'job done': { value: ['--id', '--proof', '--file', '--by', '--at'], bare: [] },
   'job list': { value: ['--owner'], bare: ['--open', '--overdue', '--not-waiting', '--json'] },
-  'signal raise': { value: ['--key', '--kind', '--owner', '--text', '--file', '--at'], bare: [] },
+  'signal raise': { value: ['--key', '--kind', '--owner', '--text', '--file', '--at'], bare: ['--urgent', '--quiet'] },
+  'signal woke': { value: ['--key', '--at'], bare: [] },
   'signal close': { value: ['--key', '--by'], bare: [] },
   'signal list': { value: ['--owner', '--at'], bare: ['--open', '--unwoken', '--mark-woke', '--json'] },
   'signal prune': { value: ['--days'], bare: [] },
@@ -36,7 +38,7 @@ const FLAGS = {
 // Required flags per verb, and the pair of which exactly one is wanted (the text may come from the command line or a file).
 const REQUIRED = {
   'job upsert': ['--id', '--owner', '--by'], 'job done': ['--id', '--by'], 'job list': [],
-  'signal raise': ['--key', '--kind'], 'signal close': ['--key', '--by'], 'signal list': [], 'signal prune': ['--days'],
+  'signal raise': ['--key', '--kind'], 'signal woke': ['--key'], 'signal close': ['--key', '--by'], 'signal list': [], 'signal prune': ['--days'],
 };
 const TEXT_FLAG = { 'job upsert': '--job', 'job done': '--proof', 'signal raise': '--text' };
 
@@ -145,8 +147,13 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         return 0;
       }
       case 'signal raise': {
-        const r = raiseSignal(db, { key: flags['--key'], kind: flags['--kind'], owner: flags['--owner'], text, at: flags['--at'] }, clock);
+        const r = raiseSignal(db, { key: flags['--key'], kind: flags['--kind'], owner: flags['--owner'], text, at: flags['--at'], urgent: flags['--urgent'] === true, quiet: flags['--quiet'] === true }, clock);
         out(r.action + ' ' + ascii(flags['--key']) + (r.action === 'kept' ? '' : ' (count ' + r.count + ')'));
+        return 0;
+      }
+      case 'signal woke': {
+        const r = wokeSignal(db, { key: flags['--key'], at: flags['--at'] }, clock);
+        out(r.action + ' ' + ascii(flags['--key']));
         return 0;
       }
       case 'signal close': {
@@ -159,7 +166,9 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         if (flags['--json']) { out(ascii(JSON.stringify({ signals: rows }))); return 0; }
         if (rows.length === 0) { out('no signals'); return 0; }
         for (const r of rows) {
-          out(ascii([r.key, r.kind, r.owner ?? '-', r.state, 'count=' + r.count, 'first=' + r.first, 'last=' + r.last, 'woke=' + show(r.woke), '|', oneLine(r.text)].join(' ')));
+          // The owner may hold spaces, so on this plain line they read as underscores (-Json carries it exactly).
+          out(ascii([r.key, r.kind, r.owner === null ? '-' : r.owner.replace(/ /g, '_'), r.state, 'count=' + r.count, ...(r.urgent ? ['urgent'] : []), ...(r.quiet ? ['quiet'] : []),
+            'first=' + r.first, 'last=' + r.last, 'woke=' + show(r.woke), 'ok=' + show(r.woke_ok), '|', oneLine(r.text)].join(' ')));
         }
         return 0;
       }

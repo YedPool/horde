@@ -86,6 +86,21 @@
         @{ Name = "waiting-not-shown-in-the-line"
            Find = '...(r.waiting_on === null ? [] : [''waiting='' + oneLine(r.waiting_on).replace(/ /g, ''_'')]), '
            Replace = '' }
+        @{ Name = "urgent-flag-dropped"
+           Find = 'urgent: flags[''--urgent''] === true,'
+           Replace = 'urgent: false,' }
+        @{ Name = "quiet-flag-dropped"
+           Find = 'quiet: flags[''--quiet''] === true }'
+           Replace = 'quiet: false }' }
+        @{ Name = "woke-verb-reports-nothing"
+           Find = 'const r = wokeSignal(db, { key: flags[''--key''], at: flags[''--at''] }, clock);'
+           Replace = 'const r = { action: ''kept'' };' }
+        @{ Name = "owner-spaces-not-shown-as-underscores"
+           Find = 'r.owner.replace(/ /g, ''_'')'
+           Replace = 'r.owner' }
+        @{ Name = "confirmed-wake-not-shown"
+           Find = '''ok='' + show(r.woke_ok), '
+           Replace = '' }
         @{ Name = "updated-fields-not-named"
            Find = '(r.action === ''updated'' ? '' ('' + r.changed.join('', '') + '')'' : '''')'
            Replace = '''''' }

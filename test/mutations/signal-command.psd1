@@ -36,6 +36,15 @@
         @{ Name = "days-not-passed"
            Find = '; "--days" = "Days"'
            Replace = '' }
+        @{ Name = "urgent-not-passed"
+           Find = 'if ($Urgent) { $bare += "--urgent" }'
+           Replace = '' }
+        @{ Name = "quiet-not-passed"
+           Find = 'if ($Quiet) { $bare += "--quiet" }'
+           Replace = '' }
+        @{ Name = "woke-takes-a-days-flag"
+           Find = 'woke  = @("Key", "At")'
+           Replace = 'woke  = @("Key", "At", "Days")' }
         @{ Name = "open-not-passed"
            Find = 'if ($Open) { $bare += "--open" }'
            Replace = '' }
