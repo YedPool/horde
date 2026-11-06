@@ -104,6 +104,12 @@ try {
         $lines = @(Get-LogLines)
         Check ($lines.Count -eq $before + 1 -and $lines[$lines.Count - 1] -match ' skipped 0 ms \| a sync is still running$') "   and the log says so"
     } finally { $held.Dispose() }
+    # A holder that shares: only the sync's OWN FileShare.None refuses here. Above, the holder's None would refuse any opener, so a sync that shared its lock (two syncs at once) would still pass.
+    $held = [System.IO.File]::Open($lockFile, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    try {
+        $r = Invoke-Db @("sync", "-Force")
+        Check ($r.code -eq 0 -and $r.out -like "*skipped: a sync is still running*") "the sync's own lock shares with nobody: an opener that allows sharing still makes it skip"
+    } finally { $held.Dispose() }
     $r = Invoke-Db @("sync", "-Force")
     Check ($r.code -eq 0 -and $r.out -like "*sync: files ran*") "the lock is let go with the handle (no stale lock): the next sync runs"
 
