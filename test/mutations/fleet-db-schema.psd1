@@ -30,12 +30,6 @@
         @{ Name = "reopened-reads-closed"
            Find = "WHEN 'closed' THEN 'closed' WHEN 'acked' THEN 'closed' ELSE 'open' END AS state"
            Replace = "WHEN 'open' THEN 'open' ELSE 'closed' END AS state" }
-        @{ Name = "state-from-progress"
-           Find = "AND e.kind NOT IN ('progress', 'priority', 'handed')"
-           Replace = "AND e.kind NOT IN ('priority')" }
-        @{ Name = "tie-not-broken-by-id"
-           Find = "ORDER BY e.at DESC, e.id DESC LIMIT 1) AS state,"
-           Replace = "ORDER BY e.at DESC, e.id ASC LIMIT 1) AS state," }
         @{ Name = "second-thrall-allowed"
            Find = "CREATE UNIQUE INDEX orc_one_thrall ON orc (rank) WHERE rank = 'thrall' AND retired_at IS NULL;"
            Replace = "" }

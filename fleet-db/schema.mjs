@@ -995,6 +995,55 @@ export const MIGRATIONS = [
   WHEN NEW.last_at < OLD.last_at OR NEW.count < OLD.count
   BEGIN SELECT RAISE(ABORT, 'signal: last_at and count never go back'); END;
   `,
+
+  // 9: task_now by the ledger's own rule (T-0299; design: planning/fleet-db-design.md, "Task state"). The view of migration 1 took
+  // the newest event's word as the state, and disagreed with task.py on 31 of 415 real tasks: T-0299 itself read opened. Now: the
+  // opened line counts first whatever its time, so a late one takes neither priority nor owner; resumed and reopened read started;
+  // handed reads opened, since the new owner has not begun; progress on an opened task means it began. task_tree: a closed parent
+  // took its live subtasks off the list with it, 21 of 128 live tasks on the real data, three at priority 1. A live task whose parent
+  // is closed now stands at the top of its own owner's list. Only views change, so no row moves.
+  `
+  DROP VIEW task_now;
+  CREATE VIEW task_now AS
+  SELECT t.id, t.key, t.title, t.source, t.parent_id, t.created_at,
+    CASE
+      WHEN m.kind IN ('resumed', 'reopened') THEN 'started'
+      WHEN m.kind IS NOT NULL AND m.kind <> 'handed' THEN m.kind
+      WHEN NOT EXISTS (SELECT 1 FROM task_event e WHERE e.task_id = t.id) THEN NULL
+      WHEN EXISTS (SELECT 1 FROM task_event p WHERE p.task_id = t.id AND p.kind = 'progress'
+        AND (m.id IS NULL OR p.at > m.at OR (p.at = m.at AND p.id > m.id))) THEN 'started'
+      ELSE 'opened'
+    END AS state,
+    (SELECT e.prio FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'priority')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS prio,
+    (SELECT e.to_orc_id FROM task_event e WHERE e.task_id = t.id AND e.kind IN ('opened', 'handed')
+       ORDER BY e.kind = 'opened', e.at DESC, e.id DESC LIMIT 1) AS owner_orc_id,
+    (SELECT max(e.at) FROM task_event e WHERE e.task_id = t.id) AS last_event_at
+  FROM task t
+  LEFT JOIN task_event m ON m.id = (SELECT e.id FROM task_event e WHERE e.task_id = t.id
+    AND e.kind IN ('started', 'waiting', 'resumed', 'handed', 'done', 'verified', 'reopened', 'dropped', 'superseded')
+    ORDER BY e.at DESC, e.id DESC LIMIT 1);
+  DROP VIEW task_tree;
+  CREATE VIEW task_tree AS
+  WITH RECURSIVE live AS (
+    SELECT t.id, t.key, t.title, t.parent_id, t.position, t.due_at, t.created_at, n.state, n.prio, n.owner_orc_id
+    FROM task t JOIN task_now n ON n.id = t.id
+    WHERE n.state NOT IN ('done', 'verified', 'dropped', 'superseded') OR n.state IS NULL),
+  sib AS (
+    SELECT x.id, row_number() OVER (PARTITION BY x.parent_id ORDER BY x.position IS NULL, x.position, x.created_at, x.id) AS n
+    FROM live x WHERE x.parent_id IS NOT NULL),
+  top AS (
+    SELECT x.id, row_number() OVER (PARTITION BY x.owner_orc_id ORDER BY x.prio IS NULL, x.prio, x.position IS NULL, x.position, x.created_at, x.id) AS n
+    FROM live x WHERE x.parent_id IS NULL OR x.parent_id NOT IN (SELECT id FROM live)),
+  tree (id, owner_orc_id, depth, path, sort) AS (
+    SELECT top.id, l.owner_orc_id, 0, CAST(top.n AS TEXT), printf('%06d', top.n)
+    FROM top JOIN live l ON l.id = top.id
+    UNION ALL
+    SELECT c.id, tree.owner_orc_id, tree.depth + 1, tree.path || '.' || s.n, tree.sort || '.' || printf('%06d', s.n)
+    FROM live c JOIN sib s ON s.id = c.id JOIN tree ON tree.id = c.parent_id)
+  SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
+  FROM tree JOIN live l ON l.id = tree.id;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

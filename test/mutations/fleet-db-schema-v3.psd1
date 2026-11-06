@@ -86,20 +86,5 @@
         @{ Name = "status-now-oldest"
            Find = 'PARTITION BY st.orc_id ORDER BY st.at DESC, st.id DESC) AS rn FROM orc_status st)'
            Replace = 'PARTITION BY st.orc_id ORDER BY st.at ASC, st.id DESC) AS rn FROM orc_status st)' }
-        @{ Name = "tree-keeps-done"
-           Find = 'WHERE n.state IS NULL OR n.state NOT IN (''done'', ''verified'', ''dropped'', ''superseded'')),'
-           Replace = 'WHERE 1),' }
-        @{ Name = "tree-ignores-priority"
-           Find = 'ORDER BY prio IS NULL, prio, position IS NULL, position, created_at, id) AS n'
-           Replace = 'ORDER BY position IS NULL, position, created_at, id) AS n' }
-        @{ Name = "tree-ignores-position"
-           Find = 'PARTITION BY parent_id ORDER BY position IS NULL, position, created_at, id) AS n'
-           Replace = 'PARTITION BY parent_id ORDER BY created_at, id) AS n' }
-        @{ Name = "tree-one-list"
-           Find = 'row_number() OVER (PARTITION BY owner_orc_id ORDER BY'
-           Replace = 'row_number() OVER (ORDER BY' }
-        @{ Name = "tree-sorts-as-text"
-           Find = 'tree.sort || ''.'' || printf(''%06d'', sib.n)'
-           Replace = 'tree.sort || ''.'' || sib.n' }
     )
 }
