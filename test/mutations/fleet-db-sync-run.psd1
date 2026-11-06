@@ -45,7 +45,7 @@
            Find = '[int][Math]::Floor($TimeLimitSeconds * 0.4)'
            Replace = '$TimeLimitSeconds' }
         @{ Name = "snapshot-file-left-behind"
-           Find = 'if ($snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }'
+           Find = 'if ($null -ne $snapshot -and $snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }'
            Replace = '$null = $snapshot' }
         @{ Name = "log-never-cut"
            Find = 'if ($MayCut -and [System.IO.File]::Exists($Path)'

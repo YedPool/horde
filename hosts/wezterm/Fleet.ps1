@@ -351,7 +351,7 @@ function Get-HordeWeztermFleetPanes {
     # the budget ran out before is unknown, not skipped. Every call names its terminal (Act.ps1), so this never
     # reaches the terminal the environment points at. The whole answer is unknown when the socket folder cannot be
     # listed. -SockDir, -Runner and -ProcessStart stand in for the real ones in a test.
-    param([string]$SockDir = (Get-HordeWeztermSockDir), [int]$CallMs = 8000, [int]$BudgetMs = 30000, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
+    param([string]$SockDir = (Get-HordeWeztermSockDir), [int]$CallMs = 8000, [int]$BudgetMs = 12000, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
     if (-not (Test-Path -LiteralPath $SockDir -PathType Container)) { return (New-HordeUnknown -Reason ("there is no terminal socket folder at " + $SockDir + ", so the live panes cannot be listed")) }
     $socks = @()
     try { $socks = @(Get-ChildItem -LiteralPath $SockDir -ErrorAction Stop | Where-Object { -not $_.PSIsContainer -and $_.Name -cmatch $script:HordeWeztermSocketLeaf } | Sort-Object Name) }

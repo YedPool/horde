@@ -114,6 +114,8 @@ function Invoke-HordeDbSyncSnapshot {
             try { if ($null -ne $p.GetType().GetMethod("Kill", [Type[]]@([bool]))) { $p.Kill($true) } else { $p.Kill() } } catch { }
             [void]$p.WaitForExit(5000)
             if ([System.IO.File]::Exists($file)) { [System.IO.File]::Delete($file) }
+            # A kill between the child's temp write and its move leaves the temp file, and this runs every minute.
+            foreach ($left in [System.IO.Directory]::GetFiles($HordeHome, ([System.IO.Path]::GetFileName($file) + ".tmp-*"))) { try { [System.IO.File]::Delete($left) } catch { } }
             return [pscustomobject]@{ file = ""; error = ("the snapshot script was killed after " + $LimitSeconds + " s") }
         }
         $p.WaitForExit()
@@ -146,6 +148,7 @@ function Invoke-HordeDbSync {
     # The same for the snapshot: a suite points it at a fixture that writes a fake one (no real terminal is ever asked in a test).
     if ($SnapshotScript -eq "") { $SnapshotScript = Join-Path $PSScriptRoot "SessionSnapshotRun.ps1" }
     $lock = $null
+    $snapshot = $null
     try {
         # The folder first: a missing one would answer the open below with an IOException too (DirectoryNotFound), and be taken for a held lock.
         [void][System.IO.Directory]::CreateDirectory($HordeHome)
@@ -193,9 +196,10 @@ function Invoke-HordeDbSync {
             return [pscustomobject]@{ code = 1; outcome = "failed"; lines = @(ConvertTo-HordeDbSyncText $why) }
         } finally {
             $p.Dispose()
-            if ($snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }
         }
     } finally {
+        # Here, not with the child: node failing to start must not leave one snapshot file a minute in the home.
+        if ($null -ne $snapshot -and $snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }
         if ($null -ne $lock) { $lock.Dispose() }
     }
 }

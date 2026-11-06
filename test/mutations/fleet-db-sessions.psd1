@@ -68,9 +68,9 @@
         @{ Name = "oldest-record-owns-the-pane"
            Find = '(lastSeen.get(b) - lastSeen.get(a))'
            Replace = '(lastSeen.get(a) - lastSeen.get(b))' }
-        @{ Name = "running-process-does-not-outrank-the-date"
-           Find = 'if (live.length > 0) pool = live;'
-           Replace = '' }
+        @{ Name = "running-process-takes-the-pane"
+           Find = 'const pool = [...ids].sort('
+           Replace = 'const pool = [...(snap.processes.known && ids.some((id) => snap.processes.running.has(id)) ? ids.filter((id) => snap.processes.running.has(id)) : ids)].sort(' }
         @{ Name = "retired-record-claims-a-pane"
            Find = 'if (rec.retired === true) return null;'
            Replace = '' }

@@ -389,7 +389,40 @@ test('liveness: a running process keeps a session alive when its pane is gone; a
   assert.equal(headless.verdicts.get(noPane.sid), 'dead', 'no pane and no process');
 });
 
-test('liveness: two records claim one pane - the owner has the newest lastSeen, or the running process', () => {
+test('liveness: a /clear pair - the new id holds the pane and is alive though the process still names the old id', () => {
+  const w = fresh();
+  const oldId = rec(w, 1, { pane: '5', lastSeen: ago(3 * HOUR) });
+  const newId = rec(w, 2, { pane: '5', lastSeen: ago(MIN) });
+  const entries = [oldId, newId].map((r) => ({ id: r.sid, rec: r }));
+  const j = judgeLiveness(entries, parseSnapshot(snapshot([oldId, newId], { sockets: listed(5), running: [uuid(1)] })));
+  assert.equal(j.owners.get('term-100\u00005'), uuid(2), 'the newest lastSeen owns the pane, whichever id the process names');
+  assert.equal(j.verdicts.get(uuid(2)), 'alive', 'never a false death for the session really in the pane');
+  assert.equal(j.verdicts.get(uuid(1)), 'alive', 'its running process still proves the old id alive: the accepted wrong answer');
+});
+
+test('an alive session with no record read yet is not called idle, and its stamp stays old', () => {
+  const w = fresh();
+  const r = rec(w, 1, { pane: '5', lastSeen: ago(MIN), transcriptPath: path.join(w.dir, 'no-such-transcript.jsonl') });
+  const out = runSessionsStep(w.db, snapshot([r], { sockets: listed(5) }), { now: T0 });
+  assert.equal(out.counts.unknown, 1);
+  assert.equal(out.counts.idle, 0);
+  assert.equal(sess(w.db, 1).state, null);
+  assert.equal(sess(w.db, 1).state_checked_at, null);
+});
+
+test('last_seen follows the record, and an older record never moves it back', () => {
+  const w = fresh();
+  const r = rec(w, 1, { pane: '5', lastSeen: ago(HOUR) });
+  runSessionsStep(w.db, snapshot([r], { sockets: listed(5) }), { now: T0 });
+  const first = sess(w.db, 1).last_seen;
+  runSessionsStep(w.db, snapshot([{ ...r, lastSeen: ago(MIN) }], { sockets: listed(5) }), { now: T0 });
+  const moved = sess(w.db, 1).last_seen;
+  assert.ok(moved > first);
+  runSessionsStep(w.db, snapshot([{ ...r, lastSeen: ago(2 * HOUR) }], { sockets: listed(5) }), { now: T0 });
+  assert.equal(sess(w.db, 1).last_seen, moved);
+});
+
+test('liveness: two records claim one pane - the owner has the newest lastSeen', () => {
   const w = fresh();
   const stale = rec(w, 1, { pane: '5', lastSeen: ago(3 * HOUR) });
   const fresher = rec(w, 2, { pane: '5', lastSeen: ago(MIN) });
@@ -398,10 +431,6 @@ test('liveness: two records claim one pane - the owner has the newest lastSeen, 
   assert.equal(byTime.owners.get('term-100\u00005'), uuid(2));
   assert.equal(byTime.verdicts.get(uuid(1)), 'dead', 'the other one does not hold the pane');
   assert.equal(byTime.verdicts.get(uuid(2)), 'alive');
-  // The process outranks the date: the OLDER record is the one running.
-  const byPid = judgeLiveness(entries, parseSnapshot(snapshot([stale, fresher], { sockets: listed(5), running: [uuid(1)] })));
-  assert.equal(byPid.owners.get('term-100\u00005'), uuid(1));
-  assert.equal(byPid.verdicts.get(uuid(1)), 'alive');
   // In the database: one open session_pane for the pane, and it is the owner's.
   runSessionsStep(w.db, snapshot([stale, fresher], { sockets: listed(5) }), { now: T0 });
   assert.deepEqual(all(w.db, 'SELECT session_id FROM session_pane WHERE to_at IS NULL'), [{ session_id: uuid(2) }]);

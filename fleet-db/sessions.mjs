@@ -16,8 +16,8 @@
 // A SECOND TICK WITH NOTHING NEW WRITES NOTHING BUT state_checked_at.
 //
 // LIVENESS, AND WHAT IT IS NOT. The registry is NOT a liveness source: about 115 of 155 records are never retired, and one
-// stale record claimed a live pane. Two records can claim one pane; the owner is the one whose process is running, else the
-// one with the newest lastSeen (the record's own field, written by the hook - never a file's modified time). A session with
+// stale record claimed a live pane. Two records can claim one pane; the owner is the one with the newest lastSeen (the
+// record's own field, written by the hook - never a file's modified time; judgeLiveness says why not the process). A session with
 // no live pane and no running process is 'dead' (retired_at is NOT touched: that stays someone else's). THE RULE IS
 // ASYMMETRIC ON PURPOSE: a terminal that could not be listed, or a process list that could not be read, makes the session
 // UNKNOWN - its state and state_checked_at are left alone, so a reader sees an old stamp rather than a false death.
@@ -136,8 +136,11 @@ function instanceState(snap, instance) {
 }
 
 // entries: [{ id, rec }] -> { verdicts: Map id -> 'alive' | 'dead' | 'unknown', owners: Map 'instance\0no' -> id }.
-// THE OWNER of a pane: among the records claiming it, the ones whose process is running (when the process list is known),
-// else all of them; of those the newest lastSeen (the record's own field), ties by id so the answer never flips.
+// THE OWNER of a pane: the record claiming it with the newest lastSeen (the record's own field), ties by id so the answer never
+// flips. The process list does NOT pick the owner: after a /clear the new id runs inside a process whose control file still
+// names the old id, so letting the running id win took the pane from the healthy new session and called it dead. A running
+// process only ever proves its own record alive, so that old id reads alive too: the wrong answer this rule accepts, because a
+// false death raises an alarm on a healthy session and a false life only shows an old, quiet row.
 export function judgeLiveness(entries, snap) {
   const claims = new Map();
   const lastSeen = new Map();
@@ -151,12 +154,7 @@ export function judgeLiveness(entries, snap) {
   }
   const owners = new Map();
   for (const [key, ids] of claims) {
-    let pool = ids;
-    if (snap.processes.known) {
-      const live = ids.filter((id) => snap.processes.running.has(id));
-      if (live.length > 0) pool = live;
-    }
-    pool = [...pool].sort((a, b) => (lastSeen.get(b) - lastSeen.get(a)) || (a < b ? -1 : 1));
+    const pool = [...ids].sort((a, b) => (lastSeen.get(b) - lastSeen.get(a)) || (a < b ? -1 : 1));
     owners.set(key, pool[0]);
   }
   const verdicts = new Map();
@@ -378,14 +376,20 @@ export function runSessionsStep(db, raw, { now = Date.now(), stepBytes = STEP_RE
 
     // ---- state and activity: a row is written only when something in it changed
     const upd = db.prepare('UPDATE session SET last_activity_at = ?, last_assistant_at = ?, in_turn = ?, waits_person = ?, state = ?, transcript_offset = ? WHERE id = ?');
+    // The importer inserts a row and never updates it, so last_seen would freeze at the first tick. Rank and retired_at are not
+    // refreshed: a new seat can read rank 'unknown' while an old seat holder stays unretired, until seat binding owns that.
+    const seenUpd = db.prepare('UPDATE session SET last_seen = ? WHERE id = ? AND last_seen < ?');
     const checked = [];
     for (const e of uniq) {
       if (!have.has(e.id)) continue;
+      const seen = parseTime(e.rec.lastSeen);
+      if (seen !== null) seenUpd.run(seen, e.id, seen);
       const res = next.get(e.id);
       const v = verdicts.get(e.id);
       const old = stored.get(e.id) ?? null;
       let state = old ? old.state : null;
-      if (v === 'unknown') counts.unknown++;
+      // Alive with no record read yet (a new transcript, or a first read put off by the budget) says nothing of its turn: not idle.
+      if (v === 'unknown' || (v === 'alive' && res.act.inTurn === null)) counts.unknown++;
       else { state = stateOf(v, res.act); counts[state]++; checked.push(e.id); }
       const row = [res.act.lastActivityAt, res.act.lastAssistantAt, flagOf(res.act.inTurn), res.act.inTurn === null ? null : flagOf(res.act.waitsPerson), state, res.offset];
       // A row just inserted holds NULL everywhere, so a session with nothing to say yet is not written at all.
