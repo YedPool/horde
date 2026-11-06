@@ -172,10 +172,11 @@ foreach ($sh in $shells) {
     Check ($mw.code -eq 0 -and $mw.out -like '*"key":"ALARM:T-1"*' -and $mw.out -cmatch '"woke_at":\d{13}') "signal list -MarkWoke (which implies -Unwoken) records the wake attempt on the signals it returns"
     $uw = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
     Check ($uw.code -eq 0 -and $uw.out -like "*ALARM:T-1 *") "an attempted wake is not a confirmed one: the signal is still unwoken, so a failed wake is retried"
-    $wk = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1")
+    $wk = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1", "-At", $later)
     Check ($wk.code -eq 0 -and $wk.out -cmatch '(?m)^woke ALARM:T-1\r?$') "signal woke records that the wake worked"
-    $wk2 = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1")
-    Check ($wk2.code -eq 0 -and $wk2.out -cmatch '(?m)^kept ALARM:T-1\r?$') "and a repeat says kept"
+    # The same -At, not a bare repeat: with no -At the time is now, a later confirmation, which is said as woke.
+    $wk2 = Invoke-Verb @("signal", "woke", "-Key", "ALARM:T-1", "-At", $later)
+    Check ($wk2.code -eq 0 -and $wk2.out -cmatch '(?m)^kept ALARM:T-1\r?$') "and a repeat at the same time says kept"
     $uw2 = Invoke-Verb @("signal", "list", "-Open", "-Unwoken")
     Check ($uw2.code -eq 0 -and $uw2.out -like "*no signals*") "after a confirmed wake the signal is no longer unwoken"
     $wk3 = Invoke-Verb @("signal", "woke", "-Key", "no-such-key")

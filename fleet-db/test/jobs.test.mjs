@@ -683,7 +683,7 @@ test('cli: job upsert --waiting-on / --not-waiting and job list --not-waiting', 
   w.db.close();
   const run = (...a) => cli(w, a);
   assert.deepEqual(run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--waiting-on', 'the founder').out, ['created J-1']);
-  assert.match(run('job', 'list').out[0], /^J-1 R open started=S+ due=- done=- waiting=the_founder | x$/);
+  assert.match(run('job', 'list').out[0], /^J-1 R open started=\S+ due=- done=- waiting=the_founder \| x$/);
   assert.deepEqual(run('job', 'list', '--not-waiting').out, ['no jobs']);
   assert.equal(JSON.parse(run('job', 'list', '--json').out[0]).jobs[0].waiting_on, 'the founder');
   const both = run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--waiting-on', 'y', '--not-waiting');

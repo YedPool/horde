@@ -83,6 +83,9 @@
         @{ Name = "waiting-text-not-passed"
            Find = 'waitingOn: flags[''--waiting-on''],'
            Replace = 'waitingOn: undefined,' }
+        @{ Name = "file-keeps-its-byte-order-mark"
+           Find = "{ fatal: true }"
+           Replace = "{ fatal: true, ignoreBOM: true }" }
         @{ Name = "waiting-not-shown-in-the-line"
            Find = '...(r.waiting_on === null ? [] : [''waiting='' + oneLine(r.waiting_on).replace(/ /g, ''_'')]), '
            Replace = '' }

@@ -14,9 +14,6 @@
         @{ Name = "text-takes-non-ascii"
            Find = 'const bad = /[^\x20-\x7E\n\t]/.exec(t);'
            Replace = 'const bad = null;' }
-        @{ Name = "text-keeps-its-byte-order-mark"
-           Find = '(v.charCodeAt(0) === 0xFEFF ? v.slice(1) : v)'
-           Replace = 'v' }
         @{ Name = "text-keeps-crlf"
            Find = '.replace(/\r\n?/g, ''\n'')'
            Replace = '' }

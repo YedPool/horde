@@ -53,11 +53,12 @@ export function signalOwnerOf(v, what = 'Owner') {
   return v;
 }
 
-// Free text: printable ASCII, with line breaks and tabs allowed (it may come from a file). A leading byte-order mark and
-// the whitespace at the end are dropped, and CRLF becomes LF, so the same words saved by two editors are the same text.
+// Free text: printable ASCII, with line breaks and tabs allowed (it may come from a file). The whitespace at the end is
+// dropped and CRLF becomes LF, so the same words saved by two editors are the same text (a --file's byte-order mark never
+// gets here: the decoder in jobs-cli.mjs drops it).
 export function textOf(v, what, max = LIMITS.text) {
   if (typeof v !== 'string') throw refuse(what + ' is required');
-  const t = (v.charCodeAt(0) === 0xFEFF ? v.slice(1) : v).replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+  const t = v.replace(/\r\n?/g, '\n').replace(/\s+$/, '');
   if (t.length < 1) throw refuse(what + ' is empty');
   if (t.length > max) throw refuse(what + ' is ' + t.length + ' characters; the most is ' + max);
   const bad = /[^\x20-\x7E\n\t]/.exec(t);
@@ -222,8 +223,9 @@ export function raiseSignal(db, req, { now = Date.now } = {}) {
   });
 }
 
-// Record that a wake WORKED (the overseer confirmed someone was reached): woke_ok_at, never moved back. A repeat is kept; an
-// unknown key is refused. Until this is called a wake that was only attempted (signal list -MarkWoke) is still unwoken.
+// Record that a wake WORKED (the overseer confirmed someone was reached): woke_ok_at, never moved back. A repeat at the same
+// -At is kept (a retry); with no -At the time is now, so a later call records a later confirmation. An unknown key is refused.
+// Until this is called a wake that was only attempted (signal list -MarkWoke) is still unwoken.
 export function wokeSignal(db, req, { now = Date.now } = {}) {
   const key = wordOf(req.key, 'Key', LIMITS.key);
   const clock = now();
