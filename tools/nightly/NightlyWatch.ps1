@@ -147,7 +147,8 @@ try {
     # Nights back from the one judged, until one that ran: the streak comes from the evidence, never from memory.
     $verdicts = @()
     foreach ($d in @(Get-HordeNightlyWatchDates -Date $date -Count $Lookback)) {
-        $rt = $(if ($d -ceq $date) { Read-WatchText (Join-Path $ReportDir ($d + ".txt")) } else { "" })
+        # Every night's own report, so a thin night further back still counts in the streak.
+        $rt = Read-WatchText (Join-Path $ReportDir ($d + ".txt"))
         $v = Get-HordeNightlyWatchVerdict -Date $d -LogText $logText -ReportNames $reportNames -ReportText $rt -PendingCount $pending -FolderMissing $folderMissing -BootTime $boot
         $verdicts += $v
         if (-not $v.missed) { break }

@@ -288,6 +288,14 @@ try {
     Check ($r.code -eq 0) ("a ran night exits 0 (" + $r.code + ")")
     Check ((Lines $rig.rec).Count -eq 0 -and (Lines $rig.hrec).Count -eq 0) "and tells nobody"
     Check ((AlarmText $rig "2026-11-03") -eq "") "and leaves no alarm file"
+    # TWO THIN NIGHTS IN A ROW are a streak of 2: the watcher must read each night's own report, not only the judged one's.
+    $thinRig = New-Rig
+    $thinLine = "BELOW THE COVERAGE FLOOR of 90 percent: a/b ran 1 of 9 units (11 percent). INCOMPLETE: 8 units not run."
+    Add-Night $thinRig "2026-11-01" "2026-11-02"
+    Add-Night $thinRig "2026-11-02" "2026-11-03" -Headline $thinLine
+    Add-Night $thinRig "2026-11-03" "2026-11-04" -Headline $thinLine
+    $r = Invoke-Watch $thinRig "2026-11-04 07:15" -More @("-Plan")
+    Check ($r.out -like "*night 2026-11-03 is TOO FEW*streak 2,*") ("two thin nights after a whole one are a streak of 2 (" + $r.out + ")")
     $r = Invoke-Watch $rig "2026-11-04 07:15" -Plan:$false -More @("-Plan")
     Check ($r.code -eq 0 -and $r.out -like "*PLAN night 2026-11-03: RAN*") "-Plan prints the judgement"
 
