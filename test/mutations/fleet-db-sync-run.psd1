@@ -5,6 +5,9 @@
     Target = "fleet-db\Sync.ps1"
     Suite  = "test\test-db-sync.ps1"
     Mutations = @(
+        @{ Name = "trailing-backslash-escapes-the-quote"
+           Find = '($_ -replace ''(\\+)$'', ''$1$1'')'
+           Replace = '$_' }
         @{ Name = "lock-shared"
            Find = '[System.IO.FileShare]::None)'
            Replace = '[System.IO.FileShare]::ReadWrite)' }

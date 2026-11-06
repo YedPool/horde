@@ -43,10 +43,11 @@ function Write-HordeDbSyncLog {
                 $keep.Insert(0, $all[$i])
             }
             $temp = $Path + ".tmp-" + [guid]::NewGuid().ToString("N")
+            # A cut that fails (a reader holds the file) must not cost this run its line: the line is appended below regardless.
             try {
                 [System.IO.File]::WriteAllText($temp, ((@($keep) -join "`n") + "`n"), (New-Object System.Text.ASCIIEncoding))
                 Move-HordeFileAtomic -From $temp -To $Path
-            } finally { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } }
+            } catch { } finally { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } }
         }
         [System.IO.File]::AppendAllText($Path, ($Line + "`n"), (New-Object System.Text.ASCIIEncoding))
     } catch { }
@@ -67,7 +68,8 @@ function Start-HordeDbSyncNode {
     param([Parameter(Mandatory = $true)][string]$NodePath, [Parameter(Mandatory = $true)][string]$Script, [string[]]$NodeArgs = @(), [Parameter(Mandatory = $true)][string]$HordeHome)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $NodePath
-    $quoted = @($NodeArgs | ForEach-Object { '"' + $_ + '"' })
+    # Backslashes just before the closing quote are doubled, or a path saved as C:\x\ would escape that quote and swallow the next argument.
+    $quoted = @($NodeArgs | ForEach-Object { '"' + ($_ -replace '(\\+)$', '$1$1') + '"' })
     $psi.Arguments = '"' + $Script + '"' + $(if ($quoted.Count -gt 0) { " " + ($quoted -join " ") } else { "" })
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
@@ -105,10 +107,11 @@ function Invoke-HordeDbSync {
         try {
             $lock = [System.IO.File]::Open((Join-Path $HordeHome "fleet-db-sync.lock"), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
         } catch {
-            # A method call wraps what .NET threw; the sharing violation is the inner IOException. Anything else is not "a sync is running".
+            # A method call wraps what .NET threw; the sharing violation is the inner IOException with Windows error 32 (or 33, a
+            # lock violation). Anything else is not "a sync is running": a broken home must fail, not look like a busy sync forever.
             $thrown = $_.Exception
             if ($null -ne $thrown.InnerException) { $thrown = $thrown.InnerException }
-            if ($thrown -isnot [System.IO.IOException]) { throw }
+            if ($thrown -isnot [System.IO.IOException] -or @(32, 33) -notcontains ($thrown.HResult -band 0xFFFF)) { throw }
             Write-HordeDbSyncLog -Path $log -Line ($stamp + " skipped 0 ms | a sync is still running") -MaxBytes $MaxLogBytes
             return [pscustomobject]@{ code = 0; outcome = "skipped"; lines = @("skipped: a sync is still running") }
         }

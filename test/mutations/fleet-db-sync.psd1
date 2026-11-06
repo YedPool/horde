@@ -5,6 +5,9 @@
     Target = "fleet-db\sync.mjs"
     Suite  = "test\test-fleet-db.ps1"
     Mutations = @(
+        @{ Name = "save-waits-out-the-pace"
+           Find = 'filesDue(state, start, req.force || req.save)'
+           Replace = 'filesDue(state, start, req.force)' }
         @{ Name = "files-step-every-tick"
            Find = 'return ok === null || now - ok >= FILES_EVERY_MS || now < ok;'
            Replace = 'return true;' }

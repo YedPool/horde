@@ -77,6 +77,11 @@ try {
     Check (@(Get-LogLines | Where-Object { $_ -match ' ok \d+ ms \| sync: files skipped' }).Count -eq 1) "   and logs it"
     $r = Invoke-Db @("sync", "-Force")
     Check ($r.code -eq 0 -and $r.out -like "*sync: files ran, no rows added*") "-Force runs the step at once, and adds nothing the second time"
+    # A backslash before the closing quote of node's command line would escape that quote and save a path with a quote in it.
+    $r = Invoke-Db @("sync", "-Save", "-Ledger", $ledger, "-Changelog", $changelog, "-Cards", ($cards + "\"))
+    $saved = [System.IO.File]::ReadAllText((Join-Path (Join-Path $hordeHome "settings") "fleet-db-sync.json")) | ConvertFrom-Json
+    Check ($r.code -eq 0 -and $r.out -like "*sync: files ran*") ("-Save runs inside 5 minutes too: new sources do not wait (" + $r.code + ": " + $r.out.Trim() + ")")
+    Check ($saved.cards -ceq ($cards + "\") -and $saved.ledger -ceq $ledger) ("a path ending in a backslash is saved as given (" + $saved.cards + ")")
 
     Write-Host ""
     Write-Host "--- flags are for their own verb ---" -ForegroundColor Cyan
@@ -118,9 +123,13 @@ try {
         if ($sleeperPid -eq 0) { Start-Sleep -Milliseconds 100 }
     }
     Check ($sleeperPid -gt 0) "CONTROL: the fixture script was started as the sync's child"
+    # The fixture writes its pid at once and the parent lowers it just after starting it, so this asks until it shows (a busy box is slow here).
     $priority = ""
-    Start-Sleep -Milliseconds 300
-    if ($sleeperPid -gt 0) { try { $priority = "" + (Get-Process -Id $sleeperPid -ErrorAction Stop).PriorityClass } catch { $priority = "gone" } }
+    $deadline = (Get-Date).AddSeconds(5)
+    while ($sleeperPid -gt 0 -and $priority -cne "BelowNormal" -and $priority -cne "gone" -and (Get-Date) -lt $deadline) {
+        try { $priority = "" + (Get-Process -Id $sleeperPid -ErrorAction Stop).PriorityClass } catch { $priority = "gone" }
+        if ($priority -cne "BelowNormal") { Start-Sleep -Milliseconds 100 }
+    }
     Check ($priority -ceq "BelowNormal") ("the node child runs below normal priority (" + $priority + ")")
     $done = Complete-HordeCliRun -Run $run -Seconds 60
     $took = ((Get-Date) - $started).TotalSeconds

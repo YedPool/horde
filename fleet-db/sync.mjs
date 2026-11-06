@@ -174,7 +174,8 @@ export function syncMain(argv, env = process.env, out = (s) => process.stdout.wr
     const sources = readSettings(home);
     const state = readState(home);
     const start = now();
-    if (!filesDue(state, start, req.force)) {
+    // A save always runs: new sources must not wait out the pace of the old ones.
+    if (!filesDue(state, start, req.force || req.save)) {
       out('sync: files skipped (last ok ' + Math.floor((start - state.files.lastOkAt) / 1000) + ' s ago, runs every ' + FILES_EVERY_MS / 60000 + ' min)');
       return 0;
     }
@@ -189,7 +190,8 @@ export function syncMain(argv, env = process.env, out = (s) => process.stdout.wr
     } catch (e) {
       // A failed run is recorded, then handed to the single error line below; lastOkAt stays, so the next tick retries.
       state.files = { ...state.files, lastRunAt: start, lastResult: 'failed', lastMs: now() - start };
-      writeState(home, state);
+      // A state that cannot be written must not hide why the run failed.
+      try { writeState(home, state); } catch { /* the import's own error is the one to say */ }
       throw e;
     }
     writeState(home, state);

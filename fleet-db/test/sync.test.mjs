@@ -107,6 +107,15 @@ test('--save writes the settings whole (schema 1, absolute paths) and then syncs
   assert.ok(count(w.home, 'task_event') >= 2);
 });
 
+test('--save runs inside the 5 minutes too: new sources do not wait out the pace of the old ones', () => {
+  const w = world();
+  assert.equal(run(w.env, ['--save', '--ledger', w.ledger]).code, 0);
+  const r = run(w.env, ['--save', '--ledger', w.ledger, '--changelog', w.changelog]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^sync: files ran, /);
+  assert.ok(count(w.home, 'changelog_entry') >= 1);
+});
+
 test('the sources are never defaulted: a relative path is refused on save and in a hand-made file', () => {
   const w = world();
   assert.throws(() => saveSettings(w.home, { ledger: 'tasks.jsonl' }), /must be absolute/);
