@@ -76,15 +76,12 @@
            Replace = 'return $true' }
         # An unreadable list is not awaited: the notice goes unwatched.
         @{ Name = "services-tell-unreadable-list-not-awaiting"
-           Find = 'if ($r.state -cne "known") { return $true }
-    return (@($r.value.awaiting).Count -gt 0)'
-           Replace = 'if ($r.state -cne "known") { return $false }
-    return (@($r.value.awaiting).Count -gt 0)' }
+           Find = 'if ($r.state -cne "known") { return $true }'
+           Replace = 'if ($r.state -cne "known") { return $false }' }
         # The loader no longer clears the registry: the second load in a process throws.
         @{ Name = "services-tell-loader-keeps-old-registry"
-           Find = '$script:HordeMessengers = @{}
-    try {'
-           Replace = 'try {' }
+           Find = '$script:HordeMessengers = @{}'
+           Replace = '$null = 0' }
         # A quiet pass loads the port for nothing.
         @{ Name = "services-tell-always-awaiting"
            Find = 'return [bool][System.IO.File]::Exists((Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome))'
