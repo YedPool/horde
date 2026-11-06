@@ -250,5 +250,5 @@ test('bad arguments are refused, nothing printed to the output', () => {
 });
 
 test('the schema this was written for is the current one', () => {
-  assert.equal(SCHEMA_VERSION, 9);
+  assert.equal(SCHEMA_VERSION, 10);
 });

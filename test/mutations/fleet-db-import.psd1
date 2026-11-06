@@ -81,8 +81,8 @@
            Find = 'if (/^[A-Z]\d+$/.test(raw)) return'
            Replace = 'if (false) return' }
         @{ Name = "identical-line-not-reported"
-           Find = 'if (!r.inserted && ctx.seen.has(r.id))'
-           Replace = 'if (false)' }
+           Find = 'if (!r.inserted && ctx.seen.has(r.id)) rep.unlink('
+           Replace = 'if (false) rep.unlink(' }
         @{ Name = "task-pr-link-time-wrong"
            Find = 'ON CONFLICT DO NOTHING").run(row.task_id, prId, e.at);'
            Replace = 'ON CONFLICT DO NOTHING").run(row.task_id, prId, 0);' }
@@ -129,8 +129,50 @@
            Find = 'orc: labelOrc(ctx, raw), unlinked: labelOrc(ctx, raw) === null }'
            Replace = 'orc: null, unlinked: true }' }
         @{ Name = "handed-needs-a-person-not-said"
-           Find = 'names no Orc row (event not imported; needs a person)'
-           Replace = 'names no Orc row (event not imported)' }
+           Find = 'names no Orc row (kept in task_event_extra; needs a person)'
+           Replace = 'names no Orc row (kept in task_event_extra)' }
+        @{ Name = "promise-and-kept-not-known"
+           Find = "const EXTRA_ONLY_KINDS = ['promise', 'kept'];"
+           Replace = "const EXTRA_ONLY_KINDS = [];" }
+        @{ Name = "kept-not-known"
+           Find = "const EXTRA_ONLY_KINDS = ['promise', 'kept'];"
+           Replace = "const EXTRA_ONLY_KINDS = ['promise'];" }
+        @{ Name = "replaces-not-kept"
+           Find = "if (nz(ev.replaces)) row.replaces_no = promiseNo(rep, ev.replaces, 'replaces', ev.task);"
+           Replace = "" }
+        @{ Name = "closes-not-kept"
+           Find = "row.closes_no = promiseNo(rep, ev.closes, 'closes', ev.task);"
+           Replace = "" }
+        @{ Name = "bad-name-silent"
+           Find = "if (!m) { rep.unlink('ledger', flag + ' names no promise number (read as naming nothing)', task); return null; }"
+           Replace = "if (!m) { return null; }" }
+        @{ Name = "number-not-kept"
+           Find = "row.promise_no = e.promiseNo;"
+           Replace = "row.promise_no = 1;" }
+        @{ Name = "number-by-time-not-by-file"
+           Find = "promiseNumber = (promisesSeen.get(obj.task) ?? 0) + 1;"
+           Replace = "promiseNumber = promisesSeen.size + 1;" }
+        @{ Name = "numbers-do-not-climb"
+           Find = "promisesSeen.set(obj.task, promiseNumber);"
+           Replace = "" }
+        @{ Name = "due-not-kept"
+           Find = "else row.due_at = due;"
+           Replace = "else row.due_at = undefined;" }
+        @{ Name = "bad-due-silent"
+           Find = "if (due === null) rep.unlink('ledger', 'promise has no usable due (kept with no due time)', ev.task);"
+           Replace = "if (due === null) { }" }
+        @{ Name = "extra-pr-silent"
+           Find = "if (nz(ev.pr)) rep.unlink('ledger', ev.event + ' line names a PR (the PR is not linked from it)', ev.task);"
+           Replace = "" }
+        @{ Name = "hand-over-words-lost"
+           Find = "if (to !== null) row.to_text = fit(rep, 'ledger', 'to', to, 120, ev.task);"
+           Replace = "" }
+        @{ Name = "hand-over-to-no-orc-dropped"
+           Find = "      putExtra(ctx, e, row);"
+           Replace = "" }
+        @{ Name = "extra-repeat-silent"
+           Find = "if (!r.inserted && ctx.seen.has(r.id)) ctx.rep.unlink('ledger', 'line is identical to an earlier line (one event)', e.ev.task + ' ' + e.ev.event);"
+           Replace = "if (false) { }" }
         @{ Name = "first-seen-substitution-silent"
            Find = '{ rep.unlink(''registry'', ''firstSeen is not a time (lastSeen used)'', id); first = last; }'
            Replace = '{ first = last; }' }

@@ -32,6 +32,9 @@ import { inWrite } from './store.mjs';
 import { appendHistory, newId } from './write.mjs';
 import { ensureOrcRow } from './orc-row.mjs';
 import { RANKS, TASK_EVENT_KINDS, CHANGELOG_KINDS } from './schema.mjs';
+
+// The ledger's kinds that go only to task_event_extra (migration 10). A hand-over goes there too, when it names no Orc.
+const EXTRA_ONLY_KINDS = ['promise', 'kept'];
 import { canonical } from './ids.mjs';
 
 const EXAMPLES = 5;
@@ -41,7 +44,7 @@ const PR_REF = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
 const TASK_KEY = /^T-\d{4,}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA40 = /^[0-9a-f]{40}$/;
-const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
+const TABLES = ['node', 'orc', 'session', 'task', 'task_event', 'task_event_extra', 'pr', 'task_pr', 'changelog_entry', 'tag', 'entity_tag', 'orc_status',
   'question', 'question_event', 'answer', 'answer_extra', 'answer_route', 'answer_route_extra', 'decisions_read',
   'parking_lot', 'parking_lot_member', 'wake', 'wake_member'];
 
@@ -579,14 +582,20 @@ function stepLedger(ctx, data) {
   if (data.ledger === null) return;
   const { rep } = ctx;
   const events = [];
+  const promisesSeen = new Map(); // task key -> how many promise lines so far, in file order: a promise's number (design, task.py)
   for (const { n, obj } of data.ledger) {
+    let promiseNumber = null;
+    if (obj.event === 'promise' && typeof obj.task === 'string') {
+      promiseNumber = (promisesSeen.get(obj.task) ?? 0) + 1;
+      promisesSeen.set(obj.task, promiseNumber);
+    }
     const at = parseTime(obj.ts);
     if (at === null || typeof obj.task !== 'string' || !TASK_KEY.test(obj.task) || typeof obj.event !== 'string') {
       rep.unlink('ledger', 'line lacks a usable ts, task or event (not imported)', 'line ' + (n + 1));
       continue;
     }
-    if (!TASK_EVENT_KINDS.includes(obj.event)) { rep.unlink('ledger', 'event kind ' + obj.event + ' is not known (not imported)', 'line ' + (n + 1)); continue; }
-    events.push({ n, at, ev: obj });
+    if (!TASK_EVENT_KINDS.includes(obj.event) && !EXTRA_ONLY_KINDS.includes(obj.event)) { rep.unlink('ledger', 'event kind ' + obj.event + ' is not known (not imported)', 'line ' + (n + 1)); continue; }
+    events.push({ n, at, ev: obj, promiseNo: promiseNumber });
   }
   // By time; two lines of one time keep file order. The file itself is not in time order (backfills).
   events.sort((a, b) => a.at - b.at || a.n - b.n);
@@ -656,6 +665,21 @@ function prFor(ctx, ev, at) {
   return insertPr(ctx, m.key, m.repo, m.number, 'open', null, null, at, null);
 }
 
+// P3 to 3. Anything else is reported and names nothing, so the line falls back to what a line naming nothing does.
+function promiseNo(rep, text, flag, task) {
+  const m = /^P([1-9]\d{0,5})$/.exec(String(text));
+  if (!m) { rep.unlink('ledger', flag + ' names no promise number (read as naming nothing)', task); return null; }
+  return Number(m[1]);
+}
+
+// A line task_event has no place for (migration 10). Its row holds by_orc_id, by_text and the columns of its kind.
+function putExtra(ctx, e, row) {
+  const r = appendHistory(ctx.db, 'task_event_extra', row);
+  if (!r.inserted && ctx.seen.has(r.id)) ctx.rep.unlink('ledger', 'line is identical to an earlier line (one event)', e.ev.task + ' ' + e.ev.event);
+  else ctx.rep.count('task_event_extra', r.inserted);
+  ctx.seen.add(r.id);
+}
+
 function putEvent(ctx, e) {
   const { db, rep } = ctx;
   const ev = e.ev;
@@ -674,6 +698,22 @@ function putEvent(ctx, e) {
     else rep.unlink('ledger', 'by ' + by + ' names no Orc row (kept as by_text)', ev.task);
   }
 
+  if (EXTRA_ONLY_KINDS.includes(ev.event)) {
+    if (ev.event === 'promise') {
+      const due = parseTime(ev.due);
+      if (due === null) rep.unlink('ledger', 'promise has no usable due (kept with no due time)', ev.task);
+      else row.due_at = due;
+      row.promise_no = e.promiseNo;
+      if (nz(ev.replaces)) row.replaces_no = promiseNo(rep, ev.replaces, 'replaces', ev.task);
+    } else if (nz(ev.closes)) {
+      row.closes_no = promiseNo(rep, ev.closes, 'closes', ev.task);
+    }
+    if (nz(ev.proof)) row.proof = fit(rep, 'ledger', 'proof', ev.proof, 4000, ev.task);
+    if (nz(ev.reason)) row.reason = fit(rep, 'ledger', 'reason', ev.reason, 4000, ev.task);
+    if (nz(ev.pr)) rep.unlink('ledger', ev.event + ' line names a PR (the PR is not linked from it)', ev.task);
+    putExtra(ctx, e, row);
+    return;
+  }
   if (ev.event === 'opened' || ev.event === 'priority') {
     const prio = Number.isInteger(ev.prio) && ev.prio >= 0 && ev.prio <= 9 ? ev.prio : null;
     if (prio === null) {
@@ -691,7 +731,9 @@ function putEvent(ctx, e) {
     const to = nz(ev.to);
     const target = to === null ? null : (orcRef(ctx, to) ?? labelOrc(ctx, to));
     if (target === null) {
-      rep.unlink('ledger', to === null ? 'handed has no to (event not imported; needs a person to say who took it)' : 'handed to ' + to + ' names no Orc row (event not imported; needs a person)', ev.task);
+      rep.unlink('ledger', to === null ? 'handed has no to (kept in task_event_extra; needs a person to say who took it)' : 'handed to ' + to + ' names no Orc row (kept in task_event_extra; needs a person)', ev.task);
+      if (to !== null) row.to_text = fit(rep, 'ledger', 'to', to, 120, ev.task);
+      putExtra(ctx, e, row);
       return;
     }
     row.to_orc_id = target;

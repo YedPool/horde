@@ -1044,6 +1044,97 @@ export const MIGRATIONS = [
   SELECT tree.owner_orc_id, tree.path, tree.depth, tree.sort, l.id, l.key, l.title, l.state, l.prio, l.due_at
   FROM tree JOIN live l ON l.id = tree.id;
   `,
+
+  // 10: what task_event has no place for (T-0416, T-0417; design: planning/fleet-db-design.md, "Lines task_event has no place for").
+  // A promise or a kept line: neither kind is allowed there. A hand-over to no Orc row: task_event requires an Orc. A side table and
+  // not a new column, because appendHistory hashes every column of a table: a new column would change the hash of each line, and
+  // the next sync would write every event again. task_now reads the table, so state and owner follow task.py: a hand-over to no Orc
+  // row means nobody has begun, and the owner is no Orc, unless the line names nobody, which leaves the owner as it was.
+  // task_promise_open (Orc M, 2026-11-06). A promise's id is its number on its task, P1, P2, counted by order in the ledger file:
+  // short to type, and the file is append-only, so it never changes. A kept may name the promise it closes (closes_no) and a promise
+  // the one it replaces (replaces_no); a promise so named reads closed. A kept naming nothing closes the oldest still open that
+  // nobody named. A promise wrongly closed vanishes and nobody chases it; one wrongly left open is seen and costs a line. Old lines
+  // name nothing and nothing is guessed, so an old re-date reads open: task_state and later_promises show that at a glance.
+  `
+  CREATE TABLE task_event_extra (
+    id TEXT PRIMARY KEY ${ulid('id')},
+    task_id TEXT NOT NULL REFERENCES task (id),
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('promise', 'kept', 'handed')),
+    by_orc_id TEXT REFERENCES orc (id),
+    by_text TEXT CHECK (length(by_text) <= 64),
+    due_at INTEGER,
+    promise_no INTEGER CHECK (promise_no >= 1),
+    replaces_no INTEGER CHECK (replaces_no >= 1),
+    closes_no INTEGER CHECK (closes_no >= 1),
+    to_text TEXT CHECK (length(to_text) <= 120),
+    proof TEXT CHECK (length(proof) <= 4000),
+    reason TEXT CHECK (length(reason) <= 4000),
+    backfill INTEGER NOT NULL DEFAULT 0 ${flag('backfill')},
+    sha256 TEXT NOT NULL UNIQUE ${sha('sha256')},
+    CHECK (due_at IS NULL OR kind = 'promise'),
+    CHECK ((promise_no IS NOT NULL) = (kind = 'promise')),
+    CHECK (replaces_no IS NULL OR kind = 'promise'),
+    CHECK (closes_no IS NULL OR kind = 'kept'),
+    CHECK (kind <> 'promise' OR due_at IS NOT NULL OR backfill = 1),
+    CHECK (to_text IS NULL OR kind = 'handed')
+  ) STRICT;
+  CREATE INDEX task_event_extra_task ON task_event_extra (task_id, kind, at);
+  CREATE UNIQUE INDEX task_event_extra_promise ON task_event_extra (task_id, promise_no) WHERE promise_no IS NOT NULL;
+  ${appendOnly('task_event_extra')}
+
+  CREATE VIEW task_promise_open AS
+  WITH RECURSIVE named (task_id, no) AS (
+    SELECT c.task_id, c.closes_no FROM task_event_extra c WHERE c.closes_no IS NOT NULL
+    UNION SELECT r.task_id, r.replaces_no FROM task_event_extra r WHERE r.replaces_no IS NOT NULL),
+  line AS (
+    SELECT x.task_id, x.kind, row_number() OVER (PARTITION BY x.task_id ORDER BY x.at, x.id) AS n
+    FROM task_event_extra x
+    WHERE (x.kind = 'kept' AND x.closes_no IS NULL)
+      OR (x.kind = 'promise' AND NOT EXISTS (SELECT 1 FROM named a WHERE a.task_id = x.task_id AND a.no = x.promise_no))),
+  walk (task_id, n, promised, closed) AS (
+    SELECT l.task_id, 1, l.kind = 'promise', 0 FROM line l WHERE l.n = 1
+    UNION ALL
+    SELECT w.task_id, l.n, w.promised + (l.kind = 'promise'), w.closed + (l.kind = 'kept' AND w.closed < w.promised)
+    FROM walk w JOIN line l ON l.task_id = w.task_id AND l.n = w.n + 1),
+  closed AS (SELECT task_id, max(closed) AS n FROM walk GROUP BY task_id),
+  numbered AS (
+    SELECT p.*, row_number() OVER (PARTITION BY p.task_id ORDER BY p.at, p.id) AS i, count(*) OVER (PARTITION BY p.task_id) AS total
+    FROM task_event_extra p WHERE p.kind = 'promise'
+      AND NOT EXISTS (SELECT 1 FROM named b WHERE b.task_id = p.task_id AND b.no = p.promise_no))
+  SELECT p.id, p.task_id, t.key, t.title, s.state AS task_state, p.promise_no, p.at, p.due_at, p.by_orc_id, p.by_text, p.reason, p.total - p.i AS later_promises
+  FROM numbered p JOIN closed c ON c.task_id = p.task_id JOIN task t ON t.id = p.task_id JOIN task_now s ON s.id = p.task_id
+  WHERE p.i > c.n;
+
+  DROP VIEW task_now;
+  CREATE VIEW task_now AS
+  SELECT t.id, t.key, t.title, t.source, t.parent_id, t.created_at,
+    CASE
+      WHEN hx.id IS NOT NULL AND EXISTS (SELECT 1 FROM task_event qg WHERE qg.task_id = t.id AND qg.kind = 'progress'
+        AND (qg.at > hx.at OR (qg.at = hx.at AND qg.id > hx.id))) THEN 'started'
+      WHEN hx.id IS NOT NULL THEN 'opened'
+      WHEN mv.kind IN ('resumed', 'reopened') THEN 'started'
+      WHEN mv.kind IS NOT NULL AND mv.kind <> 'handed' THEN mv.kind
+      WHEN NOT EXISTS (SELECT 1 FROM task_event ev WHERE ev.task_id = t.id) THEN NULL
+      WHEN EXISTS (SELECT 1 FROM task_event pg WHERE pg.task_id = t.id AND pg.kind = 'progress'
+        AND (mv.id IS NULL OR pg.at > mv.at OR (pg.at = mv.at AND pg.id > mv.id))) THEN 'started'
+      ELSE 'opened'
+    END AS state,
+    (SELECT ev.prio FROM task_event ev WHERE ev.task_id = t.id AND ev.kind IN ('opened', 'priority')
+       ORDER BY ev.kind = 'opened', ev.at DESC, ev.id DESC LIMIT 1) AS prio,
+    CASE WHEN EXISTS (SELECT 1 FROM task_event_extra ox WHERE ox.task_id = t.id AND ox.kind = 'handed' AND ox.to_text IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM task_event ol WHERE ol.task_id = t.id AND ol.kind = 'handed' AND (ol.at > ox.at OR (ol.at = ox.at AND ol.id > ox.id)))) THEN NULL
+      ELSE (SELECT ev.to_orc_id FROM task_event ev WHERE ev.task_id = t.id AND ev.kind IN ('opened', 'handed')
+       ORDER BY ev.kind = 'opened', ev.at DESC, ev.id DESC LIMIT 1) END AS owner_orc_id,
+    (SELECT max(ev.at) FROM task_event ev WHERE ev.task_id = t.id) AS last_event_at
+  FROM task t
+  LEFT JOIN task_event mv ON mv.id = (SELECT ev.id FROM task_event ev WHERE ev.task_id = t.id
+    AND ev.kind IN ('started', 'waiting', 'resumed', 'handed', 'done', 'verified', 'reopened', 'dropped', 'superseded')
+    ORDER BY ev.at DESC, ev.id DESC LIMIT 1)
+  LEFT JOIN task_event_extra hx ON hx.id = (SELECT y.id FROM task_event_extra y WHERE y.task_id = t.id AND y.kind = 'handed'
+    ORDER BY y.at DESC, y.id DESC LIMIT 1)
+    AND (mv.id IS NULL OR hx.at > mv.at OR (hx.at = mv.at AND hx.id > mv.id));
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
