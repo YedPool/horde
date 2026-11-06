@@ -678,6 +678,12 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
     Check ($LASTEXITCODE -eq 0) ("-CoverageFloorPercent 0 is the one setting that turns it off (" + $LASTEXITCODE + ")")
 
+    # A run asked for a subset is not a thin night: -Only and -Limit shrink the list on purpose.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -Limit 1 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-Limit: no coverage floor, exit 0 (" + $LASTEXITCODE + ")")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -Only "test-a" -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-Only: no coverage floor, exit 0 (" + $LASTEXITCODE + ")")
+
     # THE NET'S FIRST CLAIM ON THE SLOT: held through every gate call of the suite phase, each gate told it is the net's.
     $cn = Join-Path $work "claim"; [void][System.IO.Directory]::CreateDirectory($cn)
     $claimStub = Join-Path $cn "gate.ps1"
