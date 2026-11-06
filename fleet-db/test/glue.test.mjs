@@ -324,13 +324,42 @@ test('each Orc\'s list starts at 1, and position orders tasks of one priority', 
   assert.deepEqual(tree(w, w.k), ['1 ' + k1.key]);
 });
 
-test('a finished task leaves the tree with its subtasks, and the rest close up', () => {
+test('a finished task leaves the tree, and the rest close up', () => {
   const w = world();
   const a = task(w, { owner: w.f, prio: 1, at: 10 });
-  task(w, { owner: w.f, parent: a.id, at: 11 });
   const b = task(w, { owner: w.f, prio: 2, at: 12 });
   done(w, a);
   assert.deepEqual(tree(w, w.f), ['1 ' + b.key]);
+});
+
+test('a live subtask of a finished task stays on the list, at the top, its own subtasks still under it', () => {
+  const w = world();
+  const a = task(w, { owner: w.f, prio: 1, at: 10 });
+  const s = task(w, { owner: w.f, parent: a.id, prio: 3, at: 11 });
+  const ss = task(w, { owner: w.f, parent: s.id, at: 12 });
+  const b = task(w, { owner: w.f, prio: 2, at: 13 });
+  done(w, a);
+  assert.deepEqual(tree(w, w.f), ['1 ' + b.key, '2 ' + s.key, '2.1 ' + ss.key]);
+});
+
+test('a live task under a finished one does not climb to a live grandparent', () => {
+  const w = world();
+  const a = task(w, { owner: w.f, prio: 1, at: 10 });
+  const s = task(w, { owner: w.f, parent: a.id, at: 11 });
+  const ss = task(w, { owner: w.f, parent: s.id, at: 12 });
+  done(w, s);
+  assert.deepEqual(tree(w, w.f), ['1 ' + a.key, '2 ' + ss.key]);
+});
+
+test('a live subtask moves to its own owner\'s list when its parent finishes; before that it is numbered under the parent', () => {
+  const w = world();
+  const a = task(w, { owner: w.f, prio: 1, at: 10 });
+  const s = task(w, { owner: w.k, parent: a.id, at: 11 });
+  assert.deepEqual(tree(w, w.f), ['1 ' + a.key, '1.1 ' + s.key]);
+  assert.deepEqual(tree(w, w.k), []);
+  done(w, a);
+  assert.deepEqual(tree(w, w.f), []);
+  assert.deepEqual(tree(w, w.k), ['1 ' + s.key]);
 });
 
 test('subtasks past ten sort as numbers, not as text', () => {
