@@ -38,13 +38,29 @@ export function dbPathFor(home) {
   return path.join(path.resolve(h), DB_FILE);
 }
 
+// Turning a new file to WAL can say "database is locked" at once, with busy_timeout unused, when another process is doing the
+// same: measured 2026-11-06 (T-0408), 23 failures in 2108 rounds of six processes opening one new file, all on this pragma. So it
+// is retried for as long as the caller would wait for a lock. On a file already in WAL it changes nothing and takes no such lock.
+export function enterWal(db, busyMs, { now = Date.now, pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  const giveUp = now() + Number(busyMs);
+  for (;;) {
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      return;
+    } catch (e) {
+      if (!/database is locked/i.test(String(e && e.message)) || now() >= giveUp) throw e;
+      pause(25);
+    }
+  }
+}
+
 export function openStore(file, { readOnly = false, busyMs = 5000 } = {}) {
   if (readOnly && !fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; open it for writing once');
   if (!readOnly) fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file, { readOnly, enableForeignKeyConstraints: true });
   db.exec('PRAGMA busy_timeout = ' + Number(busyMs));
   if (!readOnly) {
-    db.exec('PRAGMA journal_mode = WAL');
+    enterWal(db, busyMs);
     db.exec('PRAGMA synchronous = NORMAL');
   }
   db.exec('PRAGMA foreign_keys = ON');
