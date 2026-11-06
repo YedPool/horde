@@ -324,8 +324,11 @@ foreach ($cmdName in @("services", "rollout")) {
 }
 # The loader itself: what it loads is there while -Run runs, and the registry that was there is put back.
 $before = @(Get-HordeMessengerNames) -join ","
-$inside = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
-$again = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
+# A load that throws is a failed check, not a broken suite (tools/Mutate.ps1 counts only a failed check as a catch).
+try {
+    $inside = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
+    $again = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
+} catch { $inside = "IT THREW: " + $_.Exception.Message; $again = "" }
 Check ($inside -ceq $again -and $inside.Contains("memory") -and $inside.Contains("wezfleet")) ("the loader gives each run the real messengers, twice over (" + $inside + ")")
 Check ((@(Get-HordeMessengerNames) -join ",") -ceq $before) "and puts back the registry that was there (this suite's own stand-in)"
 }
