@@ -70,6 +70,21 @@
         @{ Name = "services-tell-asked-table-keeps-the-over"
            Find = 'if ($live.ContainsKey($k) -and $Table[$k] -is [long])'
            Replace = 'if ($Table[$k] -is [long])' }
+        # The look is made for a list with nothing on it (the file stays after the last mark).
+        @{ Name = "services-tell-awaiting-when-file-exists"
+           Find = 'return (@($r.value.awaiting).Count -gt 0)'
+           Replace = 'return $true' }
+        # An unreadable list is not awaited: the notice goes unwatched.
+        @{ Name = "services-tell-unreadable-list-not-awaiting"
+           Find = 'if ($r.state -cne "known") { return $true }
+    return (@($r.value.awaiting).Count -gt 0)'
+           Replace = 'if ($r.state -cne "known") { return $false }
+    return (@($r.value.awaiting).Count -gt 0)' }
+        # The loader no longer clears the registry: the second load in a process throws.
+        @{ Name = "services-tell-loader-keeps-old-registry"
+           Find = '$script:HordeMessengers = @{}
+    try {'
+           Replace = 'try {' }
         # A quiet pass loads the port for nothing.
         @{ Name = "services-tell-always-awaiting"
            Find = 'return [bool][System.IO.File]::Exists((Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome))'

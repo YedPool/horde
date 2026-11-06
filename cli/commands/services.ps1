@@ -42,23 +42,18 @@ $HordeCommand = @{
         # THE TELLER: the messenger port and what it needs are loaded INSIDE this one block, at the
         # moment something has to be told, so a quiet pass - nearly every pass - never pays for them,
         # and the blocks a messenger registers can see its helpers for as long as the block runs
-        # (cli/ServicesTell.ps1). Called at most once a process.
+        # (cli/ServicesTell.ps1, Invoke-HordeServiceWithMessengers). A pass may call this and TellTaken in
+        # either order: the loader is safe to run twice in one process.
         $tools["TellAll"] = {
             param($Notices, $HordeHome, $Policy)
-            foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
-            . (Join-Path $root "messengers\Port.ps1")
-            foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
-            return (Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy)
+            return (Invoke-HordeServiceWithMessengers -Root $root -Run { Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy })
         }
         # WHAT BECAME OF THE NOTICES ALREADY POSTED (cli/ServicesTell.ps1): loaded in its own block as the teller is, and only when a
         # notice is awaiting, so a quiet pass never pays for the port.
         $tools["TellTaken"] = {
             param($HordeHome, $Policy)
             if (-not (Test-HordeServiceTellAwaiting -HordeHome $HordeHome)) { return @() }
-            foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
-            . (Join-Path $root "messengers\Port.ps1")
-            foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
-            return @(Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Policy.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Policy.takenAfterAlarmSeconds))
+            return @(Invoke-HordeServiceWithMessengers -Root $root -Run { Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Policy.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Policy.takenAfterAlarmSeconds) })
         }
         if ($Verb -eq "stop" -or $Verb -eq "start") {
             if ($Target -eq "") { throw ("services " + $Verb + " needs the name of a service (horde services status lists them)") }

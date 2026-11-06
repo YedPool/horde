@@ -112,6 +112,12 @@
         @{ Name = "untold-notice-gets-a-new-id-every-pass"
            Find = 'if ($state.pendingNotice -cnotmatch (''\A'' + [regex]::Escape($tellWhat) + '':[0-9a-f-]{36}\z'')) {'
            Replace = 'if ($true) {' }
+        @{ Name = "kept-id-reused-for-another-trouble"
+           Find = 'if ($state.pendingNotice -cnotmatch (''\A'' + [regex]::Escape($tellWhat) + '':[0-9a-f-]{36}\z'')) {'
+           Replace = 'if ($state.pendingNotice -cnotmatch ''\A[a-z-]+:[0-9a-f-]{36}\z'') {' }
+        @{ Name = "told-notice-keeps-its-id"
+           Find = '$state.told = $tellWhat; $state.pendingNotice = ""; $dirty = $true;'
+           Replace = '$state.told = $tellWhat; $dirty = $true;' }
         @{ Name = "teller-lines-dropped"
            Find = 'foreach ($tl in @($answer.lines)) { [void]$lines.Add("" + $tl) }'
            Replace = '$null = 0' }

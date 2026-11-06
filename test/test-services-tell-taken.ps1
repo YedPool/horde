@@ -293,7 +293,41 @@ Write-Host "--- a test's home still tells nobody; the quiet pass pays for nothin
 $tempTell = Send-HordeServiceNotices -Notices @(New-Notice (New-Id)) -HordeHome $H1 -Policy $pol -Seat { throw "the seat must not be read for a home under the temp folder" }
 Check (@($tempTell.told).Count -eq 0 -and $tempTell.problem.Contains("a test's") -and @($tempTell.lines).Count -eq 0) "A TEST'S HOME TELLS NOBODY: refused before any messenger, seat or list is looked for"
 Check (-not (Test-HordeServiceTellAwaiting -HordeHome (New-Home))) "a home with no awaiting list has nothing to ask about"
-Check (Test-HordeServiceTellAwaiting -HordeHome $H1) "and a home with one has"
+# The look is made only while a mark waits. The file stays after the last mark is taken off ({"awaiting":[]}), so its being there is
+# not the question (review of PR 430, should-fix 2); a list that cannot be read counts as awaiting, so the tick reports it.
+$HA = New-Home
+$idA = New-Id
+$null = Send-One $HA $idA 0
+Check (Test-HordeServiceTellAwaiting -HordeHome $HA) "and a home with a mark on the list has"
+$script:stages[$idA] = "handed-over"
+$null = Tick $HA 0
+$listPath = Join-Path $HA "services\tell-taken.json"
+Check ([System.IO.File]::Exists($listPath) -and @(Marks-Of $HA $idA).Count -eq 0) "CONTROL: once the mark is taken off the file is still there, with nothing on it"
+Check (-not (Test-HordeServiceTellAwaiting -HordeHome $HA)) "and then nothing is awaiting: a quiet pass loads no messenger (the file's being there says nothing)"
+[System.IO.File]::WriteAllText($listPath, "not json")
+Check (Test-HordeServiceTellAwaiting -HordeHome $HA) "a list that cannot be read counts as awaiting, so the look is made and says why it cannot be"
+
+Write-Host ""
+Write-Host "--- the two tellers of a pass load the port in one process, in either order (review of PR 430) ---" -ForegroundColor Cyan
+# The REAL TellAll and TellTaken blocks of cli/commands/services.ps1 and rollout.ps1, cut out of the files and run in a child process of
+# this shell (test/fixtures/services-tell-taken/load-twice.ps1), one pass's two tools in both orders. Before the loader was safe to run
+# twice, the second block threw "messenger 'memory' is already registered" and the notices waited untold on every pass.
+$shell = (Get-Process -Id $PID).Path
+$loader = Join-Path $fx "load-twice.ps1"
+foreach ($cmdName in @("services", "rollout")) {
+    foreach ($order in @("TellTaken,TellAll", "TellAll,TellTaken")) {
+        $got = @(& $shell -NoProfile -File $loader -Root $root -Command $cmdName -Order $order -Home_ (Join-Path $work ("loader-" + $cmdName + "-" + $order.Replace(",", "-"))))
+        $steps = @($order -split ",")
+        $said = $got -join " | "
+        Check ($got.Count -eq 2 -and $said.Contains($cmdName + " " + $order + " " + $steps[0] + " OK") -and $said.Contains($cmdName + " " + $order + " " + $steps[1] + " OK")) ($cmdName + ".ps1, " + $order + ": both blocks run in one process (" + $said + ")")
+    }
+}
+# The loader itself: what it loads is there while -Run runs, and the registry that was there is put back.
+$before = @(Get-HordeMessengerNames) -join ","
+$inside = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
+$again = Invoke-HordeServiceWithMessengers -Root $root -Run { (@(Get-HordeMessengerNames) -join ",") }
+Check ($inside -ceq $again -and $inside.Contains("memory") -and $inside.Contains("wezfleet")) ("the loader gives each run the real messengers, twice over (" + $inside + ")")
+Check ((@(Get-HordeMessengerNames) -join ",") -ceq $before) "and puts back the registry that was there (this suite's own stand-in)"
 }
 finally {
     $env:HORDE_HOME = $keepHome

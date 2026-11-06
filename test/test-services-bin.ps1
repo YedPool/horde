@@ -402,6 +402,20 @@ try {
     }
     Check ($ids.Count -eq 3 -and @($ids | Select-Object -Unique).Count -eq 1 -and $ids[0] -cmatch '\A[0-9a-f-]{36}\z') ("T-0391: an untold notice keeps ONE id across passes (" + ($ids -join ",") + ")")
     Check (@($gSaid | Where-Object { $_ -ceq "the teller's own line" }).Count -eq 3) "T-0391: the teller's own lines are the pass's lines"
+    # A different trouble is a different notice: the kept id is only reused for the kind of trouble it was made for.
+    $gState = Read-HordeInstalledCliState -HordeHome $w.home
+    $gOldId = ("" + $gState.pendingNotice).Substring(("" + $gState.pendingNotice).IndexOf(":") + 1)
+    $gKind = ("" + $gState.pendingNotice).Substring(0, ("" + $gState.pendingNotice).IndexOf(":"))
+    $gState.pendingNotice = "other-" + $gKind + ":" + $gOldId
+    Write-HordeInstalledCliState -State $gState -HordeHome $w.home
+    $ids.Clear()
+    $null = Quiet { Invoke-HordeInstalledCliFollow -HordeHome $w.home -Policy $pol -Now $t0.AddSeconds(360) -Tell $capture -Tools (New-HordeInstalledCliTools) -NoFetch }
+    Check ($ids.Count -eq 1 -and $ids[0] -cne $gOldId -and $ids[0] -cmatch '\A[0-9a-f-]{36}\z' -and ("" + (Read-HordeInstalledCliState -HordeHome $w.home).pendingNotice).StartsWith($gKind + ":")) "T-0391: a kept id made for another kind of trouble is not reused (a different tellWhat gets a new id)"
+    # Told: the kept id is let go, so the next trouble is a new notice.
+    $gTold = New-Told
+    $null = Quiet { Invoke-HordeInstalledCliFollow -HordeHome $w.home -Policy $pol -Now $t0.AddSeconds(480) -Tell (New-Teller $gTold) -Tools (New-HordeInstalledCliTools) -NoFetch }
+    $gAfter = Read-HordeInstalledCliState -HordeHome $w.home
+    Check ($gTold.notices.Count -eq 1 -and $gAfter.told -ceq $gKind -and $gAfter.pendingNotice -ceq "") "T-0391: a notice that was told clears the kept id (pendingNotice is empty and told is set)"
     $w = New-World "h"
     $polOff = New-Policy $w -Follow $false
     $before = Head $w

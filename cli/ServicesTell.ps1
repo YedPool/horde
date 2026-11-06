@@ -26,10 +26,11 @@
 # setting tellWarchief is one guard and this is the other, because the seat is found in a store whose
 # place does not follow the Horde home (item 7).
 #
-# THE CALLER LOADS THE PORT. messengers/Port.ps1, every messenger's file, core/SessionSeat.ps1 and
-# core/Device.ps1 must have been dot-sourced in the scope this is called from, so the blocks a
-# messenger registered can still see its helpers (cli/commands/services.ps1 does it in the one block
-# that calls this, once a process).
+# THE CALLER LOADS THE PORT, THROUGH Invoke-HordeServiceWithMessengers (below). messengers/Port.ps1, every
+# messenger's file, core/SessionSeat.ps1 and core/Device.ps1 must have been dot-sourced in the scope this is
+# called from, so the blocks a messenger registered can still see its helpers. A pass may need the port
+# twice (the look at the awaiting list, then the teller), so the loader is safe to run any number of times
+# in one process and in either order.
 #
 # A NOTICE COUNTS AS TOLD ONLY WHEN THE WARCHIEF'S OWN SESSION TOOK IT (T-0391 slice 6; the chat's own rule, channels/chat/Taken.ps1,
 # and the routed answers', the doorbell's, the photo notice's and the relay-full notice's: decisions/NoticeTaken.ps1, used as it is). The
@@ -237,10 +238,40 @@ function Test-HordeServiceNoticeListed {
     return $false
 }
 
+function Invoke-HordeServiceWithMessengers {
+    # Loads the messenger port and every messenger INTO THIS FUNCTION'S SCOPE, runs -Run from here and puts the registry back as it was.
+    # Why here and not once per process: the blocks a messenger registers find their helpers only through the scope that is running them
+    # (dynamic scope), so each user of the port loads it around its own call, and the helpers go with the function. But the registry is
+    # script-wide and refuses a second registration of a name (messengers/Port.ps1, Register-HordeMessenger), so the second load in one
+    # process (TellTaken, then TellAll, or the reverse) threw and the notices waited untold on every pass (review of PR 430). Clearing the
+    # registry for the load is the right cure, not skipping the load: a skipped load would leave the second user's registered blocks
+    # without helpers in a scope that no longer has them. The registry that was there is put back after, so a caller that loaded the port
+    # for itself keeps what it registered.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][scriptblock]$Run)
+    foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $Root ("core\" + $f + ".ps1")) }
+    $had = $null -ne (Get-Variable -Name HordeMessengers -Scope Script -ErrorAction SilentlyContinue)
+    $kept = $null
+    if ($had) { $kept = $script:HordeMessengers }
+    $script:HordeMessengers = @{}
+    try {
+        . (Join-Path $Root "messengers\Port.ps1")
+        foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
+        return (& $Run)
+    } finally {
+        if ($had) { $script:HordeMessengers = $kept } else { Remove-Variable -Name HordeMessengers -Scope Script -ErrorAction SilentlyContinue }
+    }
+}
+
 function Test-HordeServiceTellAwaiting {
-    # Is there an awaiting list to ask about at all? A quiet pass - nearly every pass - has none, and then loads no messenger.
+    # Is there a mark to ask about? A quiet pass - nearly every pass - has none, and then loads no messenger. The file stays after the
+    # last mark is taken off ({"awaiting":[]}), so its being there says nothing; a list that cannot be read counts as awaiting, so the
+    # look is made and says why it cannot be (a notice must never go unwatched for an unreadable file).
     param([Parameter(Mandatory = $true)][string]$HordeHome)
-    return [bool][System.IO.File]::Exists((Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome))
+    $path = Get-HordeDecisionNoticeTakenPath -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome
+    if (-not [System.IO.File]::Exists($path)) { return $false }
+    $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeServiceTellTakenKind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return $true }
+    return (@($r.value.awaiting).Count -gt 0)
 }
 
 function Read-HordeServiceTellAsked {

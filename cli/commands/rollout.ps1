@@ -18,22 +18,16 @@ $HordeCommand = @{
         $only = @()
         if ($Service -ne "") { $only = @($Service) }
         $tools = New-HordeServiceTools
-        # The teller, loaded inside its one block (cli/commands/services.ps1 says why).
+        # The teller, loaded inside its one block, safe to run after TellTaken in one process (cli/commands/services.ps1 says why).
         $tools["TellAll"] = {
             param($Notices, $HordeHome, $Policy)
-            foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
-            . (Join-Path $root "messengers\Port.ps1")
-            foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
-            return (Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy)
+            return (Invoke-HordeServiceWithMessengers -Root $root -Run { Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy })
         }
         # What became of the notices already posted, loaded in its own block (cli/commands/services.ps1 says why).
         $tools["TellTaken"] = {
             param($HordeHome, $Policy)
             if (-not (Test-HordeServiceTellAwaiting -HordeHome $HordeHome)) { return @() }
-            foreach ($f in @("SessionSeat", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
-            . (Join-Path $root "messengers\Port.ps1")
-            foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
-            return @(Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Policy.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Policy.takenAfterAlarmSeconds))
+            return @(Invoke-HordeServiceWithMessengers -Root $root -Run { Invoke-HordeServiceTellTakenTick -HordeHome $HordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Policy.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Policy.takenAfterAlarmSeconds) })
         }
         # The scheduled pass holds the lock for under a minute; a person's roll-out waits it out.
         $done = Invoke-HordeServiceSupervisor -Tools $tools -Only $only -IgnoreIdle:$Now -ForceFetch -LockWaitSeconds 90 -SettleSeconds $WaitSeconds -BudgetSeconds $WaitSeconds
