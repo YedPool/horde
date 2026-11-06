@@ -125,10 +125,71 @@ try {
     Check ((@($w.lines) -join " ") -like "*could not tell the warchief: boom*" -and -not (Test-Path $statePath)) "a teller that throws is a failed tell, not a stopped pass"
 
     Write-Host ""
+    Write-Host "--- is anyone reading the alarms? ---" -ForegroundColor Cyan
+    $rp = [pscustomobject]@{ watcherReaderMinutes = 120 }
+    $rdir = Join-Path $work "reader"
+    $selfPath = Join-Path $rdir "self.txt"
+    $mailRoot = Join-Path $rdir "mail"
+    $rstate = Join-Path $rdir "state\reader.json"
+    $sid = "abcd1234-reader"
+    $inbox = Join-Path $mailRoot ($sid + "\inbox")
+    [void][System.IO.Directory]::CreateDirectory($rdir)
+    function Put-Mail { param([string]$Name, [AllowEmptyString()][string]$Json) [void][System.IO.Directory]::CreateDirectory($inbox); [System.IO.File]::WriteAllText((Join-Path $inbox ($Name + ".json")), $Json, $utf8) }
+    function Mail-Ago { param([int]$Minutes) return ("{""createdAt"":""" + (Iso $Minutes) + """}") }
+    function Reader { return (Get-HordeWatcherReaderVerdict -SelfPath $selfPath -MailRoot $mailRoot -Now $t0 -Policy $rp) }
+    Check ((Reader).kind -ceq "unknown") "no file naming the reader is an alarm, not quiet"
+    [System.IO.File]::WriteAllText($selfPath, "..\..\evil", $utf8)
+    Check ((Reader).kind -ceq "unknown") "a first word that is no session id is unknown, and no path is built from it"
+    [System.IO.File]::WriteAllText($selfPath, ($sid + " S`n"), $utf8)
+    Check ((Reader).kind -ceq "nomail") "no fleet mail folder is an alarm, not quiet"
+    [void][System.IO.Directory]::CreateDirectory($mailRoot)
+    Check (-not (Reader).stale) "a reader with no inbox yet has nothing unread"
+    Put-Mail "a" (Mail-Ago 120)
+    Check (-not (Reader).stale) "mail exactly 120 minutes old is not yet stale"
+    Put-Mail "b" (Mail-Ago 121)
+    Put-Mail "c" (Mail-Ago 5)
+    $v = Reader
+    Check ($v.stale -and $v.kind -ceq "unread" -and $v.why -like "3 unread, the oldest 121 minutes*") "older than 120 is stale, and it counts all of them and ages the oldest"
+    Remove-Item -LiteralPath (Join-Path $inbox "a.json"), (Join-Path $inbox "b.json"), (Join-Path $inbox "c.json")
+    Put-Mail "bad" "not json"
+    [System.IO.File]::SetLastWriteTimeUtc((Join-Path $inbox "bad.json"), $t0.AddMinutes(-300))
+    Check ((Reader).kind -ceq "unread") "a message that cannot be read counts by its file's time"
+    Check ((Get-HordeWatcherReaderMessageTime -Path (Join-Path $inbox "bad.json")) -eq $t0.AddMinutes(-300)) "CONTROL: the file time of a message that is there"
+    Remove-Item -LiteralPath (Join-Path $inbox "bad.json")
+    # Review of T-0388: the reader takes a message between the listing and the read; a missing file's time reads 1601.
+    Check ($null -eq (Get-HordeWatcherReaderMessageTime -Path (Join-Path $inbox "bad.json"))) "a message taken while it is being looked at has no age: a reader draining its mail is no alarm"
+    Put-Mail "denied" (Mail-Ago 5)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $null = & icacls $inbox /deny ("*" + $me + ":(RD)")
+    try { $v = Reader; $listed = $true } catch { $listed = $false } finally { $null = & icacls $inbox /remove:d ("*" + $me) }
+    Check ($listed -and $v.stale -and $v.kind -ceq "unreadable") "an inbox that cannot be listed is an alarm, not a thrown pass and not quiet"
+    Check (-not (Reader).stale) "CONTROL: the same inbox, readable again, is quiet"
+    Remove-Item -LiteralPath (Join-Path $inbox "denied.json")
+    Put-Mail "old" (Mail-Ago 300)
+    $rig.tells.Clear(); $rig.notices.Clear(); $rig.tellOk = $true; $rig.noticeOk = $true
+    $rt = @{ Now = { return $t0 }; Tell = $tools["Tell"]; Notify = $tools["Notify"] }
+    function ReaderLook { return (Invoke-HordeWatcherReaderCheck -Tools $rt -Policy $rp -SelfPath $selfPath -MailRoot $mailRoot -StatePath $rstate) }
+    $w = ReaderLook
+    Check ($rig.notices.Count -eq 1 -and $rig.tells.Count -eq 1 -and (@($w.lines) -join " ") -like "*STALE (unread)*") "unread mail: one notice and one tell"
+    $w = ReaderLook
+    Check ($rig.notices.Count -eq 1 -and $rig.tells.Count -eq 1 -and @($w.lines).Count -eq 0) "and nothing more while it stays unread"
+    Remove-Item -LiteralPath (Join-Path $inbox "old.json")
+    $w = ReaderLook
+    Check ($rig.notices.Count -eq 1 -and @($w.lines).Count -eq 0) "taken: the episode closes with no notice"
+    Put-Mail "again" (Mail-Ago 300)
+    $null = ReaderLook
+    Check ($rig.notices.Count -eq 2) "the next backlog is a new episode"
+    Remove-Item -LiteralPath $rstate
+    $rig.notices.Clear(); $rig.tellOk = $false; $rig.noticeOk = $false
+    $null = ReaderLook
+    Check (-not (Test-Path $rstate)) "neither tell taken: not marked told, so the next pass tries again"
+    $rig.tellOk = $true; $rig.noticeOk = $true
+
+    Write-Host ""
     Write-Host "--- the settings and the command ---" -ForegroundColor Cyan
     foreach ($f in @("Tristate", "Home", "ModuleSettings", "AnalystRounds")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
     $d = Get-HordeAnalystSettings -HordeHome $work
-    Check ($d.values.watcherCheck -eq $true -and $d.values.watcherStaleMinutes -eq 30 -and $d.values.watcherHungMinutes -eq 15 -and $d.values.watcherRunFile -ceq "") "the settings default to 30 and 15 minutes, on, the default file"
+    Check ($d.values.watcherCheck -eq $true -and $d.values.watcherStaleMinutes -eq 30 -and $d.values.watcherHungMinutes -eq 15 -and $d.values.watcherReaderMinutes -eq 120 -and $d.values.watcherRunFile -ceq "") "the settings default to 30, 15 and 120 minutes, on, the default file"
 }
 finally {
     try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch { }

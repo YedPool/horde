@@ -537,7 +537,11 @@ try {
     $nowIso = [datetime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
     [System.IO.File]::WriteAllText((Join-Path $runDir "run.json"), ('{"started":"' + $nowIso + '","finished":"' + $nowIso + '"}'), $utf8)
     $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
-    Check ($x.code -eq 0 -and $x.out -cnotlike "*watcher check*") "and a fresh run.json at <fleet root>\_home\orcs\overseer says nothing"
+    Check ($x.out -like "*watcher reader check: STALE (unknown)*") "tend checks the alarm reader too: no file naming it is an alarm, not quiet (T-0388)"
+    [System.IO.File]::WriteAllText((Join-Path $runDir "self.txt"), "abcd1234-reader", $utf8)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $work "no-fleet-here\mail"))
+    $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
+    Check ($x.code -eq 0 -and $x.out -cnotlike "*watcher check*" -and $x.out -cnotlike "*watcher reader check*") "and a fresh run.json at <fleet root>\_home\orcs\overseer, a named reader and an empty inbox say nothing"
     Write-Handover -Folder (Join-Path $e "analyst") -Sid $sidA -At ([datetime]::UtcNow)
     $x = Invoke-HordeCliProcess -Root $root -HordeArgs @("analyst", "tend") -Env $env2
     Check ($x.code -eq 0 -and $x.out -like ("*adopted session " + $sidA + "*")) "the next pass adopts the analyst its handover names"
