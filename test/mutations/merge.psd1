@@ -387,5 +387,14 @@
         @{ Name = "intent-unanswered-reads-fine"
            Find = '$ok = $false; & $say ("COULD NOT ASK GITHUB whether "'
            Replace = '& $say ("COULD NOT ASK GITHUB whether "' }
+        @{ Name = "intent-unknown-merge-settled"
+           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
+           Replace = '$gitHubSaid = $true' }
+        @{ Name = "intent-timed-out-merge-settled"
+           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
+           Replace = '$gitHubSaid = ($null -ne $after)' }
+        @{ Name = "intent-unanswered-view-settled"
+           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
+           Replace = '$gitHubSaid = ($m.code -ne -1)' }
     )
 }

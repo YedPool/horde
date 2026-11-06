@@ -189,10 +189,12 @@ function New-SuiteTools {
 
 function Invoke-Case {
     # Invoke-HordeMerge on one case: the answer.
-    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails, [switch]$IntentFails)
+    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails, [switch]$IntentFails, [scriptblock]$GhWrap = $null)
     $req = Test-HordeMergeRequest -Pr $Pr -Task $Task -State $State -By $By -On $On -Reason $Reason -Guards $Guards
     if (-not $req.ok) { throw ("the suite built a bad request: " + $req.why) }
     $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails -OwedFails:$OwedFails -IntentFails:$IntentFails
+    # A GhWrap sees each gh call first ($Arguments, and $script:innerGh for the stand-in) and may answer in its place.
+    if ($null -ne $GhWrap) { $script:innerGh = $tools["Gh"]; $script:ghWrap = $GhWrap; $tools["Gh"] = { param([string[]]$Arguments) return (& $script:ghWrap $Arguments) } }
     # A throw is an answer of its own, so a mutant that makes the command crash fails a check by name
     # (tools\Mutate.ps1 counts only a failed check as caught).
     try { return (Invoke-HordeMerge -Request $req -Tools $tools -WorkFolder $Case.work) }
@@ -1035,6 +1037,33 @@ $old = Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool
 $null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line $old
 $run = Invoke-OwedRun -Case $c
 Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0 -and (@(Read-IntentLines $c)[-1]) -clike '*"how":"not-merged"*') "an old intent whose PR is still open is settled as not merged"
+
+# AN UNKNOWN MERGE IS NOT SETTLED AS NOT MERGED (round 2): only GitHub's own word settles it.
+function Get-IntentHows { param($Case) return @(Read-IntentLines $Case | Where-Object { $_ -clike '{"kind":"settled"*' }) }
+# a. gh refuses the merge and the view right after fails too.
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$script:mergeSeen = $false
+$r = Invoke-Case -Case $c -Guards later -GhWrap {
+    param($a)
+    $j = @($a) -join " "
+    if ($j -clike "pr merge*") { $script:mergeSeen = $true }
+    if ($script:mergeSeen -and $j -clike "pr view*") { return [pscustomobject]@{ code = 1; out = ""; err = "gh: connection reset" } }
+    return (& $script:innerGh $a)
+}
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub's answer is unknown*nightly run will ask*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a refused merge whose view also failed: the intent stays open, the refusal says GitHub's answer is unknown (" + $r.why + ")")
+# b. gh timed out (code -1) and the view says OPEN.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -GhWrap {
+    param($a)
+    $j = @($a) -join " "
+    if ($j -clike "pr merge*") { return [pscustomobject]@{ code = -1; out = ""; err = "gh ran past 120 s and was stopped" } }
+    return (& $script:innerGh $a)
+}
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub's answer is unknown*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a timed-out merge whose view says OPEN: the intent stays open (" + $r.why + ")")
+# c. a plain refusal, GitHub answering OPEN: settled as not merged, as before.
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$r = Invoke-Case -Case $c -Guards later
+Check ($r.outcome -ceq "refused" -and $r.why -cnotlike "*unknown*" -and @(Get-IntentHows $c).Count -eq 1 -and (@(Get-IntentHows $c)[0]) -clike '*"how":"not-merged"*' -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0) ("a plain refused merge settles the intent as not merged (" + $r.why + ")")
 
 # GITHUB CANNOT BE ASKED: the intent stays, the run ends 2 (never 0), and the merge is not forgotten.
 $c = New-Case

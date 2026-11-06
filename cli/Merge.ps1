@@ -623,7 +623,15 @@ function Invoke-HordeMerge {
     }
     $isMerged = ($null -ne $after -and "" + $after.state -ceq "MERGED")
     if ($isMerged -and $m.code -ne 0) { & $say ("gh answered with an error, but GitHub shows " + $Request.pr + " MERGED: " + (Get-HordeMergeFirstLine ("" + $m.err))) }
-    if (-not $isMerged -and $m.code -ne 0) { & $settle "not-merged"; return (& $refuse ("gh did not merge " + $Request.pr + ": " + (Get-HordeMergeFirstLine ("" + $m.err + "`n" + $m.out)))) }
+    if (-not $isMerged -and $m.code -ne 0) {
+        # SETTLED AS NOT MERGED ONLY WHEN GITHUB SAID SO (round 2 of T-0347). No answer to the view, or a merge that was
+        # stopped on a timeout (code -1: GitHub may still be merging, whatever the view right after says), is an
+        # unknown: the intent stays open and the nightly run asks GitHub, so the merge is never lost.
+        $gitHubSaid = ($null -ne $after -and $m.code -ne -1)
+        if ($gitHubSaid) { & $settle "not-merged" }
+        $unknown = $(if ($gitHubSaid) { "" } else { "; GitHub's answer is unknown, so the intent stays open and the nightly run will ask" })
+        return (& $refuse ("gh did not merge " + $Request.pr + ": " + (Get-HordeMergeFirstLine ("" + $m.err + "`n" + $m.out)) + $unknown))
+    }
     if (-not $isMerged) {
         # gh said it merged and GitHub does not show it: nothing after this can be said truthfully.
         return [pscustomobject]@{ outcome = "merged-unfinished"; why = ("gh said it merged " + $Request.pr + ", but GitHub does not show it MERGED; look at it by hand. The ledger was NOT written and nobody was told" + $(if ($check.skipped -eq $true) { "; the intent to merge stays recorded, so the nightly run queues it if GitHub shows it MERGED" } else { "" })); mergeSha = ""; problems = @("look at the PR by hand") }
