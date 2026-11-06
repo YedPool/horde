@@ -284,6 +284,23 @@ try {
 } finally { Remove-Item -LiteralPath $tdir -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
+Write-Host "--- the coverage floor: a share of the units that ran, and guards ---" -ForegroundColor Cyan
+function Cov { param([int]$Ran, [int]$Unrun, [string]$Guards = "green", [string]$Repo = "a/b") return [pscustomobject]@{ repo = $Repo; suiteCount = $Ran; unrunCount = $Unrun; guards = [pscustomobject]@{ state = $Guards; text = "" } } }
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 10 466) -FloorPercent 90)[0] -ceq "a/b ran 10 of 476 units (2 percent)") "the night of 11-05 is below it, in numbers"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 0 0) -FloorPercent 90)[0] -ceq "a/b ran 0 of 0 units (0 percent)") "a repo with nothing to count ran nothing: below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 396 54) -FloorPercent 90).Count -eq 1) "the night of 10-28, 88 percent, is below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 90 10) -FloorPercent 90).Count -eq 0) "exactly 90 percent is not below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 89 11) -FloorPercent 90).Count -eq 1) "89 percent is"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 899 101) -FloorPercent 90).Count -eq 1) "and 89.9 percent is not rounded up to 90"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0) -FloorPercent 90).Count -eq 0) "a whole night is not"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "not run") -FloorPercent 90)[0] -ceq "a/b ran no guards") "a whole night with no guards run is below it"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "RED") -FloorPercent 90).Count -eq 0) "guards that ran red are a finding of their own, not thin coverage"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "no repo-wide guard list (flake8 critical is a unit below)") -FloorPercent 90).Count -eq 0) "a repo with no guard list owes none"
+Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 1 99) -FloorPercent 0).Count -eq 0) "-FloorPercent 0 finds nothing"
+$covHead = Get-HordeNightlyHeadlineStatus -Repos @([pscustomobject]@{ repo = "a/b"; suiteCount = 10; unrunCount = 466; guards = [pscustomobject]@{ state = "not run"; text = "" }; compare = [pscustomobject]@{}; incomplete = "" }) -CoverageFloorPercent 90
+Check ($covHead -clike "BELOW THE COVERAGE FLOOR of 90 percent: a/b ran 10 of 476 units (2 percent), a/b ran no guards. INCOMPLETE: *") ("the headline leads with it, the rest still follows (" + $covHead + ")")
+
+Write-Host ""
 Write-Host "--- R5: a missing exit code, a skip in a bisect, the report reserve, an unnamed bisect in the headline ---" -ForegroundColor Cyan
 Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false })) -ceq "red") "R5: a run with no exit code is red, never green"
 Check ((Get-HordeNightlyVerdict ([pscustomobject]@{ code = $null; timedOut = $false }) -AtTip) -ceq "red") "R5: at the tip too"
@@ -546,6 +563,8 @@ Write-Output "heavy-slot: memory held by delta, 1 processes, 0.50 GB"
 Write-Output "heavy-slot: released exit=125"
 exit 125
 '@)
+    $thinGate = Join-Path $hn "thin-gate.ps1"
+    [System.IO.File]::WriteAllText($thinGate, ('param([string]$Script, [string]$Worktree, [string]$Out)' + "`r`n" + '[System.IO.File]::WriteAllText($Out, "")' + "`r`n" + 'Write-Output "heavy-slot: gave up after 1 s waiting for the slot; nothing was run"' + "`r`n" + 'Write-Output "heavy-slot: released exit=125"' + "`r`n" + 'exit 125' + "`r`n"))
     $hwr = Join-Path $hn "wr"
     $horigin = Join-Path $hn "horigin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $horigin "test\lib"))
     [void](Git $horigin @("init", "-q", "-b", "main"))
@@ -556,7 +575,7 @@ exit 125
     & git.exe clone -q $origin (Join-Path $hwr "Fix__Py\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
     # Tonight at 23:00 is inside the window, and the real clock is always well before its cutoff.
     $night = (Get-Date).Date.AddHours(23)
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $hwr -HeavySlotScript $gateStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main,Fix/Py:pytest:main")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $hwr -HeavySlotScript $gateStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main,Fix/Py:pytest:main")
     $nc = $LASTEXITCODE
     $callsFile = Join-Path $hn "calls.txt"
     $calls = @(); if (Test-Path -LiteralPath $callsFile) { $calls = @(Get-Content -LiteralPath $callsFile) }
@@ -602,7 +621,7 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     [void](Git $sorigin @("add", "-A")); [void](Git $sorigin @("commit", "-q", "-m", "base"))
     $swr = Join-Path $sn "wr"
     & git.exe clone -q $sorigin (Join-Path $swr "Fix__Need\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
-    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $okGate -ProbesFile $probesJson -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Need:horde:main")
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $night.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $okGate -ProbesFile $probesJson -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Need:horde:main")
     $snc = $LASTEXITCODE
     $scalls = @(); if (Test-Path -LiteralPath (Join-Path $sn "calls.txt")) { $scalls = @(Get-Content -LiteralPath (Join-Path $sn "calls.txt")) }
     Check ($snc -eq 0) ("the night with needs ends exit 0 (" + $snc + ")")
@@ -645,6 +664,18 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     Check (@($bts | Where-Object { $_ -like "*pytest-of-*" -or (Split-Path -Parent $_) -ne $btDir }).Count -eq 0 -and $bts.Count -eq 2) ("the basetemp is beside the nodes file, never the shared pytest-of folder (" + ($bts -join ", ") + ")")
     Check ($bts.Count -eq 2 -and $bts[0] -ne $bts[1]) "each run gets a basetemp of its own"
     Check (@(Get-ChildItem -LiteralPath $btDir -Directory).Count -eq 0) "and the wrap leaves no basetemp folder behind"
+    # A NIGHT THAT RAN FEW UNITS IS A FAILURE (2026-11-05: 10 of 476 Horde units, no guards, exit 0). The first rig ran 1 of 7.
+    $thinWr = Join-Path $work "thin"
+    & git.exe clone -q $horigin (Join-Path $thinWr "Fix__Hord\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 6) ("a night with no unit run ends exit 6, not 0 (" + $LASTEXITCODE + ")")
+    $thinFile = @(Get-ChildItem -LiteralPath (Join-Path $thinWr "reports") -Filter "*.txt")[0].FullName
+    $thinHead = (Get-Content -LiteralPath $thinFile)[0]
+    Check ($thinHead -like "*BELOW THE COVERAGE FLOOR of 90 percent: Fix/Hord ran 0 of *") ("and the report's first line says so (" + $thinHead + ")")
+    Check ([System.IO.File]::ReadAllText((Join-Path $thinWr "nightly.log")) -like "*below the coverage floor of 90 percent*") "and the log"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $thinWr -HeavySlotScript $thinGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hord:horde:main")
+    Check ($LASTEXITCODE -eq 0) ("-CoverageFloorPercent 0 is the one setting that turns it off (" + $LASTEXITCODE + ")")
+
     # THE NET'S FIRST CLAIM ON THE SLOT: held through every gate call of the suite phase, each gate told it is the net's.
     $cn = Join-Path $work "claim"; [void][System.IO.Directory]::CreateDirectory($cn)
     $claimStub = Join-Path $cn "gate.ps1"
