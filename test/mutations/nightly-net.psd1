@@ -14,8 +14,14 @@
            Find = '.ToString("yyyy-MM-dd''T''HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))'
            Replace = '.ToString("yyyy-MM-dd''T''HH:mm:sszzz", [System.Globalization.CultureInfo]::InvariantCulture))' }
         @{ Name = "task-boundary-wrong-hour"
-           Find = 'param([datetime]$Date, [int]$Hour = 22)'
-           Replace = 'param([datetime]$Date, [int]$Hour = 21)' }
+           Find = 'param([datetime]$Date, [int]$Hour = 22, [int]$Minute = 0)'
+           Replace = 'param([datetime]$Date, [int]$Hour = 21, [int]$Minute = 0)' }
+        @{ Name = "label-ignores-the-early-morning"
+           Find = '    if ($Time -lt $d.AddHours($EndHour).AddMinutes($EndMinute)) { $d = $d.AddDays(-1) }'
+           Replace = '' }
+        @{ Name = "label-flips-at-the-wrong-minute"
+           Find = '    if ($Time -lt $d.AddHours($EndHour).AddMinutes($EndMinute)) { $d = $d.AddDays(-1) }'
+           Replace = '    if ($Time -le $d.AddHours($EndHour).AddMinutes($EndMinute)) { $d = $d.AddDays(-1) }' }
         @{ Name = "deadline-always-tomorrow"
            Find = '    if ($Now -lt $today) { return $today }'
            Replace = '    if ($false) { return $today }' }

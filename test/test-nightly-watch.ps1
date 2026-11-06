@@ -167,6 +167,48 @@ $msgN = Format-HordeNightlyWatchMessage -Decision $nt -Verdict $incv -Lookback 1
 Check ((G $msgN "founder") -ceq "" -and (G $msgN "m") -like "*NOTE for M only, not a miss*INCOMPLETE*") "an incomplete night goes to M only, as a note"
 $msgT = Format-HordeNightlyWatchMessage -Decision $tf -Verdict $okv -Lookback 14
 Check ((G $msgT "m") -like "*the night ran, but the scheduled task looks wrong*TASK: the scheduled task is disabled*" -and (G $msgT "founder") -like "*scheduled task looks wrong*disabled*") "a task finding on a ran night is told as such"
+# The phone sentence is true for each way a night can be missed (T-0397): a night whose tests ran must not be called a night they did not run.
+$phoneCases = @(
+    @{ status = "NOT STARTED"; log = ""; names = @(); say = "*did not run for the night of 2026-11-03*"; not = "*started*" },
+    @{ status = "REFUSED"; log = "2026-11-03T21:00:00 nightly net 2026-11-03: window CLOSED, x"; names = @(); say = "*did not run for the night of 2026-11-03*outside*hours*"; not = "*started but*" },
+    @{ status = "BUSY"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03-BUSY.txt"); say = "*did not run for the night of 2026-11-03*still*"; not = "*started but*" },
+    @{ status = "FAILED"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03-FAILED.txt"); say = "*started on the night of 2026-11-03*failed*"; not = "*did not run*" },
+    @{ status = "NOT REPORTED"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @(); say = "*started on the night of 2026-11-03 but did not finish*"; not = "*did not run*" },
+    @{ status = "NOT TOLD"; log = "2026-11-03T22:00:05 nightly net 2026-11-03: window open, x"; names = @("2026-11-03.txt"); say = "*ran on the night of 2026-11-03*report did not reach M*"; not = "*did not run*" }
+)
+foreach ($pc in $phoneCases) {
+    $pv = Get-HordeNightlyWatchVerdict -Date $D -LogText $pc.log -ReportNames $pc.names
+    $pm = Format-HordeNightlyWatchMessage -Decision (Get-HordeNightlyWatchDecision -Verdict $pv -Streak 1 -State $empty) -Verdict $pv -Lookback 14
+    $pf = G $pm "founder"
+    Check ((G $pv "status") -ceq $pc.status) ("phone wording: the case really is " + $pc.status)
+    Check ($pf -like $pc.say -and $pf -notlike $pc.not -and $pf -like "*Details are with M.") ("phone wording for " + $pc.status + " is true and plain: " + $pf)
+    Check ($pf -cmatch '^[\x20-\x7E]*$' -and $pf -notmatch '["<>;]') ("phone wording for " + $pc.status + " is ASCII with no double quote, semicolon or angle bracket")
+}
+
+Write-Host ""
+Write-Host "--- a NOT REPORTED night and the PC's last boot (T-0397) ---" -ForegroundColor Cyan
+# The real shape of 2026-11-04: window open 22:00:02, last line 22:57:17, the PC restarted at 23:02:20, no report.
+$killedLog = "2026-11-04T22:00:02 nightly net 2026-11-04: window open, cutoff 2026-11-05T06:15:00, repos a`n2026-11-04T22:57:17 order: a"
+function KillVerdict { param($Boot, [string[]]$Names = @()) return (Get-HordeNightlyWatchVerdict -Date "2026-11-04" -LogText $killedLog -ReportNames $Names -BootTime $Boot) }
+$kv = KillVerdict ([datetime]"2026-11-04 23:02:20")
+Check ((G $kv "status") -ceq "NOT REPORTED" -and (G $kv "detail") -like "*the PC restarted at 23:02 and killed the run*" -and (G $kv "rebootAt") -ceq "23:02") "a boot inside the run says the PC restarted at that time"
+$kmsg = Format-HordeNightlyWatchMessage -Decision (Get-HordeNightlyWatchDecision -Verdict $kv -Streak 1 -State $empty) -Verdict $kv -Lookback 14
+Check ((G $kmsg "founder") -like "*started on the night of 2026-11-04 but the PC restarted at 23:02 and stopped them*" -and (G $kmsg "founder") -notlike "*did not run*" -and (G $kmsg "m") -like "*the PC restarted at 23:02*") "and the phone and M say so, never 'did not run'"
+Check (((G $kmsg "founder") + (G $kmsg "m")) -cmatch '^[\x20-\x7E\n]*$' -and ((G $kmsg "founder") + (G $kmsg "m")) -notmatch '["<>;]') "in plain ASCII with no double quote, semicolon or angle bracket"
+Check ((G (KillVerdict ([datetime]"2026-11-05 02:10:00")) "rebootAt") -ceq "02:10") "a boot after midnight, still in the window, counts"
+Check ((G (KillVerdict ([datetime]"2026-11-05 06:30:00")) "rebootAt") -ceq "06:30") "and so does a boot at the window's end"
+foreach ($b in @("2026-11-04 21:40:00", "2026-11-04 22:00:01", "2026-11-05 06:30:01", "2026-11-05 14:00:00", "2026-11-06 03:00:00")) {
+    $nv = KillVerdict ([datetime]$b)
+    Check ((G $nv "rebootAt") -ceq "" -and (G $nv "detail") -like "*killed or crashed midway*" -and (G $nv "detail") -notlike "*restarted*") ("a boot at " + $b + " is no evidence for this run and claims no restart")
+}
+$nv = KillVerdict $null
+Check ((G $nv "rebootAt") -ceq "" -and (G $nv "detail") -like "*killed or crashed midway*") "an unknown boot time claims nothing"
+$nv = Get-HordeNightlyWatchVerdict -Date "2026-11-04" -LogText $killedLog -ReportNames @()
+Check ((G $nv "rebootAt") -ceq "") "and so does leaving the boot time out"
+$nv = Get-HordeNightlyWatchVerdict -Date "2026-11-04" -LogText $killedLog -ReportNames @("2026-11-04.txt") -BootTime ([datetime]"2026-11-04 23:02:20")
+Check ((G $nv "status") -ceq "NOT TOLD" -and (G $nv "rebootAt") -ceq "" -and (G $nv "detail") -notlike "*restarted*") "a night with a report is not blamed on a restart"
+$nv = Get-HordeNightlyWatchVerdict -Date "2026-11-04" -LogText "" -ReportNames @() -BootTime ([datetime]"2026-11-04 23:02:20")
+Check ((G $nv "status") -ceq "NOT STARTED" -and (G $nv "rebootAt") -ceq "") "a night that never started is not blamed on a restart"
 
 Write-Host ""
 Write-Host "--- two channels, each tried whatever the other did ---" -ForegroundColor Cyan
@@ -219,8 +261,8 @@ try {
         Add-Content -LiteralPath (Join-Path $Rig.work "nightly.log") -Value (RanLog $D $Next) -Encoding Ascii
         [System.IO.File]::WriteAllText((Join-Path $Rig.work ("reports\" + $D + ".txt")), ("Nightly net " + $D + ": 0 newly red across 2 repos. " + $Headline + "`n"))
     }
-    function Invoke-Watch { param($Rig, [string]$At, [string]$Xml = $xmlGood, [bool]$Founder = $false, [string[]]$More = @())
-        $a = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $watch, "-WorkRoot", $Rig.work, "-AtTime", $At, "-TellProgram", $Rig.tell, "-HordeScript", $Rig.horde, "-TellRetrySeconds", "0", "-TellTries", "1", "-TaskXmlFile", $Xml)
+    function Invoke-Watch { param($Rig, [string]$At, [string]$Xml = $xmlGood, [bool]$Founder = $false, [string[]]$More = @(), [string]$Boot = "none")
+        $a = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $watch, "-WorkRoot", $Rig.work, "-AtTime", $At, "-BootTime", $Boot, "-TellProgram", $Rig.tell, "-HordeScript", $Rig.horde, "-TellRetrySeconds", "0", "-TellTries", "1", "-TaskXmlFile", $Xml)
         if ($Founder) { $a += @("-NoticeService", "nightly-watch", "-NoticeSecretFile", $secret) }
         $o = @(& $exe @a @More)
         return [pscustomobject]@{ code = $LASTEXITCODE; out = ($o -join "`n") }
@@ -251,7 +293,7 @@ try {
     Check ($alarm -like "*NIGHTLY WATCH 2026-11-01: MISSED, REFUSED*" -and $alarm -notlike "*in a row*") "the alarm file names the night and REFUSED, and a single night is not a streak"
     Check ((Lines $rig.rec).Count -eq 1 -and (Lines $rig.rec)[0] -like "*tell M -Kind report -MessageFile*" ) "M was told with the message file"
     $h = Lines $rig.hrec
-    Check ($h.Count -eq 1 -and $h[0] -like "notify nightly-watch *service.secret | Nightly tests did not run for the night of 2026-11-01 (REFUSED)*") ("the phone line went through horde notify -Service with the secret FILE path (" + ($h -join " / ") + ")")
+    Check ($h.Count -eq 1 -and $h[0] -like "notify nightly-watch *service.secret | Nightly tests did not run for the night of 2026-11-01: they were started outside their allowed hours.*") ("the phone line went through horde notify -Service with the secret FILE path (" + ($h -join " / ") + ")")
     $everything = (Get-ChildItem -LiteralPath $rig.work -Recurse -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
     Check ($everything -notlike ("*" + $secretWord + "*") -and $r.out -notlike ("*" + $secretWord + "*")) "the secret's content is never read, logged or sent"
     Check ((Get-Content -LiteralPath (Join-Path $rig.work "nightly-watch.log") -Raw) -notlike "*nightly net 20*: window*" -and (Get-Content -LiteralPath (Join-Path $rig.work "nightly.log") -Raw) -notlike "*watch*") "the watcher keeps to its own log: nightly.log stays the net's evidence"
@@ -353,6 +395,18 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $rig.work "watch-state.json"), "")
     $r = Invoke-Watch $rig "2026-11-04 07:15"
     Check ((Lines $rig.rec).Count -eq 1) "nor does an empty one"
+    Write-Host ""
+    Write-Host "--- the real script: a restart that killed the run is named (T-0397) ---" -ForegroundColor Cyan
+    $rig = New-Rig
+    Add-Content -LiteralPath (Join-Path $rig.work "nightly.log") -Value @("2026-11-03T22:00:02 nightly net 2026-11-03: window open, cutoff 2026-11-04T06:15:00, repos a", "2026-11-03T22:57:17 order: a") -Encoding Ascii
+    $r = Invoke-Watch $rig "2026-11-04 07:15" -Founder $true -Boot "2026-11-03 23:02:20"
+    Check ((AlarmText $rig "2026-11-03") -like "*NOT REPORTED*the PC restarted at 23:02 and killed the run*") "M is told the PC restarted at the boot time"
+    Check ((Lines $rig.hrec).Count -eq 1 -and (Lines $rig.hrec)[0] -like "*the PC restarted at 23:02*" -and (Lines $rig.hrec)[0] -notlike "*did not run*") "and so is the phone"
+    $rig = New-Rig
+    Add-Content -LiteralPath (Join-Path $rig.work "nightly.log") -Value @("2026-11-03T22:00:02 nightly net 2026-11-03: window open, cutoff 2026-11-04T06:15:00, repos a", "2026-11-03T22:57:17 order: a") -Encoding Ascii
+    $r = Invoke-Watch $rig "2026-11-04 07:15" -Boot "2026-11-04 06:45:00"
+    Check ((AlarmText $rig "2026-11-03") -like "*NOT REPORTED*killed or crashed midway*" -and (AlarmText $rig "2026-11-03") -notlike "*restarted*") "a boot after the window is not blamed"
+
 
     Write-Host ""
     Write-Host "--- the real script: the dry run writes and sends nothing ---" -ForegroundColor Cyan

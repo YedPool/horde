@@ -33,7 +33,9 @@ $boundary = Get-HordeNightlyTaskBoundary -Date $first -Hour $Hour
 Write-Host ("task " + $taskPath + $taskName)
 Write-Host ("<StartBoundary>" + $boundary + "</StartBoundary>  (wall-clock, no offset), daily")
 Write-Host ("action: " + $ps51 + " " + $argument)
-Write-Host "settings: execution time limit PT8H30M, multiple instances IgnoreNew"
+# One splat feeds the printed line and the call, so the dry run cannot say one thing and register another.
+$batterySettings = @{ AllowStartIfOnBatteries = $true; DontStopIfGoingOnBatteries = $true }
+Write-Host ("settings: execution time limit PT8H30M, multiple instances IgnoreNew, start on battery, not stopped on battery (" + (@($batterySettings.Keys | Sort-Object) -join " ") + ")")
 if ($Plan -or $WhatIfPreference) { Write-Host "dry run: nothing registered"; exit 0 }
 if (-not (Test-Path -LiteralPath $script)) { throw ("not found: " + $script) }
 
@@ -41,7 +43,7 @@ $action = New-ScheduledTaskAction -Execute $ps51 -Argument $argument -WorkingDir
 $trigger = New-ScheduledTaskTrigger -Daily -At $first.AddHours($Hour)
 # Set the string itself: whatever the cmdlet wrote, the stored boundary is exactly the offset-free one.
 $trigger.StartBoundary = $boundary
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 8 -Minutes 30) -AllowStartIfOnBatteries
+$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 8 -Minutes 30) @batterySettings
 $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
 if ($PSCmdlet.ShouldProcess($taskPath + $taskName, "register or update")) {

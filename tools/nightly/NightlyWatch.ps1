@@ -1,7 +1,7 @@
 # tools/nightly/NightlyWatch.ps1 - the missed-run watcher of the nightly net. T-0397.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\nightly\NightlyWatch.ps1 [-Plan] [-WorkRoot <dir>]
-#       [-NoticeService <name> -NoticeSecretFile <path>] [-AtTime <datetime>] [-TaskXmlFile <file>]
+#       [-NoticeService <name> -NoticeSecretFile <path>] [-AtTime <datetime>] [-BootTime <datetime>|none] [-TaskXmlFile <file>]
 #
 # WHY IT EXISTS. On 2026-11-01 to 11-03 the nightly task fired an hour early, the net refused and nobody heard. PR 420
 # made a refused start tell M, but that lives INSIDE the net: it cannot catch a task that never fired, a disabled or
@@ -14,7 +14,8 @@
 #   NOT STARTED    nightly.log has no line for that date with the window open (also: no work folder, an empty one).
 #   REFUSED        a -REFUSED report or a window CLOSED line, and no run.
 #   FAILED, BUSY   those report files, and no report.
-#   NOT REPORTED   it started but there is no reports\<date>.txt.
+#   NOT REPORTED   it started but there is no reports\<date>.txt. If the PC's last boot (Win32_OperatingSystem; -BootTime
+#                  overrides it for a suite, "none" means unknown) falls inside that run, the text says the PC restarted.
 #   NOT TOLD       the report exists but the log has no report sent line.
 # Every one but RAN is a MISSED night. A night that RAN but headed INCOMPLETE is a lower-level note to M only. The
 # scheduled task itself is read too (missing, disabled, a trigger whose StartBoundary carries an offset): a finding even
@@ -35,6 +36,7 @@
 param(
     [string]$WorkRoot = "",
     [string]$AtTime = "",
+    [string]$BootTime = "",
     [string]$TellProgram = "wezfleet",
     [string]$Target = "M",
     [string]$HordeScript = "",
@@ -55,6 +57,11 @@ if ($WorkRoot -eq "") { $WorkRoot = Join-Path (Join-Path $env:LOCALAPPDATA "hord
 if ($HordeScript -eq "") { $HordeScript = Join-Path $root "horde.ps1" }
 $now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
 $ReportDir = Join-Path $WorkRoot "reports"
+# The PC's last boot, local time; $null when it cannot be read (the verdict then claims no restart).
+$boot = $null
+if ($BootTime -eq "none") { }
+elseif ($BootTime -ne "") { $boot = [datetime]::Parse($BootTime, [System.Globalization.CultureInfo]::InvariantCulture) }
+else { try { $boot = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime } catch { $boot = $null } }
 $WatchLog = Join-Path $WorkRoot "nightly-watch.log"
 $StateFile = Join-Path $WorkRoot "watch-state.json"
 $Fallback = Join-Path ([System.IO.Path]::GetTempPath()) "horde-nightly-fallback"
@@ -141,7 +148,7 @@ try {
     $verdicts = @()
     foreach ($d in @(Get-HordeNightlyWatchDates -Date $date -Count $Lookback)) {
         $rt = $(if ($d -ceq $date) { Read-WatchText (Join-Path $ReportDir ($d + ".txt")) } else { "" })
-        $v = Get-HordeNightlyWatchVerdict -Date $d -LogText $logText -ReportNames $reportNames -ReportText $rt -PendingCount $pending -FolderMissing $folderMissing
+        $v = Get-HordeNightlyWatchVerdict -Date $d -LogText $logText -ReportNames $reportNames -ReportText $rt -PendingCount $pending -FolderMissing $folderMissing -BootTime $boot
         $verdicts += $v
         if (-not $v.missed) { break }
     }
