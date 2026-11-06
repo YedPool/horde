@@ -83,7 +83,7 @@ Check ($null -ne $halfSent -and -not $halfSent.ok -and $halfSent.code -ceq "bad-
 $spLine = $ascii.GetString((Line $golden["req-session-spawn.json"]))
 $U = [string][char]92 + "u"
 Refused (Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + '0000 ')))) "bad-frame" "a NUL" "a received prompt holding an escaped NUL is refused"
-Refused (Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + 'd800 ')))) "bad-frame" "one spelling" "a received prompt holding a lone escaped surrogate is refused (ConvertFrom-Json replaces the half, so the frame is not written again the same)"
+Refused (Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + 'd800 ')))) "bad-frame" "half a surrogate pair" "a received prompt holding a lone escaped surrogate is refused (the parser keeps the half as written, and a half cannot cross the link)"
 Check ((Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + 'd83d' + $U + 'de00 ')))).ok) "CONTROL: a received prompt holding a whole escaped pair is accepted"
 Check ((ConvertTo-HordeWireString ([char]::ConvertFromUtf32(0x1F600))) -ceq '"\ud83d\ude00"') "a character outside the BMP is its two UTF-16 escapes"
 Check ((ConvertTo-HordeWireString ([string][char]0x2028)) -ceq '"\u2028"') "a line separator (U+2028) is escaped"

@@ -191,7 +191,10 @@ function ConvertFrom-HordeJson {
     param($Text)
     if ($null -eq $Text) { throw (New-Object System.ArgumentNullException "Text", "there is no text to parse") }
     if ($Text -is [array]) { $Text = @($Text | ForEach-Object { "" + $_ }) -join "`n" }
-    $parsed = [HordeJsonStrictReader]::Read(("" + $Text))
+    # A .NET call wraps what it throws: unwrapped, a caller's reason read 'Exception calling "Read" with "1"
+    # argument(s): "not JSON: ..."' (measured, test-node-engine-layers). The reason is the parser's own words.
+    try { $parsed = [HordeJsonStrictReader]::Read(("" + $Text)) }
+    catch [System.Management.Automation.MethodInvocationException] { throw $_.Exception.InnerException }
     # The comma keeps a top-level array one value on the way out.
     if ($parsed -is [array]) { return , $parsed }
     return $parsed

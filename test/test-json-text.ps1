@@ -76,6 +76,8 @@ $wantShape = "[1,2]:1/True/2;[7]:1/True/1;[]:1/True/0"
 $shapeHere = Get-ShapeSignature
 Check ($shapeHere -ceq $wantShape) ("in this shell a top-level array is one array: @()-wrapped count 1, a one-element array stays an array, an empty one is an empty array (got '" + $shapeHere + "')")
 Check (Throws { ConvertFrom-HordeJson '{"a":' }) "text that is not JSON throws, as ConvertFrom-Json does"
+$reason = ""; try { $null = ConvertFrom-HordeJson '{ not json' } catch { $reason = $_.Exception.Message }
+Check ($reason -clike "not JSON: *") ("the reason is the parser's own words, not wrapped by the method call (" + $reason + ")")
 $caught = $false; try { $null = ConvertFrom-HordeJson 'not json' } catch { $caught = $true }
 Check ($caught -eq $true) "a caller's try catches the throw from inside the seam"
 
