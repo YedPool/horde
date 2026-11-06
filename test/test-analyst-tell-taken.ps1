@@ -242,10 +242,12 @@ Clear-HordeAnalystTold -State $st -Keys @("no-answer")
 Check ((Get-HordeAnalystTellGen -State $st -Key "no-answer") -eq 1 -and (Get-HordeAnalystTellGen -State $st -Key "no-analyst") -eq 0 -and @($st.told) -ccontains "no-analyst" -and @($st.told) -cnotcontains "no-answer") "clearing a key ends its event: its generation rises, the others' do not"
 Clear-HordeAnalystTold -State $st -Keys @("no-answer", "start-silent")
 Check ((Get-HordeAnalystTellGen -State $st -Key "no-answer") -eq 2 -and (Get-HordeAnalystTellGen -State $st -Key "start-silent") -eq 1) "and again, each by itself"
+Clear-HordeAnalystTold -State $st -Keys @("start-silent")
+Check ((Get-HordeAnalystTellGen -State $st -Key "no-answer") -eq 2 -and (Get-HordeAnalystTellGen -State $st -Key "start-silent") -eq 2) "clearing one key keeps the generations of the keys not named"
 $sp = Join-Path $work "state\supervisor.json"
 Write-HordeAnalystState -Path $sp -State $st
 $back = (Read-HordeAnalystState -Path $sp).value
-Check ((Get-HordeAnalystTellGen -State $back -Key "no-answer") -eq 2 -and (Get-HordeAnalystTellGen -State $back -Key "start-silent") -eq 1) "the generations are in the state file and come back"
+Check ((Get-HordeAnalystTellGen -State $back -Key "no-answer") -eq 2 -and (Get-HordeAnalystTellGen -State $back -Key "start-silent") -eq 2) "the generations are in the state file and come back"
 [System.IO.File]::WriteAllText($sp, '{"v":1,"phase":"none","sessionId":"","previousSessionId":"","startReason":"","startedAt":null,"lastRoundAt":null,"lastWakeAt":null,"contextAt":null,"findingsOffset":0,"contextTokens":-1,"transcriptLength":-1,"told":["no-answer"],"rounds":[]}', (New-Object System.Text.UTF8Encoding($false)))
 $old2 = Read-HordeAnalystState -Path $sp
 Check ($old2.state -ceq "known" -and (Get-HordeAnalystTellGen -State $old2.value -Key "no-answer") -eq 0) "a state file written before the generations existed is read, at generation 0"
@@ -329,6 +331,11 @@ $script:now = $t0
 $null = Send-HordeAnalystTell -State $stE -Key "no-answer" -Tools $tools -Values $pol.values
 $idE0 = Id-Of "no-answer" 0
 Check (@($stE.told) -ccontains "no-answer" -and (Posts-Of $idE0) -eq 1) "event one of no-answer is posted under generation 0"
+# The teller's own lines (a full list given up, an already-posted copy) are part of the journal line the pass says.
+$toolsL = @{ Tell = { param($Key, $Body, $Values, $Gen) return [pscustomobject]@{ ok = $true; detail = ""; lines = @("ALARM: the teller's own line") } } }
+$stL = New-HordeAnalystState
+$jl = Send-HordeAnalystTell -State $stL -Key "spawn-failed" -Tools $toolsL -Values $pol.values
+Check ($jl.Contains("posted to the warchief: spawn-failed") -and $jl.Contains("ALARM: the teller's own line")) ("the teller's own lines are in the journal line (" + $jl + ")")
 $script:stages[$idE0] = "seen"
 $null = Tick $HE 30
 Check (@(Marks-Of $HE $idE0).Count -eq 0) "and taken"
