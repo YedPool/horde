@@ -65,9 +65,10 @@ test('a ledger ahead of the counter raises it', () => {
 
 test('the task rows raise it too, read as numbers and not as text', () => {
   const w = home();
-  addTask(w.file, 'T-0999');
-  addTask(w.file, 'T-1000');
-  assert.deepEqual(run(w.env, 'take-task', '--above', '3').out, ['T-1001']);
+  // T-9999 sorts after T-10000 as text, so only a numeric maximum gets this right.
+  addTask(w.file, 'T-9999');
+  addTask(w.file, 'T-10000');
+  assert.deepEqual(run(w.env, 'take-task', '--above', '3').out, ['T-10001']);
 });
 
 test('eight processes at once get eight different numbers, in a row', async () => {
@@ -92,7 +93,10 @@ test('a held write lock is exit 3 and the words fleet.db busy, and takes no numb
   const holder = openStore(w.file);
   holder.exec('BEGIN IMMEDIATE');
   try {
+    const t = Date.now();
     assert.deepEqual((({ code, err }) => ({ code, err }))(run(w.env, 'take-task', '--above', '1')), { code: 3, err: ['fleet.db busy'] });
+    // The wait given (100 ms here) is the wait used: the 5 s default would hold up task.py's own retry.
+    assert.ok(Date.now() - t < 3000, 'took ' + (Date.now() - t) + ' ms');
   } finally {
     holder.exec('ROLLBACK');
     holder.close();

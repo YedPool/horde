@@ -31,7 +31,9 @@
            Replace = 'db = openStore(file);' }
         @{ Name = "not-under-the-write-lock"
            Find = 'out(inWrite(db, () => takeTaskNumber(db, Number(argv[2]))));'
-           Replace = 'out(takeTaskNumber(db, Number(argv[2])));' }
+           Replace = 'out(takeTaskNumber(db, Number(argv[2])));'
+           Expect = "survives"
+           Reason = "Numbers stay unique without the transaction: the raise and the take are each one atomic UPDATE, and the raise never lowers the counter. The transaction is kept for the one-write-path rule (inWrite checks recursive_triggers), which no test here can tell apart." }
         @{ Name = "no-home-is-not-its-own-exit"
            Find = 'return 2;'
            Replace = 'return 1;' }
