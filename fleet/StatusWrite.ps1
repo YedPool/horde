@@ -143,12 +143,15 @@ function Invoke-HordeStatusOrcRow {
     # FAIL-OPEN, because the card is what matters and it is already written: no home, no node (or one older than
     # 24), no fleet.db, a busy or newer database all come back as { state = "skipped"; reason }, never as a throw.
     # state is "added" (a row was made), "kept" (it was there) or "skipped". Only a folder named "thrall" is the Thrall's.
+    # T-0389: the card just written is passed too (--card), so the same transaction appends its orc_status row (live,
+    # backfill 0); statusRow says what became of that row: "status row added", "status row kept", "no status row: <why>"
+    # (the card's doing or blocked is past what the table holds; the orc row is still made), or "" when skipped.
     param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][string]$Orc, [AllowEmptyString()][string]$Lane = "")
     try {
         $resolved = Resolve-HordeHome
-        if ($resolved.source -eq "default") { return [pscustomobject]@{ state = "skipped"; reason = "no Horde home (set HORDE_HOME, or horde home set -Path <folder>)" } }
+        if ($resolved.source -eq "default") { return [pscustomobject]@{ state = "skipped"; reason = "no Horde home (set HORDE_HOME, or horde home set -Path <folder>)"; statusRow = "" } }
         $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $node) { return [pscustomobject]@{ state = "skipped"; reason = "node is not installed (fleet.db needs Node.js 24 or later)" } }
+        if ($null -eq $node) { return [pscustomobject]@{ state = "skipped"; reason = "node is not installed (fleet.db needs Node.js 24 or later)"; statusRow = "" } }
         # No separate `node --version` probe: it would run outside the 20 s net below. A node too old for fleet.db
         # fails orc-cli.mjs on its first import, and that comes back here as a skip like any other refusal.
         $leaf = Split-Path -Leaf ([System.IO.Path]::GetFullPath($Folder).TrimEnd("\", "/"))
@@ -159,6 +162,7 @@ function Invoke-HordeStatusOrcRow {
         $psi.FileName = $node.Source
         $psi.Arguments = '"' + (Join-Path (Split-Path -Parent $PSScriptRoot) "fleet-db\orc-cli.mjs") + '" ensure --folder "' + $leaf + '" --letter "' + $Orc + '" --lane "' + $laneText + '"'
         if ($leaf -ceq "thrall") { $psi.Arguments += " --thrall" }
+        $psi.Arguments += ' --card "' + (Join-Path ([System.IO.Path]::GetFullPath($Folder)) $script:HordeFleetStatusFile) + '"'
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -169,17 +173,21 @@ function Invoke-HordeStatusOrcRow {
             $errTask = $p.StandardError.ReadToEndAsync()
             $outTask = $p.StandardOutput.ReadToEndAsync()
             # The database waits at most a few seconds for its lock; this is the net under that, killing only the process started here.
-            if (-not $p.WaitForExit(20000)) { try { $p.Kill() } catch { }; return [pscustomobject]@{ state = "skipped"; reason = "fleet.db did not answer in 20 seconds" } }
+            if (-not $p.WaitForExit(20000)) { try { $p.Kill() } catch { }; return [pscustomobject]@{ state = "skipped"; reason = "fleet.db did not answer in 20 seconds"; statusRow = "" } }
             $p.WaitForExit()
             $said = ("" + $outTask.Result).Trim()
-            if ($p.ExitCode -eq 0 -and ($said -ceq "added" -or $said -ceq "kept")) { return [pscustomobject]@{ state = $said; reason = "" } }
+            if ($p.ExitCode -eq 0 -and $said -cmatch '\A(added|kept)(; (status row added|status row kept|no status row: [\x20-\x7E]+))?\z') {
+                $statusRow = ""
+                if ($Matches[3]) { $statusRow = $Matches[3] }
+                return [pscustomobject]@{ state = $Matches[1]; reason = ""; statusRow = $statusRow }
+            }
             # orc-cli.mjs says its reason on a line of its own ("fleet.db..." or "refused..."); a node crash or warning
             # printed around it is not the reason, so only such a line is taken.
             $why = (("" + $errTask.Result) -split "\r?\n" | Where-Object { $_ -match '^(fleet\.db|refused)' } | Select-Object -Last 1)
             if (-not $why) { $why = "the row command stopped with exit code " + $p.ExitCode + " (fleet.db needs Node.js 24 or later)" }
-            return [pscustomobject]@{ state = "skipped"; reason = ("" + $why).Trim() }
+            return [pscustomobject]@{ state = "skipped"; reason = ("" + $why).Trim(); statusRow = "" }
         } finally { $p.Dispose() }
     } catch {
-        return [pscustomobject]@{ state = "skipped"; reason = $_.Exception.Message }
+        return [pscustomobject]@{ state = "skipped"; reason = $_.Exception.Message; statusRow = "" }
     }
 }

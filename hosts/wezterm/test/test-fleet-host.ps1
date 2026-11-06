@@ -198,18 +198,18 @@ $at = [datetime]::new(2026, 10, 16, 11, 30, 5, [System.DateTimeKind]::Utc)
 $w = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $nw
 $mp = Join-Path $nw ($sidW + ".json")
 Check ($w.state -ceq "known" -and "" + $w.value -ceq $mp -and (Test-Path -LiteralPath $mp -PathType Leaf)) ("the marker is written, in a folder it makes, named by the session id (" + $w.state + ")")
-$mj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+$mj = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))
 Check ($mj.v -eq 1 -and $mj.sessionId -ceq $sidW -and $mj.by -ceq "horde" -and $mj.reason -ceq "hibernated" -and $mj.at -ceq "2026-10-16T11:30:05Z") "it holds v 1, the session id, by horde, the reason hibernated and the time"
 Check ((@($mj.PSObject.Properties.Name | Sort-Object) -join ",") -ceq "at,by,reason,sessionId,v") "and nothing else"
 Check (@(Get-ChildItem -LiteralPath $nw -Force | Where-Object { $_.Name -ne ($sidW + ".json") }).Count -eq 0) "no temporary file is left beside it"
 $bytes = [System.IO.File]::ReadAllBytes($mp)
 Check (-not ($bytes.Count -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB)) "it has no byte-order mark, which the restore plugin's JSON reader would trip on"
 $again = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at.AddMinutes(1) -Dir $nw
-Check ($again.state -ceq "known" -and ([System.IO.File]::ReadAllText($mp) | ConvertFrom-Json).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
+Check ($again.state -ceq "known" -and (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
 # A time given in local time is written as the same moment in UTC (the Z on the end says so).
 $localAt = [datetime]::new(2026, 10, 16, 7, 30, 5, [System.DateTimeKind]::Local)
 [void](Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "parked" -At $localAt -Dir $nw)
-$lj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+$lj = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))
 Check ($lj.at -ceq $localAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) -and $lj.reason -ceq "parked") ("a local time is written as UTC (" + $lj.at + ")")
 $rm = Remove-HordeWeztermFleetNoRestore -SessionId $sidW -Dir $nw
 Check ($rm.state -ceq "known" -and $rm.value -ceq "removed") "THE TWO MATCH: the wake's remover finds and removes exactly the marker the writer made"
@@ -257,6 +257,42 @@ Check ($a.state -ceq "unknown" -and (Test-Path -LiteralPath (Join-Path $ur ($sid
 Remove-Item -LiteralPath $ur -Recurse -Force -ErrorAction SilentlyContinue
 $hu = Resolve-HordeFleetAdapter -Kind "host"
 Check ($null -ne $hu.value.PSObject.Properties["unmark"] -and $null -ne $hu.value.unmark) "the adapter registers its conditional remover with the port"
+
+Section "the live panes of every terminal, for the fleet.db sessions step (the port's Panes)"
+$pd = Join-Path $env:TEMP ("horde-fleet-host-panes-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $pd | Out-Null
+try {
+    foreach ($n in @("gui-sock-4242", "gui-sock-5151", "gui-sock-6161", "gui-sock-7171", "gui-sock-abc", "notes.txt")) { [System.IO.File]::WriteAllText((Join-Path $pd $n), "x") }
+    $aliveMany = { param($p) if (@(4242, 6161, 7171) -contains $p) { $guiStart } else { $null } }.GetNewClosure()
+    $pcalls = New-Object System.Collections.ArrayList
+    $panesRunner = { param($rest, $envMap, $target)
+        [void]$pcalls.Add([pscustomobject]@{ rest = @($rest); target = $target })
+        if ($target.socket -like "*6161") { return [pscustomobject]@{ code = -1; out = ""; err = "the terminal did not answer within 8000 ms"; timedOut = $true } }
+        if ($target.socket -like "*7171") { return [pscustomobject]@{ code = 0; out = "[]"; err = ""; timedOut = $false } }
+        return [pscustomobject]@{ code = 0; out = $listed; err = ""; timedOut = $false } }.GetNewClosure()
+    $pa = Get-HordeWeztermFleetPanes -SockDir $pd -Runner $panesRunner -ProcessStart $aliveMany
+    Check ($pa.state -ceq "known" -and @($pa.value).Count -eq 4) ("one entry per socket file named for a gui, and no other file (" + $pa.reason + ")")
+    $byName = @{}; foreach ($e in @($pa.value)) { $byName[$e.instance] = $e }
+    Check ($byName["gui-sock-4242"].state -ceq "listed" -and (@($byName["gui-sock-4242"].panes) -join ",") -ceq "17,18,19,20") "a terminal that answers is listed with its pane numbers"
+    Check ($byName["gui-sock-5151"].state -ceq "closed" -and $byName["gui-sock-5151"].reason -like "*not running*") "a socket file whose gui is gone is closed, not asked"
+    Check ($byName["gui-sock-6161"].state -ceq "unknown" -and $byName["gui-sock-6161"].reason -like "*did not list its panes*") "a terminal that does not answer in its limit is UNKNOWN, never closed"
+    Check ($byName["gui-sock-7171"].state -ceq "listed" -and @($byName["gui-sock-7171"].panes).Count -eq 0) "a terminal that says it has no panes (an empty list) is listed with none"
+    Check ($pcalls.Count -eq 3 -and (@($pcalls | ForEach-Object { ($_.rest -join " ") }) | Select-Object -Unique) -ceq "list --format json") "three terminals running: three calls, each exactly cli list --format json"
+    Check (@($pcalls | Where-Object { "" + $_.target.socket -notlike (Join-Path $pd "gui-sock-*") }).Count -eq 0) "and each call named its own terminal's socket, never the environment's"
+    $pcalls.Clear()
+    $pb = Get-HordeWeztermFleetPanes -SockDir $pd -Runner $panesRunner -ProcessStart $aliveMany -BudgetMs -1
+    $bn = @{}; foreach ($e in @($pb.value)) { $bn[$e.instance] = $e }
+    Check ($pcalls.Count -eq 0 -and $bn["gui-sock-4242"].state -ceq "unknown" -and $bn["gui-sock-4242"].reason -like "*budget*" -and $bn["gui-sock-5151"].state -ceq "closed") "a pass whose budget ran out marks the rest unknown, asks nothing more, and still knows a closed gui"
+    $pe = Get-HordeWeztermFleetPanes -SockDir (Join-Path $pd "nothing-here") -Runner $panesRunner -ProcessStart $aliveMany
+    Check ($pe.state -ceq "unknown" -and $pe.reason -like "*no terminal socket folder*") "no socket folder is unknown as a whole, not an empty list"
+    $junk = { param($rest, $envMap, $target) return [pscustomobject]@{ code = 0; out = "not json"; err = ""; timedOut = $false } }
+    $pj = Get-HordeWeztermFleetPanes -SockDir $pd -Runner $junk -ProcessStart $aliveMany
+    Check (@($pj.value | Where-Object { $_.instance -ceq "gui-sock-4242" -and $_.state -ceq "unknown" }).Count -eq 1) "output that is not a list is unknown"
+} finally {
+    if ((Split-Path -Leaf $pd) -match '\Ahorde-fleet-host-panes-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $pd)) { Remove-Item -LiteralPath $pd -Recurse -Force -ErrorAction SilentlyContinue }
+}
+$hp = Resolve-HordeFleetAdapter -Kind "host"
+Check ($null -ne $hp.value.PSObject.Properties["panes"] -and $null -ne $hp.value.panes) "the adapter registers its pane list with the port"
 
 Section "the adapter registers itself"
 $h = Resolve-HordeFleetAdapter -Kind "host"

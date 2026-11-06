@@ -895,6 +895,27 @@ export const MIGRATIONS = [
   CREATE TRIGGER work_unit_no_delete BEFORE DELETE ON work_unit
   BEGIN SELECT RAISE(ABORT, 'work_unit: a unit is never deleted'); END;
   `,
+  // 7: session state, kept current by the sessions step of `horde db sync` (T-0409, piece 2 of T-0299; design: planning/
+  // fleet-db-design.md, "Keeping the file-fed tables current"). One writer (the sync), many readers: the overseer and the
+  // analyst read these columns instead of each judging every transcript on its own. All nullable: NULL is "not read yet".
+  // The times are the transcript RECORDS' own timestamps (UTC ms), never a file's modified time, which moves with mode and
+  // hook lines and no work. No stall is judged here (no threshold): a reader compares last_activity_at with its own clock.
+  //   last_activity_at   newest timestamped turn record of the session, its subagents' records folded in
+  //   last_assistant_at  newest assistant record
+  //   in_turn            1 while a turn is open (a prompt or tool result nobody has answered)
+  //   waits_person       1 when the open turn's last tool call asks a person (a plan to approve, a question)
+  //   state              live | idle | waiting-person | dead. 'waiting-job' is RESERVED for piece 3 and is never set here.
+  //   state_checked_at   when the sync last judged the state: a reader that sees an old value knows the sync was blind
+  //   transcript_offset  bytes of the transcript already read, always at a line end; the next read starts there
+  `
+  ALTER TABLE session ADD COLUMN last_activity_at INTEGER CHECK (last_activity_at >= 0);
+  ALTER TABLE session ADD COLUMN last_assistant_at INTEGER CHECK (last_assistant_at >= 0);
+  ALTER TABLE session ADD COLUMN in_turn INTEGER ${flag('in_turn')};
+  ALTER TABLE session ADD COLUMN waits_person INTEGER ${flag('waits_person')};
+  ALTER TABLE session ADD COLUMN state TEXT CHECK (state IN ('live', 'idle', 'waiting-person', 'waiting-job', 'dead'));
+  ALTER TABLE session ADD COLUMN state_checked_at INTEGER CHECK (state_checked_at >= 0);
+  ALTER TABLE session ADD COLUMN transcript_offset INTEGER CHECK (transcript_offset >= 0);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

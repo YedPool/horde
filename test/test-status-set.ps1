@@ -310,6 +310,12 @@ if (verb === 'init') {
     console.log(db.prepare('SELECT letter, lane_dir, rank FROM orc ORDER BY lane_dir').all().map((r) => r.letter + '|' + r.lane_dir + '|' + r.rank).join(';'));
     db.close();
   }
+} else if (verb === 'status') {
+  if (!fs.existsSync(file)) { console.log('no file'); } else {
+    const db = new DatabaseSync(file, { readOnly: true });
+    console.log(db.prepare('SELECT doing, blocked, backfill FROM orc_status ORDER BY at, id').all().map((r) => r.doing + '|' + (r.blocked ?? '') + '|' + r.backfill).join(';'));
+    db.close();
+  }
 }
 '@
 [System.IO.File]::WriteAllText($tool, $toolText, (New-Object System.Text.UTF8Encoding($false)))
@@ -337,13 +343,17 @@ $laneR = New-OrcFolder "row-lane"
 $cli = Set-RowCard $laneR "R" $h1
 Check ($cli.code -eq 0 -and $cli.out -match "status written for R: making a row" -and $cli.out -match "fleet.db: row made for Orc R") "the first card of a new Orc: written, and one line says its fleet.db row was made"
 Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   the row has the card's letter and folder, rank orc"
+# T-0389: the same call also appended the card's status as a LIVE row (backfill 0, `at` = the card's modified time), by the importer's own rule.
+Check ((Invoke-DbTool "status" $db1) -ceq "making a row||0") "   and its orc_status row: the card's doing, not blocked, backfill 0 (live)"
 $cli = Set-RowCard $laneR "R" $h1
 Check ($cli.code -eq 0 -and $cli.out -match "status written for R" -and $cli.out -notmatch "fleet.db") "the second card prints nothing about fleet.db: the row was there"
 Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   and no second row was made"
+Check ((Invoke-DbTool "status" $db1) -ceq "making a row||0;making a row||0") "   but the second card is a new status at a new time: a second live row, not a doubled first"
 $laneS = New-OrcFolder "dry-lane"
 $cli = Set-RowCard $laneS "S" $h1 -DryRun
 Check ($cli.code -eq 0 -and $cli.out -match "dry run" -and $cli.out -notmatch "fleet.db" -and -not (Test-Path -LiteralPath (Join-Path $laneS "status.txt"))) "-DryRun: no card and no word about fleet.db"
 Check ((Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc") "   and fleet.db was not touched"
+Check ((Invoke-DbTool "status" $db1) -ceq "making a row||0;making a row||0") "   no status row either"
 $laneT = New-OrcFolder "thrall"
 $cli = Set-RowCard $laneT "M" $h1 -Lane "the master"
 Check ($cli.code -eq 0 -and $cli.out -match "fleet.db: row made for Orc M" -and (Invoke-DbTool "list" $db1) -ceq "R|row-lane|orc;M|thrall|thrall") "a card in a folder named thrall makes the Thrall's row (rank thrall)"

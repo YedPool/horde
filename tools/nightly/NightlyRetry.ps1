@@ -34,7 +34,7 @@ if ($NetScript -eq "") { $NetScript = Join-Path $root "tools\NightlyNet.ps1" }
 $now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
 $retryLog = Join-Path $WorkRoot "nightly-retry.log"
 
-function Say {
+function Write-NightlyRetryLine {
     param([string]$Line)
     $l = $now.ToString("s") + " " + ($Line -replace "[^\x20-\x7E]", "?")
     if ($Plan) { Write-Host ("PLAN " + $l); return }
@@ -53,7 +53,7 @@ try {
     $held = $null
     try { if ([System.Threading.Mutex]::TryOpenExisting($MutexName, [ref]$held)) { $alive = $true; $held.Dispose() } } catch { }
     $d = Get-HordeNightlyRetryDecision -Now $now -ReportNames $names -MarkerExists $markerExists -NetAlive $alive -MinMinutes $MinMinutes
-    Say ("night " + $d.night + ": " + $(if ($d.run) { "RUN" } else { "no retry" }) + ", decided by: " + $d.condition + " (" + $d.minutesLeft + " min before the cutoff)")
+    Write-NightlyRetryLine ("night " + $d.night + ": " + $(if ($d.run) { "RUN" } else { "no retry" }) + ", decided by: " + $d.condition + " (" + $d.minutesLeft + " min before the cutoff)")
     if (-not $d.run -or $Plan) { exit 0 }
     # THE MARKER FIRST. If it cannot be written, nothing runs: a retry that cannot be remembered could loop.
     try {
@@ -62,16 +62,16 @@ try {
         $bytes = [System.Text.Encoding]::ASCII.GetBytes("retry started " + $now.ToString("s") + "`n")
         $fs.Write($bytes, 0, $bytes.Length); $fs.Dispose()
     } catch {
-        Say ("the marker could not be written, so nothing runs: " + $_.Exception.Message)
+        Write-NightlyRetryLine ("the marker could not be written, so nothing runs: " + $_.Exception.Message)
         exit 0
     }
     try { Add-Content -LiteralPath (Join-Path $WorkRoot "nightly.log") -Value ($now.ToString("s") + " nightly retry " + $d.night + ": the net is run once more after a restart") -Encoding Ascii -ErrorAction Stop } catch { }
     $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     & $ps51 -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $NetScript
     $code = $LASTEXITCODE
-    Say ("the net ended with exit " + $code)
+    Write-NightlyRetryLine ("the net ended with exit " + $code)
     exit $code
 } catch {
-    Say ("the retry itself failed: " + $_.Exception.Message)
+    Write-NightlyRetryLine ("the retry itself failed: " + $_.Exception.Message)
     exit 1
 }

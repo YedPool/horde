@@ -57,6 +57,9 @@
         @{ Name = "row-thrall-folder-not-detected"
            Find = 'if ($leaf -ceq "thrall") {'
            Replace = 'if ($false) {' }
+        @{ Name = "row-card-not-passed"
+           Find = '$psi.Arguments += '' --card "'' + (Join-Path ([System.IO.Path]::GetFullPath($Folder)) $script:HordeFleetStatusFile) + ''"'''
+           Replace = '$null = $psi' }
         @{ Name = "row-made-for-wrong-orc"
            Find = 'orc = $back.orc; lane = $back.lane }'
            Replace = 'orc = "Z"; lane = $back.lane }' }

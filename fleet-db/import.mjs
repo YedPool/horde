@@ -261,19 +261,24 @@ function loadSources(src, rep) {
   return d;
 }
 
+// THE ONE READER OF A STATUS CARD FILE, shared by the importer (readCard) and `horde status set` (orc-cli.mjs --card),
+// so a card is parsed, and its folder and its time judged, by the same code on both paths. Returns { card } or
+// { error }, the error being the reason in the importer's own words. mtime is the file's modified time in whole
+// milliseconds, which is the status row's `at`.
+export function readStatusCard(file, folder, isThrall) {
+  const card = parseCard(fs.readFileSync(file));
+  if (card.error) return { error: 'card is not valid, no Orc row made: ' + card.error };
+  if (!/^[a-z0-9-]{1,64}$/.test(folder)) return { error: 'folder name cannot be a lane_dir (no Orc row made)' };
+  return { card: { ...card, folder, mtime: Math.floor(fs.statSync(file).mtimeMs), isThrall } };
+}
+
 function readCard(file, folder, rep, isThrall) {
-  const buf = fs.readFileSync(file);
-  const card = parseCard(buf);
-  const source = isThrall ? 'thrall-card' : 'cards';
-  if (card.error) {
-    rep.unlink(source, 'card is not valid, no Orc row made: ' + card.error, folder);
+  const r = readStatusCard(file, folder, isThrall);
+  if (r.error) {
+    rep.unlink(isThrall ? 'thrall-card' : 'cards', r.error, folder);
     return null;
   }
-  if (!/^[a-z0-9-]{1,64}$/.test(folder)) {
-    rep.unlink(source, 'folder name cannot be a lane_dir (no Orc row made)', folder);
-    return null;
-  }
-  return { ...card, folder, mtime: Math.floor(fs.statSync(file).mtimeMs), isThrall };
+  return r.card;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -483,6 +488,20 @@ function stepSessions(ctx, data) {
     done.add(row.id);
   };
   for (const row of order) put(row);
+}
+
+// THE SESSIONS STEP OF `horde db sync` (T-0409) FILES ITS RECORDS THROUGH THIS, so there is one rule for how a registry
+// record becomes a session row (rank, Orc, seat, parent links, stubs), not a second copy that drifts. `records` are
+// { file: '<session id>.json', rec } as the registry folder gives them; the caller (fleet-db/sessions.mjs) builds the file
+// name from the id. Call it inside the caller's own inWrite: it opens no transaction, so the session rows and the pane rows
+// of one tick land together or not at all. A row already there is kept as it is, as in a full import.
+export function importSessionRecords(db, records) {
+  const rep = new Report();
+  const ctx = { db, rep, seen: new Set() };
+  ctx.nodeId = stepNode(ctx);
+  loadOrcMaps(ctx);
+  stepSessions(ctx, { sessions: records });
+  return { nodeId: ctx.nodeId, report: rep.result(false) };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -797,22 +816,35 @@ function tagEntry(ctx, entryId, lane, at, legacy) {
 // ---------------------------------------------------------------------------------------------------------
 // orc_status
 
+// THE ONE RULE FOR A CARD'S STATUS ROW, shared by the importer (stepStatus) and `horde status set` (orc-cli.mjs --card).
+// Returns { row: { at, doing, blocked } } or { skip } with the reason in the importer's words (the card then has no
+// status row; its Orc row is still made).
+export function statusRowFor(c) {
+  const doing = c.doing;
+  if (doing.length < 1 || doing.length > 120) return { skip: 'doing is empty or over 120 characters (no status row)' };
+  // 'no' (any case) is "not blocked"; 'none' and every other sentence is kept as the words it is.
+  const blocked = /^no$/i.test(c.blocked) || c.blocked === '' ? null : c.blocked;
+  if (blocked !== null && blocked.length > 200) return { skip: 'blocked is over 200 characters (no status row)' };
+  return { row: { at: c.mtime, doing, blocked } };
+}
+
+// A card whose Orc already has a status row at the card's own time is counted as there and not written again,
+// WHATEVER that row's backfill. WHY: `horde status set` now writes the same status live, with backfill 0 and the
+// card's mtime as `at`, and the content hash includes backfill, so a backfill 1 row for the same card is a different
+// hash: without this skip the sync (which re-reads every card every few minutes) would add a duplicate of every
+// live row. orc-cli.mjs checks the same thing the other way round, so whichever path sees a card first wins.
 function stepStatus(ctx) {
   const { db, rep } = ctx;
+  const there = db.prepare('SELECT 1 FROM orc_status WHERE orc_id = ? AND at = ? LIMIT 1');
   for (const c of ctx.cards) {
     const orcId = ctx.cardOrc.get(c);
-    const doing = c.doing;
-    if (doing.length < 1 || doing.length > 120) {
-      rep.unlink('cards', 'doing is empty or over 120 characters (no status row)', c.folder);
+    const s = statusRowFor(c);
+    if (s.skip) {
+      rep.unlink('cards', s.skip, c.folder);
       continue;
     }
-    // 'no' (any case) is "not blocked"; 'none' and every other sentence is kept as the words it is.
-    const blocked = /^no$/i.test(c.blocked) || c.blocked === '' ? null : c.blocked;
-    if (blocked !== null && blocked.length > 200) {
-      rep.unlink('cards', 'blocked is over 200 characters (no status row)', c.folder);
-      continue;
-    }
-    const r = appendHistory(db, 'orc_status', { orc_id: orcId, at: c.mtime, doing, blocked, backfill: 1 });
+    if (there.get(orcId, s.row.at)) { rep.count('orc_status', false); continue; }
+    const r = appendHistory(db, 'orc_status', { orc_id: orcId, at: s.row.at, doing: s.row.doing, blocked: s.row.blocked, backfill: 1 });
     rep.count('orc_status', r.inserted);
   }
 }

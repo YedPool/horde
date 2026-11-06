@@ -40,6 +40,16 @@
 #                                              percent }
 #                                            paneOf ($pid) -> answer known pane id of that process
 #     Describe   ($request)                  the exact command a spawn would run, as text, for -DryRun
+#     Panes      ()                          OPTIONAL (the fleet.db sessions step, T-0409): the live panes of EVERY
+#                                            terminal instance, one entry per instance, as an answer: known list of
+#                                            { instance; state: listed | closed | unknown; panes (the pane numbers);
+#                                            reason }. instance is the name the fleet registry stores for the
+#                                            terminal. listed: those are its panes. closed: that terminal is not
+#                                            running, so none of its panes is. unknown: it runs and could not be
+#                                            listed (a timeout, an error): the sessions in it are UNKNOWN, never dead.
+#                                            Each terminal is asked with a short limit of its own, killing only the
+#                                            child that call started; unknown as a whole (not a list) when the
+#                                            instances cannot be found at all.
 #     Release    ($sessionId)                optional: remove the terminal restore's "do not restore" marker
 #                                            of that one session, as an answer: known "removed" or "none",
 #                                            unknown with the reason. A wake calls it just before the
@@ -96,11 +106,12 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][scriptblock]$Describe,
         [scriptblock]$Release = $null,
         [scriptblock]$Mark = $null,
-        [scriptblock]$Unmark = $null
+        [scriptblock]$Unmark = $null,
+        [scriptblock]$Panes = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark; unmark = $Unmark })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark; unmark = $Unmark; panes = $Panes })
 }
 
 function Resolve-HordeFleetAdapter {
