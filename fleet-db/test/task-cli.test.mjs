@@ -122,6 +122,14 @@ test('a task in a list that is not its owner\'s says whose it is, a task with no
   assert.ok(r.out.includes(`  1.2 ${n.key} opened p2 owner=no-Orc | nobody works this`), r.out.join('\n'));
 });
 
+test('-orc keeps a subtask another Orc owns inside this Orc\'s list, so the numbers have no hole', () => {
+  const w = home();
+  const a = task(w, { owner: w.f, prio: 1, title: 'parent' });
+  const s = task(w, { owner: w.k, parent: a.id, title: 'K works this' });
+  const r = run(w, 'list', '--orc', 'F');
+  assert.deepEqual(r.out, ['F:', `1 ${a.key} opened p1 | parent`, `  1.1 ${s.key} opened p2 owner=K | K works this`, '2 open, and 0 done, not yet verified, not listed']);
+});
+
 test('done tasks are counted, per Orc with -orc, and take no number', () => {
   const w = home();
   task(w, { owner: w.f, title: 'finished', state: 'done' });
@@ -134,14 +142,14 @@ test('done tasks are counted, per Orc with -orc, and take no number', () => {
 
 test('a due time and a title that is not ASCII print safely', () => {
   const w = home();
-  const a = task(w, { owner: w.f, due: Date.UTC(2026, 10, 6, 9), title: 'café' });
+  const a = task(w, { owner: w.f, due: Date.UTC(2026, 10, 6, 9), title: 'caf\u00e9' });
   const r = run(w, 'list');
   assert.equal(r.out[1], `1 ${a.key} opened p2 due=2026-11-06T09:00:00.000Z | caf\\u00e9`);
 });
 
 test('json is one line of data, the same tasks, ASCII', () => {
   const w = home();
-  const a = task(w, { owner: w.f, prio: 1, due: Date.UTC(2026, 10, 6, 9), title: 'café' });
+  const a = task(w, { owner: w.f, prio: 1, due: Date.UTC(2026, 10, 6, 9), title: 'caf\u00e9' });
   const b = task(w, { owner: w.f, prio: 2 });
   task(w, { owner: w.f, state: 'done' });
   const r = run(w, 'list', '--json');
@@ -152,7 +160,7 @@ test('json is one line of data, the same tasks, ASCII', () => {
   assert.deepEqual(d.tasks.map((t) => [t.list, t.path, t.task, t.state, t.prio, t.owner, t.depth]), [['F', '1', a.key, 'opened', 1, 'F', 0], ['F', '2', b.key, 'opened', 2, 'F', 0]]);
   assert.equal(d.tasks[0].due, '2026-11-06T09:00:00.000Z');
   assert.equal(d.tasks[1].due, null);
-  assert.equal(d.tasks[0].title, 'café');
+  assert.equal(d.tasks[0].title, 'caf\u00e9');
 });
 
 test('it never writes: a database at an older version is refused and left at that version', () => {
