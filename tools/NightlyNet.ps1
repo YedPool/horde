@@ -132,7 +132,9 @@ $Ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.ex
 # -AtTime is for the suite: the time to act as now (the window, the cutoff, the date), so it can drive the paths before
 # any run outside the night.
 $now = $(if ($AtTime -ne "") { [datetime]::Parse($AtTime, [System.Globalization.CultureInfo]::InvariantCulture) } else { Get-Date })
-$Date = $now.ToString("yyyy-MM-dd")
+# The night's label (core Get-HordeNightlyNightLabel): the date it BEGAN, shared with the watcher. A start at 01:00 is the
+# night of yesterday's date; the cutoff, the window and the memory floors read the clock itself and are unaffected.
+$Date = Get-HordeNightlyNightLabel -Time $now
 $ReportDir = Join-Path $WorkRoot "reports"
 $RunDir = Join-Path (Join-Path $WorkRoot "runs") (Get-Date).ToString("yyyyMMdd-HHmmss")
 $LogFile = Join-Path $WorkRoot "nightly.log"

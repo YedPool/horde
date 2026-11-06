@@ -7,11 +7,11 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "night-is-two-days-back"
-           Find = '    $night = $Now.Date.AddDays(-1)'
-           Replace = '    $night = $Now.Date.AddDays(-2)' }
+           Find = 'InvariantCulture).AddDays(-1)'
+           Replace = 'InvariantCulture).AddDays(-2)' }
         @{ Name = "early-morning-judges-the-running-night"
-           Find = '    if ($Now -lt $Now.Date.AddHours($EndHour).AddMinutes($EndMinute)) { $night = $night.AddDays(-1) }'
-           Replace = '' }
+           Find = '(Get-HordeNightlyNightLabel -Time $Now -EndHour $EndHour -EndMinute $EndMinute), "yyyy-MM-dd"'
+           Replace = '$Now.ToString("yyyy-MM-dd"), "yyyy-MM-dd"' }
         @{ Name = "dates-skip-every-other-day"
            Find = '$d.AddDays(-$i).ToString('
            Replace = '$d.AddDays(-2 * $i).ToString(' }
@@ -55,8 +55,8 @@
            Find = 'elseif ($haveBusy) {'
            Replace = 'elseif ($false) {' }
         @{ Name = "started-without-report-ignored"
-           Find = 'elseif ($openAt -ge 0) { $status = "NOT REPORTED";'
-           Replace = 'elseif ($false) { $status = "NOT REPORTED";' }
+           Find = 'elseif ($openAt -ge 0) {'
+           Replace = 'elseif ($false) {' }
         @{ Name = "refused-file-ignored"
            Find = 'elseif ($closed -or $haveRefused) {'
            Replace = 'elseif ($closed) {' }
@@ -99,6 +99,21 @@
         @{ Name = "phone-told-the-note"
            Find = '    elseif ($Decision.kind -ceq "note") { $lines += ("NIGHTLY WATCH " + $date + ": the night ran.") }'
            Replace = '    elseif ($Decision.kind -ceq "note") { $lines += ("NIGHTLY WATCH " + $date + ": the night ran."); $phone = "note" }' }
+        @{ Name = "phone-says-not-run-for-a-night-that-ran"
+           Find = '"NOT TOLD" { "Nightly tests ran on the night of "'
+           Replace = '"NOT TOLD" { "Nightly tests did not run for the night of "' }
+        @{ Name = "phone-says-not-run-for-a-night-that-started"
+           Find = '} else { "Nightly tests started on the night of " + $date + " but did not finish." }'
+           Replace = '} else { "Nightly tests did not run for the night of " + $date + " but did not finish." }' }
+        @{ Name = "boot-before-the-run-is-a-restart"
+           Find = 'if ($boot -ge $runStart -and $boot -le $winEnd) {'
+           Replace = 'if ($boot -le $winEnd) {' }
+        @{ Name = "boot-after-the-window-is-a-restart"
+           Find = 'if ($boot -ge $runStart -and $boot -le $winEnd) {'
+           Replace = 'if ($boot -ge $runStart) {' }
+        @{ Name = "phone-ignores-the-restart"
+           Find = '-and "" + $Verdict.rebootAt -ne "")'
+           Replace = '-and $false)' }
         @{ Name = "all-failed-when-any-failed"
            Find = 'allFailed = ($results.Count -gt 0 -and $okCount -eq 0)'
            Replace = 'allFailed = ($okCount -lt $results.Count)' }
