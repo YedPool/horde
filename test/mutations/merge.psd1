@@ -396,5 +396,23 @@
         @{ Name = "intent-unanswered-view-settled"
            Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
            Replace = '$gitHubSaid = ($m.code -ne -1)' }
+        @{ Name = "open-red-guard-loses-own-since"
+           Find = 'if ($null -ne $have) { [void]$kept.Add($have); continue }'
+           Replace = 'if ($false) { [void]$kept.Add($have); continue }' }
+        @{ Name = "open-red-new-guard-no-own-merge"
+           Find = '[void]$kept.Add([pscustomobject]@{ guard = $d2.guard; since = $stamp; merge = $mrec; note = $d2.note })'
+           Replace = '[void]$kept.Add([pscustomobject]@{ guard = $d2.guard; since = $stamp; merge = $null; note = $d2.note })' }
+        @{ Name = "open-red-guard-takes-first-guards-entry"
+           Find = 'Get-HordeMergeRedGuard -Record $openRed.reds[$r + "|" + $d.base] -Guard $d.guard'
+           Replace = 'Get-HordeMergeRedGuard -Record $openRed.reds[$r + "|" + $d.base] -Guard @($openRed.reds[$r + "|" + $d.base].guards)[0].guard' }
+        @{ Name = "open-red-fixed-guard-stays-in-record"
+           Find = '$openRed.reds[$key] = [pscustomobject]@{ repo = $r; base = $rb; guards = @($kept) }'
+           Replace = '$openRed.reds[$key] = [pscustomobject]@{ repo = $r; base = $rb; guards = @(@($old.guards) + @($kept)) }' }
+        @{ Name = "open-red-fixed-guard-not-reported"
+           Find = '[void]$text.Add("GREEN AGAIN: " + $ge.guard + " on " + $rbase'
+           Replace = '$null = ("GREEN AGAIN: " + $ge.guard + " on " + $rbase' }
+        @{ Name = "open-red-old-format-read"
+           Find = 'return (& $bad "holds a record with a guard entry that has no guard name")'
+           Replace = 'continue' }
     )
 }

@@ -585,9 +585,10 @@ Check ($r.outcome -ceq "refused" -and -not (Test-MergeCall $c) -and @(Read-OwedL
 Write-Host "== the nightly run (horde merge -RunOwed): which queued merge turned a guard red"
 $nightly = [datetime]::new(2026, 10, 23, 3, 0, 0, [System.DateTimeKind]::Utc)
 function Invoke-OwedRun {
-    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null)
+    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null, $Now = $null)
     $tools = New-SuiteTools -Case $Case -GuardOverride $GuardOverride
-    try { return (Invoke-HordeMergeRunOwed -Tools $tools -WorkFolder $Case.work -Folder $Case.owed -Repo $Repo -Now $nightly) }
+    if ($null -eq $Now) { $Now = $nightly }
+    try { return (Invoke-HordeMergeRunOwed -Tools $tools -WorkFolder $Case.work -Folder $Case.owed -Repo $Repo -Now $Now) }
     catch { return [pscustomobject]@{ exit = -9; json = ""; repos = @(); threw = $_.Exception.Message } }
 }
 function Add-QueuedMerges {
@@ -966,8 +967,61 @@ Check ($run.exit -eq 0 -and (Said "nothing is owed: every queued merge has been 
 $w = Get-WrapperAnswer -Case $c -Run $run
 Check ($w.code -eq 0 -and $w.state -ceq "green") "  and the net reads it as green"
 
+# TWO GUARDS RED ON ONE BRANCH, EACH WITH ITS OWN SINCE AND MERGE (round 2): G1 (test-mutation-specs) red behind M1, G2
+# (test-host-names) red behind M2 a night later, then G1 fixed. G2's later nights must name M2, not M1.
+function Add-HandMerge {
+    # One more merge on main of a hand case: a commit with -Files pushed onto main and its owed line. Returns the merge sha.
+    param($Case, [hashtable]$Files, [string]$By, [int]$Number, [switch]$Unqueued)
+    $tipNow = G $Case.origin rev-parse refs/heads/main
+    $null = G $seed fetch -q $Case.origin "refs/heads/main"
+    $sha = New-SeedCommit -From $tipNow -Files $Files -Message "hand merge"
+    $null = G $seed push -q -f $Case.origin ($sha + ":refs/heads/main")
+    if (-not $Unqueued) {
+        $o = [ordered]@{ repo = "yedpool/horde"; baseRefName = "main"; pr = ("YedPool/horde#" + $Number); task = "T-0247"; by = $By; at = "2026-10-22T10:00:00Z"; headSha = $sha; mergeSha = $sha; firstParent = $tipNow }
+        $null = Add-HordeMergeLine -Path (Join-Path $Case.owed "guards-owed.jsonl") -Line (ConvertTo-Json -InputObject $o -Compress)
+    }
+    return $sha
+}
+$g1 = "test\test-mutation-specs.ps1"
+$g2 = "test\test-host-names.ps1"
+$n1 = $nightly
+$n2 = $nightly.AddDays(1)
+$n3 = $nightly.AddDays(2)
+$n4 = $nightly.AddDays(3)
+$st1 = $n1.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+$st2 = $n2.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$run = Invoke-OwedRun -Case $h.c -Now $n1
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#100*")) -and -not (Said ("RED " + $g2 + "*"))) ("per guard, night 1: G1 red behind M1 (exit " + $run.exit + ")")
+$m2 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red hostnames-red" } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+$gs2 = @($rec[0].guards)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: first red at the merge of YedPool/horde#200 (task T-0247, by K, mergeSha " + $m2 + ") on main; its owner fixes it first thing")) -and -not (Said ("RED " + $g2 + "*the red has been open since*"))) ("  night 2: G2 turns red behind M2 while G1 is red, and is not given the red's old date (" + @($script:said | Where-Object { $_ -clike ("RED " + $g2 + "*") })[0] + ")")
+Check (@($rec).Count -eq 1 -and $gs2.Count -eq 2 -and @($gs2 | Where-Object { $_.guard -ceq $g1 -and $_.since -ceq $st1 -and $_.merge.mergeSha -ceq $m1 }).Count -eq 1 -and @($gs2 | Where-Object { $_.guard -ceq $g2 -and $_.since -ceq $st2 -and $_.merge.mergeSha -ceq $m2 }).Count -eq 1) ("  the record holds each guard's own since and merge: " + (($gs2 | ForEach-Object { $_.guard + "@" + $_.since }) -join ", "))
+$sum = ConvertFrom-HordeJson -Text $run.json
+$j2 = @($sum.repos[0].reds | Where-Object { $_.guard -ceq $g2 })[0]
+Check ($j2.open -eq $false -and $j2.since -ceq $st2 -and $j2.merge.mergeSha -ceq $m2) "  and the JSON gives G2 its own since, and says it was not open before"
+# NIGHT 3: G1 is fixed (a push outside the queue); G2 stays red.
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "hostnames-red" } -By "F" -Number 300 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: STILL RED since " + $st2 + ": first red at the merge of YedPool/horde#200 (task T-0247, by K, mergeSha " + $m2 + ")*")) -and -not (Said "*YedPool/horde#100*mergeSha*on main; its owner*")) ("night 3, G1 fixed: STILL RED names G2's own merge and date, not G1's (" + @($script:said | Where-Object { $_ -clike ("RED " + $g2 + "*") })[0] + ")")
+Check ((Said ("GREEN AGAIN: " + $g1 + " on main was red since " + $st1 + " (first red at the merge of YedPool/horde#100*) and is green at the tip now; " + $g2 + " stays red there")) -and -not (Said ("GREEN AGAIN: main *"))) "  a guard that went green while another stays red gets its own line"
+Check (@($rec).Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $rec[0].guards[0].guard -ceq $g2 -and $rec[0].guards[0].since -ceq $st2) "  and leaves the record; the branch stays open on G2 alone"
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($sum.repos[0].reds[0].open -eq $true -and $sum.repos[0].reds[0].since -ceq $st2 -and $sum.repos[0].reds[0].merge.mergeSha -ceq $m2) "  and the JSON carries G2's own since and merge"
+$w = Get-WrapperAnswer -Case $h.c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net still reads it as RED: " + $w.last)
+# NIGHT 4: G2 fixed too: the branch clears.
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 301 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n4
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+Check ($run.exit -eq 0 -and (Said ("GREEN AGAIN: main was red since " + $st2 + "*") ) -and @($rec).Count -eq 0) ("night 4, nothing red: the branch clears and the run is green (exit " + $run.exit + ")")
+
 # A RECORD THAT CANNOT BE READ IS NOT GREEN.
-foreach ($junk in @("this is not json", "", "{""reds"":[{""repo"":""not a repo"",""base"":""main""}]}", "{""nope"":1}")) {
+foreach ($junk in @("this is not json", "", "{""reds"":[{""repo"":""not a repo"",""base"":""main""}]}", "{""nope"":1}", "{""reds"":[{""repo"":""YedPool/horde"",""base"":""main"",""guards"":[""test\\a.ps1""]}]}", "{""reds"":[{""repo"":""YedPool/horde"",""base"":""main"",""guards"":[{""since"":""x""}]}]}")) {
     $c3 = New-Case
     [void][System.IO.Directory]::CreateDirectory($c3.owed)
     [System.IO.File]::WriteAllText((Join-Path $c3.owed "guards-red.json"), $junk, $utf8)

@@ -767,7 +767,9 @@ $script:HordeMergeRedFileName = "guards-red.json"
 
 function Read-HordeMergeOpenReds {
     # { ok; why; reds } from guards-red.json (the record of reds still open, one per repo and branch, T-0347). reds is a
-    # hashtable "repo|base" -> { repo; base; since; guards; merge; note } (merge is $null or { pr; task; by; mergeSha }).
+    # hashtable "repo|base" -> { repo; base; guards } where guards is a list of { guard; since; merge; note } (merge is $null or
+    # { pr; task; by; mergeSha }). EACH GUARD CARRIES ITS OWN since, merge AND note (round 2 of T-0347): two guards red on one
+    # branch turn red at different times and behind different merges, and one record per branch blamed the wrong PR.
     # No file is no open red. A file that is there and cannot be read, is not JSON, or holds a record that is not one is
     # NOT GREEN: ok is false and the run ends 2, because reading a damaged record as "nothing open" would turn a red
     # main green on the next quiet night, the very thing this file exists to stop.
@@ -783,20 +785,30 @@ function Read-HordeMergeOpenReds {
     foreach ($e in @($o.reds)) {
         if ($null -eq $e -or $null -eq $e.PSObject) { return (& $bad "holds a record that is not an object") }
         $v = @{}
-        foreach ($k in @("repo", "base", "since", "note")) {
+        foreach ($k in @("repo", "base")) {
             $v[$k] = ""
             if ($null -ne $e.PSObject.Properties[$k] -and $e.PSObject.Properties[$k].Value -is [string]) { $v[$k] = [string]$e.PSObject.Properties[$k].Value }
         }
         if (-not (Test-HordeMergeOwedRepo -Repo $v["repo"]) -or $v["base"] -cnotmatch $script:HordeMergeRefPattern) { return (& $bad "holds a record with no usable repository or branch") }
-        $guards = @()
-        if ($null -ne $e.PSObject.Properties["guards"]) { $guards = @(@($e.guards) | Where-Object { $_ -is [string] }) }
-        $merge = $null
-        if ($null -ne $e.PSObject.Properties["merge"] -and $null -ne $e.merge -and $null -ne $e.merge.PSObject) {
-            $mv = @{}
-            foreach ($k in @("pr", "task", "by", "mergeSha")) { $mv[$k] = ""; if ($null -ne $e.merge.PSObject.Properties[$k] -and $e.merge.PSObject.Properties[$k].Value -is [string]) { $mv[$k] = ([string]$e.merge.PSObject.Properties[$k].Value -replace '[^\x20-\x7E]', '?') } }
-            $merge = [pscustomobject]@{ pr = $mv["pr"]; task = $mv["task"]; by = $mv["by"]; mergeSha = $mv["mergeSha"] }
+        $guards = New-Object System.Collections.ArrayList
+        if ($null -ne $e.PSObject.Properties["guards"]) {
+            foreach ($ge in @($e.guards)) {
+                if ($null -eq $ge -or $null -eq $ge.PSObject -or $null -eq $ge.PSObject.Properties["guard"] -or $ge.PSObject.Properties["guard"].Value -isnot [string] -or [string]$ge.PSObject.Properties["guard"].Value -eq "") { return (& $bad "holds a record with a guard entry that has no guard name") }
+                $gv = @{}
+                foreach ($k in @("guard", "since", "note")) {
+                    $gv[$k] = ""
+                    if ($null -ne $ge.PSObject.Properties[$k] -and $ge.PSObject.Properties[$k].Value -is [string]) { $gv[$k] = ([string]$ge.PSObject.Properties[$k].Value -replace '[^\x20-\x7E]', '?') }
+                }
+                $merge = $null
+                if ($null -ne $ge.PSObject.Properties["merge"] -and $null -ne $ge.merge -and $null -ne $ge.merge.PSObject) {
+                    $mv = @{}
+                    foreach ($k in @("pr", "task", "by", "mergeSha")) { $mv[$k] = ""; if ($null -ne $ge.merge.PSObject.Properties[$k] -and $ge.merge.PSObject.Properties[$k].Value -is [string]) { $mv[$k] = ([string]$ge.merge.PSObject.Properties[$k].Value -replace '[^\x20-\x7E]', '?') } }
+                    $merge = [pscustomobject]@{ pr = $mv["pr"]; task = $mv["task"]; by = $mv["by"]; mergeSha = $mv["mergeSha"] }
+                }
+                [void]$guards.Add([pscustomobject]@{ guard = $gv["guard"]; since = $gv["since"]; merge = $merge; note = $gv["note"] })
+            }
         }
-        $reds[$v["repo"].ToLowerInvariant() + "|" + $v["base"]] = [pscustomobject]@{ repo = $v["repo"].ToLowerInvariant(); base = $v["base"]; since = ($v["since"] -replace '[^\x20-\x7E]', '?'); guards = @($guards); merge = $merge; note = ($v["note"] -replace '[^\x20-\x7E]', '?') }
+        $reds[$v["repo"].ToLowerInvariant() + "|" + $v["base"]] = [pscustomobject]@{ repo = $v["repo"].ToLowerInvariant(); base = $v["base"]; guards = @($guards) }
     }
     return [pscustomobject]@{ ok = $true; why = ""; reds = $reds }
 }
@@ -810,9 +822,13 @@ function Write-HordeMergeOpenReds {
         $list = @()
         foreach ($k in @($Reds.Keys | Sort-Object)) {
             $e = $Reds[$k]
-            $m = $null
-            if ($null -ne $e.merge) { $m = [ordered]@{ pr = $e.merge.pr; task = $e.merge.task; by = $e.merge.by; mergeSha = $e.merge.mergeSha } }
-            $list += , ([ordered]@{ repo = $e.repo; base = $e.base; since = $e.since; guards = @($e.guards); merge = $m; note = $e.note })
+            $gl = @()
+            foreach ($ge in @($e.guards)) {
+                $m = $null
+                if ($null -ne $ge.merge) { $m = [ordered]@{ pr = $ge.merge.pr; task = $ge.merge.task; by = $ge.merge.by; mergeSha = $ge.merge.mergeSha } }
+                $gl += , ([ordered]@{ guard = $ge.guard; since = $ge.since; merge = $m; note = $ge.note })
+            }
+            $list += , ([ordered]@{ repo = $e.repo; base = $e.base; guards = @($gl) })
         }
         $json = ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; reds = @($list) }) -Compress -Depth 8
         $tmp = $Path + ".tmp"
@@ -820,6 +836,21 @@ function Write-HordeMergeOpenReds {
         if ([System.IO.File]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { [System.IO.File]::Move($tmp, $Path) }
         return [pscustomobject]@{ ok = $true; detail = $Path }
     } catch { return [pscustomobject]@{ ok = $false; detail = ("could not write " + $Path + ": " + $_.Exception.Message) } }
+}
+
+function Get-HordeMergeRedGuard {
+    # PURE. The entry of one guard in a branch's open-red record, or $null (no record, or the guard is not in it).
+    param($Record, [string]$Guard)
+    if ($null -eq $Record) { return $null }
+    return (@(@($Record.guards) | Where-Object { $_.guard -ceq $Guard }) | Select-Object -First 1)
+}
+
+function Get-HordeMergeRedSince {
+    # PURE. When a branch's red began: the oldest since among the guards of its record (the stamps sort as text).
+    param([Parameter(Mandatory = $true)]$Record)
+    $s = @(@($Record.guards) | ForEach-Object { $_.since } | Sort-Object)
+    if ($s.Count -eq 0) { return "" }
+    return $s[0]
 }
 
 function Format-HordeMergeNamedMerge {
@@ -1130,7 +1161,7 @@ function Invoke-HordeMergeRunOwed {
         $redJson = @()
         foreach ($er in @($res.errors)) {
             [void]$text.Add("COULD NOT RUN" + $(if ($er.base -ne "") { " on " + $er.base } else { "" }) + ": " + $er.why)
-            if ($openRed.reds.ContainsKey($r + "|" + $er.base)) { [void]$text.Add("STILL OPEN: the red on " + $er.base + " (since " + $openRed.reds[$r + "|" + $er.base].since + ") stays open until the guards run green there. If the branch is gone for good, remove its record from " + $redPath) }
+            if ($openRed.reds.ContainsKey($r + "|" + $er.base)) { [void]$text.Add("STILL OPEN: the red on " + $er.base + " (since " + (Get-HordeMergeRedSince -Record $openRed.reds[$r + "|" + $er.base]) + ") stays open until the guards run green there. If the branch is gone for good, remove its record from " + $redPath) }
             [void]$text.Add("" + @($er.entries).Count + " merge(s) stay owed and will be tried again; a guard that cannot run or hangs reads as 'could not run' (exit 2 in every run until it runs), never as red or green")
             # THE WAY OUT (T-0347): a branch that is gone (a stacked PR's base, deleted after its merge) can never be
             # fetched, so its merges stayed owed and ended every night 2 with no word of how to stop it. Each merge gets
@@ -1157,16 +1188,27 @@ function Invoke-HordeMergeRunOwed {
         $redBases = @(@($res.reds) | ForEach-Object { $_.base })
         $backGreen = @(@($res.ran) | Where-Object { $openRed.reds.ContainsKey($r + "|" + $_) -and $redBases -cnotcontains $_ })
         foreach ($gb in $backGreen) {
-            $grec = $openRed.reds[$r + "|" + $gb]
-            $was = $grec.note
-            if ($null -ne $grec.merge) { $was = "first red at " + (Format-HordeMergeNamedMerge -Merge $grec.merge) }
-            [void]$text.Add("GREEN AGAIN: " + $gb + " was red since " + $grec.since + " (" + $was + ") and every guard is green at its tip now; the open red is cleared")
+            $brec = $openRed.reds[$r + "|" + $gb]
+            $was = @(@($brec.guards) | ForEach-Object { $w = $_.note; if ($null -ne $_.merge) { $w = "first red at " + (Format-HordeMergeNamedMerge -Merge $_.merge) }; if (@($brec.guards).Count -gt 1) { $_.guard + " since " + $_.since + ": " + $w } else { $w } }) -join "; "
+            [void]$text.Add("GREEN AGAIN: " + $gb + " was red since " + (Get-HordeMergeRedSince -Record $brec) + " (" + $was + ") and every guard is green at its tip now; the open red is cleared")
+        }
+        # A GUARD THAT WENT GREEN WHILE ANOTHER STAYS RED on the same branch is said too, and leaves the record.
+        foreach ($rbase in @($redBases | Select-Object -Unique)) {
+            if (-not $openRed.reds.ContainsKey($r + "|" + $rbase)) { continue }
+            $stillRed = @(@($res.reds) | Where-Object { $_.base -ceq $rbase } | ForEach-Object { $_.guard })
+            foreach ($ge in @($openRed.reds[$r + "|" + $rbase].guards)) {
+                if ($stillRed -ccontains $ge.guard) { continue }
+                $was = $ge.note
+                if ($null -ne $ge.merge) { $was = "first red at " + (Format-HordeMergeNamedMerge -Merge $ge.merge) }
+                [void]$text.Add("GREEN AGAIN: " + $ge.guard + " on " + $rbase + " was red since " + $ge.since + " (" + $was + ") and is green at the tip now; " + ($stillRed -join ", ") + " stays red there")
+            }
         }
         foreach ($d in @($res.reds)) {
             $who = $d.note
             $mj = $null
+            # THIS GUARD'S OWN ENTRY in the open-red record: its since, its merge, its note (not the branch's).
             $rec = $null
-            if ($openRed.reds.ContainsKey($r + "|" + $d.base)) { $rec = $openRed.reds[$r + "|" + $d.base] }
+            if ($openRed.reds.ContainsKey($r + "|" + $d.base)) { $rec = Get-HordeMergeRedGuard -Record $openRed.reds[$r + "|" + $d.base] -Guard $d.guard }
             if ($null -ne $d.entry) {
                 $verb = "first red at the merge of "
                 if ($d.kind -ceq "dropped") { $verb = "dropped from the list by the merge of " }
@@ -1202,16 +1244,22 @@ function Invoke-HordeMergeRunOwed {
             # THE OPEN-RED RECORD IS WRITTEN BEFORE ANY MERGE IS MARKED CHECKED, like the report: a red whose record was
             # not written would read green the next quiet night, so a failure leaves every merge owed (T-0347).
             $dirty = $false
+            # EACH RED GUARD KEEPS ITS OWN ENTRY: one still red keeps its since and merge, a newly red one gets this run's stamp and
+            # its own walked merge, and one no longer red is dropped (round 2 of T-0347).
             foreach ($rb in @($redBases | Select-Object -Unique)) {
-                $first = @(@($res.reds) | Where-Object { $_.base -ceq $rb })[0]
                 $key = $r + "|" + $rb
-                $guardNames = @(@($res.reds) | Where-Object { $_.base -ceq $rb } | ForEach-Object { $_.guard } | Select-Object -Unique)
-                if ($openRed.reds.ContainsKey($key)) { $openRed.reds[$key].guards = @($guardNames); $dirty = $true; continue }
-                $named = @(@($res.reds) | Where-Object { $_.base -ceq $rb -and $null -ne $_.entry })
-                $mrec = $null
-                $nrec = $first.note
-                if ($named.Count -gt 0) { $mrec = [pscustomobject]@{ pr = $named[0].entry.pr; task = $named[0].entry.task; by = $named[0].entry.by; mergeSha = $named[0].entry.mergeSha } }
-                $openRed.reds[$key] = [pscustomobject]@{ repo = $r; base = $rb; since = $stamp; guards = @($guardNames); merge = $mrec; note = $nrec }
+                $old = $null
+                if ($openRed.reds.ContainsKey($key)) { $old = $openRed.reds[$key] }
+                $kept = New-Object System.Collections.ArrayList
+                foreach ($d2 in @(@($res.reds) | Where-Object { $_.base -ceq $rb })) {
+                    if (@($kept | Where-Object { $_.guard -ceq $d2.guard }).Count -gt 0) { continue }
+                    $have = Get-HordeMergeRedGuard -Record $old -Guard $d2.guard
+                    if ($null -ne $have) { [void]$kept.Add($have); continue }
+                    $mrec = $null
+                    if ($null -ne $d2.entry) { $mrec = [pscustomobject]@{ pr = $d2.entry.pr; task = $d2.entry.task; by = $d2.entry.by; mergeSha = $d2.entry.mergeSha } }
+                    [void]$kept.Add([pscustomobject]@{ guard = $d2.guard; since = $stamp; merge = $mrec; note = $d2.note })
+                }
+                $openRed.reds[$key] = [pscustomobject]@{ repo = $r; base = $rb; guards = @($kept) }
                 $dirty = $true
             }
             foreach ($gb in $backGreen) { $openRed.reds.Remove($r + "|" + $gb); $dirty = $true }
