@@ -198,18 +198,18 @@ $at = [datetime]::new(2026, 10, 16, 11, 30, 5, [System.DateTimeKind]::Utc)
 $w = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at -Dir $nw
 $mp = Join-Path $nw ($sidW + ".json")
 Check ($w.state -ceq "known" -and "" + $w.value -ceq $mp -and (Test-Path -LiteralPath $mp -PathType Leaf)) ("the marker is written, in a folder it makes, named by the session id (" + $w.state + ")")
-$mj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+$mj = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))
 Check ($mj.v -eq 1 -and $mj.sessionId -ceq $sidW -and $mj.by -ceq "horde" -and $mj.reason -ceq "hibernated" -and $mj.at -ceq "2026-10-16T11:30:05Z") "it holds v 1, the session id, by horde, the reason hibernated and the time"
 Check ((@($mj.PSObject.Properties.Name | Sort-Object) -join ",") -ceq "at,by,reason,sessionId,v") "and nothing else"
 Check (@(Get-ChildItem -LiteralPath $nw -Force | Where-Object { $_.Name -ne ($sidW + ".json") }).Count -eq 0) "no temporary file is left beside it"
 $bytes = [System.IO.File]::ReadAllBytes($mp)
 Check (-not ($bytes.Count -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB)) "it has no byte-order mark, which the restore plugin's JSON reader would trip on"
 $again = Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "hibernated" -At $at.AddMinutes(1) -Dir $nw
-Check ($again.state -ceq "known" -and ([System.IO.File]::ReadAllText($mp) | ConvertFrom-Json).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
+Check ($again.state -ceq "known" -and (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))).at -ceq "2026-10-16T11:31:05Z") "a second write replaces the first, whole"
 # A time given in local time is written as the same moment in UTC (the Z on the end says so).
 $localAt = [datetime]::new(2026, 10, 16, 7, 30, 5, [System.DateTimeKind]::Local)
 [void](Write-HordeWeztermFleetNoRestore -SessionId $sidW -Reason "parked" -At $localAt -Dir $nw)
-$lj = [System.IO.File]::ReadAllText($mp) | ConvertFrom-Json
+$lj = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($mp))
 Check ($lj.at -ceq $localAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) -and $lj.reason -ceq "parked") ("a local time is written as UTC (" + $lj.at + ")")
 $rm = Remove-HordeWeztermFleetNoRestore -SessionId $sidW -Dir $nw
 Check ($rm.state -ceq "known" -and $rm.value -ceq "removed") "THE TWO MATCH: the wake's remover finds and removes exactly the marker the writer made"
