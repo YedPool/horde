@@ -143,10 +143,22 @@ function Invoke-HordeWatcherHeartbeat {
     return [pscustomobject]@{ lines = @($lines.ToArray()) }
 }
 
+function Get-HordeWatcherReaderMessageTime {
+    # When the message at -Path was sent, UTC. One whose time cannot be read counts by its file's time: it is still a
+    # message nobody took. $null when it is gone: the reader took it after the listing. A missing file's time reads
+    # 1601 on .NET, an age of 223 million minutes (review of T-0388), so a reader draining its mail would read as down.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $at = $null
+    try { $at = ConvertTo-HordeWatcherTime -Value (ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)).createdAt } catch { }
+    if ($null -ne $at) { return $at }
+    $t = [System.IO.File]::GetLastWriteTimeUtc($Path)
+    if ($t.Year -le 1601) { return $null }
+    return $t
+}
+
 function Get-HordeWatcherReaderVerdict {
     # { stale; kind; why } for the reader named by -SelfPath (first word: its session id) at -Now. kind: "" |
-    # "unknown" (no usable id) | "nomail" (no mail folder) | "unread". A message whose time cannot be read counts
-    # by its file's time: it is still a message nobody took.
+    # "unknown" (no usable id) | "nomail" (no mail folder) | "unreadable" (its inbox cannot be listed) | "unread".
     param([Parameter(Mandatory = $true)][string]$SelfPath, [Parameter(Mandatory = $true)][string]$MailRoot, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)]$Policy)
     $sid = ""
     try { $sid = (("" + (Read-HordeSharedText -Path $SelfPath)).Trim() -split '\s+')[0] } catch { }
@@ -155,18 +167,23 @@ function Get-HordeWatcherReaderVerdict {
     $limit = [int]$Policy.watcherReaderMinutes
     $utc = $Now.ToUniversalTime()
     $inbox = [System.IO.Path]::Combine($MailRoot, $sid, "inbox")
-    $files = @(); if ([System.IO.Directory]::Exists($inbox)) { $files = @([System.IO.Directory]::GetFiles($inbox, "*.json")) }
+    $files = @()
+    if ([System.IO.Directory]::Exists($inbox)) {
+        try { $files = @([System.IO.Directory]::GetFiles($inbox, "*.json")) }
+        catch { return [pscustomobject]@{ stale = $true; kind = "unreadable"; why = ("the alarm reader's inbox cannot be listed: " + $_.Exception.Message) } }
+    }
     $oldest = $null
+    $unread = 0
     foreach ($f in $files) {
-        $at = $null
-        try { $at = ConvertTo-HordeWatcherTime -Value (ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $f)).createdAt } catch { }
-        if ($null -eq $at) { $at = [System.IO.File]::GetLastWriteTimeUtc($f) }
+        $at = Get-HordeWatcherReaderMessageTime -Path $f
+        if ($null -eq $at) { continue }
+        $unread++
         if ($null -eq $oldest -or $at -lt $oldest) { $oldest = $at }
     }
     if ($null -eq $oldest) { return [pscustomobject]@{ stale = $false; kind = ""; why = "" } }
     $age = [int][System.Math]::Floor(($utc - $oldest).TotalMinutes)
     if ($age -le $limit) { return [pscustomobject]@{ stale = $false; kind = ""; why = "" } }
-    return [pscustomobject]@{ stale = $true; kind = "unread"; why = ("" + $files.Count + " unread, the oldest " + $age + " minutes old (more than " + $limit + "): it, or the whole fleet, may be down") }
+    return [pscustomobject]@{ stale = $true; kind = "unread"; why = ("" + $unread + " unread, the oldest " + $age + " minutes old (more than " + $limit + "): it, or the whole fleet, may be down") }
 }
 
 function Invoke-HordeWatcherReaderCheck {
@@ -175,15 +192,16 @@ function Invoke-HordeWatcherReaderCheck {
     $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $v = Get-HordeWatcherReaderVerdict -SelfPath $SelfPath -MailRoot $MailRoot -Now $now -Policy $Policy
     $st = Read-HordeWatcherBeatState -Path $StatePath
+    if ($v.stale -and $st.alerted) { return [pscustomobject]@{ lines = @() } }
     if (-not $v.stale) {
         if ($st.alerted) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null }) }
         return [pscustomobject]@{ lines = @() }
     }
-    if ($st.alerted) { return [pscustomobject]@{ lines = @() } }
     $text = "Overseer alarms are not being read (" + $v.kind + "): " + $v.why + "."
     $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text $text -Who "the founder's phone"
     $w = Send-HordeWatcherWord -Tools $Tools -Name "Tell" -Text ("OVERSEER ALARMS UNREAD`n" + $text + "`nYou are not told again until this has cleared and comes back.") -Who "the warchief"
     # TOLD ONLY WHEN TAKEN: when neither was taken, the next pass tries again.
-    if ($n.ok -or $w.ok) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true; since = $now }) }
+    $told = ($n.ok -or $w.ok)
+    if ($told) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true; since = $now }) }
     return [pscustomobject]@{ lines = @(("watcher reader check: STALE (" + $v.kind + ") - " + $v.why), $n.line, $w.line) }
 }

@@ -154,7 +154,17 @@ try {
     Put-Mail "bad" "not json"
     [System.IO.File]::SetLastWriteTimeUtc((Join-Path $inbox "bad.json"), $t0.AddMinutes(-300))
     Check ((Reader).kind -ceq "unread") "a message that cannot be read counts by its file's time"
+    Check ((Get-HordeWatcherReaderMessageTime -Path (Join-Path $inbox "bad.json")) -eq $t0.AddMinutes(-300)) "CONTROL: the file time of a message that is there"
     Remove-Item -LiteralPath (Join-Path $inbox "bad.json")
+    # Review of T-0388: the reader takes a message between the listing and the read; a missing file's time reads 1601.
+    Check ($null -eq (Get-HordeWatcherReaderMessageTime -Path (Join-Path $inbox "bad.json"))) "a message taken while it is being looked at has no age: a reader draining its mail is no alarm"
+    Put-Mail "denied" (Mail-Ago 5)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $null = & icacls $inbox /deny ("*" + $me + ":(RD)")
+    try { $v = Reader; $listed = $true } catch { $listed = $false } finally { $null = & icacls $inbox /remove:d ("*" + $me) }
+    Check ($listed -and $v.stale -and $v.kind -ceq "unreadable") "an inbox that cannot be listed is an alarm, not a thrown pass and not quiet"
+    Check (-not (Reader).stale) "CONTROL: the same inbox, readable again, is quiet"
+    Remove-Item -LiteralPath (Join-Path $inbox "denied.json")
     Put-Mail "old" (Mail-Ago 300)
     $rig.tells.Clear(); $rig.notices.Clear(); $rig.tellOk = $true; $rig.noticeOk = $true
     $rt = @{ Now = { return $t0 }; Tell = $tools["Tell"]; Notify = $tools["Notify"] }
