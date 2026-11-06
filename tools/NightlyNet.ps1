@@ -117,6 +117,8 @@ $env:GCM_INTERACTIVE = "never"
 # powershell -File hands a comma list over as ONE string: split it here.
 $Repos = @($Repos | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() })
 $Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() })
+# A run asked for a subset is not a thin night, so a person's -Only or -Limit run neither exits 6 nor alarms the morning.
+if (@($Only).Count -gt 0 -or $Limit -gt 0) { $CoverageFloorPercent = 0 }
 if ($WorkRoot -eq "") { $WorkRoot = Join-Path (Join-Path $env:LOCALAPPDATA "horde") "nightly" }
 if ($HordeScript -eq "") { $HordeScript = Join-Path (Split-Path -Parent $PSScriptRoot) "horde.ps1" }
 # -HeavySlotScript is for the suite: a stand-in gate, so a whole night can be driven with no real slot or memory.
