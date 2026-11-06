@@ -54,6 +54,16 @@ Check ((G $v "incomplete") -eq $false) "and a COMPLETE headline is no note"
 $v = Get-HordeNightlyWatchVerdict -Date $D -LogText $ran -ReportNames @("2026-11-03.txt") -ReportText "Nightly net 2026-11-03: 0 newly red across 2 repos. INCOMPLETE: 3 units not run. GUARDS RED in x.`nREPO a"
 Check ((G $v "status") -ceq "RAN" -and (G $v "missed") -eq $false -and (G $v "incomplete") -eq $true) "RAN but INCOMPLETE is a note, not a miss"
 Check ((G $v "incompleteWhy") -like "INCOMPLETE: 3 units not run.*" -and (G $v "incompleteWhy") -notlike "*GUARDS*") "and it says why in the headline's own words"
+$thinText = "Nightly net 2026-11-03: 0 newly red across 2 repos. BELOW THE COVERAGE FLOOR of 90 percent: a/b ran 10 of 476 units (2 percent), a/b ran no guards. INCOMPLETE: 466 units not run.`nREPO a"
+$v = Get-HordeNightlyWatchVerdict -Date $D -LogText $ran -ReportNames @("2026-11-03.txt") -ReportText $thinText
+Check ((G $v "status") -ceq "TOO FEW" -and (G $v "missed") -eq $true) "a night below the coverage floor is a miss, TOO FEW, though it ran and was told"
+Check ((G $v "detail") -like "*a/b ran 10 of 476 units (2 percent)*") ("and it says the numbers (" + (G $v "detail") + ")")
+$thinDecision = Get-HordeNightlyWatchDecision -Verdict $v -Streak 1 -State (Read-HordeNightlyWatchState -Text "")
+Check ((G $thinDecision "kind") -ceq "alarm") "so it alarms, where a RAN night with a note would not"
+$thinMsg = Format-HordeNightlyWatchMessage -Decision $thinDecision -Verdict $v -Lookback 14
+Check ((G $thinMsg "founder") -like "*ran too few tests to count as a pass*" -and (G $thinMsg "founder") -notlike "*did not run*") ("the phone says what happened (" + (G $thinMsg "founder") + ")")
+$v = Get-HordeNightlyWatchVerdict -Date $D -LogText $ran -ReportNames @("2026-11-03.txt") -ReportText "Nightly net 2026-11-03: x. COMPLETE.`na unit says BELOW THE COVERAGE FLOOR: not the headline"
+Check ((G $v "status") -ceq "RAN") "only the headline line counts as below the floor"
 $v = Get-HordeNightlyWatchVerdict -Date $D -LogText $ran -ReportNames @("2026-11-03.txt") -ReportText "Nightly net 2026-11-03: x. COMPLETE.`nunit says INCOMPLETE: not the headline"
 Check ((G $v "incomplete") -eq $false) "only the headline line counts as INCOMPLETE"
 $v = Get-HordeNightlyWatchVerdict -Date "2026-11-01" -LogText ("2026-11-01T21:00:03 nightly net 2026-11-01: window CLOSED, cutoff 2026-11-01T06:15:00, repos a`n2026-11-01T21:00:03 outside the night window (22:00 to 06:30): nothing run") -ReportNames @("2026-11-01-REFUSED.txt")

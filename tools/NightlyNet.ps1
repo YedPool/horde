@@ -84,6 +84,7 @@ param(
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [ValidateRange(60, 1800)][int]$MinFitSeconds = 600,
     [int]$BisectReserveMinutes = 90,
+    [ValidateRange(0, 100)][int]$CoverageFloorPercent = 90,
     [int]$MaxBisectRuns = 40,
     [ValidateRange(0, 120)][int]$ReportReserveMinutes = 15,
     [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
@@ -674,7 +675,9 @@ try {
             skipReasons = $c.skipReasons; pending = @($c.state.pending) }
     }
     $memory = [pscustomobject]@{ giveUps = $script:MemoryGiveUps; minFreeGB = (@($ctxs | ForEach-Object { $_.kind } | Select-Object -Unique | ForEach-Object { $_ + " " + (Get-NightlyFloor $_).freeGB.ToString($Inv) }) -join ", "); minCommitGB = (Get-NightlyFloor $ctxs[0].kind).commitGB.ToString($Inv); holders = @($script:MemoryHolders) }
-    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory -AppLines @($script:AppCloser.lines)
+    $body = New-HordeNightlyReport -Date $Date -Repos $repoRows -Memory $memory -AppLines @($script:AppCloser.lines) -CoverageFloorPercent $CoverageFloorPercent
+    $thin = @(Get-HordeNightlyCoverageFindings -Repos $repoRows -FloorPercent $CoverageFloorPercent)
+    if ($thin.Count -gt 0) { Write-NightlyNetLine ("below the coverage floor of " + $CoverageFloorPercent + " percent: " + ($thin -join ", ")) }
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
@@ -691,6 +694,8 @@ try {
     }
     if ($told -ne 0) { exit $told }
     if (-not $saved) { exit 1 }
+    # 6: the night ran and was told, but ran too little to count (core Get-HordeNightlyCoverageFindings).
+    if ($thin.Count -gt 0) { exit 6 }
     exit 0
 } catch {
     # A failed night must never be silent: one plain line to M, and the same line in the report folder.
