@@ -265,7 +265,7 @@ $main = {
         -Say { param($line) Write-HordeHeavySlotLine $line }
     if ($got.state -cne "held") {
         if ($got.blocker -ceq "idle") { $script:code = 128; Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the PC to be idle or for night; nothing was run"); return }
-        if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its suite phase ends, at the latest about 04:45; nothing was run. Try again after that."); return }
+        if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its suite phase ends, at the latest about 05:45; nothing was run. Try again after that."); return }
         if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")
