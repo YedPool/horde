@@ -35,7 +35,39 @@
 # A TEST'S HOME TELLS NOBODY AND STARTS NOTHING. The real tools refuse a Horde home under the temp
 # folder before they look for a messenger, a seat or a script (cli/ServicesTell.ps1, the same guard).
 #
+# A KEY COUNTS AS TOLD ONLY WHILE ITS NOTICE IS WATCHED UNTIL THE WARCHIEF'S OWN SESSION TAKES IT (T-0391 slice 7; the chat's own rule,
+# channels/chat/Taken.ps1, and the services', the doorbell's and the routed answers': decisions/NoticeTaken.ps1, used as it is). The
+# messenger ACCEPTING the post was counted as the warchief being told, the key went into the state's told list, and a notice the session
+# never took was never said again. Now:
+#   - MARK FIRST, THEN POST (Send-HordeAnalystWarchiefTaken). A list that cannot be read or written means no post, the reason said, and the
+#     key is NOT put in the told list, so the next pass tries again. A post the messenger REFUSES (a known answer) takes its mark off; an
+#     UNKNOWN result keeps it, for a post that may have landed must stay watched.
+#   - WHAT THE TOLD LIST MEANS NOW: "posted and watched". A key goes in it when the post is accepted AND marked, and stays until its condition
+#     is over (Clear-HordeAnalystTold) - so a key is never posted twice for one event and never lost: DELIVERED is the awaiting list's
+#     business (Invoke-HordeAnalystTellTakenTick says TAKEN when the session's own hook took it), and a notice not taken raises ONE ALARM
+#     at takenAlarmSeconds, is asked about every takenAfterAlarmSeconds after it, and is given up with a second ALARM when 7 days old.
+#   - ONE ID PER EVENT, A NEW ID FOR A NEW EVENT. The notice id is made from the key and the key's GENERATION, a number in the state
+#     (tellGen) that Clear-HordeAnalystTold raises each time a condition is declared over. The same event after a restart has the same
+#     generation (the state is written whole, after the clear and the post), so wezfleet keeps one message (lib/MailPost.ps1
+#     already-posted) and the mark keeps its clock and its alarm; the same key told on a LATER event has a higher generation, a new id, and
+#     wakes someone. A pass killed between the clear and the state write repeats the clear, and reaches the same generation again.
+#   - A repost the messenger answers already-posted for a mark this pass has just written is not a fresh post: the first copy's stage says
+#     nothing of this one, so the mark is taken off and the line says so (else a false TAKEN would follow). The key is then told.
+#   - THE LINES (a TAKEN, an ALARM, a full list given up) are the pass's own lines, which `horde analyst run` writes to the supervisor's log.
+# The founder's notice (Notify) goes to the notices store (notices/Decide.ps1), not through a messenger, and is left as it was. The relay
+# watch's and the watcher check's tells (Send-HordeAnalystWarchief) keep their own states and are left as they were.
+#
+# THE PORT IS LOADED ONCE, BY THE COMMAND (cli/commands/analyst.ps1), at its own scope, for every tool that needs it - the teller and the look
+# at the awaiting list share that one load, so there is no second load to throw "already registered" (PR 430's round 1). A suite cuts the real
+# blocks out of the command file and runs them in one process, in both orders (test/test-analyst-tell-taken.ps1).
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "decisions\NoticeTaken.ps1")
+
+# The awaiting list of these notices: one file under the home, the words its lines use (decisions/NoticeTaken.ps1).
+$script:HordeAnalystTellTakenKind = New-HordeDecisionNoticeKind -Path @("analyst", "tell-taken.json") -TempPrefix "analyst-tell-taken" -Ledger "the analyst supervisor's awaiting ledger" -List "the awaiting list of analyst supervisor notices" -Label "analyst" -Notice "analyst supervisor notice" -Owner "the warchief's" -Detail { param($Entry) return "from the analyst supervisor" }
+$script:HordeAnalystTellTakenAskedFile = "tell-taken-asked.txt"
 
 $script:HordeAnalystTellRole = "warchief"
 $script:HordeAnalystFromSession = "horde-analyst"
@@ -76,6 +108,8 @@ function New-HordeAnalystTools {
         Tell     = $null
         Notify   = $null
         Spawn    = $null
+        # What became of the notices already posted (Invoke-HordeAnalystTellTakenTick): lines for the pass. $null: nothing is asked.
+        TellTaken = $null
     }
 }
 
@@ -107,22 +141,41 @@ function Get-HordeAnalystPolicy {
 }
 
 function Send-HordeAnalystTell {
-    # Tell the warchief one thing once: the key goes into the state's told list when the teller took it,
-    # and a key already there is not told again. Returns the journal line.
+    # Tell the warchief one thing once: the key goes into the state's told list when the teller POSTED it and marked it for watching (header:
+    # not when the session took it - the awaiting list says that), and a key already there is not told again. Returns the journal line,
+    # with the teller's own lines (a full list given up, an already-posted copy) after it.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string]$Extra = "")
     if (@($State.told) -ccontains $Key) { return "" }
     if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return ("would tell the warchief (" + $Key + "), but telling is off") }
     $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $Extra
     $r = $null
-    try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Tell" -With @($Key, $body, $Values) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
-    if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); return ("told the warchief: " + $Key) }
-    return ("could not tell the warchief (" + $Key + "): " + $(if ($null -ne $r) { "" + $r.detail } else { "the teller did not answer" }))
+    $gen = Get-HordeAnalystTellGen -State $State -Key $Key
+    try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Tell" -With @($Key, $body, $Values, $gen) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+    $more = @()
+    if ($null -ne $r -and $null -ne $r.PSObject.Properties["lines"]) { $more = @(@($r.lines) | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" }) }
+    $tail = $(if ($more.Count -gt 0) { " | " + ($more -join " | ") } else { "" })
+    if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); return ("posted to the warchief: " + $Key + " (delivered only when the warchief's own session takes it)" + $tail) }
+    return ("could not tell the warchief (" + $Key + "): " + $(if ($null -ne $r) { "" + $r.detail } else { "the teller did not answer" }) + $tail)
+}
+
+function Get-HordeAnalystTellGen {
+    # The generation of a key: how many times its condition has been declared over. 0 for a key never cleared.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key)
+    foreach ($row in @($State.tellGen)) { if ("" + $row -cmatch '\A([a-z0-9-]{1,40})=([0-9]{1,9})\z' -and $Matches[1] -ceq $Key) { return [long]$Matches[2] } }
+    return [long]0
 }
 
 function Clear-HordeAnalystTold {
-    # Forget the told keys whose condition is over, so it is told again if it comes back.
+    # Forget the told keys whose condition is over, so it is told again if it comes back. Each key named is a new EVENT the next time it
+    # is told: its generation goes up, and with it the notice id (header, ONE ID PER EVENT), so a second event is not taken by the
+    # messenger for a repeat of the first and left unheard. Raised for every key named, told or not: a post whose result was unknown may
+    # have landed, and its event is over too.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string[]]$Keys)
     $State.told = [string[]]@(@($State.told) | Where-Object { $Keys -cnotcontains $_ })
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($k in $Keys) { [void]$rows.Add($k + "=" + ((Get-HordeAnalystTellGen -State $State -Key $k) + 1)) }
+    foreach ($row in @($State.tellGen)) { if ("" + $row -cmatch '\A([a-z0-9-]{1,40})=([0-9]{1,9})\z' -and $Keys -cnotcontains $Matches[1]) { [void]$rows.Add("" + $row) } }
+    $State.tellGen = [string[]]@($rows.ToArray())
 }
 
 function Invoke-HordeAnalystPass {
@@ -135,10 +188,17 @@ function Invoke-HordeAnalystPass {
     $paths = Get-HordeAnalystPaths -Folder $Folder
     $sp = Get-HordeAnalystSessionPaths -Folder $Folder
     $now = ([datetime](Invoke-HordeAnalystTool -Tools $Tools -Name "Now")).ToUniversalTime()
+    # WHAT BECAME OF THE NOTICES ALREADY POSTED (T-0391 slice 7, header): the warchief's own session took them (TAKEN), or an ALARM says it
+    # did not. Every pass, whatever else it does, even one that cannot read its state: a notice must never go unwatched for an unrelated
+    # file. The lines are the pass's own, so `horde analyst run` writes them to the supervisor's log. Its failure is its own.
+    if ($null -ne $Tools["TellTaken"]) {
+        try { foreach ($l in @(& $Tools["TellTaken"] $Policy.values)) { & $say ("" + $l) } }
+        catch { & $say ("the awaiting notices could not be asked: " + $_.Exception.Message) }
+    }
     $read = Read-HordeAnalystState -Path $sp.state
     if ($read.state -cne "known") {
         # A state that cannot be read is never taken for no state: that would start a second analyst.
-        return [pscustomobject]@{ lines = @("the supervisor's state cannot be read: " + $read.reason); problem = ("the supervisor's state cannot be read, so nothing was done: " + $read.reason); state = $null }
+        return [pscustomobject]@{ lines = @($lines.ToArray()) + @("the supervisor's state cannot be read: " + $read.reason); problem = ("the supervisor's state cannot be read, so nothing was done: " + $read.reason); state = $null }
     }
     $s = $read.value
     $handover = Read-HordeAnalystHandover -Path $sp.handover
@@ -356,10 +416,11 @@ function Send-HordeAnalystPost {
     # Post -Body to -SessionId through the one messenger that keeps a body out of any input box and
     # takes a repost as one message: { ok; woken; detail }.
     param([Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][string]$Body, [Parameter(Mandatory = $true)]$Values, [string]$HordeHome = "")
+    # known: whether the answer is a KNOWN one (nothing was posted, or the messenger said what it did) - an unknown result may have landed.
     $found = Find-HordeMessenger -Require $script:HordeAnalystTellNeeds
-    if ($found.state -cne "known") { return [pscustomobject]@{ ok = $false; woken = $false; detail = ("no messenger can deliver to a session: " + $(if ($found.state -ceq "absent") { $found.note } else { $found.reason })) } }
+    if ($found.state -cne "known") { return [pscustomobject]@{ ok = $false; woken = $false; known = $true; detail = ("no messenger can deliver to a session: " + $(if ($found.state -ceq "absent") { $found.note } else { $found.reason })) } }
     $deviceId = ""
-    try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return [pscustomobject]@{ ok = $false; woken = $false; detail = ("this machine's device id could not be had: " + $_.Exception.Message) } }
+    try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return [pscustomobject]@{ ok = $false; woken = $false; known = $true; detail = ("this machine's device id could not be had: " + $_.Exception.Message) } }
     $message = [pscustomobject]@{
         messageId = $MessageId; sessionId = $SessionId
         from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeAnalystFromSession; label = "" + $Values.fromLabel }
@@ -369,9 +430,9 @@ function Send-HordeAnalystPost {
     if ($posted.state -ceq "known" -and $script:HordeAnalystTakenStages -ccontains "$($posted.value.stage)") {
         $woken = $posted.value.PSObject.Properties["woken"]
         $reason = $posted.value.PSObject.Properties["reason"]
-        return [pscustomobject]@{ ok = $true; woken = ($null -ne $woken -and $woken.Value -eq $true); detail = $(if ($null -ne $reason) { "" + $reason.Value } else { "" }) }
+        return [pscustomobject]@{ ok = $true; woken = ($null -ne $woken -and $woken.Value -eq $true); known = $true; detail = $(if ($null -ne $reason) { "" + $reason.Value } else { "" }) }
     }
-    return [pscustomobject]@{ ok = $false; woken = $false; detail = $(if ($posted.state -ceq "known") { "the messenger answered " + $posted.value.stage } else { "the messenger did not take it: " + $posted.reason }) }
+    return [pscustomobject]@{ ok = $false; woken = $false; known = ($posted.state -ceq "known"); detail = $(if ($posted.state -ceq "known") { "the messenger answered " + $posted.value.stage } else { "the messenger did not take it: " + $posted.reason }) }
 }
 
 function Send-HordeAnalystMessage {
@@ -389,6 +450,114 @@ function Send-HordeAnalystWarchief {
     if ($seat.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("the warchief's session cannot be told: " + $(if ($seat.state -ceq "absent") { $seat.note } else { $seat.reason })) } }
     $r = Send-HordeAnalystPost -SessionId $seat.value.sessionId -MessageId ([guid]::NewGuid().ToString()) -Body $Body -Values $Values -HordeHome $HordeHome
     return [pscustomobject]@{ ok = $r.ok; detail = $r.detail }
+}
+
+function Test-HordeAnalystNoticeListed {
+    # Is the notice on the awaiting list now? $false too when the list cannot be read (Add then fails and nothing is posted).
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId)
+    $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return $false }
+    $id = $NoticeId.Replace("-", "")
+    foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e -and $e.messageId -ceq $id) { return $true } }
+    return $false
+}
+
+function Send-HordeAnalystWarchiefTaken {
+    # THE TELL TOOL (header): one fixed notice to the warchief's session, marked on the awaiting list BEFORE it is posted, under the id of
+    # (-Key, -Gen): { ok; detail; lines }. ok is $true when the post was accepted and is watched - NOT when the session took it. -Seat and
+    # -TempRoot are for a suite.
+    param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Body, [Parameter(Mandatory = $true)]$Values, [long]$Gen = 0, [string]$HordeHome = "", $Now = $null, [scriptblock]$Seat = $null, [string]$TempRoot = "")
+    $lines = New-Object System.Collections.ArrayList
+    $done = { param([bool]$Ok, [string]$Detail) return [pscustomobject]@{ ok = $Ok; detail = $Detail; lines = [string[]]@($lines.ToArray()) } }
+    if (Test-HordeAnalystHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot) { return (& $done $false "this Horde home is a test's: nobody is told") }
+    $where = $(if ($null -ne $Seat) { & $Seat } else { Get-HordeRoleSeat -Role $script:HordeAnalystTellRole })
+    if ($where.state -cne "known") { return (& $done $false ("the warchief's session cannot be told: " + $(if ($where.state -ceq "absent") { $where.note } else { $where.reason }))) }
+    $id = ConvertTo-HordeAnalystMessageId -Seed ("tell:" + $Key + ":" + $Gen)
+    $at = $(if ($Now -is [datetime]) { $Now.ToUniversalTime() } else { [datetime]::UtcNow })
+    # THE MARK IS WRITTEN BEFORE THE POST. A crash between the mark and the post only costs an alarm at takenAlarmSeconds: the next pass
+    # posts the same id, which the messenger keeps as one.
+    $wasListed = Test-HordeAnalystNoticeListed -HordeHome $HordeHome -NoticeId $id
+    $awaited = Add-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id -Answer $Gen -SessionId ("" + $where.value.sessionId) -Now $at
+    foreach ($l in @($awaited.lines)) { [void]$lines.Add($l) }
+    if (-not $awaited.ok) { return (& $done $false ("the notice cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
+    $r = Send-HordeAnalystPost -SessionId ("" + $where.value.sessionId) -MessageId $id -Body $Body -Values $Values -HordeHome $HordeHome
+    if ($r.ok) {
+        # ALREADY POSTED, AND THIS PASS WROTE A BRAND-NEW MARK: the messenger answered with the first copy's stage and woke nobody, so that
+        # stage says nothing of THIS post. The mark is taken off (or the next look would log a TAKEN for a notice never sent again) and the
+        # line says so. The key is still told: the first copy was posted, whatever it became.
+        if ($r.detail -clike "already-posted*" -and -not $wasListed) {
+            $null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id
+            [void]$lines.Add("analyst: the notice " + $id + " (" + $Key + ") was NOT sent again: the messenger already held a copy of it from an earlier post and woke nobody, so it is not counted as delivered")
+        }
+        return (& $done $true "")
+    }
+    # A REFUSED POST LEAVES NO MARK (the notice is in no mailbox, so a mark would alarm "not taken" for something never sent). ONLY A KNOWN
+    # ANSWER removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched.
+    $detail = "" + $r.detail
+    if ($r.known -eq $true) {
+        $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id
+        if (-not $removed.ok) { $detail = $detail + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
+    }
+    return (& $done $false $detail)
+}
+
+function Test-HordeAnalystTellAwaiting {
+    # Is there a mark to ask about? A quiet pass - nearly every pass - has none, and then asks no messenger. The file stays after the last
+    # mark is taken off ({"awaiting":[]}), so its being there says nothing; a list that cannot be read counts as awaiting, so the look is
+    # made and says why it cannot be (a notice must never go unwatched for an unreadable file).
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    $path = Get-HordeDecisionNoticeTakenPath -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome
+    if (-not [System.IO.File]::Exists($path)) { return $false }
+    $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return $true }
+    return (@($r.value.awaiting).Count -gt 0)
+}
+
+function Read-HordeAnalystTellAsked {
+    # When each mark was last asked about, by message id (UTC ms): the supervisor's tend may be a new process each time, so the cadence
+    # after an alarm needs it kept. A missing or unreadable file is an empty table (every mark is then simply asked).
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    $table = @{}
+    $path = [System.IO.Path]::Combine($HordeHome, "analyst", $script:HordeAnalystTellTakenAskedFile)
+    try {
+        if (-not [System.IO.File]::Exists($path)) { return $table }
+        foreach ($line in @([System.IO.File]::ReadAllLines($path))) { if ($line -cmatch '\A([0-9a-f]{32}) ([0-9]{1,15})\z') { $table[$Matches[1]] = [long]$Matches[2] } }
+    } catch { return @{} }
+    return $table
+}
+
+function Write-HordeAnalystTellAsked {
+    # The table, for the marks still awaiting only, replaced whole in one rename. $true when written; never throws.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][hashtable]$Table)
+    $path = [System.IO.Path]::Combine($HordeHome, "analyst", $script:HordeAnalystTellTakenAskedFile)
+    $tmp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+    try {
+        $r = Read-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome
+        if ($r.state -cne "known") { return $false }
+        $live = @{}
+        foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e) { $live[$e.messageId] = $true } }
+        $rows = @(foreach ($k in @($Table.Keys | Sort-Object)) { if ($live.ContainsKey($k) -and $Table[$k] -is [long]) { $k + " " + $Table[$k] } })
+        if ($rows.Count -eq 0) { if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }; return $true }
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
+        [System.IO.File]::WriteAllBytes($tmp, [System.Text.Encoding]::ASCII.GetBytes(($rows -join "`n") + "`n"))
+        Move-HordeFileAtomic -From $tmp -To $path
+        return $true
+    } catch { try { [System.IO.File]::Delete($tmp) } catch { }; return $false }
+}
+
+function Invoke-HordeAnalystTellTakenTick {
+    # Ask about the notices awaiting the warchief's own TAKEN and say what became of them (NoticeTaken.ps1): the lines, for the pass's
+    # output. The messenger is found as the notice was posted; when none can be had now the clock alone speaks. Never throws. The command
+    # has loaded the messenger port (header); call it only when Test-HordeAnalystTellAwaiting.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][datetime]$Now, [double]$AlarmSeconds = 90, [double]$AfterAlarmSeconds = 300)
+    $messenger = $null
+    try { $found = Find-HordeMessenger -Require $script:HordeAnalystTellNeeds; if ($found.state -ceq "known") { $messenger = $found.value } } catch { $messenger = $null }
+    try {
+        $memory = Read-HordeAnalystTellAsked -HordeHome $HordeHome
+        $tick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -Messenger $messenger -Now $Now.ToUniversalTime() -AlarmSeconds $AlarmSeconds -AfterAlarmSeconds $AfterAlarmSeconds -TtlSeconds $script:HordeAnalystTtlSeconds -Memory $memory
+        [void](Write-HordeAnalystTellAsked -HordeHome $HordeHome -Table $memory)
+        return @($tick.lines)
+    } catch { return @("analyst: the awaiting list of analyst supervisor notices could not be asked: " + $_.Exception.Message) }
 }
 
 function Send-HordeAnalystFounderNotice {
@@ -444,7 +613,7 @@ function Format-HordeAnalystStatus {
     $f = Read-HordeAnalystFindings -Path $paths.findings -Offset $s.findingsOffset
     $m = Read-HordeAnalystMail -Folder $paths.mail -Markers $Policy.markers
     [void]$out.Add("waiting: " + $(if ($f.state -ceq "known") { "" + @($f.value.items | Where-Object { $_.wake -cne "never" }).Count + " finding(s)" } else { "findings unreadable" }) + ", " + $(if ($m.state -ceq "known") { "" + @($m.value).Count + " mail(s)" } else { "mail unreadable" }))
-    if (@($s.told).Count -gt 0) { [void]$out.Add("told the warchief, and not over yet: " + (@($s.told) -join ", ")) }
+    if (@($s.told).Count -gt 0) { [void]$out.Add("posted to the warchief, and not over yet: " + (@($s.told) -join ", ")) }
     [void]$out.Add("settings: rounds every " + $v.roundMinutes + " min, heartbeat after " + $v.heartbeatHours + " h, wake at once on " + ($Policy.markers -join ", ") + ", ack within " + $v.ackMinutes + " min, spawn script " + $(if ("" + $v.spawnScript -ne "") { $v.spawnScript } else { "none (the warchief starts it)" }))
     return @($out.ToArray())
 }

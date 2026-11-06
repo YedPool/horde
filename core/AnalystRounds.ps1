@@ -97,6 +97,12 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
        what = "Whether the founder's phone is told when a round gets no ack in time." },
     @{ name = "fromLabel"; kind = "label"; default = "AS"
        what = "The hub label the supervisor's messages wear, so a messenger can say who they are from." },
+    # T-0391 slice 7: a notice to the warchief is delivered only when the warchief's own session took it. 90 s is the chat's and the
+    # doorbell's alarm limit; an alarmed notice is asked about every 300 s (the doorbell's).
+    @{ name = "takenAlarmSeconds"; kind = "whole"; default = 90; min = 10; max = 3600
+       what = "How long a notice the messenger accepted may wait to be taken by the warchief's own session before one ALARM line is raised and the notice is kept awaiting, in seconds." },
+    @{ name = "takenAfterAlarmSeconds"; kind = "whole"; default = 300; min = 5; max = 3600
+       what = "How often a notice already alarmed is asked about, until it is taken or 7 days old, in seconds." },
     # THE RELAY WATCH (core/RelayWatch.ps1), run by the same token-free loop. Empty origin: the relay
     # settings' pairOrigin. Two failures in a row before anyone is told, so one blip tells nobody.
     @{ name = "relayOrigin"; kind = "text"; min = 0; max = 200; default = ""

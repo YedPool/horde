@@ -143,7 +143,7 @@ function New-HordeAnalystState {
     return [pscustomobject]@{
         v = 1; sessionId = ""; phase = "none"; previousSessionId = ""; startedAt = $null; startReason = ""
         lastRoundAt = $null; lastWakeAt = $null; findingsOffset = [long]0; lastAckId = ""
-        rounds = @(); told = @()
+        rounds = @(); told = @(); tellGen = @()
         contextTokens = [long]-1; contextAt = $null; transcriptLength = [long]-1
     }
 }
@@ -182,6 +182,8 @@ function Read-HordeAnalystState {
         $s.contextTokens = [long]$doc.contextTokens
         $s.transcriptLength = [long]$doc.transcriptLength
         $s.told = [string[]]@($doc.told | Where-Object { $_ -is [string] })
+        # How many times each told key's condition has been over (cli/AnalystTend.ps1, ONE ID PER EVENT); absent in an older file.
+        $s.tellGen = $(if ($null -ne $doc.PSObject.Properties["tellGen"]) { [string[]]@($doc.tellGen | Where-Object { $_ -is [string] -and $_ -cmatch '\A[a-z0-9-]{1,40}=[0-9]{1,9}\z' }) } else { [string[]]@() })
         $rounds = New-Object System.Collections.ArrayList
         foreach ($r in @($doc.rounds)) {
             if ($null -eq $r) { continue }
@@ -207,6 +209,7 @@ function Write-HordeAnalystState {
         findingsOffset = [long]$State.findingsOffset; lastAckId = "" + $State.lastAckId
         rounds = @($rounds | ForEach-Object { [ordered]@{ id = $_.id; kind = $_.kind; at = (ConvertTo-HordeAnalystTimeText $_.at); sessionId = $_.sessionId; alerted = [bool]$_.alerted; woken = "" + $_.woken } })
         told = @($State.told)
+        tellGen = @($State.tellGen)
         contextTokens = [long]$State.contextTokens; contextAt = (ConvertTo-HordeAnalystTimeText $State.contextAt); transcriptLength = [long]$State.transcriptLength
     }
     $dir = [System.IO.Path]::GetDirectoryName($Path)

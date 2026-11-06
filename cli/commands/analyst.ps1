@@ -43,7 +43,14 @@ $HordeCommand = @{
             foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
             . (Join-Path $root "notices\Decide.ps1")
             $tools["Post"] = { param($SessionId, $MessageId, $Body, $Values) return (Send-HordeAnalystMessage -SessionId $SessionId -MessageId $MessageId -Body $Body -Values $Values -HordeHome $hordeHome) }
-            $tools["Tell"] = { param($Key, $Body, $Values) return (Send-HordeAnalystWarchief -Key $Key -Body $Body -Values $Values -HordeHome $hordeHome) }
+            # The warchief's notices are marked on the awaiting list before they are posted (cli/AnalystTend.ps1, T-0391 slice 7). The port is
+            # loaded just above, once, and the look at the list below shares that load: neither block loads it again.
+            $tools["Tell"] = { param($Key, $Body, $Values, $Gen) return (Send-HordeAnalystWarchiefTaken -Key $Key -Body $Body -Values $Values -Gen ([long]$Gen) -HordeHome $hordeHome) }
+            $tools["TellTaken"] = {
+                param($Values)
+                if (-not (Test-HordeAnalystTellAwaiting -HordeHome $hordeHome)) { return @() }
+                return @(Invoke-HordeAnalystTellTakenTick -HordeHome $hordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Values.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Values.takenAfterAlarmSeconds))
+            }
             $tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) }
             $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason) }
         }
