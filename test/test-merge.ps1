@@ -1122,6 +1122,19 @@ $c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
 $r = Invoke-Case -Case $c -Guards later
 Check ($r.outcome -ceq "refused" -and $r.why -cnotlike "*unknown*" -and @(Get-IntentHows $c).Count -eq 1 -and (@(Get-IntentHows $c)[0]) -clike '*"how":"not-merged"*' -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0) ("a plain refused merge settles the intent as not merged (" + $r.why + ")")
 
+# THE SAME MERGE QUEUED TWICE (the nightly run recovers a merge that is between "merged" and its own queue write, and
+# then the merge queues itself): the reader keeps the first line, so the merge is walked and marked checked once.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later
+$own = @(Read-OwedLines $c)[0]
+$recovered = ConvertFrom-HordeJson -Text $own
+$recovered.firstParent = ""
+$recovered.at = "2026-10-22T09:00:00Z"
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line (ConvertTo-Json -InputObject $recovered -Compress)
+Check (@(Read-OwedLines $c).Count -eq 2 -and (Read-HordeMergeOwedEntries -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-owed.jsonl")))).entries.Count -eq 1) "CONTROL: the queue holds the same mergeSha twice, and reads as one entry"
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "all green over 1 merges") -and @(Read-CheckedLines $c).Count -eq 1 -and @($script:guardRuns | Where-Object { $_.commit -ceq (Get-Main $c) }).Count -gt 0) ("  and the nightly run walks it once and marks it checked once (exit " + $run.exit + ")")
+
 # GITHUB CANNOT BE ASKED: the intent stays, the run ends 2 (never 0), and the merge is not forgotten.
 $c = New-Case
 $null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line (Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool/horde#99" -Task "T-0247" -State "done" -By "F" -Guards "later") -HeadSha ("e" * 40) -BaseRef "main" -Now ([datetime]::new(2026, 10, 1, 0, 0, 0, [System.DateTimeKind]::Utc)))

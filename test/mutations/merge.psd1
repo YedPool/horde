@@ -414,5 +414,8 @@
         @{ Name = "open-red-old-format-read"
            Find = 'return (& $bad "holds a record with a guard entry that has no guard name")'
            Replace = 'continue' }
+        @{ Name = "owed-same-merge-walked-twice"
+           Find = 'if ($seen.ContainsKey($v["mergeSha"])) { continue }'
+           Replace = '' }
     )
 }
