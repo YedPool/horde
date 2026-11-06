@@ -109,8 +109,10 @@ test('--save writes the settings whole (schema 1, absolute paths) and then syncs
 
 test('--save runs inside the 5 minutes too: new sources do not wait out the pace of the old ones', () => {
   const w = world();
-  assert.equal(run(w.env, ['--save', '--ledger', w.ledger]).code, 0);
-  const r = run(w.env, ['--save', '--ledger', w.ledger, '--changelog', w.changelog]);
+  const first = run(w.env, ['--save', '--ledger', w.ledger, '--cards', w.cards]);
+  assert.equal(first.code, 0, first.err);
+  assert.equal(count(w.home, 'changelog_entry'), 0, 'CONTROL: the changelog is not a source yet');
+  const r = run(w.env, ['--save', '--ledger', w.ledger, '--cards', w.cards, '--changelog', w.changelog]);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /^sync: files ran, /);
   assert.ok(count(w.home, 'changelog_entry') >= 1);
