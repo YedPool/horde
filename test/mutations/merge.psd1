@@ -342,5 +342,32 @@
         @{ Name = "nightly-error-way-out-gives-up-all"
            Find = '$clearErr = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $ee.mergeSha;'
            Replace = '$clearErr = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $er.entries[0].mergeSha;' }
+        @{ Name = "open-red-never-recorded"
+           Find = 'if ($dirty) { $stateWrote = Write-HordeMergeOpenReds -Path $redPath -Reds $openRed.reds }'
+           Replace = '' }
+        @{ Name = "open-red-never-cleared"
+           Find = 'foreach ($gb in $backGreen) { $openRed.reds.Remove($r + "|" + $gb); $dirty = $true }'
+           Replace = '' }
+        @{ Name = "open-red-not-rerun-when-nothing-owed"
+           Find = 'if (-not $byRepo.Contains($orec.repo)) { $byRepo[$orec.repo] = New-Object System.Collections.ArrayList }'
+           Replace = '' }
+        @{ Name = "open-red-skipped-when-nothing-walked"
+           Find = 'if ($noWalk -and -not $Recheck) {'
+           Replace = 'if ($noWalk) {' }
+        @{ Name = "open-red-unreadable-is-green"
+           Find = 'if (-not $openRed.ok) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-clears-while-red"
+           Find = '-and $redBases -cnotcontains $_ })'
+           Replace = '})' }
+        @{ Name = "open-red-forgets-the-merge"
+           Find = 'if ($null -ne $rec.merge) { $orig = "first red at "'
+           Replace = 'if ($false) { $orig = "first red at "' }
+        @{ Name = "open-red-record-failure-still-marks"
+           Find = 'if (-not $stateWrote.ok) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-error-reads-green"
+           Find = 'elseif ($checked.Count -eq 0 -and $rechecked -eq 0) {'
+           Replace = 'elseif ($false) {' }
     )
 }

@@ -626,10 +626,11 @@ $sum = ConvertFrom-HordeJson -Text $run.json
 Check ($sum.exit -eq 1 -and @($sum.repos).Count -eq 1 -and $sum.repos[0].status -ceq "red" -and $sum.repos[0].merges -eq 3 -and $sum.repos[0].reds[0].guard -ceq "test\test-mutation-specs.ps1" -and $sum.repos[0].reds[0].merge.pr -ceq "YedPool/horde#4" -and $sum.repos[0].reds[0].merge.mergeSha -ceq $shas[1]) ("the JSON summary names the repo, the guard and the merge: " + $run.json)
 Check ($sum.repos[0].report -ceq $reportFile) "  and the report's path"
 
-# A SECOND RUN skips what is checked.
+# A SECOND RUN skips what is checked - but main is still red, and a red main reads red until a run finds it green (T-0347:
+# this check used to enshrine exit 0 and "nothing is owed" here, which read the red main as green on the next quiet night).
 $run = Invoke-OwedRun -Case $c
-Check ($run.exit -eq 0 -and @($script:guardRuns).Count -eq 0 -and (Said "nothing is owed: every queued merge has been checked") -and @(Read-CheckedLines $c).Count -eq 3) "a second run finds nothing owed, runs nothing and adds nothing"
-Check ((ConvertFrom-HordeJson -Text $run.json).exit -eq 0 -and @((ConvertFrom-HordeJson -Text $run.json).repos).Count -eq 0) "  and its JSON says so"
+Check ($run.exit -eq 1 -and @($script:guardRuns).Count -eq 6 -and (Said "RED test\test-mutation-specs.ps1 in *STILL RED since*") -and @(Read-CheckedLines $c).Count -eq 3) "a second run finds nothing new owed, adds nothing checked, and main still reads RED"
+Check ((ConvertFrom-HordeJson -Text $run.json).exit -eq 1 -and @((ConvertFrom-HordeJson -Text $run.json).repos).Count -eq 1) "  and its JSON says so"
 # ...and a merge queued after it is the only one run.
 Check ((Add-QueuedMerges $c @(,@("3", "F"))) -cmatch "\Amerged\z") "a fourth PR is merged and queued"
 $run = Invoke-OwedRun -Case $c
@@ -882,6 +883,95 @@ $h = New-HandCase -Steps @(@{ f = @{ "one.txt" = "1" }; by = "F" })
 $run = Invoke-OwedRun -Case $h.c -GuardOverride $hung
 Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on main: the guard * could not be run in *ran past 900 s and was stopped*") -and -not (Said "RED *")) ("a hung guard reads as 'could not run', exit 2, never red (exit " + $run.exit + ")")
 Check ((Said "1 merge(s) stay owed and will be tried again; a guard that cannot run or hangs reads as 'could not run' (exit 2 in every run until it runs), never as red or green") -and @(Read-CheckedLines $h.c).Count -eq 0 -and (ConvertFrom-HordeJson -Text $run.json).repos[0].status -ceq "error") "  and it says so plainly, marks nothing checked, and the JSON says error"
+
+Write-Host "== T-0347: a red main stays red until a run finds it green"
+. (Join-Path $root "core\NightlyNet.ps1")
+function Get-NetState {
+    # What tools/NightlyNet.ps1 records for the guards from the wrapper's exit: 0 green, 1 RED, anything else not run.
+    param([int]$WrapExit)
+    if ($WrapExit -eq 0) { return "green" } elseif ($WrapExit -eq 1) { return "RED" } else { return "could not run" }
+}
+function Get-WrapperAnswer {
+    # The REAL tools/nightly/guards-wrap.ps1, with a stand-in horde that prints what -RunOwed -Json printed and exits as the
+    # horde process does (0 for exit 0, else 1): the state word the net records for the night, at the seam.
+    param($Case, $Run)
+    $dir = Join-Path $Case.dir "wrap"
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    [System.IO.File]::WriteAllText((Join-Path $dir "said.json"), $Run.json, $utf8)
+    $procExit = $(if ($Run.exit -eq 0) { 0 } else { 1 })
+    [System.IO.File]::WriteAllText((Join-Path $dir "horde.ps1"), ("[Console]::Out.WriteLine('stand-in horde'); [Console]::Out.WriteLine([System.IO.File]::ReadAllText((Join-Path `$PSScriptRoot 'said.json')).Trim()); exit " + $procExit), $utf8)
+    $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $o = @(& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $dir "horde.ps1") -Repo "YedPool/horde")
+    return [pscustomobject]@{ code = $LASTEXITCODE; state = (Get-NetState -WrapExit $LASTEXITCODE); last = ("" + $o[-1]) }
+}
+$c = New-Case
+Check ((Add-QueuedMerges $c @(@("1", "F"), @("4", "K"))) -ceq "merged,merged") "two PRs are merged and queued, the second turning a guard red"
+$shas = @(@(Read-OwedLines $c) | ForEach-Object { (ConvertFrom-HordeJson -Text $_).mergeSha })
+$run = Invoke-OwedRun -Case $c
+$redFile = Join-Path $c.owed "guards-red.json"
+Check ($run.exit -eq 1 -and [System.IO.File]::Exists($redFile)) ("night 1: the red is reported, and recorded in guards-red.json (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED" -and $w.last -ceq "guards-wrap: RED") ("  the net reads night 1 as RED: " + $w.last)
+
+# NIGHT 2: nothing is owed, and main is still red. It must read red, and name the merge that first turned it red.
+$run = Invoke-OwedRun -Case $c
+$gr = @($script:guardRuns)
+Check ($run.exit -eq 1 -and -not (Said "nothing is owed*")) ("night 2, nothing owed and main still red: exit 1, not 'nothing is owed' (exit " + $run.exit + ")")
+Check (Said ("RED test\test-mutation-specs.ps1 in *: STILL RED since 2026-10-23T03:00:00Z: first red at the merge of YedPool/horde#4 (task T-0247, by K, mergeSha " + $shas[1] + ")*")) "  it says STILL RED and names the original merge"
+Check ($gr.Count -eq 6 -and @($gr | ForEach-Object { $_.commit } | Select-Object -Unique).Count -eq 1) ("  it ran the guards at the tip only, no walk (" + $gr.Count + " runs)")
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($sum.exit -eq 1 -and $sum.repos[0].status -ceq "red" -and $sum.repos[0].merges -eq 0 -and $sum.repos[0].reds[0].open -eq $true -and $sum.repos[0].reds[0].merge.pr -ceq "YedPool/horde#4" -and $sum.repos[0].reds[0].merge.mergeSha -ceq $shas[1]) ("  and the JSON: " + $run.json)
+Check (@(Read-CheckedLines $c).Count -eq 2) "  nothing new is marked checked"
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net reads night 2 as RED, not green: " + $w.last)
+$report = [System.IO.File]::ReadAllText((Join-Path $c.owed "nightly\2026-10-23-yedpool-horde.txt"))
+Check ($report -clike "*STILL RED since*YedPool/horde#4*") "  the report holds it too"
+
+# A merge that cannot be walked (not in main's history) must not skip the re-run at the tip.
+$bogus = '{"repo":"YedPool/horde","pr":"YedPool/horde#9","task":"T-0247","by":"F","at":"2026-10-22T10:00:00Z","headSha":"' + ("b" * 40) + '","mergeSha":"' + ("a" * 40) + '","firstParent":"' + ("c" * 40) + '"}'
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line $bogus
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 1 -and (Said "RED * STILL RED since*YedPool/horde#4*") -and -not (Said "GREEN AGAIN*")) ("an unwalkable queued merge does not hide the open red (exit " + $run.exit + ")")
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-checked.jsonl") -Line (ConvertTo-Json -InputObject ([ordered]@{ repo = "yedpool/horde"; mergeSha = ("a" * 40); at = "2026-10-23T03:00:00Z"; result = "given-up" }) -Compress)
+
+# A RERUN THAT COULD NOT RUN leaves the red open and reads as not-run, never green.
+$notRun7 = { param($Checkout, $Suite, $Shell) if ($Shell -ceq "7") { return [pscustomobject]@{ code = -1; out = ""; err = "PowerShell 7 is not at C:\nowhere\pwsh.exe; install the MSI" } }; return $null }
+$run = Invoke-OwedRun -Case $c -GuardOverride $notRun7
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on main*") -and (Said "STILL OPEN: the red on main (since 2026-10-23T03:00:00Z) stays open*") -and [System.IO.File]::Exists($redFile)) ("a rerun that could not run: exit 2, and the red stays open (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  the net reads it as could not run: " + $w.last)
+
+# THE RECORD CANNOT BE WRITTEN: nothing is marked checked, and the finding is still printed.
+$c2 = New-Case
+Check ((Add-QueuedMerges $c2 @(,@("4", "K"))) -ceq "merged") "another red PR is merged and queued"
+[void][System.IO.Directory]::CreateDirectory((Join-Path $c2.owed "guards-red.json.tmp"))
+$run = Invoke-OwedRun -Case $c2
+Check ($run.exit -eq 1 -and (Said "COULD NOT RECORD THE OPEN RED: *no merge is marked checked*") -and @(Read-CheckedLines $c2).Count -eq 0 -and (ConvertFrom-HordeJson -Text $run.json).repos[0].status -ceq "error") ("a record that cannot be written marks nothing checked (exit " + $run.exit + ")")
+
+# THE FIX LANDS: main is green again. The next run clears the red; the one after is a quiet night again.
+$tipNow = G $c.origin rev-parse refs/heads/main
+$null = G $seed fetch -q $c.origin "refs/heads/main"
+$fixed = New-SeedCommit -From $tipNow -Files @{ "guard.txt" = "green" } -Message "the fix"
+$null = G $seed push -q -f $c.origin ($fixed + ":refs/heads/main")
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said ("GREEN AGAIN: main was red since 2026-10-23T03:00:00Z (first red at the merge of YedPool/horde#4*mergeSha " + $shas[1] + ")*")) -and -not (Said "RED *")) ("night 3, main fixed: green, and it says the red is cleared (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 0 -and $w.state -ceq "green") ("  the net reads it as green: " + $w.last)
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "nothing is owed: every queued merge has been checked") -and @($script:guardRuns).Count -eq 0) "night 4: a quiet night with no open red runs nothing and is green"
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 0 -and $w.state -ceq "green") "  and the net reads it as green"
+
+# A RECORD THAT CANNOT BE READ IS NOT GREEN.
+foreach ($junk in @("this is not json", "", "{""reds"":[{""repo"":""not a repo"",""base"":""main""}]}", "{""nope"":1}")) {
+    $c3 = New-Case
+    [void][System.IO.Directory]::CreateDirectory($c3.owed)
+    [System.IO.File]::WriteAllText((Join-Path $c3.owed "guards-red.json"), $junk, $utf8)
+    $run = Invoke-OwedRun -Case $c3
+    Check ($run.exit -eq 2 -and (Said "COULD NOT READ THE RECORD OF OPEN REDS: *is not green*") -and @($script:guardRuns).Count -eq 0) ("an unreadable open-red record (" + $(if ($junk -eq "") { "empty" } else { $junk.Substring(0, [Math]::Min(18, $junk.Length)) }) + ") is not green: exit 2, nothing run (exit " + $run.exit + ")")
+}
+$w = Get-WrapperAnswer -Case $c3 -Run $run
+Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  and the net reads it as could not run: " + $w.last)
 
 # PART 2: the real command, as its own process.
 function New-CliCase {
