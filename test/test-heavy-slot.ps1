@@ -227,7 +227,7 @@ try {
         $w.WaitForExit()
         Check ($w.ExitCode -eq 125) ("while the net has first claim another run gives up with 125 (" + $w.ExitCode + ")")
         Check ((Get-GateText "refused") -match "gave up after 2 s: the nightly net has first claim on the slot until its suite phase ends") ("it says who has the slot and until when (" + (Get-GateText "refused") + ")")
-        Check ((Get-GateText "refused") -match "nothing was run") "and that nothing ran"
+        Check ((Get-GateText "refused") -match "at the latest about 05:45; nothing was run") "and when to try again, and that nothing ran: the time matches the net's default suite phase"
         Check ((Get-Times "refused").start -eq 0) "and its run never started"
         Check ((Get-LastLine "refused") -ceq "heavy-slot: released exit=125") "and it still ends with its closing line"
         $n = Start-Gate -Slot $slot -Tag "netrun" -Seconds 0 -More @("-WaitSeconds", "20", "-NetRun")

@@ -2,7 +2,7 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\NightlyNet.ps1 [-Repos <spec>,<spec>] [-Plan] [-NoTell]
 #       [-Only <fragments>] [-Limit <n>] [-WorkRoot <dir>] [-HordeScript <horde.ps1>] [-SlotWaitSeconds 900]
-#       [-RunSeconds 1500] [-LongRunSeconds 3600] [-BisectReserveMinutes 90] [-MaxBisectRuns 40] [-Target M]
+#       [-RunSeconds 1500] [-LongRunSeconds 3600] [-BisectReserveMinutes 30] [-MaxBisectRuns 40] [-Target M]
 #       [-MinFreeGB 4.5] [-MinCommitHeadroomGB 2] [-ShortSlotWaitSeconds 120] [-NoCloseApps] [-AppCloseWaitSeconds 60]
 #       [-AppRetryMinutes 15] [-MinFitSeconds 600] [-ProbesFile <json, for the suite>]
 #   -Repos entries are OWNER/REPO:KIND:BRANCH, KIND horde (PowerShell suites, in both shells, and the repo-wide guards)
@@ -83,7 +83,9 @@ param(
     [ValidateRange(60, 1800)][int]$RunSeconds = 1500,
     [ValidateRange(60, 7200)][int]$LongRunSeconds = 3600,
     [ValidateRange(60, 1800)][int]$MinFitSeconds = 600,
-    [int]$BisectReserveMinutes = 90,
+    # 30 (M, 2026-11-06): clean nights of 464 units ran from about 22:20 to 05:15, so 476 need about 05:30. A 90-minute reserve
+    # ended the suite phase at 04:45, about 89 percent of the units, under the coverage floor. Bisects get less for it.
+    [int]$BisectReserveMinutes = 30,
     [ValidateRange(0, 100)][int]$CoverageFloorPercent = 90,
     [int]$MaxBisectRuns = 40,
     [ValidateRange(0, 120)][int]$ReportReserveMinutes = 15,
