@@ -123,6 +123,8 @@ foreach ($sh in $shells) {
     Check ($foreign.code -ne 0 -and $foreign.out -like "*-Proof does not belong to job list*") "a flag of another verb is refused"
     $foreign2 = Invoke-Verb @("signal", "close", "-Key", "K:1", "-By", "S", "-Days", "3")
     Check ($foreign2.code -ne 0 -and $foreign2.out -like "*-Days does not belong to signal close*") "and on signal too"
+    $foreign3 = Invoke-Verb @("signal", "woke", "-Key", "K:1", "-Days", "3")
+    Check ($foreign3.code -ne 0 -and $foreign3.out -like "*-Days does not belong to signal woke*") "and on signal woke, the verb added last"
     $local = Invoke-Verb @("job", "upsert", "-Id", "J-t", "-Owner", "R", "-Job", "x", "-By", "S", "-Due", "2026-11-01T01:30:00")
     Check ($local.code -eq 1 -and $local.out -like "*refused: Due has no time zone*") "a local time with no zone is refused"
     $zoned = Invoke-Verb @("job", "upsert", "-Id", "J-t", "-Owner", "R", "-Job", "x", "-By", "S", "-Due", "2026-11-01T01:30:00-04:00", "-Session", "00000000-0000-4000-8000-000000000001")
