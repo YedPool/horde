@@ -66,7 +66,7 @@ foreach ($sh in $shells) {
     Check ($nodb2.code -eq 1 -and $nodb2.out -like "*stopped with exit code 4*") "a signal raise with no fleet.db is refused the same way"
     Check ((-not (Test-Path -LiteralPath $dbFile)) -and @(Get-ChildItem -LiteralPath $homeDir -Force).Count -eq 0) "and neither verb made the database or anything else in the home"
     $init = Invoke-Verb @("db", "init")
-    Check ($init.code -eq 0 -and $init.out -like "*(schema 9, created)*") "horde db init makes it, at schema 9"
+    Check ($init.code -eq 0 -and $init.out -like "*(schema 10, created)*") "horde db init makes it, at schema 10"
 
     # --- jobs ---
     $j1 = Invoke-Verb @("job", "upsert", "-Id", "J-1", "-Owner", "R", "-Job", "review the PRs", "-By", "S", "-Due", $futureMs)

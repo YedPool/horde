@@ -97,7 +97,7 @@ test('migration 7 on an old database: the columns come, every row stays, the CHE
   raw.close();
   const db = openStore(file);
   handles.push(db);
-  assert.equal(SCHEMA_VERSION, 9);
+  assert.equal(SCHEMA_VERSION, 10);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const row = sess(db, 1);
   for (const c of ['last_activity_at', 'last_assistant_at', 'in_turn', 'waits_person', 'state', 'state_checked_at', 'transcript_offset']) assert.equal(row[c], null, c + ' starts NULL');

@@ -631,6 +631,15 @@ and the first stop after that checks again at once (a nudge a little early, neve
 
 `task_now` follows `task.py` exactly, because the ledger is what the fleet has run on and a reader of fleet.db must see the same answer. The opened line counts first, whatever its time. `resumed` and `reopened` read `started`; `handed` reads `opened`, since the new owner has not begun; `progress` on an opened task means it began. Priority and owner come from the newest `priority` or `handed` event, else the opened line. The view of migration 1 took the newest event's word as the state and disagreed on 31 of 415 real tasks. `promise` and `kept` do not reach fleet.db at all (T-0416), and neither moves a state in the ledger.
 
+### Lines task_event has no place for (migration 10; T-0416, T-0417)
+
+`task_event_extra` holds what `task_event` cannot: `promise` and `kept` (the kinds are not allowed there) and a hand-over to no Orc row (`task_event` requires an Orc). It is a side table and not a new column, because `appendHistory` hashes every column of a table: a new column would change the hash of each line, and the next sync would write every event again.
+
+- `task_now` reads it, so a reader gets `task.py`'s answer. A hand-over to no Orc row means nobody has begun, and the owner is no Orc. A hand-over naming nobody leaves the owner as it was.
+- A promise's id is its number on its task, `P1`, `P2`, counted by order in the ledger file (`promise_no`): short to type, and the file is append-only, so it never changes. It needs no field on old lines. Writing a promise prints it, `task.py show` lists the open ones, a refused name lists them, and `task_promise_open` has the column.
+- `task_promise_open` lists the promises not yet kept (Orc M, 2026-11-06). `task.py event T kept --closes P5` and `task.py event T promise --replaces P5` name a promise, and a promise so named reads closed. A kept naming nothing closes the oldest still open that nobody named, and `task.py` says which. A kept with nothing open closes nothing. A promise wrongly closed vanishes and nobody chases it, and one wrongly left open is seen and costs a line. Old lines name nothing and nothing is guessed, so old re-dates read open: `task_state` and `later_promises` show that at a glance. On 2026-11-06, 27 read open by this rule. S's watcher has its own rule (any later line of that Orc on the task closes it), and 11 read open by that one; the two are not the same list.
+- There is no verb: readers use SQL, until a reader needs more.
+
 ### The task tree keeps every live task
 
 `task_tree` is also redefined by migration 9. A closed parent used to take its live subtasks off the list with it: 21 of the 128 live tasks on the real data, four at priority 1. Now a live task whose parent is closed stands at the top of its own owner's list, with its own subtasks still under it. It does not climb to a live grandparent. While its parent is live, a subtask is numbered in the parent's list even when another Orc owns it (12 tasks on the real data), so a reader of one Orc's work reads the task's own owner from `task_now` as well.
