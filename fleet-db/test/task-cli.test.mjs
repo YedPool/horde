@@ -147,6 +147,18 @@ test('a due time and a title that is not ASCII print safely', () => {
   assert.equal(r.out[1], `1 ${a.key} opened p2 due=2026-11-06T09:00:00.000Z | caf\\u00e9`);
 });
 
+test('an impossible due time prints as unreadable, and the rest of the list still comes out', () => {
+  const w = home();
+  const a = task(w, { owner: w.f, prio: 1, due: 9e15, title: 'bad due' });
+  const b = task(w, { owner: w.f, prio: 2, title: 'after it' });
+  const r = run(w, 'list');
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.out, ['F:', `1 ${a.key} opened p1 due=unreadable | bad due`, `2 ${b.key} opened p2 | after it`, '2 open, and 0 done, not yet verified, not listed']);
+  const j = run(w, 'list', '--json');
+  assert.equal(j.code, 0);
+  assert.deepEqual(JSON.parse(j.out[0]).tasks.map((t) => t.due), ['unreadable', null]);
+});
+
 test('json is one line of data, the same tasks, ASCII', () => {
   const w = home();
   const a = task(w, { owner: w.f, prio: 1, due: Date.UTC(2026, 10, 6, 9), title: 'caf\u00e9' });

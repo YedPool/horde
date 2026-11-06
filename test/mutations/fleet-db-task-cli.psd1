@@ -45,8 +45,11 @@
            Find = "if (r.due_at !== null) words.push("
            Replace = "if (false) words.push(" }
         @{ Name = "json-due-epoch-bad"
-           Find = "due: r.due_at === null ? null : new Date(r.due_at).toISOString()"
-           Replace = "due: new Date(r.due_at).toISOString()" }
+           Find = "due: r.due_at === null ? null : when(r.due_at)"
+           Replace = "due: when(r.due_at)" }
+        @{ Name = "impossible-due-throws"
+           Find = "return Number.isNaN(d.getTime()) ? 'unreadable' : d.toISOString();"
+           Replace = "return d.toISOString();" }
         @{ Name = "json-not-ascii"
            Find = "out(ascii(JSON.stringify({ tasks:"
            Replace = "out((JSON.stringify({ tasks:" }

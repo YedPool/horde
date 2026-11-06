@@ -41,12 +41,18 @@ export function listTasks(db, { orc = null } = {}) {
   return { tasks, unverified };
 }
 
+// A time too large for a date would throw halfway through the list, and one bad row must not cut the list short.
+function when(ms) {
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? 'unreadable' : d.toISOString();
+}
+
 // One line: the number, the task, its state and priority, who owns it when that is not whose list it is in, when it is due, its title.
 function line(r) {
   const indent = '  '.repeat(r.depth);
   const words = [indent + r.path, r.task, r.state ?? 'no-state', 'p' + (r.prio ?? '-')];
   if (r.owner !== r.list) words.push('owner=' + (r.owner ?? NO_ORC.replace(' ', '-')));
-  if (r.due_at !== null) words.push('due=' + new Date(r.due_at).toISOString());
+  if (r.due_at !== null) words.push('due=' + when(r.due_at));
   return words.join(' ') + ' | ' + r.title;
 }
 
@@ -74,7 +80,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     db = openStore(file, { readOnly: true, busyMs });
     const { tasks, unverified } = listTasks(db, { orc: flags['--orc'] ?? null });
     if (flags['--json']) {
-      out(ascii(JSON.stringify({ tasks: tasks.map((r) => ({ ...r, due: r.due_at === null ? null : new Date(r.due_at).toISOString() })), done_not_verified: unverified })));
+      out(ascii(JSON.stringify({ tasks: tasks.map((r) => ({ ...r, due: r.due_at === null ? null : when(r.due_at) })), done_not_verified: unverified })));
       return 0;
     }
     let shown;
