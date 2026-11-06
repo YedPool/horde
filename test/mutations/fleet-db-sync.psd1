@@ -42,8 +42,8 @@
            Find = 'state.files = { ...state.files, lastRunAt: start, lastResult: ''failed'','
            Replace = 'state.files = { lastOkAt: now(), lastRunAt: start, lastResult: ''failed'',' }
         @{ Name = "failed-run-recorded-as-ok"
-           Find = 'lastResult: ''failed'''
-           Replace = 'lastResult: ''ok''' }
+           Find = 'lastRunAt: start, lastResult: ''failed'''
+           Replace = 'lastRunAt: start, lastResult: ''ok''' }
         @{ Name = "timeout-moves-last-ok"
            Find = 'state.files = { ...state.files, lastRunAt: now(), lastResult: ''timeout'','
            Replace = 'state.files = { lastOkAt: now(), lastRunAt: now(), lastResult: ''timeout'',' }
@@ -51,10 +51,43 @@
            Find = 'state.files = { lastOkAt: now(), lastRunAt: start, lastResult: ''ok'', lastMs: now() - start };'
            Replace = 'void start;' }
         @{ Name = "state-keys-of-other-steps-dropped"
-           Find = 'return { ...obj, schema: STATE_SCHEMA, files:'
-           Replace = 'return { schema: STATE_SCHEMA, files:' }
+           Find = '    ...obj,'
+           Replace = '' }
+        @{ Name = "sessions-step-skipped-when-files-skipped"
+           Find = 'if (req.snapshot !== null || req.snapshotError !== null) {'
+           Replace = 'if ((req.snapshot !== null || req.snapshotError !== null) && !parts[0].startsWith(''files skipped'')) {' }
+        @{ Name = "sessions-step-stopped-by-a-files-failure"
+           Find = 'if (req.snapshot !== null || req.snapshotError !== null) {'
+           Replace = 'if ((req.snapshot !== null || req.snapshotError !== null) && failures.length === 0) {' }
+        @{ Name = "sessions-failure-recorded-as-ok"
+           Find = 'lastRunAt: t0, lastResult: ''failed'''
+           Replace = 'lastRunAt: t0, lastResult: ''ok''' }
+        @{ Name = "sessions-failure-loses-the-files-result"
+           Find = 'state.sessions = { ...state.sessions, lastRunAt: t0, lastResult: ''failed'', lastMs: now() - t0 };'
+           Replace = 'state.files = { ...state.files, lastResult: ''failed'' }; state.sessions = { ...state.sessions, lastRunAt: t0, lastResult: ''failed'', lastMs: now() - t0 };' }
+        @{ Name = "sessions-good-run-not-recorded"
+           Find = 'state.sessions = { lastOkAt: now(), lastRunAt: t0, lastResult: ''ok'', lastMs: now() - t0, counts: r.counts };'
+           Replace = 'void t0;' }
+        @{ Name = "snapshot-error-ignored"
+           Find = 'if (req.snapshotError !== null) throw new Error(''no session snapshot this tick: '' + req.snapshotError);'
+           Replace = '' }
+        @{ Name = "timeout-leaves-the-sessions-step-unmarked"
+           Find = 'state.sessions = { ...state.sessions, lastRunAt: now(), lastResult: ''timeout'', lastMs: req.noteTimeoutMs };'
+           Replace = '' }
+        @{ Name = "failure-line-names-one-step"
+           Find = 'err(''fleet.db: '' + (parts.length === 1 ? failures[0] : ''sync: '' + parts.join(''; '')));'
+           Replace = 'err(''fleet.db: '' + failures[0]);' }
+        @{ Name = "failed-step-exits-zero"
+           Find = 'if (failures.length > 0) {'
+           Replace = 'if (false) {' }
+        @{ Name = "both-snapshot-flags-accepted"
+           Find = 'if (out.snapshot !== null && out.snapshotError !== null) throw'
+           Replace = 'if (false) throw' }
         @{ Name = "missing-database-made"
            Find = 'if (!fs.existsSync(file)) throw new Error(''fleet.db does not exist yet at '' + file + ''; run horde db init'');'
+           Replace = '' }
+        @{ Name = "sessions-step-makes-a-missing-database"
+           Find = 'if (!fs.existsSync(file)) throw new Error(''sessions: fleet.db does not exist yet at '' + file + ''; run horde db init'');'
            Replace = '' }
     )
 }

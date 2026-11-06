@@ -12,5 +12,8 @@
         @{ Name = "status-sync-line-dropped"
            Find = 'out(describeSync(homeFromEnv(env)));'
            Replace = '' }
+        @{ Name = "status-sessions-line-dropped"
+           Find = 'out(describeSessions(homeFromEnv(env)));'
+           Replace = '' }
     )
 }

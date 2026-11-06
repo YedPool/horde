@@ -22,7 +22,7 @@ import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { SCHEMA_VERSION, ENTITY_KINDS } from './schema.mjs';
 import { decisionsHash } from './write.mjs';
 import { importFleet } from './import.mjs';
-import { describeSync, syncMain } from './sync.mjs';
+import { describeSessions, describeSync, syncMain } from './sync.mjs';
 
 export const VERBS = ['init', 'status', 'check', 'import', 'sync'];
 
@@ -154,6 +154,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     if (verb === 'status') {
       out('database: ' + file + ' (schema ' + db.prepare('PRAGMA user_version').get().user_version + ', ' + fs.statSync(file).size + ' bytes)');
       for (const t of tableRows(db)) out(t.name + ': ' + t.rows + ' rows');
+      out(describeSessions(homeFromEnv(env)));
       out(describeSync(homeFromEnv(env)));
       return 0;
     }

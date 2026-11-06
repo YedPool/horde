@@ -11,6 +11,11 @@
 #     below normal priority, is killed by its own pid after -TimeLimitSeconds, "timeout" is logged and kept in the
 #     state, the command exits 1, and fleet.db is as it was;
 #   - THE LOG is bounded: a log past 1 MB is cut to its newest half and ends with this run's line;
+#   - THE SESSIONS STEP (T-0409): the snapshot is made by a child process (the test seam HORDE_DB_SYNC_TEST_SNAPSHOT names a fixture
+#     that writes a fake one: no test ever asks a real terminal, registry or process table). It runs on every tick, also when the files
+#     step is skipped; a snapshot that fails, or hangs past its share of the limit and is killed by its own pid, fails the sessions step
+#     and never the files step; a files step that fails never stops the sessions step; the log line and the output name both; no
+#     snapshot file is left behind; `db status` shows the step's line;
 #   - the same sync under PowerShell 7;
 #   - register-sync.ps1 -WhatIf lists the one task and registers nothing; its text holds every setting the header explains.
 # NOTHING REAL IS READ OR WRITTEN: the home and the profile every child sees are folders this suite made and removes; no
@@ -33,8 +38,19 @@ New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $fakeProfile = Join-Path $work "profile"
 New-Item -ItemType Directory -Path $hordeHome, $fakeProfile | Out-Null
-$cliEnv = @{ HORDE_HOME = $hordeHome; USERPROFILE = $fakeProfile }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+# The fake snapshot the sessions step reads: one session in pane 3 of a terminal that lists pane 3, its transcript idle. The fixture
+# script stands in for fleet-db\SessionSnapshotRun.ps1 (HORDE_DB_SYNC_TEST_SNAPSHOT); its mode says fail, hang or write.
+$fakeTranscript = Join-Path $work "fake-transcript.jsonl"
+[System.IO.File]::WriteAllText($fakeTranscript, ('{"type":"user","timestamp":"2026-11-02T10:00:00.000Z","message":{"role":"user","content":"go"}}' + "`n" + '{"type":"assistant","timestamp":"2026-11-02T10:01:00.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text"}]}}' + "`n"), $utf8)
+$fakeSession = "22222222-0000-4000-8000-000000000001"
+$fakeRec = [ordered]@{ kind = "warg"; owner = "C"; instance = "term-100"; pane = "3"; cwd = $work; transcriptPath = $fakeTranscript; firstSeen = "2026-11-02T10:00:00Z"; lastSeen = "2026-11-02T10:01:00Z" }
+$fakeSnap = [ordered]@{ v = 1; at = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); registry = [ordered]@{ complete = $true; reason = ""; sessions = @([ordered]@{ id = $fakeSession; rec = $fakeRec }) }; panes = [ordered]@{ state = "known"; reason = ""; sockets = @([ordered]@{ instance = "term-100"; state = "listed"; panes = @(3); reason = "" }) }; processes = [ordered]@{ state = "known"; reason = ""; running = @() } }
+$fakeSnapFile = Join-Path $work "fake-snapshot.json"
+[System.IO.File]::WriteAllText($fakeSnapFile, (ConvertTo-Json -InputObject $fakeSnap -Depth 8 -Compress), $utf8)
+$fakeScript = Join-Path $work "fake-snapshot.ps1"
+[System.IO.File]::WriteAllText($fakeScript, ('param([string]$Out)' + "`n" + 'if ($env:HORDE_FAKE_SNAPSHOT_MODE -eq "fail") { [Console]::Error.WriteLine("snapshot fixture failed"); exit 1 }' + "`n" + 'if ($env:HORDE_FAKE_SNAPSHOT_MODE -eq "hang") { [System.IO.File]::WriteAllText($env:HORDE_SLEEPER_PIDFILE, [string][System.Diagnostics.Process]::GetCurrentProcess().Id); Start-Sleep -Seconds 120 }' + "`n" + '[System.IO.File]::Copy($env:HORDE_FAKE_SNAPSHOT_JSON, $Out, $true)' + "`n"), $utf8)
+$cliEnv = @{ HORDE_HOME = $hordeHome; USERPROFILE = $fakeProfile; HORDE_DB_SYNC_TEST_SNAPSHOT = $fakeScript; HORDE_FAKE_SNAPSHOT_JSON = $fakeSnapFile }
 function Invoke-Db { param([string[]]$DbArgs, [hashtable]$Env = $cliEnv, [string]$Shell = "powershell.exe") return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("db") + $DbArgs) -Env $Env -Shell $Shell) }
 $logFile = Join-Path (Join-Path $hordeHome "logs") "fleet-db-sync.log"
 $stateFile = Join-Path $hordeHome "fleet-db-sync-state.json"
@@ -59,7 +75,10 @@ try {
     Check ($r.code -eq 0) "CONTROL: horde db init makes the test home's fleet.db"
     $r = Invoke-Db @("sync")
     Check ($r.code -ne 0 -and $r.out -like "*no sources are saved*" -and $r.out -like "*db sync -Save*") "no saved sources: refused, and the line names the -Save form"
-    Check (-not (Test-Path -LiteralPath $stateFile)) "   and a refusal leaves no state"
+    # The sessions step ran beside the refusal and wrote its own key; the refused files step must have left nothing of its own.
+    $refused = $null
+    if (Test-Path -LiteralPath $stateFile) { $refused = [System.IO.File]::ReadAllText($stateFile) | ConvertFrom-Json }
+    Check ($null -eq $refused -or $null -eq $refused.files -or ($null -eq $refused.files.lastRunAt -and $null -eq $refused.files.lastOkAt)) "   and a refusal leaves no state for the files step"
     Check ((Get-LogLines | Where-Object { $_ -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ failed \d+ ms \| ' }).Count -eq 1) "   and the log has one line for it: UTC time, failed, ms, the reason"
     Check ((Get-StatusLine "sync:") -ceq "sync: never synced") "db status says never synced"
 
@@ -67,6 +86,11 @@ try {
     Write-Host "--- -Save, then a sync, then a second one inside 5 minutes ---" -ForegroundColor Cyan
     $r = Invoke-Db @("sync", "-Save", "-Ledger", $ledger, "-Changelog", $changelog, "-Cards", $cards)
     Check ($r.code -eq 0 -and $r.out -like "*sync: files ran, *task_event +2*") ("-Save saves the sources and runs the files step (" + $r.code + ": " + $r.out.Trim() + ")")
+    Check ($r.out -like "*; sessions ran, 1 sessions (0 live, 1 idle, 0 waiting-person, 0 dead, 0 unknown)*") "   and the sessions step, in the same tick, from the snapshot the child wrote"
+    Check ((Get-StatusLine "session:") -ceq "session: 1 rows") "   the fake snapshot's session is a row"
+    Check ((Get-StatusLine "sessions:") -like "sessions: last ok 20*Z, last run ok at 20*Z, live 0, idle 1, waiting-person 0, dead 0, unknown 0") "db status has one line for the sessions step, with the sessions by state"
+    Check (@(Get-ChildItem -LiteralPath $hordeHome -Filter "fleet-db-sessions-*.snapshot.json" -ErrorAction SilentlyContinue).Count -eq 0) "no snapshot file is left in the home"
+    Check (@(Get-LogLines | Where-Object { $_ -match '^\S+ ok \d+ ms \| sync: files ran, .*; sessions ran, 1 sessions' }).Count -eq 1) "the log line names both steps"
     Check (Test-Path -LiteralPath (Join-Path (Join-Path $hordeHome "settings") "fleet-db-sync.json")) "   the settings file is in HORDE_HOME\settings"
     Check ((Get-StatusLine "task_event:") -ceq "task_event: 2 rows" -and (Get-StatusLine "orc_status:") -ceq "orc_status: 1 rows") "   the events and the card's status are in fleet.db"
     Check ((Get-StatusLine "sync:") -like "sync: files last ok 20*Z, last run ok at 20*Z") "db status now ends with the last good sync"
@@ -74,6 +98,7 @@ try {
     Check ($okLines.Count -eq 1) "the log got an ok line naming the step and the rows added"
     $r = Invoke-Db @("sync")
     Check ($r.code -eq 0 -and $r.out -like "*sync: files skipped (last ok *") "a second sync inside 5 minutes skips the files step and exits 0"
+    Check ($r.out -like "*files skipped (last ok *); sessions ran, 1 sessions*") "   and the sessions step still ran: it is not paced by the files step"
     Check (@(Get-LogLines | Where-Object { $_ -match ' ok \d+ ms \| sync: files skipped' }).Count -eq 1) "   and logs it"
     $r = Invoke-Db @("sync", "-Force")
     Check ($r.code -eq 0 -and $r.out -like "*sync: files ran, no rows added*") "-Force runs the step at once, and adds nothing the second time"
@@ -119,7 +144,7 @@ try {
     $sleeper = Join-Path $work "sleeper.mjs"
     [System.IO.File]::WriteAllText($sleeper, "import fs from 'node:fs';`nfs.writeFileSync(process.env.HORDE_SLEEPER_PIDFILE, String(process.pid));`nsetTimeout(() => {}, 120000);`n", $utf8)
     $eventsBefore = Get-StatusLine "task_event:"
-    $sleepEnv = @{ HORDE_HOME = $hordeHome; USERPROFILE = $fakeProfile; HORDE_DB_SYNC_TEST_SCRIPT = $sleeper; HORDE_SLEEPER_PIDFILE = $pidFile }
+    $sleepEnv = @{ HORDE_HOME = $hordeHome; USERPROFILE = $fakeProfile; HORDE_DB_SYNC_TEST_SCRIPT = $sleeper; HORDE_SLEEPER_PIDFILE = $pidFile; HORDE_DB_SYNC_TEST_SNAPSHOT = $fakeScript; HORDE_FAKE_SNAPSHOT_JSON = $fakeSnapFile }
     $started = Get-Date
     $run = Start-HordeCliRun -Root $root -HordeArgs @("db", "sync", "-Force", "-TimeLimitSeconds", "10") -Env $sleepEnv
     $sleeperPid = 0
@@ -151,6 +176,42 @@ try {
     Check ((Get-StatusLine "task_event:") -ceq $eventsBefore) "fleet.db is as it was"
     Check ((Get-StatusLine "sync:") -like "sync: files last ok 20*Z, last run timeout at 20*Z") "and db status says the last run timed out"
     Check ((Invoke-Db @("sync", "-Force")).out -like "*sync: files ran*") "the lock was released after the kill: the next sync runs"
+
+    Write-Host ""
+    Write-Host "--- the sessions step: its own failures, and neither step stops the other ---" -ForegroundColor Cyan
+    # A snapshot the child cannot make: the sessions step fails, the files step runs (-Force), the line names both, the exit is 1.
+    $failEnv = $cliEnv + @{ HORDE_FAKE_SNAPSHOT_MODE = "fail" }
+    $r = Invoke-Db @("sync", "-Force") -Env $failEnv
+    Check ($r.code -eq 1 -and $r.out -like "*files ran*sessions failed: no session snapshot this tick: snapshot fixture failed*") ("a failed snapshot: the files step ran, the sessions step failed with the child's reason, exit 1 (" + $r.code + ": " + $r.out.Trim() + ")")
+    $lines = @(Get-LogLines)
+    Check ($lines[$lines.Count - 1] -match ' failed \d+ ms \| fleet\.db: sync: files ran, .*; sessions failed: ') "   and the log line says failed and names both steps"
+    $state = [System.IO.File]::ReadAllText($stateFile) | ConvertFrom-Json
+    Check ($state.sessions.lastResult -ceq "failed" -and $state.files.lastResult -ceq "ok") "   and the state keeps each step's own result"
+    Check ((Get-StatusLine "sessions:") -like "sessions: last ok 20*Z, last run failed at 20*Z, live 0, idle 1*") "   and db status says the sessions step's last run failed beside its last good one"
+    # A snapshot that hangs: killed by its own pid after its share of the limit (40 percent of 10 s), and the files step still runs.
+    $hangPid = Join-Path $work "hanger.pid"
+    if (Test-Path -LiteralPath $hangPid) { Remove-Item -LiteralPath $hangPid -Force }
+    $hangEnv = $cliEnv + @{ HORDE_FAKE_SNAPSHOT_MODE = "hang"; HORDE_SLEEPER_PIDFILE = $hangPid }
+    $started = Get-Date
+    $r = Invoke-Db @("sync", "-Force", "-TimeLimitSeconds", "10") -Env $hangEnv
+    $took = ((Get-Date) - $started).TotalSeconds
+    Check ($r.code -eq 1 -and $r.out -like "*files ran*sessions failed: no session snapshot this tick: the snapshot script was killed after 4 s*") ("a snapshot that hangs is killed at its share of the limit; the files step ran (" + $r.code + ": " + $r.out.Trim() + ")")
+    Check ($took -lt 40) ("   and the tick ended near the limit, not after the child's two minutes (" + [int]$took + " s)")
+    $hungPid = 0
+    if (Test-Path -LiteralPath $hangPid) { $t = ([System.IO.File]::ReadAllText($hangPid)).Trim(); if ($t -match '^\d+$') { $hungPid = [int]$t } }
+    Check ($hungPid -gt 0) "CONTROL: the hanging fixture started and wrote its pid"
+    $hungAlive = $true
+    if ($hungPid -gt 0) { try { $null = Get-Process -Id $hungPid -ErrorAction Stop } catch { $hungAlive = $false } }
+    Check (-not $hungAlive) "   and it was killed through its own pid"
+    Check (@(Get-ChildItem -LiteralPath $hordeHome -Filter "fleet-db-sessions-*.snapshot.json" -ErrorAction SilentlyContinue).Count -eq 0) "   and no snapshot file is left in the home"
+    # The files step failing does not stop the sessions step: save a ledger that is not there.
+    $missingLedger = Join-Path $work "no-such-ledger.jsonl"
+    $r = Invoke-Db @("sync", "-Save", "-Ledger", $missingLedger, "-Changelog", $changelog, "-Cards", $cards)
+    Check ($r.code -eq 1 -and $r.out -like "*files failed:*; sessions ran, 1 sessions*") ("a files step that fails does not stop the sessions step (" + $r.code + ": " + $r.out.Trim() + ")")
+    $state = [System.IO.File]::ReadAllText($stateFile) | ConvertFrom-Json
+    Check ($state.files.lastResult -ceq "failed" -and $state.sessions.lastResult -ceq "ok") "   and each records its own result"
+    $r = Invoke-Db @("sync", "-Save", "-Ledger", $ledger, "-Changelog", $changelog, "-Cards", $cards)
+    Check ($r.code -eq 0 -and $r.out -like "*files ran*; sessions ran*") "the good sources are saved again and both steps run"
 
     Write-Host ""
     Write-Host "--- the log is bounded ---" -ForegroundColor Cyan

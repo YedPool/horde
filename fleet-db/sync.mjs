@@ -1,30 +1,38 @@
 // `horde db sync` (T-0389, piece 1 of T-0299): keeps task_event, changelog_entry, orc and orc_status current from the
 // fleet's files, from ONE scheduled task that ticks every minute (fleet-db/register-sync.ps1). Node side; the
 // PowerShell side (fleet-db/Sync.ps1) holds the lock, the time limit, the priority and the run log.
-//   node cli.mjs sync [--force]
+//   node cli.mjs sync [--force] [--snapshot f | --snapshot-error text]
 //   node cli.mjs sync --save [--ledger f] [--pr-cache f] [--changelog f] [--cards dir] [--thrall-card f]   (saves, then syncs)
 //   node cli.mjs sync --note-timeout <ms>      (records that the PowerShell side killed a run; opens no database)
+// --snapshot is the sessions step's input: a JSON file the port side wrote this tick (fleet/SessionSnapshot.ps1, shape in
+// sessions.mjs). --snapshot-error says why there is none (the producer failed or timed out), so the step records a failure
+// instead of silence. With neither, the sessions step is not part of the run (a hand `node cli.mjs sync`).
 // STDOUT: one line "sync: ..." naming the step run or skipped and the rows added; the caller logs it.
 // EXIT CODES: 0 done or nothing due, 1 refused or failed, 2 no home.
 //
 // THE SOURCES ARE NEVER DEFAULTED (the importer's rule): they are read from HORDE_HOME\settings\fleet-db-sync.json,
 // written only by --save, every path absolute. No settings file is a refusal that names the --save form. The
-// sync takes no registry, decisions or lots source: sessions are piece 2's step, and decisions are written live by
-// publish.
+// sync takes no registry, decisions or lots source: the sessions step is fed by a snapshot (below), and decisions are
+// written live by publish.
 //
 // WHAT RUNS: the existing importFleet, unchanged in meaning (one inWrite transaction, idempotent), so a run that is
 // killed part way leaves the database as it was. Rows stay backfill 1: they come from files, and the content hash
 // holds backfill, so flipping it would write every old task_event again.
 //
 // CADENCE: the tick is every minute and each STEP has its own pace, kept in HORDE_HOME\fleet-db-sync-state.json:
-//   { "schema": 1, "files": { "lastOkAt", "lastRunAt", "lastResult": "ok|failed|timeout", "lastMs" } }
+//   { "schema": 1, "files": { "lastOkAt", "lastRunAt", "lastResult": "ok|failed|timeout", "lastMs" },
+//                  "sessions": { the same four, and "counts": { live, idle, waiting-person, dead, unknown } } }
 // The files step runs when its lastOkAt is FILES_EVERY_MS or more ago (or with --force). A failed or timed-out
-// run does not move lastOkAt, so it is tried again on the next tick. Piece 2 adds a "sessions" key that runs on
-// every tick: a step is one key in the state and one block in syncMain; unknown keys are kept when the state is written.
+// run does not move lastOkAt, so it is tried again on the next tick. The sessions step (T-0409, sessions.mjs) runs on
+// EVERY tick that has a snapshot, whether or not the files step was due. A step is one key in the state and one block in
+// syncMain; unknown keys are kept when the state is written.
+// THE STEPS DO NOT BLOCK EACH OTHER: each runs in its own try, records its own result, and the one line says both
+// ("sync: files skipped (...); sessions ran, ..."). A failure of either makes the run exit 1 after both have had their turn.
 import fs from 'node:fs';
 import path from 'node:path';
 import { dbPathFor, homeFromEnv, openStore } from './store.mjs';
 import { importFleet } from './import.mjs';
+import { runSessionsStep } from './sessions.mjs';
 
 export const SETTINGS_SCHEMA = 1;
 export const STATE_SCHEMA = 1;
@@ -54,7 +62,7 @@ export function writeFileAtomic(file, text) {
 }
 
 export function parseSyncArgs(args) {
-  const out = { force: false, save: false, sources: {}, noteTimeoutMs: null };
+  const out = { force: false, save: false, sources: {}, noteTimeoutMs: null, snapshot: null, snapshotError: null };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--force') { out.force = true; continue; }
@@ -66,6 +74,15 @@ export function parseSyncArgs(args) {
       i++;
       continue;
     }
+    if (a === '--snapshot' || a === '--snapshot-error') {
+      const v = args[i + 1];
+      const field = a === '--snapshot' ? 'snapshot' : 'snapshotError';
+      if (v === undefined || v === '' || (a === '--snapshot' && v.startsWith('--'))) throw new Error('sync: ' + a + ' needs ' + (a === '--snapshot' ? 'a path' : 'the reason'));
+      if (out[field] !== null) throw new Error('sync: ' + a + ' given twice');
+      out[field] = v;
+      i++;
+      continue;
+    }
     const key = SOURCE_FLAGS[a];
     if (!key) throw new Error('sync: unknown argument ' + String(a).slice(0, 40));
     if (key in out.sources) throw new Error('sync: ' + a + ' given twice');
@@ -74,6 +91,7 @@ export function parseSyncArgs(args) {
     out.sources[key] = v;
     i++;
   }
+  if (out.snapshot !== null && out.snapshotError !== null) throw new Error('sync: --snapshot and --snapshot-error are one or the other');
   if (!out.save && Object.keys(out.sources).length > 0) throw new Error('sync: source paths are only taken with -Save (they are saved, not used once)');
   if (out.save && Object.keys(out.sources).length === 0) throw new Error('sync: -Save needs at least one of ' + Object.keys(SOURCE_FLAGS).join(', '));
   return out;
@@ -106,6 +124,7 @@ export function saveSettings(home, sources) {
   writeFileAtomic(settingsFile(home), JSON.stringify(obj, null, 2) + '\n');
 }
 
+const COUNT_KEYS = ['live', 'idle', 'waiting-person', 'dead', 'unknown'];
 const whole = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
 
 // The state, with anything missing or unreadable as "never": a damaged state file costs one early run, never a refusal.
@@ -114,8 +133,15 @@ export function readState(home) {
   try { obj = JSON.parse(fs.readFileSync(stateFile(home), 'utf8').replace(/^\uFEFF/, '')); } catch { obj = null; }
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj) || obj.schema !== STATE_SCHEMA) obj = { schema: STATE_SCHEMA };
   const f = obj.files !== null && typeof obj.files === 'object' && !Array.isArray(obj.files) ? obj.files : {};
-  const result = ['ok', 'failed', 'timeout'].includes(f.lastResult) ? f.lastResult : null;
-  return { ...obj, schema: STATE_SCHEMA, files: { lastOkAt: whole(f.lastOkAt), lastRunAt: whole(f.lastRunAt), lastResult: result, lastMs: whole(f.lastMs) } };
+  const step = (x) => ({ lastOkAt: whole(x.lastOkAt), lastRunAt: whole(x.lastRunAt), lastResult: ['ok', 'failed', 'timeout'].includes(x.lastResult) ? x.lastResult : null, lastMs: whole(x.lastMs) });
+  const sv = obj.sessions !== null && typeof obj.sessions === 'object' && !Array.isArray(obj.sessions) ? obj.sessions : {};
+  const counts = sv.counts !== null && typeof sv.counts === 'object' && !Array.isArray(sv.counts) ? sv.counts : null;
+  return {
+    ...obj,
+    schema: STATE_SCHEMA,
+    files: step(f),
+    sessions: { ...step(sv), counts: counts === null ? null : Object.fromEntries(COUNT_KEYS.map((k) => [k, whole(counts[k]) ?? 0])) },
+  };
 }
 
 export function writeState(home, state) {
@@ -135,6 +161,23 @@ export function describeSync(home) {
   if (f.lastOkAt === null && f.lastResult === null) return 'sync: never synced';
   const ok = f.lastOkAt === null ? 'never ok' : 'files last ok ' + new Date(f.lastOkAt).toISOString();
   return 'sync: ' + ok + ', last run ' + (f.lastResult ?? 'unknown') + (f.lastRunAt === null ? '' : ' at ' + new Date(f.lastRunAt).toISOString());
+}
+
+// The line `horde db status` adds for the sessions step: when it last ran well, how the last run ended, and the sessions by
+// state ('unknown' are the ones the sync could not judge: their stamp is old on purpose).
+export function describeSessions(home) {
+  const s = readState(home).sessions;
+  if (s.lastOkAt === null && s.lastResult === null) return 'sessions: never synced';
+  const ok = s.lastOkAt === null ? 'never ok' : 'last ok ' + new Date(s.lastOkAt).toISOString();
+  const by = s.counts === null ? '' : ', ' + COUNT_KEYS.map((k) => k + ' ' + s.counts[k]).join(', ');
+  return 'sessions: ' + ok + ', last run ' + (s.lastResult ?? 'unknown') + (s.lastRunAt === null ? '' : ' at ' + new Date(s.lastRunAt).toISOString()) + by;
+}
+
+// How the sessions step says what it did: the sessions by state and what changed.
+export function sessionsSummary(r) {
+  const c = r.counts;
+  return r.sessions + ' sessions (' + COUNT_KEYS.map((k) => c[k] + ' ' + k).join(', ') + '), ' + r.added + ' added, ' + r.changed + ' changed, panes +'
+    + r.paneOpened + ' -' + r.paneClosed + ' moved ' + r.moved + (r.deferred > 0 ? ', ' + r.deferred + ' read later' : '');
 }
 
 // The rows added per table that changed, as "task_event +3, changelog_entry +1", or "no rows added".
@@ -163,39 +206,82 @@ export function syncMain(argv, env = process.env, out = (s) => process.stdout.wr
   }
   try {
     if (req.noteTimeoutMs !== null) {
-      // The caller killed this run (its time limit), so nothing here ran to say so. lastOkAt is not moved.
+      // The caller killed this run (its time limit), so nothing here ran to say so. lastOkAt is not moved. Which step was
+      // running cannot be told, so both are marked: each was still due its next run, and each runs again next tick.
       const state = readState(home);
       state.files = { ...state.files, lastRunAt: now(), lastResult: 'timeout', lastMs: req.noteTimeoutMs };
+      state.sessions = { ...state.sessions, lastRunAt: now(), lastResult: 'timeout', lastMs: req.noteTimeoutMs };
       writeState(home, state);
       out('sync: files timeout recorded');
       return 0;
     }
     if (req.save) saveSettings(home, req.sources);
-    const sources = readSettings(home);
     const state = readState(home);
     const start = now();
-    // A save always runs: new sources must not wait out the pace of the old ones.
-    if (!filesDue(state, start, req.force || req.save)) {
-      out('sync: files skipped (last ok ' + Math.floor((start - state.files.lastOkAt) / 1000) + ' s ago, runs every ' + FILES_EVERY_MS / 60000 + ' min)');
-      return 0;
-    }
-    let line;
+    const parts = [];
+    const failures = [];
+    let dirty = false;
+
+    // ---- the files step. A refusal (no sources saved) is a failure of THIS step only, and leaves no state.
     try {
-      if (!fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; run horde db init');
-      const db = openStore(file);
-      let report;
-      try { report = importFleet(db, sources); } finally { db.close(); }
-      state.files = { lastOkAt: now(), lastRunAt: start, lastResult: 'ok', lastMs: now() - start };
-      line = 'sync: files ran, ' + addedSummary(report) + (report.unlinked.length > 0 ? ', ' + report.unlinked.reduce((n, u) => n + u.count, 0) + ' lines or cards not linked' : '');
+      const sources = readSettings(home);
+      // A save always runs: new sources must not wait out the pace of the old ones.
+      if (!filesDue(state, start, req.force || req.save)) {
+        parts.push('files skipped (last ok ' + Math.floor((start - state.files.lastOkAt) / 1000) + ' s ago, runs every ' + FILES_EVERY_MS / 60000 + ' min)');
+      } else {
+        try {
+          if (!fs.existsSync(file)) throw new Error('fleet.db does not exist yet at ' + file + '; run horde db init');
+          const db = openStore(file);
+          let report;
+          try { report = importFleet(db, sources); } finally { db.close(); }
+          state.files = { lastOkAt: now(), lastRunAt: start, lastResult: 'ok', lastMs: now() - start };
+          parts.push('files ran, ' + addedSummary(report) + (report.unlinked.length > 0 ? ', ' + report.unlinked.reduce((n, u) => n + u.count, 0) + ' lines or cards not linked' : ''));
+        } catch (e) {
+          // A failed run is recorded; lastOkAt stays, so the next tick retries.
+          state.files = { ...state.files, lastRunAt: start, lastResult: 'failed', lastMs: now() - start };
+          throw e;
+        } finally {
+          dirty = true;
+        }
+      }
     } catch (e) {
-      // A failed run is recorded, then handed to the single error line below; lastOkAt stays, so the next tick retries.
-      state.files = { ...state.files, lastRunAt: start, lastResult: 'failed', lastMs: now() - start };
-      // A state that cannot be written must not hide why the run failed.
-      try { writeState(home, state); } catch { /* the import's own error is the one to say */ }
-      throw e;
+      failures.push(e.message);
+      parts.push('files failed: ' + e.message);
     }
-    writeState(home, state);
-    out(line);
+
+    // ---- the sessions step: every tick that has a snapshot (or the reason it has none). Its own try: a files failure
+    // above never stops it, and a failure here never loses the files result already in `state`.
+    if (req.snapshot !== null || req.snapshotError !== null) {
+      const t0 = now();
+      try {
+        if (req.snapshotError !== null) throw new Error('no session snapshot this tick: ' + req.snapshotError);
+        let raw;
+        try { raw = JSON.parse(fs.readFileSync(req.snapshot, 'utf8').replace(/^\uFEFF/, '')); } catch (e) { throw new Error('the session snapshot ' + req.snapshot + ' could not be read: ' + e.message); }
+        if (!fs.existsSync(file)) throw new Error('sessions: fleet.db does not exist yet at ' + file + '; run horde db init');
+        const db = openStore(file);
+        let r;
+        try { r = runSessionsStep(db, raw, { now: t0 }); } finally { db.close(); }
+        state.sessions = { lastOkAt: now(), lastRunAt: t0, lastResult: 'ok', lastMs: now() - t0, counts: r.counts };
+        parts.push('sessions ran, ' + sessionsSummary(r));
+      } catch (e) {
+        state.sessions = { ...state.sessions, lastRunAt: t0, lastResult: 'failed', lastMs: now() - t0 };
+        failures.push(e.message);
+        parts.push('sessions failed: ' + e.message);
+      } finally {
+        dirty = true;
+      }
+    }
+
+    // A state that cannot be written must not hide why a step failed.
+    if (dirty) {
+      try { writeState(home, state); } catch (e) { if (failures.length === 0) throw e; }
+    }
+    if (failures.length > 0) {
+      // One failed step and nothing else said: the plain reason, as before. Otherwise the line names both steps.
+      err('fleet.db: ' + (parts.length === 1 ? failures[0] : 'sync: ' + parts.join('; ')));
+      return 1;
+    }
+    out('sync: ' + parts.join('; '));
     return 0;
   } catch (e) {
     err('fleet.db: ' + e.message);

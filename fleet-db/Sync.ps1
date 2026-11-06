@@ -5,6 +5,13 @@
 # below normal priority, and that every run leaves a line to read. The scheduled task ticks every minute
 # (fleet-db/register-sync.ps1); this runs the tick.
 #
+# TWO STEPS IN ONE TICK (T-0409). The node half runs the files step (when due) and the sessions step (every tick). The sessions
+# step needs facts only the machine has - the registry, the live panes, the running processes - so BEFORE node starts, this half
+# runs fleet-db/SessionSnapshotRun.ps1 as a child of its own (Invoke-HordeDbSyncSnapshot), with its own limit, and hands node the
+# file it wrote (--snapshot) or the reason there is none (--snapshot-error). A snapshot that fails or hangs costs the tick its sessions
+# step, recorded as failed; it never blocks the files step, and the files step never blocks it. THE ONE TIME LIMIT COVERS BOTH: the
+# snapshot gets at most 40 percent of it and node gets what is left of the whole.
+#
 # SINGLE INSTANCE: an OS-exclusive handle on HORDE_HOME\fleet-db-sync.lock (FileShare.None) is held for the whole run and
 # released in finally. If the process dies the OS closes the handle, so there is no stale lock to clean up and no
 # pid to check. A tick that cannot open the file says "skipped: a sync is still running", logs it and exits 0: a
@@ -82,6 +89,43 @@ function Start-HordeDbSyncNode {
     return [pscustomobject]@{ process = $p; outTask = $p.StandardOutput.ReadToEndAsync(); errTask = $p.StandardError.ReadToEndAsync() }
 }
 
+function Invoke-HordeDbSyncSnapshot {
+    # Runs the snapshot script as a child with a limit and returns { file; error }: the file it wrote, or the one-line reason
+    # there is none. On a timeout THAT child is killed through its own Process object (never by name; with its tree on
+    # PowerShell 7). The script runs in the same PowerShell as this one (the 5.1 and 7 traps differ, so one tick must not mix them).
+    param([Parameter(Mandatory = $true)][string]$Script, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][int]$LimitSeconds)
+    $file = Join-Path $HordeHome ("fleet-db-sessions-" + [guid]::NewGuid().ToString("N") + ".snapshot.json")
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $self = [System.Diagnostics.Process]::GetCurrentProcess()
+    try { $psi.FileName = $self.MainModule.FileName } finally { $self.Dispose() }
+    $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Script + '" -Out "' + $file + '"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $HordeHome
+    $p = $null
+    try { $p = [System.Diagnostics.Process]::Start($psi) } catch { return [pscustomobject]@{ file = ""; error = (ConvertTo-HordeDbSyncText ("the snapshot script could not be started: " + $_.Exception.Message)) } }
+    try {
+        try { $p.PriorityClass = "BelowNormal" } catch { }
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($LimitSeconds * 1000)) {
+            try { if ($null -ne $p.GetType().GetMethod("Kill", [Type[]]@([bool]))) { $p.Kill($true) } else { $p.Kill() } } catch { }
+            [void]$p.WaitForExit(5000)
+            if ([System.IO.File]::Exists($file)) { [System.IO.File]::Delete($file) }
+            # A kill between the child's temp write and its move leaves the temp file, and this runs every minute.
+            foreach ($left in [System.IO.Directory]::GetFiles($HordeHome, ([System.IO.Path]::GetFileName($file) + ".tmp-*"))) { try { [System.IO.File]::Delete($left) } catch { } }
+            return [pscustomobject]@{ file = ""; error = ("the snapshot script was killed after " + $LimitSeconds + " s") }
+        }
+        $p.WaitForExit()
+        if ($p.ExitCode -eq 0 -and [System.IO.File]::Exists($file)) { return [pscustomobject]@{ file = $file; error = "" } }
+        $why = (("" + $errTask.Result) -split "\r?\n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1)
+        if (-not $why) { $why = "the snapshot script stopped with exit code " + $p.ExitCode }
+        return [pscustomobject]@{ file = ""; error = (ConvertTo-HordeDbSyncText $why 200) }
+    } finally { $p.Dispose() }
+}
+
 function Invoke-HordeDbSync {
     # One tick. Returns { code; outcome; lines } - outcome is ok, skipped, failed or timeout; lines is what to print.
     # code: 0 ok or skipped, 1 failed or timed out or refused.
@@ -90,6 +134,7 @@ function Invoke-HordeDbSync {
         [Parameter(Mandatory = $true)][string]$NodePath,
         [Parameter(Mandatory = $true)][string]$CliScript,
         [string]$SyncScript = "",
+        [string]$SnapshotScript = "",
         [string[]]$SyncArgs = @(),
         [int]$TimeLimitSeconds = 50,
         [int]$MaxLogBytes = 1048576
@@ -100,7 +145,10 @@ function Invoke-HordeDbSync {
     # THE TEST SEAM: a suite points the sync run at a fixture script (one that sleeps) to prove the time limit; the
     # `--note-timeout` call below always uses the real script.
     if ($SyncScript -eq "") { $SyncScript = $CliScript }
+    # The same for the snapshot: a suite points it at a fixture that writes a fake one (no real terminal is ever asked in a test).
+    if ($SnapshotScript -eq "") { $SnapshotScript = Join-Path $PSScriptRoot "SessionSnapshotRun.ps1" }
     $lock = $null
+    $snapshot = $null
     try {
         # The folder first: a missing one would answer the open below with an IOException too (DirectoryNotFound), and be taken for a held lock.
         [void][System.IO.Directory]::CreateDirectory($HordeHome)
@@ -115,10 +163,15 @@ function Invoke-HordeDbSync {
             Write-HordeDbSyncLog -Path $log -Line ($stamp + " skipped 0 ms | a sync is still running") -MaxBytes $MaxLogBytes
             return [pscustomobject]@{ code = 0; outcome = "skipped"; lines = @("skipped: a sync is still running") }
         }
-        $run = Start-HordeDbSyncNode -NodePath $NodePath -Script $SyncScript -NodeArgs (@("sync") + $SyncArgs) -HordeHome $HordeHome
+        # The snapshot first, inside the same limit: at most 40 percent of it, and node gets what is left.
+        $snapshot = Invoke-HordeDbSyncSnapshot -Script $SnapshotScript -HordeHome $HordeHome -LimitSeconds ([Math]::Max(1, [int][Math]::Floor($TimeLimitSeconds * 0.4)))
+        $snapArgs = @("--snapshot-error", $(if ($snapshot.error -ne "") { $snapshot.error -replace '"', "'" } else { "no snapshot was made" }))
+        if ($snapshot.file -ne "") { $snapArgs = @("--snapshot", $snapshot.file) }
+        $leftMs = [Math]::Max(1000, ($TimeLimitSeconds * 1000) - [int]$watch.ElapsedMilliseconds)
+        $run = Start-HordeDbSyncNode -NodePath $NodePath -Script $SyncScript -NodeArgs (@("sync") + $SyncArgs + $snapArgs) -HordeHome $HordeHome
         $p = $run.process
         try {
-            if (-not $p.WaitForExit($TimeLimitSeconds * 1000)) {
+            if (-not $p.WaitForExit($leftMs)) {
                 # Only the child started above. On PowerShell 7 its tree goes with it; Windows PowerShell 5.1 has no such overload.
                 try { if ($p.GetType().GetMethod("Kill", [Type[]]@([bool]))) { $p.Kill($true) } else { $p.Kill() } } catch { }
                 [void]$p.WaitForExit(5000)
@@ -141,8 +194,12 @@ function Invoke-HordeDbSync {
             if (-not $why) { $why = "fleet.db: the sync stopped with exit code " + $p.ExitCode + " (fleet.db needs Node.js 24 or later)" }
             Write-HordeDbSyncLog -Path $log -Line ($stamp + " failed " + $ms + " ms | " + (ConvertTo-HordeDbSyncText $why)) -MaxBytes $MaxLogBytes -MayCut
             return [pscustomobject]@{ code = 1; outcome = "failed"; lines = @(ConvertTo-HordeDbSyncText $why) }
-        } finally { $p.Dispose() }
+        } finally {
+            $p.Dispose()
+        }
     } finally {
+        # Here, not with the child: node failing to start must not leave one snapshot file a minute in the home.
+        if ($null -ne $snapshot -and $snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }
         if ($null -ne $lock) { $lock.Dispose() }
     }
 }

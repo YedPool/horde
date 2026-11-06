@@ -21,8 +21,8 @@
            Find = 'try { if ($p.GetType().GetMethod("Kill", [Type[]]@([bool]))) { $p.Kill($true) } else { $p.Kill() } } catch { }'
            Replace = '$null = $p' }
         @{ Name = "time-limit-five-times-too-long"
-           Find = '$p.WaitForExit($TimeLimitSeconds * 1000)'
-           Replace = '$p.WaitForExit($TimeLimitSeconds * 5000)' }
+           Find = '$p.WaitForExit($leftMs)'
+           Replace = '$p.WaitForExit($leftMs * 5)' }
         @{ Name = "timeout-exits-zero"
            Find = 'return [pscustomobject]@{ code = 1; outcome = "timeout"'
            Replace = 'return [pscustomobject]@{ code = 0; outcome = "timeout"' }
@@ -32,6 +32,21 @@
         @{ Name = "failure-logged-as-ok"
            Find = '$stamp + " failed " + $ms'
            Replace = '$stamp + " ok " + $ms' }
+        @{ Name = "snapshot-never-handed-to-node"
+           Find = 'if ($snapshot.file -ne "") { $snapArgs = @("--snapshot", $snapshot.file) }'
+           Replace = '' }
+        @{ Name = "snapshot-child-not-killed"
+           Find = 'try { if ($null -ne $p.GetType().GetMethod("Kill", [Type[]]@([bool]))) { $p.Kill($true) } else { $p.Kill() } } catch { }'
+           Replace = '$null = $p' }
+        @{ Name = "snapshot-limit-ignored"
+           Find = 'if (-not $p.WaitForExit($LimitSeconds * 1000)) {'
+           Replace = 'if (-not $p.WaitForExit($LimitSeconds * 100000)) {' }
+        @{ Name = "snapshot-gets-the-whole-limit"
+           Find = '[int][Math]::Floor($TimeLimitSeconds * 0.4)'
+           Replace = '$TimeLimitSeconds' }
+        @{ Name = "snapshot-file-left-behind"
+           Find = 'if ($null -ne $snapshot -and $snapshot.file -ne "" -and [System.IO.File]::Exists($snapshot.file)) { try { [System.IO.File]::Delete($snapshot.file) } catch { } }'
+           Replace = '$null = $snapshot' }
         @{ Name = "log-never-cut"
            Find = 'if ($MayCut -and [System.IO.File]::Exists($Path)'
            Replace = 'if ($false -and [System.IO.File]::Exists($Path)' }
