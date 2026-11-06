@@ -297,6 +297,8 @@ Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "not run") -FloorPe
 Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "RED") -FloorPercent 90).Count -eq 0) "guards that ran red are a finding of their own, not thin coverage"
 Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 450 0 "no repo-wide guard list (flake8 critical is a unit below)") -FloorPercent 90).Count -eq 0) "a repo with no guard list owes none"
 Check (@(Get-HordeNightlyCoverageFindings -Repos @(Cov 1 99) -FloorPercent 0).Count -eq 0) "-FloorPercent 0 finds nothing"
+$zeroHead = Get-HordeNightlyHeadlineStatus -Repos @([pscustomobject]@{ repo = "a/b"; suiteCount = 0; unrunCount = 0; guards = [pscustomobject]@{ state = "green"; text = "" }; compare = [pscustomobject]@{}; incomplete = "" }) -CoverageFloorPercent 90
+Check ($zeroHead -cnotmatch '\bCOMPLETE\.' -and $zeroHead -clike "BELOW THE COVERAGE FLOOR*INCOMPLETE: nothing ran*") ("a repo with nothing to run is never headed COMPLETE: the old net's alarm reads that word as cover (" + $zeroHead + ")")
 $covHead = Get-HordeNightlyHeadlineStatus -Repos @([pscustomobject]@{ repo = "a/b"; suiteCount = 10; unrunCount = 466; guards = [pscustomobject]@{ state = "not run"; text = "" }; compare = [pscustomobject]@{}; incomplete = "" }) -CoverageFloorPercent 90
 Check ($covHead -clike "BELOW THE COVERAGE FLOOR of 90 percent: a/b ran 10 of 476 units (2 percent), a/b ran no guards. INCOMPLETE: *") ("the headline leads with it, the rest still follows (" + $covHead + ")")
 

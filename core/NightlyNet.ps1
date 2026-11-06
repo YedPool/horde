@@ -573,8 +573,10 @@ function Get-HordeNightlyHeadlineStatus {
     # A newly red unit whose bisect named no merge (capped, inconclusive or flaky) is not a finished answer: COMPLETE
     # read as every new red has a name (review of PR 380, finding 11).
     if ($unnamed -gt 0) { $why += ("" + $unnamed + " bisects named no merge (capped, inconclusive or flaky)") }
-    $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
     $thin = @(Get-HordeNightlyCoverageFindings -Repos $Repos -FloorPercent $CoverageFloorPercent)
+    # A night below the floor is never COMPLETE: a repo with no units has no other reason to say so, and readers trust the word.
+    if ($thin.Count -gt 0 -and $why.Count -eq 0) { $why += "nothing ran" }
+    $t = $(if ($why.Count -gt 0) { "INCOMPLETE: " + ($why -join ", ") + "." } else { "COMPLETE." })
     if ($thin.Count -gt 0) { $t = "BELOW THE COVERAGE FLOOR of " + $CoverageFloorPercent + " percent: " + ($thin -join ", ") + ". " + $t }
     if ($gred.Count -gt 0) { $t += " GUARDS RED in " + ($gred -join ", ") + "." }
     if ($hung -gt 0) { $t += " HUNG: " + $hung + " units ran past their time limit." }
