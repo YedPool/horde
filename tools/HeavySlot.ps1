@@ -248,7 +248,7 @@ $main = {
     # bounds the whole. The slot itself is waited for in slices, so Ctrl+C is seen between them: one long
     # WaitOne cannot be broken.
     $claimName = $SlotName + "-NetClaim"
-    $claimCheck = $(if ($NetRun) { $null } else { { Test-HordeHeavySlotNetClaim -Name $claimName }.GetNewClosure() })
+    $claimCheck = $(if ($NetRun) { $null } else { { Test-HordeHeavySlotNetClaim -Name $claimName } })
     $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice -GetNetClaim $claimCheck `
         -GetIdle { Get-HordeIdleState -Config $idleCfg } `
         -GetFreeGB { Get-HordeHeavySlotFreeGB } `
