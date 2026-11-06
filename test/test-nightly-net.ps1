@@ -451,6 +451,10 @@ try {
     Check ($text -like "*PLAN apps (named list: chrome, Slack, WhatsApp, WhatsApp.Root, ClickUp, ms-teams, Teams, Zoom*force-quit only Slack, WhatsApp, WhatsApp.Root, ClickUp*WOULD CLOSE (dry run, nothing closed)*WOULD FORCE-QUIT*") "-Plan lists, dry, what the app closer would close and force-quit"
     Check ($text -like "*CHROME RESTORE*") "and the Chrome restore setting, read only"
     Check ($text -like "*PLAN time: suite phase 22:00 to 04:45 = 24300 s for 2 gate runs*") ("and the time budget of the suite phase (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
+    # -AtTime stands in for the clock in the budget too: on 2026-11-06 at 02:16 the check above was red only because the
+    # budget read the real clock, which was inside the window. These two hold at any real hour.
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T23:10:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main")
+    Check ((($o -join "`n") -like "*PLAN time: suite phase 23:10 to 04:45 = 20100 s for 2 gate runs*")) ("-AtTime inside the window starts the budget at that time (" + (($o | Where-Object { $_ -like "PLAN time*" }) -join "") + ")")
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -Plan -AtTime "2026-10-22T14:00:00" -NoCloseApps -WorkRoot $wr -Repos "Fix/Repo:pytest:main" -MinFreeGB 3.25)
     Check ((($o -join "`n") -like "*memory floor pytest 3.25 GB free*")) "-MinFreeGB is the one setting that moves the day floor"
     Check ((($o -join "`n") -like "*PLAN apps: -NoCloseApps, nothing would be closed*")) "-NoCloseApps: -Plan says nothing would be closed"

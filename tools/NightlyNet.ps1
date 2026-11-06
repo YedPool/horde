@@ -141,7 +141,7 @@ $LogFile = Join-Path $WorkRoot "nightly.log"
 $StopFile = Join-Path $WorkRoot "STOP"
 $Shells = @("ps51", "pwsh7")
 
-function Say {
+function Write-NightlyNetLine {
     param([string]$Line)
     $l = (Get-Date).ToString("s") + " " + ($Line -replace "[^\x20-\x7E]", "?")
     try { Add-Content -LiteralPath $LogFile -Value $l -Encoding Ascii -ErrorAction Stop } catch { }
@@ -222,7 +222,7 @@ function Invoke-NightlyAppCloser {
     if ($NoCloseApps -or $AtTime -ne "" -or $HeavySlotScript -ne "") {
         $s.done = $true
         $s.lines = @("APPS: nothing closed (" + $(if ($NoCloseApps) { "-NoCloseApps" } else { "a suite run: -AtTime or -HeavySlotScript" }) + ").")
-        Say $s.lines[0]
+        Write-NightlyNetLine $s.lines[0]
         return
     }
     $real = Get-Date
@@ -235,24 +235,24 @@ function Invoke-NightlyAppCloser {
     if ($step -ceq "stop") {
         $s.done = $true
         $s.lines = @("APPS: nothing closed, the PC was not idle " + $need + " s before " + $Cutoff.ToString("HH:mm") + " (" + $s.tries + " tries).")
-        Say $s.lines[0]
+        Write-NightlyNetLine $s.lines[0]
         return
     }
     $s.tries++
     if ($step -ceq "busy") {
         $s.nextTry = $real.AddMinutes($AppRetryMinutes)
         $what = $(if ($null -ne $idle -and ("" + $idle.state) -ceq "known") { "idle " + $idle.seconds + " s of " + $need } else { "input clock unknown" })
-        Say ("app closer: the PC is in use (" + $what + "), nothing closed, next try " + $s.nextTry.ToString("HH:mm"))
+        Write-NightlyNetLine ("app closer: the PC is in use (" + $what + "), nothing closed, next try " + $s.nextTry.ToString("HH:mm"))
         return
     }
     $s.done = $true
     $targets = @(Select-HordeNightlyAppProcesses -Processes @(Get-Process) -Names (Get-HordeNightlyCloseAppNames))
     $r = Close-HordeNightlyApps -Targets $targets -ForceNames (Get-HordeNightlyForceQuitAppNames) -WaitSeconds $AppCloseWaitSeconds
-    foreach ($x in @($r.closed)) { Say ("app closer: closed " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
-    foreach ($x in @($r.forced)) { Say ("app closer: FORCE-QUIT " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
-    foreach ($x in @($r.running)) { Say ("app closer: still running " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    foreach ($x in @($r.closed)) { Write-NightlyNetLine ("app closer: closed " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    foreach ($x in @($r.forced)) { Write-NightlyNetLine ("app closer: FORCE-QUIT " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
+    foreach ($x in @($r.running)) { Write-NightlyNetLine ("app closer: still running " + $x.name + " pid " + $x.pid + " " + $x.gb.ToString("0.000", $Inv) + " GB") }
     $s.lines = @(Format-HordeNightlyAppLines -Result $r) + @((Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
-    foreach ($l in $s.lines) { Say $l }
+    foreach ($l in $s.lines) { Write-NightlyNetLine $l }
 }
 
 function Get-NightlyProbes {
@@ -264,7 +264,7 @@ function Get-NightlyProbes {
         $o = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ProbesFile))
         foreach ($q in $o.PSObject.Properties) { $p["" + $q.Name] = [pscustomobject]@{ ok = ($q.Value.ok -eq $true); why = ("" + $q.Value.why) } }
     } else { $p = Get-HordeNightlyProbes }
-    foreach ($k in (@($p.Keys) | Sort-Object)) { Say ("probe " + $k + ": " + $(if ($p[$k].ok -eq $true) { "yes" } else { "NO" }) + " - " + $p[$k].why) }
+    foreach ($k in (@($p.Keys) | Sort-Object)) { Write-NightlyNetLine ("probe " + $k + ": " + $(if ($p[$k].ok -eq $true) { "yes" } else { "NO" }) + " - " + $p[$k].why) }
     $script:NightProbes = $p
     return $p
 }
@@ -328,8 +328,8 @@ function Invoke-NightlySlot {
         $h = @(Read-HordeNightlyMemoryHolders -Gate $gate)
         if ($h.Count -gt 0) { $script:MemoryHolders = $h }
     }
-    if ($script:MemoryShort -and -not $wasShort) { Say ($Tag + " gave up on memory: slot waits are " + (Get-NightlySlotWait) + " s until a gate gets its memory") }
-    elseif ($wasShort -and -not $script:MemoryShort) { Say ($Tag + " got its memory: slot waits are " + (Get-NightlySlotWait) + " s again") }
+    if ($script:MemoryShort -and -not $wasShort) { Write-NightlyNetLine ($Tag + " gave up on memory: slot waits are " + (Get-NightlySlotWait) + " s until a gate gets its memory") }
+    elseif ($wasShort -and -not $script:MemoryShort) { Write-NightlyNetLine ($Tag + " got its memory: slot waits are " + (Get-NightlySlotWait) + " s again") }
     return [pscustomobject]@{ code = $code; timedOut = $timedOut; gate = $gate; out = $out }
 }
 
@@ -375,7 +375,7 @@ function Read-NightlyState {
         $s.lastTip = "" + $o.lastTip
         foreach ($p in $o.units.PSObject.Properties) { $s.units["" + $p.Name] = "" + $p.Value }
         if ($o.PSObject.Properties["pending"]) { $s.pending = @(@($o.pending) | Where-Object { "" + $_ -ne "" } | ForEach-Object { "" + $_ }) }
-    } catch { Say ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{}; pending = @() } }
+    } catch { Write-NightlyNetLine ("state unreadable, treated as empty: " + $Path + ": " + $_.Exception.Message); return @{ lastTip = ""; units = @{}; pending = @() } }
     return $s
 }
 
@@ -472,7 +472,7 @@ function Invoke-NightlyPhaseOne {
         # A unit whose declared need the night lacks is SKIPPED with the reason: not run, not red, never green.
         if ($Ctx.kind -ceq "horde") {
             $skip = Get-NightlySkipReason -Ctx $Ctx -Unit $u
-            if ($skip -ne "") { $Ctx.verdicts[$u] = "skipped"; $Ctx.skipReasons[$u] = $skip; Say ($Ctx.repo + " " + $u + " -> skipped, " + $skip); continue }
+            if ($skip -ne "") { $Ctx.verdicts[$u] = "skipped"; $Ctx.skipReasons[$u] = $skip; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> skipped, " + $skip); continue }
         }
         $need = $(if ($u -ceq "pytest-all") { $LongRunSeconds } else { $RunSeconds })
         Invoke-NightlyAppCloser -Cutoff $Cutoff
@@ -488,7 +488,7 @@ function Invoke-NightlyPhaseOne {
             # Only a run that finished as pytest does (exit 0, or 1 with the failing nodes it named) is a verdict. A timeout,
             # a crash, a missing python or a failed collection (the wrap says 70 and 71) is UNRUN, never green.
             $finished = (-not $r.timedOut) -and (Test-Path -LiteralPath $nf) -and (($r.code -eq 0) -or ($r.code -eq 1 -and $nodes.Count -gt 0))
-            if (-not $finished) { Say ($Ctx.repo + " pytest-all did not finish as pytest does (exit " + $r.code + ", timed out " + $r.timedOut + ")"); $Ctx.incomplete = "the pytest run did not complete"; $Ctx.unrun++; continue }
+            if (-not $finished) { Write-NightlyNetLine ($Ctx.repo + " pytest-all did not finish as pytest does (exit " + $r.code + ", timed out " + $r.timedOut + ")"); $Ctx.incomplete = "the pytest run did not complete"; $Ctx.unrun++; continue }
             foreach ($n in $nodes) { $Ctx.verdicts["pytest-node|" + $n] = "red" }
             $Ctx.verdicts["pytest-all"] = "green"
             continue
@@ -498,7 +498,7 @@ function Invoke-NightlyPhaseOne {
         $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip -Seconds $secs
         # Past a limit cut short by the end of the night is not a hang: it is unrun, and runs again tomorrow.
         if ($v -ceq "hung" -and $secs -lt $need) { $v = "unrun" }
-        Say ($Ctx.repo + " " + $u + " -> " + $v + " in " + [int]$uclock.Elapsed.TotalSeconds + " s")
+        Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> " + $v + " in " + [int]$uclock.Elapsed.TotalSeconds + " s")
         if ($v -ceq "absent") { continue }
         $Ctx.verdicts[$u] = $v
         if ($v -ceq "unrun") { $Ctx.unrun++ }
@@ -538,7 +538,7 @@ function Invoke-NightlyBisect {
             try {
                 [void](Invoke-NightlyGit $Ctx.tree @("checkout", "--quiet", "--detach", $sha))
                 [void](Invoke-NightlyGit $Ctx.tree @("clean", "-fdq"))
-            } catch { Say ("bisect checkout of " + $sha + " failed: " + $_.Exception.Message); return $null }
+            } catch { Write-NightlyNetLine ("bisect checkout of " + $sha + " failed: " + $_.Exception.Message); return $null }
             $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag (($Ctx.repo -replace '/', '_') + "-bisect-" + $sha.Substring(0, 8) + "-" + $u)
             $res = ConvertTo-HordeNightlyBisectAnswer $v
             $memo[$key] = $res
@@ -549,7 +549,7 @@ function Invoke-NightlyBisect {
         if ($found.state -ceq "found") { $merge = @($Ctx.merges | Where-Object { $_.sha -ceq $found.sha })[0] }
         $Ctx.culprits += [pscustomobject]@{ unit = $u; state = $found.state; sha = $found.sha; merge = $merge; runs = $found.runs; between = $found.between }
         $script:BisectLeft = [Math]::Max(0, $script:BisectLeft - [int]$found.runs)
-        Say ($Ctx.repo + " bisect " + $u + " -> " + $found.state + " " + $found.sha + " in " + $found.runs + " runs")
+        Write-NightlyNetLine ($Ctx.repo + " bisect " + $u + " -> " + $found.state + " " + $found.sha + " in " + $found.runs + " runs")
     }
     [void](Invoke-NightlyGit $Ctx.tree @("checkout", "--quiet", "--detach", $Ctx.tip))
 }
@@ -563,7 +563,7 @@ function Save-NightlyState {
 }
 
 # ---------------------------------------------------------------- the run
-# THE WORK FOLDER FIRST, before the first log line (review of PR 380, finding 6: Say ran before it existed, so a fresh
+# THE WORK FOLDER FIRST, before the first log line (review of PR 380, finding 6: the log writer ran before it existed, so a fresh
 # box lost the window line). If it cannot be made (a bad -WorkRoot, an ACL, a full disk) the log and the report go to a
 # folder under the temp path instead, and the run fails below through the catch, which tells M from there.
 $setupError = ""
@@ -578,23 +578,23 @@ catch {
 # Runs end -ReportReserveMinutes (15) before 06:30, so the report, the tell and the save are done by then.
 $cutoff = Get-HordeNightlyRunCutoff -Now $now -ReportReserveMinutes $ReportReserveMinutes
 $inWindow = Test-HordeNightlyWindow -Now $now
-Say ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
+Write-NightlyNetLine ("nightly net " + $Date + ": window " + $(if ($inWindow) { "open" } else { "CLOSED" }) + ", cutoff " + $cutoff.ToString("s") + ", repos " + ($Repos -join ", "))
 
 function Send-NightlyReport {
     # Tell M (core Invoke-HordeNightlyTell): 0 told, 3 not told, the report stays in the report folder.
     param([string]$File)
-    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -TimeoutSeconds 300 -Say { param($l) Say $l })
+    return (Invoke-HordeNightlyTell -Program $TellProgram -Target $Target -File $File -NoTell:$NoTell -RetrySeconds $TellRetrySeconds -TimeoutSeconds 300 -Say { param($l) Write-NightlyNetLine $l })
 }
 
 if (-not $inWindow -and -not $Plan) {
     # Never a silent refusal (T-0397): three nights in a row (2026-11-01 to 11-03) started an hour early, ran nothing
     # and told nobody. M hears it, and the exit stays 4 whether or not the tell gets through.
-    Say "outside the night window (22:00 to 06:30): nothing run"
+    Write-NightlyNetLine "outside the night window (22:00 to 06:30): nothing run"
     try {
         $refused = Join-Path $ReportDir ($Date + "-REFUSED.txt")
         [System.IO.File]::WriteAllText($refused, (ConvertTo-HordeNightlyText ("NIGHTLY NET " + $Date + ": NOT RUN, started at " + $now.ToString("yyyy-MM-dd HH:mm", $Inv) + ", outside the night window (22:00 to 06:30), so nothing ran. Check the schedule's start time. Log: " + $LogFile)) + "`n")
         [void](Send-NightlyReport $refused)
-    } catch { Say ("the refused-start report failed: " + $_.Exception.Message) }
+    } catch { Write-NightlyNetLine ("the refused-start report failed: " + $_.Exception.Message) }
     exit 4
 }
 
@@ -610,7 +610,7 @@ try {
     if (-not $held) {
         # Never a silent night (review of PR 380, finding 4): a run wedged from an earlier night holds the lock, and
         # every night after it would end here with exit 0 and a log line nobody reads. M hears it, and it exits 5.
-        Say "another nightly run holds the lock: tonight runs nothing"
+        Write-NightlyNetLine "another nightly run holds the lock: tonight runs nothing"
         $busy = Join-Path $ReportDir ($Date + "-BUSY.txt")
         [System.IO.File]::WriteAllText($busy, (ConvertTo-HordeNightlyText ("NIGHTLY NET " + $Date + ": NOT RUN, another nightly run still holds the lock (a run from an earlier night may be wedged). Log: " + $LogFile)) + "`n")
         [void](Send-NightlyReport $busy)
@@ -622,7 +622,7 @@ try {
     # Fewest units first (core Get-HordeNightlyRepoOrder): the night of 2026-10-23 never reached the 2-unit repo.
     $counts = @($ctxs | ForEach-Object { @(Get-NightlyUnits $_).Count })
     $ctxs = @(@(Get-HordeNightlyRepoOrder -Counts $counts) | ForEach-Object { $ctxs[$_] })
-    Say ("order: " + (@($ctxs | ForEach-Object { $_.repo }) -join ", ") + "; memory floor " + (Get-NightlyFloorText @($ctxs | ForEach-Object { $_.kind })) + " (night floors 22:00 to 07:00, by day " + $MinFreeGB.ToString($Inv) + " GB free and " + $MinCommitHeadroomGB.ToString($Inv) + " GB commit headroom); slot wait " + $SlotWaitSeconds + " s, " + $ShortSlotWaitSeconds + " s after a memory give-up")
+    Write-NightlyNetLine ("order: " + (@($ctxs | ForEach-Object { $_.repo }) -join ", ") + "; memory floor " + (Get-NightlyFloorText @($ctxs | ForEach-Object { $_.kind })) + " (night floors 22:00 to 07:00, by day " + $MinFreeGB.ToString($Inv) + " GB free and " + $MinCommitHeadroomGB.ToString($Inv) + " GB commit headroom); slot wait " + $SlotWaitSeconds + " s, " + $ShortSlotWaitSeconds + " s after a memory give-up")
     # The bisect reserve is kept only when there is a merge to bisect over: with none in any repo (a first night has
     # none), no unit can be bisected, and the suite phase gets the whole night.
     $reserve = $(if (@($ctxs | ForEach-Object { @($_.merges) }).Count -gt 0) { $BisectReserveMinutes } else { 0 })
@@ -643,8 +643,8 @@ try {
             foreach ($l in @(Format-HordeNightlyAppLines -Result $dry)) { Write-Host ("  " + $l) }
         }
         Write-Host ("  " + (Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
-        # THE TIME BUDGET of the suite phase, from tonight's 22:00 (or now, inside the window).
-        $real = Get-Date
+        # THE TIME BUDGET of the suite phase, from tonight's 22:00 (or now, inside the window). -AtTime is now, as for the floors.
+        $real = $(if ($AtTime -ne "") { $now } else { Get-Date })
         $bStart = $(if (Test-HordeNightlyWindow -Now $real) { $real } else { $now.Date.AddHours(22) })
         $bRun = Get-HordeNightlyRunCutoff -Now $bStart -ReportReserveMinutes $ReportReserveMinutes
         $bSuite = $bRun.AddMinutes(-$reserve)
@@ -669,16 +669,16 @@ try {
     if ($body.Length -gt 6000) { $body = $body.Substring(0, 6000) + " ...cut, the full report is in the report folder." }
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
-    Say ("report written: " + $file)
+    Write-NightlyNetLine ("report written: " + $file)
     # The state is ALWAYS saved (review of PR 380, finding 2): tonight's verdicts and tip are test facts whether or not M
     # heard them. What M did not hear is kept apart, pending, and re-listed in every report until a tell succeeds. Each
     # repo's save is its own try: one that throws after the tell must not turn a delivered report into a FAILED night.
     $told = Send-NightlyReport $file
-    if ($told -ne 0) { Say "the report was not told: tonight's findings stay pending and the next report lists them again" }
+    if ($told -ne 0) { Write-NightlyNetLine "the report was not told: tonight's findings stay pending and the next report lists them again" }
     $saved = $true
     for ($i = 0; $i -lt $ctxs.Count; $i++) {
         try { Save-NightlyState -Ctx $ctxs[$i] -Row $repoRows[$i] -Told ($told -eq 0) }
-        catch { $saved = $false; Say ("report " + $(if ($told -eq 0) { "sent" } else { "not sent" }) + ", but the state of " + $ctxs[$i].repo + " was not saved: " + $_.Exception.Message) }
+        catch { $saved = $false; Write-NightlyNetLine ("report " + $(if ($told -eq 0) { "sent" } else { "not sent" }) + ", but the state of " + $ctxs[$i].repo + " was not saved: " + $_.Exception.Message) }
     }
     if ($told -ne 0) { exit $told }
     if (-not $saved) { exit 1 }
@@ -687,7 +687,7 @@ try {
     # A failed night must never be silent: one plain line to M, and the same line in the report folder.
     $why = ConvertTo-HordeNightlyText ("" + $_.Exception.Message)
     if ($why.Length -gt 400) { $why = $why.Substring(0, 400) }
-    Say ("the nightly net FAILED: " + $why)
+    Write-NightlyNetLine ("the nightly net FAILED: " + $why)
     if (-not $Plan) {
         $body = "NIGHTLY NET " + $Date + ": FAILED, the night did not complete and tonight's tests say nothing. Error: " + $why + ". Log: " + $LogFile
         # The report folder may be what failed: the temp path is the second place to write the line M is told.
@@ -698,9 +698,9 @@ try {
                 $file = Join-Path $dir ($Date + "-FAILED.txt")
                 [System.IO.File]::WriteAllText($file, (ConvertTo-HordeNightlyText $body) + "`n")
                 [void](Send-NightlyReport $file); $sent = $true; break
-            } catch { Say ("could not report the failure from " + $dir + ": " + $_.Exception.Message) }
+            } catch { Write-NightlyNetLine ("could not report the failure from " + $dir + ": " + $_.Exception.Message) }
         }
-        if (-not $sent) { Say "M was not told of the failure" }
+        if (-not $sent) { Write-NightlyNetLine "M was not told of the failure" }
     }
     exit 1
 } finally {

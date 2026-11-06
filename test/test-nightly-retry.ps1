@@ -89,8 +89,11 @@ try {
         [System.IO.File]::WriteAllText($net, $body)
         return [pscustomobject]@{ work = $w; net = $net; rec = (Join-Path $dir "rec.txt"); marker = (Join-Path $w "retry\2026-11-04.marker"); log = (Join-Path $w "nightly.log"); rlog = (Join-Path $w "nightly-retry.log") }
     }
-    function Invoke-Retry { param($Rig, [string]$At = "2026-11-04T23:30:00", [string[]]$More = @())
-        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File $retry -WorkRoot $Rig.work -AtTime $At -NetScript $Rig.net @More)
+    # A LOCK OF THE RIG'S OWN, never the script's default: on 2026-11-06 at 02:16 this suite was red only because the real
+    # net was running and held the real lock, so the script rightly refused to start the stand-in.
+    $freeLock = "HordeRetryTestFree" + [guid]::NewGuid().ToString("N")
+    function Invoke-Retry { param($Rig, [string]$At = "2026-11-04T23:30:00", [string[]]$More = @(), [string]$Lock = $freeLock)
+        $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File $retry -WorkRoot $Rig.work -AtTime $At -NetScript $Rig.net -MutexName $Lock @More)
         return [pscustomobject]@{ code = $LASTEXITCODE; out = ($o -join "`n") }
     }
     function Recs { param($Rig) if (Test-Path -LiteralPath $Rig.rec) { return ,@(Get-Content -LiteralPath $Rig.rec) } else { return ,@() } }
@@ -139,9 +142,17 @@ try {
     $mxName = "HordeRetryTest" + [guid]::NewGuid().ToString("N")
     $mx = New-Object System.Threading.Mutex($true, $mxName)
     try {
-        $r = Invoke-Retry $rig -More @("-MutexName", $mxName)
+        $r = Invoke-Retry $rig -Lock $mxName
         Check ((Recs $rig).Count -eq 0 -and -not (Test-Path -LiteralPath $rig.marker) -and (RLog $rig) -like "*decided by: net is running*") "the net's lock held: no start, and no marker spent"
     } finally { $mx.ReleaseMutex(); $mx.Dispose() }
+    # The rigs above never read the script's default lock, so this is what ties the retry to the lock the real net takes.
+    $lockDefault = { param([string]$File)
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($File, [ref]$null, [ref]$null)
+        return (@($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ceq "MutexName" })[0].DefaultValue.Value)
+    }
+    $retryLock = & $lockDefault $retry
+    $netLock = & $lockDefault (Join-Path $root "tools\NightlyNet.ps1")
+    Check ($retryLock -ceq "Global\HordeNightlyNet" -and $retryLock -ceq $netLock) ("by default the retry looks at the very lock the net takes (" + $retryLock + ", " + $netLock + ")")
 
     $rig = New-Rig
     [System.IO.File]::WriteAllText((Join-Path $rig.work "retry"), "a file where the marker folder should be")
