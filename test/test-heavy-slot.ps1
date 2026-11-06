@@ -210,6 +210,27 @@ try {
     Check ((Get-GateText "commit") -match "gave up after 2 s waiting for 1000000 GB of commit headroom") "it says it gave up waiting for commit headroom"
     Check (@((Get-GateText "commit") -split "`r?`n" | Where-Object { $_ -like "heavy-slot: memory held by *" }).Count -ge 1) "and names who holds the memory"
     Check ((Get-Times "commit").start -eq 0) "and its run never started"
+    # THE NET'S FIRST CLAIM (2026-11-06): enforced in the gate, by a mutex name derived from the slot's.
+    $slot = New-Slot
+    $netClaim = New-Object System.Threading.Mutex($false, ($slot + "-NetClaim"))
+    try {
+        $w = Start-Gate -Slot $slot -Tag "refused" -Seconds 0 -More @("-WaitSeconds", "2")
+        $w.WaitForExit()
+        Check ($w.ExitCode -eq 125) ("while the net has first claim another run gives up with 125 (" + $w.ExitCode + ")")
+        Check ((Get-GateText "refused") -match "gave up after 2 s: the nightly net has first claim on the slot until its suite phase ends") ("it says who has the slot and until when (" + (Get-GateText "refused") + ")")
+        Check ((Get-GateText "refused") -match "nothing was run") "and that nothing ran"
+        Check ((Get-Times "refused").start -eq 0) "and its run never started"
+        Check ((Get-LastLine "refused") -ceq "heavy-slot: released exit=125") "and it still ends with its closing line"
+        $n = Start-Gate -Slot $slot -Tag "netrun" -Seconds 0 -More @("-WaitSeconds", "20", "-NetRun")
+        $n.WaitForExit()
+        Check ($n.ExitCode -eq 0 -and (Get-Times "netrun").start -gt 0) ("the net's own run goes straight through its claim (" + $n.ExitCode + ")")
+        $other = Start-Gate -Slot (New-Slot) -Tag "otherslot" -Seconds 0 -More @("-WaitSeconds", "20")
+        $other.WaitForExit()
+        Check ($other.ExitCode -eq 0) ("a suite's slot of its own is not held up by this claim (" + $other.ExitCode + ")")
+    } finally { $netClaim.Dispose() }
+    $after = Start-Gate -Slot $slot -Tag "afterclaim" -Seconds 0 -More @("-WaitSeconds", "20")
+    $after.WaitForExit()
+    Check ($after.ExitCode -eq 0 -and (Get-Times "afterclaim").start -gt 0) ("the moment the net lets go, others run again: no stale claim (" + $after.ExitCode + ")")
     # T-0331: a gate that waits for memory holds NOTHING, so another gate runs while it waits.
     $slot = New-Slot
     $m = Start-Gate -Slot $slot -Tag "memwait" -Seconds 0 -MinFreeGB "1000000" -More @("-WaitSeconds", "20")

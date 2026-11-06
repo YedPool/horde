@@ -24,9 +24,9 @@ function New-World {
 }
 function Run-Acquire {
     # -CommitFloor 0 (the default) is every existing caller: the commit getter is passed but must never be asked.
-    param([double]$Floor = 4, [int]$Wait = 7200, [double]$CommitFloor = 0)
+    param([double]$Floor = 4, [int]$Wait = 7200, [double]$CommitFloor = 0, [scriptblock]$NetClaim = $null)
     $script:commitFloor = $CommitFloor
-    return (Invoke-HordeHeavySlotAcquire -MinFreeGB $Floor -MinCommitHeadroomGB $CommitFloor -WaitSeconds $Wait -SliceMs 500 `
+    return (Invoke-HordeHeavySlotAcquire -MinFreeGB $Floor -MinCommitHeadroomGB $CommitFloor -WaitSeconds $Wait -SliceMs 500 -GetNetClaim $NetClaim `
         -GetCommitHeadroomGB { $script:world.commitAsks++; return [double](& $script:world.commit $script:world.t $script:world.commitAsks) } `
         -GetIdle {
             $script:world.idleAsks++
@@ -50,6 +50,26 @@ function Run-Acquire {
         -Say { param($line) $script:world.said += $line })
 }
 $script:floor = 4
+
+Write-Host ""
+Write-Host "--- the net's first claim: never taken while it stands, nothing held, and it goes when the net does ---" -ForegroundColor Cyan
+New-World
+$r = Run-Acquire -Wait 60 -NetClaim { $true }
+Check ($r.state -ceq "timeout" -and $r.blocker -ceq "claim") ("a standing claim times out naming the claim (" + $r.state + ", " + $r.blocker + ")")
+Check ($script:world.takes -eq 0 -and -not $script:world.held) "and the slot was never taken"
+Check (@($script:world.said | Where-Object { $_ -like "*first claim*" }).Count -eq 1) "it says so once, not once a slice"
+New-World
+$r = Run-Acquire -Wait 60 -NetClaim { $script:world.t -lt 20 }
+Check ($r.state -ceq "held" -and $script:world.t -ge 20 -and $script:world.takes -eq 1) ("the claim gone, the slot is taken (t=" + $script:world.t + ")")
+# The net starts between the check and the take.
+New-World
+$script:askClaim = 0
+$r = Run-Acquire -Wait 60 -NetClaim { $script:askClaim++; return ($script:askClaim -eq 2) }
+Check ($r.state -ceq "held" -and $script:world.takes -eq 2 -and $script:world.releases -eq 1) ("a claim that appears after the take: released, then taken again once it is gone (" + $script:world.takes + " takes, " + $script:world.releases + " releases)")
+Check (@($script:world.said | Where-Object { $_ -like "*took first claim after the slot was taken*" }).Count -eq 1) "and it says why it let go"
+New-World
+$r = Run-Acquire -Wait 60
+Check ($r.state -ceq "held") "no claim check given (the net's own gate): the slot is taken"
 
 Write-Host ""
 Write-Host "--- everything fine: the slot is taken at once, with no wait ---" -ForegroundColor Cyan
