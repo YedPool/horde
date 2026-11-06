@@ -643,8 +643,8 @@ try {
             foreach ($l in @(Format-HordeNightlyAppLines -Result $dry)) { Write-Host ("  " + $l) }
         }
         Write-Host ("  " + (Get-HordeNightlyChromeRestore -UserDataDir (Get-NightlyChromeUserData)).text)
-        # THE TIME BUDGET of the suite phase, from tonight's 22:00 (or now, inside the window).
-        $real = Get-Date
+        # THE TIME BUDGET of the suite phase, from tonight's 22:00 (or now, inside the window). -AtTime is now, as for the floors.
+        $real = $(if ($AtTime -ne "") { $now } else { Get-Date })
         $bStart = $(if (Test-HordeNightlyWindow -Now $real) { $real } else { $now.Date.AddHours(22) })
         $bRun = Get-HordeNightlyRunCutoff -Now $bStart -ReportReserveMinutes $ReportReserveMinutes
         $bSuite = $bRun.AddMinutes(-$reserve)
