@@ -210,6 +210,15 @@ try {
     Check ((Get-GateText "commit") -match "gave up after 2 s waiting for 1000000 GB of commit headroom") "it says it gave up waiting for commit headroom"
     Check (@((Get-GateText "commit") -split "`r?`n" | Where-Object { $_ -like "heavy-slot: memory held by *" }).Count -ge 1) "and names who holds the memory"
     Check ((Get-Times "commit").start -eq 0) "and its run never started"
+    # EVERY WAY A CALLER STARTS THE GATE (2026-11-06, PR 439): the claim's check once could not see the gate's own function
+    # when the gate was called with & from a command, exit 127 for every run so called, while -File, all this suite used, passed.
+    foreach ($form in @(@{ n = "Windows PowerShell"; exe = $shell }, @{ n = "PowerShell 7"; exe = (Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe") })) {
+        if (-not (Test-Path -LiteralPath $form.exe)) { continue }
+        $amp = New-Slot
+        $ampLine = "& '" + $gate + "' -Worktree '" + $work + "' -Script sleeper.ps1 -ScriptArgs '-Tag,amp,-Seconds,0,-Log," + (Join-Path $work "amp.log") + "' -MinFreeGB 0 -WaitSeconds 20 -SlotName '" + $amp + "' -HolderFile '" + (Join-Path $work ($amp.Substring(6) + ".holder")) + "' -Out '" + (Join-Path $work "amp.out.txt") + "'"
+        $ampOut = @(& $form.exe -NoProfile -ExecutionPolicy Bypass -Command $ampLine | ForEach-Object { "$_" })
+        Check (($ampOut -join "`n") -like "*heavy-slot: released exit=0*") ("called with & from " + $form.n + ": the gate runs (" + (@($ampOut | Select-Object -Last 1) -join "") + ")")
+    }
     # THE NET'S FIRST CLAIM (2026-11-06): enforced in the gate, by a mutex name derived from the slot's.
     $slot = New-Slot
     $netClaim = New-Object System.Threading.Mutex($false, ($slot + "-NetClaim"))
