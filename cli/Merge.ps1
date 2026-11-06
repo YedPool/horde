@@ -264,22 +264,45 @@ function Add-HordeMergeLine {
     # the path on success, the reason on failure. Never throws. A file that does not end in a line feed (a crash
     # in the middle of a write, a hand edit) gets one first, or the new line would be glued onto the damaged one and
     # both would be unusable (S2 of the review of PR 375).
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Line)
+    # A SHARING VIOLATION IS TRIED AGAIN, a few times and briefly: AppendAllText holds the file with FileShare.Read, so a
+    # second writer (two daytime merges at once) or a writer meeting the nightly run's read failed at once with "NOT
+    # QUEUED" (review of PR 375 follow-up, T-0347). The wait is bounded, and when it runs out the failure is the same
+    # loud one. -Attempts and -DelayMs are seams for the suite; -Sleep takes milliseconds.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Line, [int]$Attempts = 8, [int]$DelayMs = 150, [scriptblock]$Sleep = { param([int]$Ms) Start-Sleep -Milliseconds $Ms })
+    $last = ""
+    for ($try = 1; $try -le $Attempts; $try++) {
+        try {
+            [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
+            $prefix = ""
+            if ([System.IO.File]::Exists($Path)) {
+                $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try {
+                    if ($fs.Length -gt 0) {
+                        [void]$fs.Seek(-1, [System.IO.SeekOrigin]::End)
+                        if ($fs.ReadByte() -ne 10) { $prefix = "`n" }
+                    }
+                } finally { $fs.Dispose() }
+            }
+            [System.IO.File]::AppendAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+            return [pscustomobject]@{ ok = $true; detail = $Path }
+        } catch [System.IO.IOException] {
+            $last = $_.Exception.Message
+            if ($try -lt $Attempts) { & $Sleep ($DelayMs * $try) }
+        } catch { return [pscustomobject]@{ ok = $false; detail = ("could not append to " + $Path + ": " + $_.Exception.Message) } }
+    }
+    return [pscustomobject]@{ ok = $false; detail = ("could not append to " + $Path + " after " + $Attempts + " tries, the file stayed in use: " + $last) }
+}
+
+function Read-HordeMergeFileText {
+    # The text of a file of this command's, opened so a writer may append meanwhile (FileShare.ReadWrite): ReadAllText
+    # takes FileShare.Read, which made a daytime merge that queued during the nightly run's read fail "NOT QUEUED".
+    # Throws as ReadAllText does.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
     try {
-        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
-        $prefix = ""
-        if ([System.IO.File]::Exists($Path)) {
-            $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-            try {
-                if ($fs.Length -gt 0) {
-                    [void]$fs.Seek(-1, [System.IO.SeekOrigin]::End)
-                    if ($fs.ReadByte() -ne 10) { $prefix = "`n" }
-                }
-            } finally { $fs.Dispose() }
-        }
-        [System.IO.File]::AppendAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))
-        return [pscustomobject]@{ ok = $true; detail = $Path }
-    } catch { return [pscustomobject]@{ ok = $false; detail = ("could not append to " + $Path + ": " + $_.Exception.Message) } }
+        $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding($false)), $true)
+        try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
+    } finally { $fs.Dispose() }
 }
 
 function Get-HordeMergeFirstLine {
@@ -861,11 +884,11 @@ function Invoke-HordeMergeRunOwed {
     if ($Repo -ne "" -and -not (Test-HordeMergeOwedRepo -Repo $Repo)) { & $say ("'" + $Repo + "' is not a repository: OWNER/REPO"); return (& $finish 2) }
     $owedText = ""
     if ([System.IO.File]::Exists($owedPath)) {
-        try { $owedText = [System.IO.File]::ReadAllText($owedPath) } catch { & $say ("could not read " + $owedPath + ": " + $_.Exception.Message); return (& $finish 2) }
+        try { $owedText = Read-HordeMergeFileText -Path $owedPath } catch { & $say ("could not read " + $owedPath + ": " + $_.Exception.Message); return (& $finish 2) }
     }
     $checkedText = ""
     if ([System.IO.File]::Exists($checkedPath)) {
-        try { $checkedText = [System.IO.File]::ReadAllText($checkedPath) } catch { & $say ("could not read " + $checkedPath + ": " + $_.Exception.Message); return (& $finish 2) }
+        try { $checkedText = Read-HordeMergeFileText -Path $checkedPath } catch { & $say ("could not read " + $checkedPath + ": " + $_.Exception.Message); return (& $finish 2) }
     }
     $owed = Read-HordeMergeOwedEntries -Text $owedText
     $checked = Read-HordeMergeCheckedShas -Text $checkedText

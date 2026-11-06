@@ -829,6 +829,40 @@ Check ($run.exit -eq 0 -and @($sum.repos).Count -eq 1 -and $sum.repos[0].repo -c
 $report = [System.IO.File]::ReadAllText((Join-Path $h.c.owed "nightly\2026-10-23-yedpool-horde.txt"))
 Check ($report -clike ("*queue: " + (Join-Path $h.c.owed "guards-owed.jsonl") + " on " + [Environment]::MachineName + " - this machine*queue only*")) "S4: the report names the machine and the queue it covered, and says other machines have their own"
 
+Write-Host "== T-0347: two writers meet, and a writer meets the nightly run's read"
+$busy = Join-Path $work "busy\q.jsonl"
+[void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $busy))
+[System.IO.File]::WriteAllText($busy, "{""x"":1}`n", $utf8)
+$script:hold = New-Object System.IO.FileStream($busy, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+$script:slept = 0
+$releaseOnSecond = { param([int]$Ms) $script:slept++; if ($script:slept -eq 2 -and $null -ne $script:hold) { $script:hold.Dispose(); $script:hold = $null } }
+try {
+    $busyRun = Add-HordeMergeLine -Path $busy -Line "{""x"":2}" -Sleep $releaseOnSecond -DelayMs 1
+    Check ($busyRun.ok -eq $true -and $script:slept -eq 2 -and [System.IO.File]::ReadAllText($busy) -ceq "{""x"":1}`n{""x"":2}`n") ("a line meeting another writer waits and lands once the other lets go (" + $script:slept + " waits)")
+    $script:hold = New-Object System.IO.FileStream($busy, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $script:slept = 0
+    $never = { param([int]$Ms) $script:slept++ }
+    $stuck = Add-HordeMergeLine -Path $busy -Line "{""x"":3}" -Attempts 3 -Sleep $never -DelayMs 1
+    Check ($stuck.ok -eq $false -and $stuck.detail -clike "could not append to *after 3 tries*" -and $script:slept -eq 2) ("a file that stays in use is still a loud failure, after a bounded number of tries: " + $stuck.detail)
+    # THE NIGHTLY RUN'S READ must not shut a writer out, and a writer must not shut the read out.
+    $c = New-Case
+    Check ((Add-QueuedMerges $c @(,@("1", "F"))) -ceq "merged") "a PR is merged and queued"
+    $script:hold.Dispose()
+    $script:hold = New-Object System.IO.FileStream((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $run = Invoke-OwedRun -Case $c
+    Check ($run.exit -eq 0 -and (Said "all green over 1 merges") -and -not (Said "could not read *")) ("the nightly run reads the queue while a writer has it open (exit " + $run.exit + ")")
+    $script:hold.Dispose(); $script:hold = $null
+    $c = New-Case
+    Check ((Add-QueuedMerges $c @(,@("1", "F"))) -ceq "merged") "a PR is merged and queued"
+    $rd = [System.IO.File]::Open((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try { $late = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line "{}" -Attempts 2 -Sleep { param([int]$Ms) } } finally { $rd.Dispose() }
+    Check ($late.ok -eq $false) "CONTROL: a reader that shuts writers out does make an append fail (the failure this retry is for)"
+    $readerView = Read-HordeMergeFileText -Path (Join-Path $c.owed "guards-owed.jsonl")
+    $wr = New-Object System.IO.FileStream((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try { $readerView2 = Read-HordeMergeFileText -Path (Join-Path $c.owed "guards-owed.jsonl") } finally { $wr.Dispose() }
+    Check ($readerView -ceq $readerView2 -and $readerView -clike "*mergeSha*") "the queue's reader does not shut a writer out and is not shut out by one"
+} finally { if ($null -ne $script:hold) { $script:hold.Dispose() } }
+
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.

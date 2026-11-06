@@ -327,5 +327,14 @@
         @{ Name = "nightly-report-not-written"
            Find = '$wrote = Add-HordeMergeLine -Path $reportPath -Line (($text -join "`n") + "`n")'
            Replace = '$wrote = [pscustomobject]@{ ok = $true; detail = "" }' }
+        @{ Name = "append-not-retried"
+           Find = 'for ($try = 1; $try -le $Attempts; $try++) {'
+           Replace = 'for ($try = 1; $try -le 1; $try++) {' }
+        @{ Name = "append-retry-without-end"
+           Find = 'return [pscustomobject]@{ ok = $false; detail = ("could not append to " + $Path + " after " + $Attempts + " tries, the file stayed in use: " + $last) }'
+           Replace = 'return [pscustomobject]@{ ok = $true; detail = $Path }' }
+        @{ Name = "nightly-read-shuts-writers-out"
+           Find = 'try { $owedText = Read-HordeMergeFileText -Path $owedPath }'
+           Replace = 'try { $owedText = [System.IO.File]::ReadAllText($owedPath) }' }
     )
 }
