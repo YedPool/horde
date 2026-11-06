@@ -91,10 +91,10 @@
            Replace = 'private const int MaxDepth = 200;' }
         @{ Name = "int64-read-as-decimal"
            Find = 'if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) { return l; }'
-           Replace = '' }
+           Replace = 'if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) { return (decimal)l; }' }
         @{ Name = "fraction-read-as-double"
            Find = 'if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out m)) { return m; }'
-           Replace = '' }
+           Replace = 'if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out m)) { return (double)m; }' }
         @{ Name = "number-too-large-is-infinity"
            Find = 'throw Bad(start, "a number too large to hold");'
            Replace = 'return double.PositiveInfinity;' }
