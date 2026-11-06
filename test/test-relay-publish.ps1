@@ -436,6 +436,12 @@ try {
     Check ($W.deploys -eq 3 -and (Whats) -ceq "deploy-failed,deployed") ("once it works, that is told (" + (Whats) + ")")
     $st = Read-HordeRelayPublishState -HordeHome $W.home
     Check ($st.state -ceq "known" -and $null -eq $st.value.failure) "and the failure is settled"
+    # T-0391 slice 6: the teller's own lines (a full awaiting list given up, an already-posted copy) are the pass's lines.
+    $W = New-World (New-Home "failed-lines"); Seed; $W.deploy = "fail"
+    Range @("surfaces/pwa/page/app.js")
+    $linesTeller = { param($Notices, $HordeHome, $Policy) return [pscustomobject]@{ told = @(@($Notices) | ForEach-Object { $_.id }); problem = ""; lines = @("the teller's own line") } }
+    $l = @(Invoke-HordeRelayPublishStep -HordeHome $W.home -Tools (New-Tools) -Policy $policyOn -Teller $linesTeller -Checkout $work)
+    Check (Says $l "the teller's own line") ("T-0391: the teller's own lines are among the pass's lines (" + ($l -join " | ") + ")")
 
     Write-Host ""
     Write-Host "--- a deploy that went out and failed its check needs action, and is never 'deploy-failed' ---" -ForegroundColor Cyan
