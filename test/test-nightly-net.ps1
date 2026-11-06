@@ -645,6 +645,59 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     Check (@($bts | Where-Object { $_ -like "*pytest-of-*" -or (Split-Path -Parent $_) -ne $btDir }).Count -eq 0 -and $bts.Count -eq 2) ("the basetemp is beside the nodes file, never the shared pytest-of folder (" + ($bts -join ", ") + ")")
     Check ($bts.Count -eq 2 -and $bts[0] -ne $bts[1]) "each run gets a basetemp of its own"
     Check (@(Get-ChildItem -LiteralPath $btDir -Directory).Count -eq 0) "and the wrap leaves no basetemp folder behind"
+    # THE NET'S FIRST CLAIM ON THE SLOT: held through every gate call of the suite phase, each gate told it is the net's.
+    $cn = Join-Path $work "claim"; [void][System.IO.Directory]::CreateDirectory($cn)
+    $claimStub = Join-Path $cn "gate.ps1"
+    $claimName = "Local\horde-nightly-claim-" + [guid]::NewGuid().ToString("N")
+    $claimStubLines = @(
+        'param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)',
+        '$c = $null',
+        ('$seen = [System.Threading.Mutex]::TryOpenExisting("' + $claimName + '", [ref]$c)'),
+        'Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ("claim=" + $seen + " netrun=" + (@($args) -contains "-NetRun"))',
+        '[System.IO.File]::WriteAllText($Out, "")',
+        'Write-Output "heavy-slot: released exit=125"',
+        'exit 125')
+    [System.IO.File]::WriteAllText($claimStub, ($claimStubLines -join "`r`n"))
+    $cwr = Join-Path $cn "wr"
+    & git.exe clone -q $origin (Join-Path $cwr "Fix__Py\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime (Get-Date).Date.AddHours(23).ToString("s") -NoTell -BisectReserveMinutes 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -NetClaimName $claimName -WorkRoot $cwr -HeavySlotScript $claimStub -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Py:pytest:main")
+    $claimCalls = @(Get-Content -LiteralPath (Join-Path $cn "calls.txt"))
+    Check ($claimCalls.Count -ge 2 -and @($claimCalls | Where-Object { $_ -cne "claim=True netrun=True" }).Count -eq 0) ("every gate of the suite phase saw the claim standing and passed -NetRun (" + ($claimCalls -join " | ") + ")")
+    $claimLog = [System.IO.File]::ReadAllText((Join-Path $cwr "nightly.log"))
+    $iTaken = $claimLog.IndexOf("first claim on the heavy slot taken"); $iOrder = $claimLog.IndexOf(" order: "); $iGone = $claimLog.IndexOf("suite phase over: first claim on the heavy slot released")
+    Check ($iTaken -ge 0 -and $iOrder -gt $iTaken) "the claim is taken before the night's first git work"
+    Check ($iGone -gt $iOrder) "and released when the suite phase is over"
+    $probe = $null
+    Check (-not [System.Threading.Mutex]::TryOpenExisting($claimName, [ref]$probe)) "and no claim is left once the net has ended"
+    $netSource = [System.IO.File]::ReadAllText((Join-Path $root "tools\NightlyNet.ps1"))
+    $iPhase = $netSource.IndexOf('Invoke-NightlyPhaseOne -Ctx $c'); $iRelease = $netSource.IndexOf('$claim.Dispose()'); $iBisect = $netSource.IndexOf('Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff')
+    Check ($iPhase -ge 0 -and $iRelease -gt $iPhase -and $iBisect -gt $iRelease) "the release stands between the suite phase and the bisects: the claim covers the suite phase only"
+    # A plan, and a suite run that names no claim, take none of the machine's.
+    $machineClaim = "Global\HordeHeavySlot-NetClaim"; $probe = $null
+    if (-not [System.Threading.Mutex]::TryOpenExisting($machineClaim, [ref]$probe)) {
+        Check ($netSource -like '*if ($NetClaimName -eq "" -and $AtTime -eq "" -and $HeavySlotScript -eq "") { $NetClaimName = "Global\HordeHeavySlot-NetClaim" }*') "a real run takes the machine's claim, a suite run never does"
+    } else { $probe.Dispose(); Check ($true) "(the real net is running now: the machine's claim stands, not this suite's)" }
+
+    # ONLY PYTEST'S SUMMARY NAMES A FAILED TEST (2026-11-05: the night's report listed a captured log line,
+    # "ERROR    root:web_reader_dialog.py:2953 ...", as a newly red test). A fake python replays that shape.
+    $replay = Join-Path $work "replay"
+    [void][System.IO.Directory]::CreateDirectory($replay)
+    function Invoke-WrapReplay { param([string[]]$Output, [int]$Code)
+        $txt = Join-Path $replay "out.txt"
+        [System.IO.File]::WriteAllText($txt, (($Output -join "`r`n") + "`r`n"))
+        [System.IO.File]::WriteAllText((Join-Path $replay "python.cmd"), ("@echo off" + "`r`n" + "type """ + $txt + """" + "`r`n" + "exit /b " + $Code + "`r`n"))
+        $nf = Join-Path $replay ("n" + [guid]::NewGuid().ToString("N") + ".txt")
+        try {
+            $env:PATH = $replay + ";" + $oldPath
+            [void]@(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\pytest-wrap.ps1") -Tree $work -Mode all -NodesFile $nf); $wc = $LASTEXITCODE
+        } finally { $env:PATH = $oldPath }
+        return [pscustomobject]@{ code = $wc; wrote = (Test-Path -LiteralPath $nf); nodes = @($(if (Test-Path -LiteralPath $nf) { Get-Content -LiteralPath $nf | Where-Object { $_.Trim() -ne "" } } else { @() })) }
+    }
+    $body = @(".F", "=================== ERRORS ===================", "___ ERROR collecting tools/a/test_c.py ___", "E   ModuleNotFoundError: No module named 'tests.test_c'", "=================== FAILURES ===================", "___ test_b ___", "------ Captured log call ------", "ERROR    root:web_reader_dialog.py:2953 could not reconcile the stored credential", "ERROR root:one_space.py:1 a log line with one space", "FAILED to reach the mailbox, printed by the code under test")
+    $w = Invoke-WrapReplay -Output ($body + @("========= short test summary info =========", "FAILED tests/test_a.py::test_b - AssertionError: x", "ERROR tools/a/test_c.py", "1 failed, 1 error in 3.00s")) -Code 1
+    Check ($w.code -eq 1 -and (@($w.nodes) -join ",") -ceq "tests/test_a.py::test_b,tools/a/test_c.py") ("only the summary's FAILED and ERROR lines are failing nodes, never captured log or printed text (" + (@($w.nodes) -join ",") + ")")
+    $w = Invoke-WrapReplay -Output $body -Code 1
+    Check ($w.code -eq 70 -and -not $w.wrote) ("exit 1 with no summary names no test: not a verdict, 70, and no nodes file (" + $w.code + ")")
 } finally {
     $env:HORDE_HOME = $oldHome
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

@@ -89,6 +89,7 @@ param(
     [ValidateRange(0, 900)][int]$TellRetrySeconds = 120,
     [ValidateRange(30, 3600)][int]$GitSeconds = 900,
     [string]$MutexName = "Global\HordeNightlyNet",
+    [string]$NetClaimName = "",
     [string]$AtTime = "",
     [ValidateRange(0, 600)][int]$AppCloseWaitSeconds = 60,
     [ValidateRange(1, 120)][int]$AppRetryMinutes = 15,
@@ -294,7 +295,7 @@ function Invoke-NightlySlot {
     $gateOut = Join-Path $RunDir ($safe + ".gate")
     $wait = Get-NightlySlotWait
     $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + $HeavySlot + '"'), "-Script", ('"' + $Script + '"'), "-Worktree", ('"' + $Worktree + '"'),
-        "-Out", ('"' + $out + '"'), "-MinFreeGB", $floor.freeGB.ToString($Inv), "-MinCommitHeadroomGB", $floor.commitGB.ToString($Inv), "-WaitSeconds", $wait, "-RunSeconds", $Seconds)
+        "-Out", ('"' + $out + '"'), "-MinFreeGB", $floor.freeGB.ToString($Inv), "-MinCommitHeadroomGB", $floor.commitGB.ToString($Inv), "-WaitSeconds", $wait, "-RunSeconds", $Seconds, "-NetRun")
     if (@($ScriptArgs).Count -gt 0) {
         $af = Join-Path $RunDir ($safe + ".args.json")
         Set-Content -LiteralPath $af -Value (ConvertTo-Json -InputObject @($ScriptArgs)) -Encoding Ascii
@@ -617,6 +618,13 @@ try {
         exit 5
     }
     }
+    # THE NET'S FIRST CLAIM ON THE HEAVY SLOT (tools/HeavySlot.ps1): on the night of 2026-11-05 another lane's rerun took
+    # the slot between units and 10 of 476 Horde units ran. Held open by this process until the suite phase ends, so it
+    # cannot outlive a killed net. Before the first git call, so the claim stands from the night's first seconds. A suite
+    # run (-AtTime or -HeavySlotScript) takes the machine's claim never; it may name one of its own.
+    $claim = $null
+    if ($NetClaimName -eq "" -and $AtTime -eq "" -and $HeavySlotScript -eq "") { $NetClaimName = "Global\HordeHeavySlot-NetClaim" }
+    if (-not $Plan -and $NetClaimName -ne "") { $claim = New-Object System.Threading.Mutex($false, $NetClaimName); Write-NightlyNetLine ("first claim on the heavy slot taken: " + $NetClaimName) }
     $ctxs = @()
     foreach ($spec in $Repos) { $ctxs += (New-NightlyContext $spec) }
     # Fewest units first (core Get-HordeNightlyRepoOrder): the night of 2026-10-23 never reached the 2-unit repo.
@@ -656,6 +664,7 @@ try {
     }
     $suiteCutoff = $cutoff.AddMinutes(-$reserve)
     foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff; Complete-NightlyCompare $c }
+    if ($null -ne $claim) { $claim.Dispose(); $claim = $null; Write-NightlyNetLine "suite phase over: first claim on the heavy slot released" }
     foreach ($c in $ctxs) { Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff }
 
     $repoRows = @()

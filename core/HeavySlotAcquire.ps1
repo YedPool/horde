@@ -11,6 +11,10 @@
 #   4. check again AFTER taking it. Memory can drop, or the person can sit down, between the check and
 #      the take, so a slot taken while the floor no longer holds is RELEASED and the wait begins again,
 #      rather than held.
+# THE NET'S FIRST CLAIM (2026-11-06, -GetNetClaim, optional): on the night of 2026-11-05 another lane's long rerun took the
+# slot between the net's units, and 10 of the net's 476 Horde units ran. While -GetNetClaim answers true the gate does not
+# take the slot, holds nothing, and checks again after any take, so a net that starts in between still goes first. The
+# gate of the net itself passes no -GetNetClaim. Blocker "claim".
 # COMMIT HEADROOM (2026-10-24, optional): with -MinCommitHeadroomGB above 0 the gate also waits until the commit
 # limit less the commit charge (Win32_OperatingSystem FreeVirtualMemory) is at least that much. On the night of
 # 2026-10-23 the commit charge was 52.3 of 54.8 GB: a run started there can fail to allocate however much physical
@@ -25,12 +29,13 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 function Invoke-HordeHeavySlotAcquire {
-    # { state = "held" | "timeout"; blocker = "" | "idle" | "memory" | "commit" | "slot" }. "held" means the slot
+    # { state = "held" | "timeout"; blocker = "" | "idle" | "claim" | "memory" | "commit" | "slot" }. "held" means the slot
     # is held NOW and idle-or-night, the memory floor and the commit floor were true when it was taken.
     #   -GetIdle    returns a Get-HordeIdleState answer (needs .allowed, .idleSeconds, .needSeconds, .time, .why)
     #   -GetFreeGB  returns the free memory in GB
     #   -GetCommitHeadroomGB returns the commit limit less the commit charge in GB; asked only when
     #               -MinCommitHeadroomGB is above 0, and then required
+    #   -GetNetClaim returns $true while the nightly net has first claim on the slot; not given, there is no claim
     #   -TrySlot    param($ms): waits at most $ms for the slot, returns $true when it is now held
     #   -ReleaseSlot gives the slot back
     #   -Elapsed    seconds since the whole wait began;  -Sleep  param($ms);  -Say  param($line)
@@ -44,6 +49,7 @@ function Invoke-HordeHeavySlotAcquire {
         [Parameter(Mandatory = $true)][scriptblock]$Say,
         [double]$MinFreeGB = 3,
         [scriptblock]$GetCommitHeadroomGB = $null,
+        [scriptblock]$GetNetClaim = $null,
         [double]$MinCommitHeadroomGB = 0,
         [int]$WaitSeconds = 7200,
         [int]$SliceMs = 500
@@ -53,6 +59,7 @@ function Invoke-HordeHeavySlotAcquire {
     $saidIdle = $false
     $saidMemory = $false
     $saidCommit = $false
+    $saidClaim = $false
     while ($true) {
         $left = $WaitSeconds - [double](& $Elapsed)
         $blocker = ""
@@ -64,6 +71,13 @@ function Invoke-HordeHeavySlotAcquire {
             if (-not $saidIdle) {
                 $saidIdle = $true
                 & $Say ("heavy-slot: not taking the slot yet: waiting for the PC to be idle for " + $idle.needSeconds + " s or for night (local time " + $idle.time + ", " + $idle.why + ")")
+            }
+        } elseif ($null -ne $GetNetClaim -and (& $GetNetClaim)) {
+            $blocker = "claim"
+            $pause = $true
+            if (-not $saidClaim) {
+                $saidClaim = $true
+                & $Say "heavy-slot: not taking the slot yet: the nightly net has first claim on it until its suite phase ends"
             }
         } else {
             $free = [double](& $GetFreeGB)
@@ -87,10 +101,14 @@ function Invoke-HordeHeavySlotAcquire {
                 $idleNow = & $GetIdle
                 $freeNow = [double](& $GetFreeGB)
                 $commitNow = $(if ($useCommit) { [double](& $GetCommitHeadroomGB) } else { [double]::MaxValue })
+                $claimNow = ($null -ne $GetNetClaim -and (& $GetNetClaim))
+                if (-not $claimNow) {
                 if ($idleNow.allowed -and $freeNow -ge $MinFreeGB -and $commitNow -ge $MinCommitHeadroomGB) { return [pscustomobject]@{ state = "held"; blocker = "" } }
+                }
                 & $ReleaseSlot
                 $pause = $true
-                if (-not $idleNow.allowed) { $blocker = "idle"; & $Say "heavy-slot: the PC stopped being idle after the slot was taken; released it and waiting again" }
+                if ($claimNow) { $blocker = "claim"; & $Say "heavy-slot: the nightly net took first claim after the slot was taken; released it and waiting again" }
+                elseif (-not $idleNow.allowed) { $blocker = "idle"; & $Say "heavy-slot: the PC stopped being idle after the slot was taken; released it and waiting again" }
                 elseif ($freeNow -lt $MinFreeGB) { $blocker = "memory"; & $Say ("heavy-slot: free memory fell to " + $freeNow + " GB after the slot was taken; released it and waiting again") }
                 else { $blocker = "commit"; & $Say ("heavy-slot: commit headroom fell to " + $commitNow + " GB after the slot was taken; released it and waiting again") }
             } else {
