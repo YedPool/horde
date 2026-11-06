@@ -369,5 +369,23 @@
         @{ Name = "open-red-error-reads-green"
            Find = 'elseif ($checked.Count -eq 0 -and $rechecked -eq 0) {'
            Replace = 'elseif ($false) {' }
+        @{ Name = "intent-not-written-before-merge"
+           Find = 'if ($iw.ok -ne $true) { return (& $refuse ('
+           Replace = 'if ($false) { return (& $refuse (' }
+        @{ Name = "intent-never-recovered"
+           Find = '$intentRun = Resolve-HordeMergeIntents -Tools $Tools -Folder $Folder -Repo $Repo -Now $nowUtc'
+           Replace = '$intentRun = [pscustomobject]@{ ok = $true; recovered = 0 }' }
+        @{ Name = "intent-settled-when-queue-failed"
+           Find = '$hand = $owedLine'
+           Replace = '$hand = $owedLine; & $settle "queued"' }
+        @{ Name = "intent-unfinished-merge-settled"
+           Find = 'The ledger was NOT written and nobody was told" + '
+           Replace = 'The ledger was NOT written and nobody was told" + $(& $settle "queued") + ' }
+        @{ Name = "intent-young-unmerged-settled"
+           Find = 'if ($age -lt $script:HordeMergeIntentStaleMinutes) { continue }'
+           Replace = '' }
+        @{ Name = "intent-unanswered-reads-fine"
+           Find = '$ok = $false; & $say ("COULD NOT ASK GITHUB whether "'
+           Replace = '& $say ("COULD NOT ASK GITHUB whether "' }
     )
 }

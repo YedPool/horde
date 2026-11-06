@@ -146,8 +146,9 @@ function Test-MergeCall { param($Case) return [bool](@(Get-GhCalls $Case | Where
 
 # PART 1'S TOOLS. Everything a tool sees and does is kept in $script: tables the checks read.
 function New-SuiteTools {
-    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null)
+    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null, [switch]$IntentFails)
     $script:gitFails = $GitFails
+    $script:intentFails = [bool]$IntentFails
     $script:guardOverride = $GuardOverride
     $script:said = New-Object System.Collections.ArrayList
     $script:told = New-Object System.Collections.ArrayList
@@ -179,6 +180,7 @@ function New-SuiteTools {
         LedgerLine = $real["LedgerLine"]
         Tell = { param([string]$Body) [void]$script:told.Add($Body); if ($script:tellFails) { return [pscustomobject]@{ ok = $false; detail = "no session holds the role of warchief" } }; return [pscustomobject]@{ ok = $true; detail = "accepted" } }
         Owed = { param([string]$Line) if ($script:owedFails) { return [pscustomobject]@{ ok = $false; detail = "the merge folder is read-only" } }; return (Add-HordeMergeLine -Path (Join-Path $script:toolCase.owed "guards-owed.jsonl") -Line $Line) }
+        Intent = { param([string]$Line) if ($script:intentFails) { return [pscustomobject]@{ ok = $false; detail = "the merge folder is read-only" } }; return (Add-HordeMergeLine -Path (Join-Path $script:toolCase.owed "guards-intent.jsonl") -Line $Line) }
         Mail = { param([string]$Text) [void]$script:mailed.Add($Text); if ($script:mailFails) { return [pscustomobject]@{ ok = $false; detail = "the mail folder is read-only" } }; return [pscustomobject]@{ ok = $true; detail = "left for the analyst" } }
         Wait = { param([int]$Seconds) [void]$script:waited.Add($Seconds) }
         Say = { param([string]$Line) [void]$script:said.Add($Line) }
@@ -187,10 +189,10 @@ function New-SuiteTools {
 
 function Invoke-Case {
     # Invoke-HordeMerge on one case: the answer.
-    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails)
+    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails, [switch]$IntentFails)
     $req = Test-HordeMergeRequest -Pr $Pr -Task $Task -State $State -By $By -On $On -Reason $Reason -Guards $Guards
     if (-not $req.ok) { throw ("the suite built a bad request: " + $req.why) }
-    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails -OwedFails:$OwedFails
+    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails -OwedFails:$OwedFails -IntentFails:$IntentFails
     # A throw is an answer of its own, so a mutant that makes the command crash fails a check by name
     # (tools\Mutate.ps1 counts only a failed check as caught).
     try { return (Invoke-HordeMerge -Request $req -Tools $tools -WorkFolder $Case.work) }
@@ -973,6 +975,73 @@ foreach ($junk in @("this is not json", "", "{""reds"":[{""repo"":""not a repo""
 $w = Get-WrapperAnswer -Case $c3 -Run $run
 Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  and the net reads it as could not run: " + $w.last)
 
+Write-Host "== T-0347: a merge begun and never queued is not lost"
+function Read-IntentLines {
+    param($Case)
+    $f = Join-Path $Case.owed "guards-intent.jsonl"
+    if (-not [System.IO.File]::Exists($f)) { return @() }
+    return @(([System.IO.File]::ReadAllText($f) -split "\r?\n") | Where-Object { $_.Trim() -ne "" })
+}
+# The intent log's own lines.
+$iReq = Test-HordeMergeRequest -Pr "YedPool/horde#7" -Task "T-0247" -State "done" -By "F" -Guards "later"
+$iLine = Format-HordeMergeIntentLine -Request $iReq -HeadSha ("d" * 40) -BaseRef "main" -Now $nightly
+$sLine = Format-HordeMergeIntentLine -Request $iReq -HeadSha ("d" * 40) -BaseRef "main" -Kind "settled" -How "queued" -Now $nightly
+Check ($iLine -cmatch '\A[\x20-\x7E]+\z' -and (Read-HordeMergeOpenIntents -Text ($iLine + "`n")).open.Count -eq 1 -and (Read-HordeMergeOpenIntents -Text ($iLine + "`n" + $sLine + "`n")).open.Count -eq 0) "an intent line is plain ASCII, open until a settled line for the same PR and head follows"
+Check ((Read-HordeMergeOpenIntents -Text ($iLine + "`n" + $sLine + "`n" + $iLine + "`nnot json`n")).open.Count -eq 1 -and (Read-HordeMergeOpenIntents -Text ($iLine + "`nnot json`n")).bad -eq 1) "  a later intent opens it again, and a damaged line is counted, never taken for an intent"
+
+# A DAYTIME MERGE WRITES ITS INTENT FIRST AND SETTLES IT AFTER ITS QUEUE LINE.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later
+$il = @(Read-IntentLines $c)
+Check ($r.outcome -ceq "merged" -and $il.Count -eq 2 -and $il[0] -clike '{"kind":"intent",*' -and $il[1] -clike '{"kind":"settled",*"how":"queued"*' -and (Read-HordeMergeOpenIntents -Text ([string]::Join("`n", $il))).open.Count -eq 0) ("later: an intent line before the merge, a settled line after the queue line: " + ($il -join " | "))
+$before = @(Get-GhCalls $c).Count
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Get-GhCalls $c | Select-Object -Skip $before | Where-Object { $_ -clike "pr view*" }).Count -eq 0) "  and a settled intent costs the nightly run no question to GitHub"
+
+# THE INTENT CANNOT BE WRITTEN: nothing is merged.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -IntentFails
+Check ($r.outcome -ceq "refused" -and $r.why -clike "the intent to merge could not be written, so nothing was merged: *" -and -not (Test-MergeCall $c)) ("later: an intent that cannot be written refuses the merge (" + $r.outcome + ")")
+
+# THE QUEUE LINE IS LOST AFTER THE MERGE: the intent stays open, and the nightly run queues the merge.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -OwedFails
+$main = Get-Main $c
+Check ($r.outcome -ceq "merged-unfinished" -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) "a merge whose queue line was lost: queued nowhere, its intent still open"
+$run = Invoke-OwedRun -Case $c
+$ow = @(Read-OwedLines $c)
+Check ($run.exit -eq 0 -and (Said ("recovered YedPool/horde#1: it was merged as " + $main + " and never queued*")) -and $ow.Count -eq 1 -and (ConvertFrom-HordeJson -Text $ow[0]).mergeSha -ceq $main -and (ConvertFrom-HordeJson -Text $ow[0]).task -ceq "T-0247" -and (ConvertFrom-HordeJson -Text $ow[0]).baseRefName -ceq "main" -and (Said "all green over 1 merges")) ("the nightly run queues it from GitHub's word, and checks it (exit " + $run.exit + ")")
+Check ((Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0) "  and settles the intent"
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "nothing is owed*") -and @(Read-OwedLines $c).Count -eq 1) "  and the next run finds nothing more to recover"
+
+# THE MERGED-UNFINISHED RETURN (gh said merged, GitHub did not show it) queued nothing: the intent covers it too.
+$c = New-Case -Pr @{ "1" = @{ hideMerged = $true } }
+$r = Invoke-Case -Case $c -Guards later
+Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "*the intent to merge stays recorded*" -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) ("a merge GitHub does not yet show: merged-unfinished, nothing queued, the intent kept (" + $r.outcome + ")")
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) "  a young intent whose PR is not merged is left alone (it may still be in flight)"
+$gst = Read-MergeStandInState -Path $c.gh
+$gst.prs."1".hideMerged = $false
+Write-MergeStandInState -Path $c.gh -State $gst
+$main = Get-Main $c
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 1 -and (ConvertFrom-HordeJson -Text @(Read-OwedLines $c)[0]).mergeSha -ceq $main) "  once GitHub shows it MERGED, the nightly run queues it"
+
+# AN OLD INTENT WHOSE PR WAS NEVER MERGED is settled, not asked about for ever.
+$c = New-Case
+$old = Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool/horde#2" -Task "T-0247" -State "done" -By "F" -Guards "later") -HeadSha $heads["2"] -BaseRef "main" -Now ([datetime]::new(2026, 10, 1, 0, 0, 0, [System.DateTimeKind]::Utc))
+[void][System.IO.Directory]::CreateDirectory($c.owed)
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line $old
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0 -and (@(Read-IntentLines $c)[-1]) -clike '*"how":"not-merged"*') "an old intent whose PR is still open is settled as not merged"
+
+# GITHUB CANNOT BE ASKED: the intent stays, the run ends 2 (never 0), and the merge is not forgotten.
+$c = New-Case
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line (Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool/horde#99" -Task "T-0247" -State "done" -By "F" -Guards "later") -HeadSha ("e" * 40) -BaseRef "main" -Now ([datetime]::new(2026, 10, 1, 0, 0, 0, [System.DateTimeKind]::Utc)))
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 2 -and (Said "COULD NOT ASK GITHUB whether YedPool/horde#99*asked again next run") -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("an intent GitHub cannot answer for ends the run 2 and stays open (exit " + $run.exit + ")")
+
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.
@@ -1036,9 +1105,14 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     Check ($run.code -eq 1 -and $run.out -clike "*MERGED, NOT FINISHED:*the warchief was not told*" -and $run.out -cnotlike "*NOT QUEUED*") ("  and ends 1 only for the warchief a test home cannot tell (" + $run.code + ")")
     # A QUEUE THAT CANNOT BE WRITTEN, through the real command: loud, the line to add by hand, exit 1.
     $cq = New-CliCase
-    [System.IO.File]::WriteAllText((Join-Path $cq.home "merge"), "in the way", $utf8)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $cq.home "merge\guards-owed.jsonl"))
     $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $cq.home }
     Check ($run.code -eq 1 -and $run.out -clike "*THE MERGE HAPPENED, BUT IT WAS NOT QUEUED FOR THE NIGHTLY GUARDS RUN*add this line to guards-owed.jsonl by hand: {*" -and $run.out -clike "*MERGED, NOT FINISHED:*not queued*" -and $run.out -cnotlike "*guards not run: queued*") ("a queue that cannot be written: exit 1, loud, the line to add (" + $run.code + ")")
+    # T-0347: THE INTENT FOLDER IN THE WAY refuses the merge before it is made, since the queue is beside the intent.
+    $ci = New-CliCase
+    [System.IO.File]::WriteAllText((Join-Path $ci.home "merge"), "in the way", $utf8)
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $ci.home }
+    Check ($run.code -eq 1 -and $run.out -clike "*refused, nothing merged: the intent to merge could not be written, so nothing was merged*" -and -not (Test-MergeCall $ci)) ("a merge folder that cannot be written to refuses the merge before it is made (" + $run.code + ")")
     # S3: A DAYTIME MERGE TAKES NO MACHINE LOCK, so a long nightly run (or a -Guards now merge) never holds it up.
     $cl = New-CliCase
     $held = Get-HordeMergeLock -WorkFolder $cl.work

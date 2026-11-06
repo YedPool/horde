@@ -453,6 +453,96 @@ function Invoke-HordeMergeCheck {
     return [pscustomobject]@{ ok = $true; why = ""; lines = @(); base = $baseSha; head = $headSha; commit = $commit; merged = $merged; skipped = $false }
 }
 
+$script:HordeMergeIntentFileName = "guards-intent.jsonl"
+$script:HordeMergeIntentStaleMinutes = 60
+
+function Format-HordeMergeIntentLine {
+    # PURE. The line a daytime merge writes BEFORE it asks GitHub to merge (T-0347): a crash between the merge and the
+    # queue write used to lose the merge for good, because nothing recorded that it was about to happen. Plain ASCII;
+    # -Kind is "intent" or "settled" (-How says how it ended: queued, not-merged, recovered).
+    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$HeadSha, [AllowEmptyString()][string]$BaseRef = "", [string]$Kind = "intent", [string]$How = "", [datetime]$Now = [datetime]::UtcNow)
+    $e = [ordered]@{ kind = $Kind; repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant(); owner = $Request.owner; name = $Request.repo; number = [int]$Request.number; pr = $Request.pr; task = $Request.task; by = $Request.by; baseRefName = $BaseRef; headSha = $HeadSha
+        at = $Now.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [System.Globalization.CultureInfo]::InvariantCulture) }
+    if ($Kind -cne "intent") { $e["how"] = $How }
+    return (ConvertTo-Json -InputObject $e -Compress)
+}
+
+function Read-HordeMergeOpenIntents {
+    # PURE. { open; bad } from the text of guards-intent.jsonl: open is the intents with no later "settled" line for the
+    # same repo, PR number and head (an ordered list of { repo; owner; name; number; pr; task; by; baseRefName; headSha; at }).
+    # A later intent for the same key opens it again. bad counts the lines that are neither.
+    param([AllowEmptyString()][string]$Text)
+    $open = [ordered]@{}
+    $bad = 0
+    foreach ($raw in @(("" + $Text) -split "\r?\n")) {
+        if ($raw.Trim() -eq "") { continue }
+        $e = $null
+        try { $e = ConvertFrom-HordeJson -Text $raw } catch { $bad++; continue }
+        $v = @{}
+        foreach ($k in @("kind", "repo", "owner", "name", "pr", "task", "by", "baseRefName", "headSha", "at")) {
+            $v[$k] = ""
+            if ($null -ne $e -and $null -ne $e.PSObject -and $null -ne $e.PSObject.Properties[$k] -and $e.PSObject.Properties[$k].Value -is [string]) { $v[$k] = [string]$e.PSObject.Properties[$k].Value }
+        }
+        $number = 0
+        if ($null -ne $e -and $null -ne $e.PSObject -and $null -ne $e.PSObject.Properties["number"] -and ($e.number -is [int] -or $e.number -is [long])) { $number = [int]$e.number }
+        if (-not (Test-HordeMergeOwedRepo -Repo $v["repo"]) -or $number -lt 1 -or $v["headSha"] -cnotmatch $script:HordeMergeShaPattern -or @("intent", "settled") -cnotcontains $v["kind"]) { $bad++; continue }
+        $key = $v["repo"].ToLowerInvariant() + "#" + $number + "@" + $v["headSha"]
+        if ($v["kind"] -ceq "settled") { $open.Remove($key); continue }
+        if ($v["owner"] -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9-]{0,38}\z' -or $v["name"] -cnotmatch '\A[A-Za-z0-9_.-]{1,100}\z' -or ($v["baseRefName"] -ne "" -and $v["baseRefName"] -cnotmatch $script:HordeMergeRefPattern)) { $bad++; continue }
+        foreach ($k in @("pr", "task", "by")) { $v[$k] = ($v[$k] -replace '[^\x20-\x7E]', '?') }
+        $open[$key] = [pscustomobject]@{ key = $key; repo = $v["repo"].ToLowerInvariant(); owner = $v["owner"]; name = $v["name"]; number = $number; pr = $v["pr"]; task = $v["task"]; by = $v["by"]; baseRefName = $v["baseRefName"]; headSha = $v["headSha"]; at = $v["at"] }
+    }
+    return [pscustomobject]@{ open = @($open.Values); bad = $bad }
+}
+
+function Resolve-HordeMergeIntents {
+    # The nightly run's first step (T-0347): every merge that was begun and never settled is asked of GitHub. One that is
+    # MERGED is queued as owed (its merge commit is what GitHub says), so a crash between `gh pr merge` and the queue
+    # write loses nothing. One that is not merged and is older than an hour is settled as not merged (a younger one may
+    # be a merge still in flight in another process, which queues itself). { ok; recovered }: ok is false when
+    # something could not be settled, which the run ends 2 for; the intent stays and is asked again next run.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Folder, [string]$Repo = "", [datetime]$Now = [datetime]::UtcNow)
+    $say = $Tools["Say"]
+    $path = [System.IO.Path]::Combine($Folder, $script:HordeMergeIntentFileName)
+    if (-not [System.IO.File]::Exists($path)) { return [pscustomobject]@{ ok = $true; recovered = 0 } }
+    $text = ""
+    try { $text = Read-HordeMergeFileText -Path $path } catch { & $say ("could not read " + $path + ": " + $_.Exception.Message + " - merges begun and not queued cannot be recovered in this run"); return [pscustomobject]@{ ok = $false; recovered = 0 } }
+    $read = Read-HordeMergeOpenIntents -Text $text
+    $ok = $true
+    $recovered = 0
+    if ($read.bad -gt 0) { & $say ("WARNING: " + $path + " has " + $read.bad + " line(s) that are not a usable intent; they cannot be recovered"); }
+    foreach ($i in @($read.open)) {
+        if ($Repo -ne "" -and $i.repo -cne $Repo.ToLowerInvariant()) { continue }
+        $v = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("pr", "view", ("" + $i.number), "--repo", $i.repo, "--json", "state,mergeCommit"))
+        $pr = $null
+        if ($v.code -eq 0) { try { $pr = ConvertFrom-HordeJson -Text $v.out } catch { $pr = $null } }
+        if ($null -eq $pr -or $null -eq $pr.PSObject.Properties["state"]) { $ok = $false; & $say ("COULD NOT ASK GITHUB whether " + $i.pr + " was merged (a merge begun and never settled): " + (Get-HordeMergeFirstLine ("" + $v.err)) + "; asked again next run"); continue }
+        $how = ""
+        if ("" + $pr.state -ceq "MERGED") {
+            $sha = ""
+            if ($null -ne $pr.PSObject.Properties["mergeCommit"] -and $null -ne $pr.mergeCommit) { $sha = "" + $pr.mergeCommit.oid }
+            if ($sha -cnotmatch $script:HordeMergeShaPattern) { $ok = $false; & $say ("GitHub shows " + $i.pr + " MERGED but gave no merge commit; asked again next run"); continue }
+            $req = [pscustomobject]@{ owner = $i.owner; repo = $i.name; pr = $i.pr; task = $i.task; by = $i.by }
+            $line = Format-HordeMergeOwedLine -Request $req -HeadSha $i.headSha -MergeSha $sha -FirstParent "" -BaseRef $i.baseRefName
+            $ow = Invoke-HordeMergeTool -Tools $Tools -Name "Owed" -With @($line)
+            if ($ow.ok -ne $true) { $ok = $false; & $say ("COULD NOT QUEUE " + $i.pr + ", which was merged and never queued: " + $ow.detail + "; add this line to guards-owed.jsonl by hand: " + $line); continue }
+            & $say ("recovered " + $i.pr + ": it was merged as " + $sha + " and never queued (a crash between the merge and the queue write); queued now")
+            $recovered++
+            $how = "recovered"
+        } else {
+            $age = 999999
+            $at = [datetime]::MinValue
+            if ([datetime]::TryParse($i.at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$at)) { $age = ($Now.ToUniversalTime() - $at).TotalMinutes }
+            if ($age -lt $script:HordeMergeIntentStaleMinutes) { continue }
+            $how = "not-merged"
+        }
+        $req2 = [pscustomobject]@{ owner = $i.owner; repo = $i.name; number = $i.number; pr = $i.pr; task = $i.task; by = $i.by }
+        $st = Invoke-HordeMergeTool -Tools $Tools -Name "Intent" -With @((Format-HordeMergeIntentLine -Request $req2 -HeadSha $i.headSha -BaseRef $i.baseRefName -Kind "settled" -How $how))
+        if ($st.ok -ne $true) { $ok = $false; & $say ("could not settle the intent of " + $i.pr + ": " + $st.detail) }
+    }
+    return [pscustomobject]@{ ok = $ok; recovered = $recovered }
+}
+
 function Invoke-HordeMerge {
     # The whole command (header). { outcome; why; mergeSha; problems }: outcome refused (nothing merged),
     # merged (every step done) or merged-unfinished (merged; problems says what is left to do by hand).
@@ -506,6 +596,20 @@ function Invoke-HordeMerge {
     }
 
     # 6. THE MERGE.
+    # THE INTENT IS WRITTEN FIRST (daytime mode, T-0347): a crash between `gh pr merge` and the queue write used to lose the
+    # merge, with nothing anywhere to say it had been begun. The nightly run asks GitHub about every intent never settled
+    # and queues the ones that were merged. An intent that cannot be written refuses the merge: the queue is the same
+    # folder, so the merge could not have been queued either.
+    if ($check.skipped -eq $true) {
+        $iw = Invoke-HordeMergeTool -Tools $Tools -Name "Intent" -With @((Format-HordeMergeIntentLine -Request $Request -HeadSha $check.head -BaseRef ("" + $pr.baseRefName)))
+        if ($iw.ok -ne $true) { return (& $refuse ("the intent to merge could not be written, so nothing was merged: " + $iw.detail)) }
+    }
+    $settle = {
+        param([string]$How)
+        if ($check.skipped -ne $true) { return }
+        $sr = Invoke-HordeMergeTool -Tools $Tools -Name "Intent" -With @((Format-HordeMergeIntentLine -Request $Request -HeadSha $check.head -BaseRef ("" + $pr.baseRefName) -Kind "settled" -How $How))
+        if ($sr.ok -ne $true) { & $say ("could not settle the intent to merge " + $Request.pr + " (the nightly run settles it): " + $sr.detail) }
+    }
     & $say ("merging " + $Request.pr + " with a merge commit")
     $m = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("pr", "merge", ("" + $Request.number), "--repo", $repo, "--merge", "--match-head-commit", $check.head))
     $after = $null
@@ -519,10 +623,10 @@ function Invoke-HordeMerge {
     }
     $isMerged = ($null -ne $after -and "" + $after.state -ceq "MERGED")
     if ($isMerged -and $m.code -ne 0) { & $say ("gh answered with an error, but GitHub shows " + $Request.pr + " MERGED: " + (Get-HordeMergeFirstLine ("" + $m.err))) }
-    if (-not $isMerged -and $m.code -ne 0) { return (& $refuse ("gh did not merge " + $Request.pr + ": " + (Get-HordeMergeFirstLine ("" + $m.err + "`n" + $m.out)))) }
+    if (-not $isMerged -and $m.code -ne 0) { & $settle "not-merged"; return (& $refuse ("gh did not merge " + $Request.pr + ": " + (Get-HordeMergeFirstLine ("" + $m.err + "`n" + $m.out)))) }
     if (-not $isMerged) {
         # gh said it merged and GitHub does not show it: nothing after this can be said truthfully.
-        return [pscustomobject]@{ outcome = "merged-unfinished"; why = ("gh said it merged " + $Request.pr + ", but GitHub does not show it MERGED; look at it by hand. The ledger was NOT written and nobody was told"); mergeSha = ""; problems = @("look at the PR by hand") }
+        return [pscustomobject]@{ outcome = "merged-unfinished"; why = ("gh said it merged " + $Request.pr + ", but GitHub does not show it MERGED; look at it by hand. The ledger was NOT written and nobody was told" + $(if ($check.skipped -eq $true) { "; the intent to merge stays recorded, so the nightly run queues it if GitHub shows it MERGED" } else { "" })); mergeSha = ""; problems = @("look at the PR by hand") }
     }
     $mergeSha = ""
     if ($null -ne $after.PSObject.Properties["mergeCommit"] -and $null -ne $after.mergeCommit) { $mergeSha = "" + $after.mergeCommit.oid }
@@ -557,7 +661,7 @@ function Invoke-HordeMerge {
         $ow = $null
         if ($owedLine -eq "") { $ow = [pscustomobject]@{ ok = $false; detail = "GitHub gave no merge commit, so there is no sha to queue" } }
         else { $ow = Invoke-HordeMergeTool -Tools $Tools -Name "Owed" -With @($owedLine) }
-        if ($ow.ok -eq $true) { $queued = $true; & $say "guards not run: queued for the nightly run (guards-owed.jsonl)" }
+        if ($ow.ok -eq $true) { $queued = $true; & $say "guards not run: queued for the nightly run (guards-owed.jsonl)"; & $settle "queued" }
         else {
             $queued = $false
             & $say ("THE MERGE HAPPENED, BUT IT WAS NOT QUEUED FOR THE NIGHTLY GUARDS RUN: " + $ow.detail)
@@ -965,6 +1069,8 @@ function Invoke-HordeMergeRunOwed {
         return [pscustomobject]@{ exit = $Code; json = (ConvertTo-Json -InputObject $obj -Compress -Depth 8); repos = @($summary) }
     }
     if ($Repo -ne "" -and -not (Test-HordeMergeOwedRepo -Repo $Repo)) { & $say ("'" + $Repo + "' is not a repository: OWNER/REPO"); return (& $finish 2) }
+    # MERGES BEGUN AND NEVER SETTLED are asked of GitHub first, and the ones that were merged join the queue (T-0347).
+    $intentRun = Resolve-HordeMergeIntents -Tools $Tools -Folder $Folder -Repo $Repo -Now $nowUtc
     $owedText = ""
     if ([System.IO.File]::Exists($owedPath)) {
         try { $owedText = Read-HordeMergeFileText -Path $owedPath } catch { & $say ("could not read " + $owedPath + ": " + $_.Exception.Message); return (& $finish 2) }
@@ -981,6 +1087,7 @@ function Invoke-HordeMergeRunOwed {
     $owed = Read-HordeMergeOwedEntries -Text $owedText
     $checked = Read-HordeMergeCheckedShas -Text $checkedText
     $worst = 0
+    if (-not $intentRun.ok) { $worst = 2 }
     $unchecked = 0
     if ($owed.bad.Count -gt 0) {
         & $say ("WARNING: " + $owedPath + " has " + $owed.bad.Count + " line(s) that are not a usable entry (line " + (($owed.bad | Select-Object -First 10) -join ", ") + "): those merges are NOT checked, and this is said again in every run until the file is fixed by hand; the other entries are still checked")
@@ -1216,7 +1323,8 @@ function New-HordeMergeTools {
     $formatLine = ${function:Format-HordeMergeLedgerLine}
     $appendLine = ${function:Add-HordeMergeLine}
     $owedPath = ""
-    if ($OwedFolder -ne "") { $owedPath = [System.IO.Path]::Combine($OwedFolder, "guards-owed.jsonl") }
+    $intentPath = ""
+    if ($OwedFolder -ne "") { $owedPath = [System.IO.Path]::Combine($OwedFolder, "guards-owed.jsonl"); $intentPath = [System.IO.Path]::Combine($OwedFolder, $script:HordeMergeIntentFileName) }
     return @{
         Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments -Directory $place) }.GetNewClosure()
         Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments -Directory $place) }.GetNewClosure()
@@ -1237,6 +1345,8 @@ function New-HordeMergeTools {
         LedgerLine = { param([string[]]$Arguments) return (& $formatLine -Program $ledgerProgram -Script $ledgerScript -Arguments $Arguments) }.GetNewClosure()
         # The daytime queue (-Guards later): one line appended to <HORDE_HOME>\merge\guards-owed.jsonl.
         Owed = { param([string]$Line) if ($owedPath -eq "") { return [pscustomobject]@{ ok = $false; detail = "no merge folder was given, so there is nowhere to queue the merge" } }; return (& $appendLine -Path $owedPath -Line $Line) }.GetNewClosure()
+        # The intent log (T-0347): written before a daytime merge, settled after its queue line.
+        Intent = { param([string]$Line) if ($intentPath -eq "") { return [pscustomobject]@{ ok = $false; detail = "no merge folder was given, so there is nowhere to record the intent" } }; return (& $appendLine -Path $intentPath -Line $Line) }.GetNewClosure()
         Tell = $Tell
         Mail = $Mail
         Wait = { param([int]$Seconds) Start-Sleep -Seconds $Seconds }
