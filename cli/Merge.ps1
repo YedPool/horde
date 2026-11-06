@@ -592,6 +592,7 @@ function Invoke-HordeMerge {
 
 # ---- THE NIGHTLY RUN: horde merge -RunOwed (header, "THE NIGHTLY RUN") -----------------------------------
 
+$script:HordeMergeGiveUpLines = 50
 $script:HordeMergeOwedRepoPattern = '\A([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})\z'
 
 function Test-HordeMergeOwedRepo {
@@ -921,7 +922,17 @@ function Invoke-HordeMergeRunOwed {
         $redJson = @()
         foreach ($er in @($res.errors)) {
             [void]$text.Add("COULD NOT RUN" + $(if ($er.base -ne "") { " on " + $er.base } else { "" }) + ": " + $er.why)
-            [void]$text.Add("" + @($er.entries).Count + " merge(s) stay owed and will be tried again")
+            [void]$text.Add("" + @($er.entries).Count + " merge(s) stay owed and will be tried again; a guard that cannot run or hangs reads as 'could not run' (exit 2 in every run until it runs), never as red or green")
+            # THE WAY OUT (T-0347): a branch that is gone (a stacked PR's base, deleted after its merge) can never be
+            # fetched, so its merges stayed owed and ended every night 2 with no word of how to stop it. Each merge gets
+            # the line that gives it up, as a merge skipped for not being in the history does.
+            $shownErr = 0
+            foreach ($ee in @($er.entries)) {
+                if ($shownErr -ge $script:HordeMergeGiveUpLines) { [void]$text.Add("    ... and " + (@($er.entries).Count - $shownErr) + " more owed merge(s) of this branch"); break }
+                $shownErr++
+                $clearErr = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $ee.mergeSha; at = $stamp; result = "given-up" }) -Compress
+                [void]$text.Add("STAYS OWED: " + $ee.pr + " (mergeSha " + $ee.mergeSha + ") is tried again in every run. If it can never run (its branch was deleted), give it up by adding this line to " + $checkedPath + ": " + $clearErr)
+            }
         }
         $skippedJson = @()
         foreach ($sk in @($res.skipped)) {

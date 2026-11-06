@@ -863,6 +863,26 @@ try {
     Check ($readerView -ceq $readerView2 -and $readerView -clike "*mergeSha*") "the queue's reader does not shut a writer out and is not shut out by one"
 } finally { if ($null -ne $script:hold) { $script:hold.Dispose() } }
 
+Write-Host "== T-0347: a branch that is gone, and a guard that hangs, read as could-not-run with the way out"
+# A stacked PR's base branch deleted after its merge: the fetch of it fails in every run.
+$h = New-HandCase -Steps @(@{ f = @{ "one.txt" = "1" }; by = "F" }, @{ f = @{ "two.txt" = "2" }; by = "K" }) -Base "stack"
+$null = G $h.c.origin branch -D stack
+$run = Invoke-OwedRun -Case $h.c
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on stack: fetching stack failed*") -and -not (Said "RED *")) ("a deleted base branch: exit 2, could not run, no red (exit " + $run.exit + ")")
+Check ((Said ("STAYS OWED: YedPool/horde#100 (mergeSha " + $h.shas[0] + ") is tried again in every run. If it can never run*give it up by adding this line to *guards-checked.jsonl: {*" + $h.shas[0] + "*given-up*")) -and (Said ("STAYS OWED: YedPool/horde#101 (mergeSha " + $h.shas[1] + ")*"))) "  and it prints the way out for each owed merge, the line that gives it up"
+$wayOut = @($script:said | Where-Object { $_ -clike "STAYS OWED: *#100 *" })[0]
+$wayLine = $wayOut.Substring($wayOut.IndexOf(": {") + 2)
+Check (@(Read-CheckedLines $h.c).Count -eq 0) "  nothing was marked checked: the merges are not dropped"
+$null = Add-HordeMergeLine -Path (Join-Path $h.c.owed "guards-checked.jsonl") -Line $wayLine
+$run = Invoke-OwedRun -Case $h.c
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on stack*") -and -not (Said "STAYS OWED: *#100 *") -and (Said "STAYS OWED: *#101 *")) "  the printed line gives up exactly that merge and no other"
+# A hung guard: the tool kills it and answers code -1. It is never a red and never a green.
+$hung = { param($Checkout, $Suite, $Shell) return [pscustomobject]@{ code = -1; out = ""; err = "powershell.exe ran past 900 s and was stopped" } }
+$h = New-HandCase -Steps @(@{ f = @{ "one.txt" = "1" }; by = "F" })
+$run = Invoke-OwedRun -Case $h.c -GuardOverride $hung
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on main: the guard * could not be run in *ran past 900 s and was stopped*") -and -not (Said "RED *")) ("a hung guard reads as 'could not run', exit 2, never red (exit " + $run.exit + ")")
+Check ((Said "1 merge(s) stay owed and will be tried again; a guard that cannot run or hangs reads as 'could not run' (exit 2 in every run until it runs), never as red or green") -and @(Read-CheckedLines $h.c).Count -eq 0 -and (ConvertFrom-HordeJson -Text $run.json).repos[0].status -ceq "error") "  and it says so plainly, marks nothing checked, and the JSON says error"
+
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.

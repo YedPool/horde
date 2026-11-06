@@ -336,5 +336,11 @@
         @{ Name = "nightly-read-shuts-writers-out"
            Find = 'try { $owedText = Read-HordeMergeFileText -Path $owedPath }'
            Replace = 'try { $owedText = [System.IO.File]::ReadAllText($owedPath) }' }
+        @{ Name = "nightly-error-no-way-out"
+           Find = '[void]$text.Add("STAYS OWED: " + $ee.pr'
+           Replace = '$null = ("STAYS OWED: " + $ee.pr' }
+        @{ Name = "nightly-error-way-out-gives-up-all"
+           Find = '$clearErr = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $ee.mergeSha;'
+           Replace = '$clearErr = ConvertTo-Json -InputObject ([ordered]@{ repo = $r; mergeSha = $er.entries[0].mergeSha;' }
     )
 }
