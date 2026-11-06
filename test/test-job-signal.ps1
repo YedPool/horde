@@ -83,6 +83,23 @@ foreach ($sh in $shells) {
     $od = Invoke-Verb @("job", "list", "-Overdue")
     Check ($od.code -eq 0 -and $od.out -like "*J-late R overdue*" -and $od.out -notlike "*J-1 *") "job list -Overdue shows only the open job past its due time"
 
+    $wo = Invoke-Verb @("job", "upsert", "-Id", "J-late", "-Owner", "R", "-Job", "was due long ago", "-By", "S", "-WaitingOn", "the founder")
+    Check ($wo.code -eq 0 -and $wo.out -cmatch '(?m)^updated J-late \(waiting_on\)\r?$') "job upsert -WaitingOn records who it waits on and says updated"
+    $wo2 = Invoke-Verb @("job", "upsert", "-Id", "J-late", "-Owner", "R", "-Job", "was due long ago", "-By", "S", "-WaitingOn", "the founder")
+    Check ($wo2.code -eq 0 -and $wo2.out -cmatch '(?m)^kept J-late\r?$') "the same -WaitingOn again says kept"
+    $wl = Invoke-Verb @("job", "list", "-Open")
+    Check ($wl.code -eq 0 -and $wl.out -cmatch '(?m)^J-late R overdue started=\S+ due=\S+ done=- waiting=the_founder \| was due long ago\r?$') "-Open still lists a waiting job, and its line says what it waits on"
+    $wj = Invoke-Verb @("job", "list", "-Json")
+    Check ($wj.out -like '*"waiting_on":"the founder"*') "-Json carries waiting_on"
+    $nw = Invoke-Verb @("job", "list", "-Open", "-NotWaiting")
+    Check ($nw.code -eq 0 -and $nw.out -notlike "*J-late *" -and $nw.out -like "*J-1 *") "job list -Open -NotWaiting leaves out the waiting job"
+    $wb = Invoke-Verb @("job", "upsert", "-Id", "J-late", "-Owner", "R", "-Job", "was due long ago", "-By", "S", "-WaitingOn", "x", "-NotWaiting")
+    Check ($wb.code -eq 1 -and $wb.out -like "*contradict*") "-WaitingOn and -NotWaiting together are refused"
+    $wc = Invoke-Verb @("job", "upsert", "-Id", "J-late", "-Owner", "R", "-Job", "was due long ago", "-By", "S", "-NotWaiting")
+    Check ($wc.code -eq 0 -and $wc.out -cmatch '(?m)^updated J-late \(waiting_on\)\r?$') "job upsert -NotWaiting clears it"
+    $nw2 = Invoke-Verb @("job", "list", "-Open", "-NotWaiting")
+    Check ($nw2.code -eq 0 -and $nw2.out -like "*J-late *") "and the job is back among the ones that wait on nothing"
+
     # --- long text by -File: quotes and line breaks survive; a non-ASCII file is refused in words ---
     $longFile = Join-Path $work ("long-" + $sh.exe.Length + ".txt")
     [System.IO.File]::WriteAllText($longFile, ("line one says `"hi`"`r`nline two`r`n"), $utf8)
@@ -124,6 +141,10 @@ foreach ($sh in $shells) {
     Check ($la.code -eq 0 -and $la.out -cmatch '(?m)^J-1 Q done started=\S+ due=\S+ done=\S+ \| review the PRs\r?$') "and without -Open the done job is listed"
     $d2 = Invoke-Verb @("job", "done", "-Id", "J-1", "-Proof", "PR 77 merged", "-By", "S")
     Check ($d2.code -eq 0 -and $d2.out -cmatch '(?m)^kept J-1\r?$') "the same proof again says kept"
+    $d2b = Invoke-Verb @("job", "done", "-Id", "J-1", "-Proof", "PR 77 merged", "-By", "T")
+    Check ($d2b.code -eq 0 -and $d2b.out -cmatch '(?m)^kept J-1\r?$') "the same proof with another -By says kept"
+    $dj = Invoke-Verb @("job", "list", "-Json")
+    Check ($dj.out -like '*"done_by":"S"*' -and $dj.out -notlike '*"done_by":"T"*') "done_by is the first -By"
     $d3 = Invoke-Verb @("job", "done", "-Id", "J-1", "-Proof", "PR 78 merged", "-By", "S")
     Check ($d3.code -eq 1 -and $d3.out -like "*already done with another proof*") "another proof is refused"
     $d4 = Invoke-Verb @("job", "upsert", "-Id", "J-1", "-Owner", "R", "-Job", "again", "-By", "S")

@@ -10,8 +10,8 @@
            Find = 'if ($flag -ne "Verb" -and $own[$Verb] -notcontains $flag) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "list-takes-a-proof"
-           Find = 'list   = @("Owner", "Open", "Overdue", "Json")'
-           Replace = 'list   = @("Owner", "Open", "Overdue", "Json", "Proof")' }
+           Find = 'list   = @("Owner", "Open", "Overdue", "NotWaiting", "Json")'
+           Replace = 'list   = @("Owner", "Open", "Overdue", "NotWaiting", "Json", "Proof")' }
         @{ Name = "id-not-passed"
            Find = '"--id" = "Id"; '
            Replace = '' }
@@ -33,6 +33,15 @@
         @{ Name = "started-not-passed"
            Find = '"--started" = "Started"; '
            Replace = '' }
+        @{ Name = "waiting-on-not-passed"
+           Find = '"--waiting-on" = "WaitingOn"; '
+           Replace = '' }
+        @{ Name = "not-waiting-not-passed-on-upsert-or-list"
+           Find = 'if ($NotWaiting) { $bare += "--not-waiting" }'
+           Replace = '' }
+        @{ Name = "upsert-takes-no-waiting-flags"
+           Find = '"Due", "WaitingOn", "NotWaiting", "By")'
+           Replace = '"Due", "By")' }
         @{ Name = "due-not-passed"
            Find = '"--due" = "Due"; '
            Replace = '' }

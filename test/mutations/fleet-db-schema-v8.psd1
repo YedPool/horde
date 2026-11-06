@@ -26,6 +26,15 @@
         @{ Name = "job-maker-any-text"
            Find = 'created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 64 AND created_by NOT GLOB ''*[^!-~]*''),'
            Replace = 'created_by TEXT NOT NULL,' }
+        @{ Name = "job-closer-any-text"
+           Find = 'done_by TEXT CHECK (length(done_by) BETWEEN 1 AND 64 AND done_by NOT GLOB ''*[^!-~]*''),'
+           Replace = 'done_by TEXT,' }
+        @{ Name = "job-closer-without-close"
+           Find = 'CHECK ((done_at IS NULL) = (done_by IS NULL))'
+           Replace = 'CHECK (1 = 1)' }
+        @{ Name = "job-waiting-on-any-length"
+           Find = 'waiting_on TEXT CHECK (length(waiting_on) BETWEEN 1 AND 4000),'
+           Replace = 'waiting_on TEXT,' }
         @{ Name = "job-done-before-start"
            Find = 'CHECK (done_at IS NULL OR done_at >= started_at),'
            Replace = '' }

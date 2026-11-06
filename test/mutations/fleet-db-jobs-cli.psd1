@@ -74,6 +74,18 @@
         @{ Name = "owner-filter-dropped"
            Find = 'open: flags[''--open''] === true, owner: flags[''--owner''] ?? null, overdue'
            Replace = 'open: flags[''--open''] === true, owner: null, overdue' }
+        @{ Name = "not-waiting-filter-dropped"
+           Find = 'overdue: flags[''--overdue''] === true, notWaiting: flags[''--not-waiting''] === true }'
+           Replace = 'overdue: flags[''--overdue''] === true, notWaiting: false }' }
+        @{ Name = "not-waiting-switch-dropped-on-upsert"
+           Find = 'waitingOn: flags[''--waiting-on''], notWaiting: flags[''--not-waiting''] === true,'
+           Replace = 'waitingOn: flags[''--waiting-on''], notWaiting: false,' }
+        @{ Name = "waiting-text-not-passed"
+           Find = 'waitingOn: flags[''--waiting-on''],'
+           Replace = 'waitingOn: undefined,' }
+        @{ Name = "waiting-not-shown-in-the-line"
+           Find = '...(r.waiting_on === null ? [] : [''waiting='' + oneLine(r.waiting_on).replace(/ /g, ''_'')]), '
+           Replace = '' }
         @{ Name = "updated-fields-not-named"
            Find = '(r.action === ''updated'' ? '' ('' + r.changed.join('', '') + '')'' : '''')'
            Replace = '''''' }

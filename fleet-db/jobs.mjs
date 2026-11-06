@@ -101,8 +101,8 @@ function sessionOf(v) {
 
 // --- jobs ----------------------------------------------------------------------------------------------------------
 
-// Create a job, or change owner, job text, session and due on an OPEN one. started_at is never moved. A field left out is
-// left as it is (a job's due time is not cleared by omitting it). Returns { action: 'created' | 'kept' | 'updated', changed }.
+// Create a job, or change owner, job text, session, due and waiting_on on an OPEN one. started_at is never moved. A field left out is
+// left as it is (a job's due time is not cleared by omitting it); waiting_on is cleared by notWaiting, and naming both is refused. Returns { action: 'created' | 'kept' | 'updated', changed }.
 export function upsertJob(db, req, { now = Date.now } = {}) {
   const id = wordOf(req.id, 'Id', LIMITS.id);
   const owner = wordOf(req.owner, 'Owner', LIMITS.owner);
@@ -112,11 +112,14 @@ export function upsertJob(db, req, { now = Date.now } = {}) {
   const clock = now();
   const started = given(req.started) ? whenOf(req.started, 'Started', { now: clock }) : clock;
   const due = given(req.due) ? whenOf(req.due, 'Due', { now: clock }) : null;
+  const notWaiting = req.notWaiting === true;
+  if (notWaiting && given(req.waitingOn)) throw refuse('WaitingOn and NotWaiting contradict each other; give one');
+  const waiting = given(req.waitingOn) ? textOf(req.waitingOn, 'WaitingOn') : null;
   return inWrite(db, () => {
-    const row = db.prepare('SELECT owner, session_id, job, started_at, due_at, done_at FROM job WHERE id = ?').get(id);
+    const row = db.prepare('SELECT owner, session_id, job, started_at, due_at, done_at, waiting_on FROM job WHERE id = ?').get(id);
     if (!row) {
-      db.prepare('INSERT INTO job (id, owner, session_id, job, started_at, due_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(id, owner, session, job, started, due, by);
+      db.prepare('INSERT INTO job (id, owner, session_id, job, started_at, due_at, waiting_on, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, owner, session, job, started, due, waiting, by);
       return { action: 'created', changed: [] };
     }
     if (row.done_at !== null) throw refuse('job ' + id + ' is done; a new piece of work takes a new id');
@@ -125,19 +128,22 @@ export function upsertJob(db, req, { now = Date.now } = {}) {
     if (job !== row.job) changed.push('job');
     if (session !== null && session !== row.session_id) changed.push('session');
     if (due !== null && due !== row.due_at) changed.push('due');
+    const newWaiting = notWaiting ? null : (waiting ?? row.waiting_on);
+    if (newWaiting !== row.waiting_on) changed.push('waiting_on');
     if (changed.length === 0) return { action: 'kept', changed };
-    db.prepare('UPDATE job SET owner = ?, job = ?, session_id = ?, due_at = ? WHERE id = ?')
-      .run(owner, job, session ?? row.session_id, due ?? row.due_at, id);
+    db.prepare('UPDATE job SET owner = ?, job = ?, session_id = ?, due_at = ?, waiting_on = ? WHERE id = ?')
+      .run(owner, job, session ?? row.session_id, due ?? row.due_at, newWaiting, id);
     return { action: 'updated', changed };
   });
 }
 
 // Close a job with its proof. A repeat with the same proof keeps the first time; another proof is refused (done is final).
 // An end time named on purpose that is before the start is refused; a clock that stepped back is lifted to the start.
+// done_by is stored with the first close; a repeat with the same proof and another By stays 'kept' and keeps the first one.
 // Returns { action: 'done' | 'kept', doneAt }.
 export function doneJob(db, req, { now = Date.now } = {}) {
   const id = wordOf(req.id, 'Id', LIMITS.id);
-  wordOf(req.by, 'By', LIMITS.by);
+  const by = wordOf(req.by, 'By', LIMITS.by);
   const proof = textOf(req.proof, 'Proof');
   const clock = now();
   const explicit = given(req.at);
@@ -151,20 +157,20 @@ export function doneJob(db, req, { now = Date.now } = {}) {
     }
     if (explicit && at < row.started_at) throw refuse('At is before the job started');
     const doneAt = Math.max(at, row.started_at);
-    db.prepare('UPDATE job SET done_at = ?, done_proof = ? WHERE id = ?').run(doneAt, proof, id);
+    db.prepare('UPDATE job SET done_at = ?, done_proof = ?, done_by = ? WHERE id = ?').run(doneAt, proof, by, id);
     return { action: 'done', doneAt };
   });
 }
 
 // The jobs, open ones first (soonest due first, no due time last), then done ones newest first. overdue = open with a due
-// time before now (it implies open).
-export function listJobs(db, { open = false, owner = null, overdue = false } = {}, { now = Date.now } = {}) {
+// time before now (it implies open). notWaiting keeps the jobs with no waiting_on, open or not (what the overseer's idle rule reads).
+export function listJobs(db, { open = false, owner = null, overdue = false, notWaiting = false } = {}, { now = Date.now } = {}) {
   if (owner !== null) wordOf(owner, 'Owner', LIMITS.owner);
   const clock = now();
-  return db.prepare(`SELECT id, owner, session_id, job, started_at, due_at, done_at, done_proof, created_by FROM job
-    WHERE (?1 = 0 OR done_at IS NULL) AND (?2 IS NULL OR owner = ?2) AND (?3 = 0 OR (done_at IS NULL AND due_at IS NOT NULL AND due_at < ?4))
+  return db.prepare(`SELECT id, owner, session_id, job, started_at, due_at, done_at, done_proof, done_by, waiting_on, created_by FROM job
+    WHERE (?1 = 0 OR done_at IS NULL) AND (?2 IS NULL OR owner = ?2) AND (?3 = 0 OR (done_at IS NULL AND due_at IS NOT NULL AND due_at < ?4)) AND (?5 = 0 OR waiting_on IS NULL)
     ORDER BY (done_at IS NOT NULL), CASE WHEN done_at IS NULL THEN COALESCE(due_at, 9007199254740991) ELSE -done_at END, started_at, id`)
-    .all(open ? 1 : 0, owner, overdue ? 1 : 0, clock).map((r) => ({
+    .all(open ? 1 : 0, owner, overdue ? 1 : 0, clock, notWaiting ? 1 : 0).map((r) => ({
       ...r, started: iso(r.started_at), due: iso(r.due_at), done: iso(r.done_at),
       state: r.done_at === null ? 'open' : 'done', overdue: r.done_at === null && r.due_at !== null && r.due_at < clock,
     }));

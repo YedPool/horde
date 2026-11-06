@@ -62,6 +62,27 @@
         @{ Name = "done-with-another-proof-kept"
            Find = 'if (row.done_proof === proof) return { action: ''kept'', doneAt: row.done_at };'
            Replace = 'return { action: ''kept'', doneAt: row.done_at };' }
+        @{ Name = "waiting-on-and-not-waiting-both-accepted"
+           Find = 'if (notWaiting && given(req.waitingOn)) throw refuse('
+           Replace = 'if (false) throw refuse(' }
+        @{ Name = "not-waiting-does-not-clear"
+           Find = 'const newWaiting = notWaiting ? null : (waiting ?? row.waiting_on);'
+           Replace = 'const newWaiting = waiting ?? row.waiting_on;' }
+        @{ Name = "omitted-waiting-on-clears-it"
+           Find = 'const newWaiting = notWaiting ? null : (waiting ?? row.waiting_on);'
+           Replace = 'const newWaiting = waiting;' }
+        @{ Name = "waiting-change-not-seen"
+           Find = 'if (newWaiting !== row.waiting_on) changed.push(''waiting_on'');'
+           Replace = '' }
+        @{ Name = "not-waiting-filter-ignored"
+           Find = 'AND (?5 = 0 OR waiting_on IS NULL)'
+           Replace = 'AND (?5 = 0 OR 1)' }
+        @{ Name = "not-waiting-filter-only-open"
+           Find = 'AND (?5 = 0 OR waiting_on IS NULL)'
+           Replace = 'AND (?5 = 0 OR (waiting_on IS NULL AND done_at IS NULL))' }
+        @{ Name = "done-by-not-stored"
+           Find = 'UPDATE job SET done_at = ?, done_proof = ?, done_by = ? WHERE id = ?'').run(doneAt, proof, by, id);'
+           Replace = 'UPDATE job SET done_at = ?, done_proof = ?, done_by = ? WHERE id = ?'').run(doneAt, proof, ''X'', id);' }
         @{ Name = "done-before-start-accepted"
            Find = 'if (explicit && at < row.started_at) throw refuse('
            Replace = 'if (false) throw refuse(' }

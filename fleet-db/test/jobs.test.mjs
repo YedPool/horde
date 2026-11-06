@@ -85,7 +85,7 @@ test('job and signal are not entities: no entity row is made for either', () => 
 // --- the schema's own rules --------------------------------------------------------------------------------------------
 
 function rawJob(db, over = {}) {
-  const r = { id: 'J-9', owner: 'R', session_id: null, job: 'x', started_at: NOW, due_at: null, done_at: null, done_proof: null, created_by: 'S', ...over };
+  const r = { id: 'J-9', owner: 'R', session_id: null, job: 'x', started_at: NOW, due_at: null, done_at: null, done_proof: null, done_by: null, waiting_on: null, created_by: 'S', ...over };
   const cols = Object.keys(r);
   return db.prepare('INSERT INTO job (' + cols.join(', ') + ') VALUES (' + cols.map(() => '?').join(', ') + ')').run(...cols.map((c) => r[c]));
 }
@@ -97,13 +97,15 @@ function rawSignal(db, over = {}) {
 
 test('job: the CHECKs refuse each bad row, and the good ones are written', () => {
   const { db } = world();
-  rawJob(db, { id: 'ok-1', session_id: UUID1, due_at: NOW + 1, done_at: NOW + 5, done_proof: 'PR 5' });
-  rawJob(db, { id: 'ok-2', done_at: NOW, done_proof: 'same instant' });
+  rawJob(db, { id: 'ok-1', session_id: UUID1, due_at: NOW + 1, done_at: NOW + 5, done_proof: 'PR 5', done_by: 'S', waiting_on: 'founder: a link' });
+  rawJob(db, { id: 'ok-2', done_at: NOW, done_proof: 'same instant', done_by: 'S' });
   for (const bad of [
     { id: '' }, { id: 'has space' }, { id: 'x'.repeat(121) }, { id: 'caf\u00e9' }, { owner: '' }, { owner: 'two words' }, { owner: 'o'.repeat(65) },
     { job: '' }, { job: 'j'.repeat(4001) }, { created_by: '' }, { created_by: 'a b' }, { started_at: -1 }, { due_at: -1 },
     { session_id: 'not-a-uuid' }, { session_id: 'AAAAAAAA-0000-4000-8000-000000000001' },
-    { done_at: NOW - 1, done_proof: 'p' }, { done_at: NOW }, { done_proof: 'p' }, { done_at: NOW, done_proof: '' }, { done_at: NOW, done_proof: 'p'.repeat(4001) },
+    { done_at: NOW - 1, done_proof: 'p', done_by: 'S' }, { done_at: NOW }, { done_proof: 'p' }, { done_at: NOW, done_proof: '', done_by: 'S' }, { done_at: NOW, done_proof: 'p'.repeat(4001), done_by: 'S' },
+    { done_at: NOW, done_proof: 'p' }, { done_by: 'S' }, { done_at: NOW, done_proof: 'p', done_by: '' }, { done_at: NOW, done_proof: 'p', done_by: 'two words' },
+    { done_at: NOW, done_proof: 'p', done_by: 'b'.repeat(65) }, { waiting_on: '' }, { waiting_on: 'w'.repeat(4001) },
   ]) sqlRefuses(() => rawJob(db, bad), /CHECK|NOT NULL/);
   sqlRefuses(() => rawJob(db, { id: 'ok-1' }), /UNIQUE|PRIMARY/);
   assert.equal(db.prepare('SELECT count(*) AS n FROM job').get().n, 2);
@@ -112,11 +114,12 @@ test('job: the CHECKs refuse each bad row, and the good ones are written', () =>
 test('job: its start, its maker and its id never change, and a done job is final', () => {
   const { db } = world();
   rawJob(db, { id: 'open' });
-  rawJob(db, { id: 'closed', done_at: NOW + 1, done_proof: 'p' });
+  rawJob(db, { id: 'closed', done_at: NOW + 1, done_proof: 'p', done_by: 'S' });
   sqlRefuses(() => db.prepare("UPDATE job SET started_at = started_at + 1 WHERE id = 'open'").run(), /never change/);
   sqlRefuses(() => db.prepare("UPDATE job SET created_by = 'other' WHERE id = 'open'").run(), /never change/);
   sqlRefuses(() => db.prepare("UPDATE job SET id = 'renamed' WHERE id = 'open'").run(), /never change/);
   sqlRefuses(() => db.prepare("UPDATE job SET done_proof = 'another' WHERE id = 'closed'").run(), /final/);
+  sqlRefuses(() => db.prepare("UPDATE job SET done_by = 'other' WHERE id = 'closed'").run(), /final/);
   sqlRefuses(() => db.prepare("UPDATE job SET done_at = NULL, done_proof = NULL WHERE id = 'closed'").run(), /final/);
   sqlRefuses(() => db.prepare("UPDATE job SET owner = 'X' WHERE id = 'closed'").run(), /final/);
   db.prepare("UPDATE job SET owner = 'X' WHERE id = 'open'").run();
@@ -193,7 +196,7 @@ test('job upsert: created, then kept; changed fields update; started_at never mo
   const w = world();
   const t1 = NOW - 3 * DAY;
   assert.equal(job(w, { started: t1, due: NOW + DAY, session: UUID1 }).action, 'created');
-  assert.deepEqual(row(w, 'job', "id = 'J-1'"), { id: 'J-1', owner: 'R', session_id: UUID1, job: 'review the PRs', started_at: t1, due_at: NOW + DAY, done_at: null, done_proof: null, created_by: 'S' });
+  assert.deepEqual(row(w, 'job', "id = 'J-1'"), { id: 'J-1', owner: 'R', session_id: UUID1, job: 'review the PRs', started_at: t1, due_at: NOW + DAY, done_at: null, done_proof: null, done_by: null, waiting_on: null, created_by: 'S' });
   // The same call again, and the same call with another started time and another -By: kept, nothing changes.
   assert.equal(job(w, { started: t1, due: NOW + DAY, session: UUID1 }).action, 'kept');
   assert.equal(job(w, { started: NOW, by: 'someone-else', due: NOW + DAY, session: UUID1 }).action, 'kept');
@@ -370,7 +373,7 @@ test('signal prune: needs Days (1 or more), deletes only closed signals closed l
 
 test('prune does not touch jobs, done or open', () => {
   const w = world();
-  rawJob(w.db, { id: 'old-done', started_at: NOW - 90 * DAY, done_at: NOW - 80 * DAY, done_proof: 'p' });
+  rawJob(w.db, { id: 'old-done', started_at: NOW - 90 * DAY, done_at: NOW - 80 * DAY, done_proof: 'p', done_by: 'S' });
   pruneSignals(w.db, { days: '1' }, clock(w));
   assert.equal(w.db.prepare('SELECT count(*) AS n FROM job').get().n, 1);
 });
@@ -544,4 +547,62 @@ test('db check still passes on a file with jobs and signals in every state', () 
   sig(w, { key: 'K2', at: NOW + MIN });
   closeSignal(w.db, { key: 'K2', by: 'S' }, clock(w));
   assert.deepEqual(findProblems(w.db), []);
+});
+
+test('job upsert: -WaitingOn records it, a repeat is kept, -NotWaiting clears it, both together are refused, leaving both out leaves it alone', () => {
+  const w = world();
+  assert.equal(job(w, { waitingOn: 'founder: a link' }).action, 'created');
+  assert.equal(row(w, 'job', "id = 'J-1'").waiting_on, 'founder: a link');
+  assert.equal(job(w, { waitingOn: 'founder: a link' }).action, 'kept');
+  assert.equal(job(w).action, 'kept');
+  assert.equal(row(w, 'job', "id = 'J-1'").waiting_on, 'founder: a link', 'left out: unchanged');
+  const u = job(w, { waitingOn: 'Q: a reply' });
+  assert.deepEqual([u.action, u.changed], ['updated', ['waiting_on']]);
+  refuses(() => job(w, { waitingOn: 'x', notWaiting: true }), /contradict/);
+  refuses(() => job(w, { waitingOn: 'caf\u00e9' }), /WaitingOn must be ASCII/);
+  refuses(() => job(w, { waitingOn: '  ' }), /WaitingOn is empty/);
+  const c = job(w, { notWaiting: true });
+  assert.deepEqual([c.action, c.changed], ['updated', ['waiting_on']]);
+  assert.equal(row(w, 'job', "id = 'J-1'").waiting_on, null);
+  assert.equal(job(w, { notWaiting: true }).action, 'kept');
+  doneJob(w.db, { id: 'J-1', by: 'S', proof: 'p' }, clock(w));
+  refuses(() => job(w, { notWaiting: true }), /is done/);
+});
+
+test('job done: -By is stored as done_by; a repeat with the same proof and another By is kept and keeps the first', () => {
+  const w = world();
+  job(w);
+  doneJob(w.db, { id: 'J-1', by: 'S', proof: 'PR 5' }, clock(w));
+  assert.equal(row(w, 'job', "id = 'J-1'").done_by, 'S');
+  assert.equal(doneJob(w.db, { id: 'J-1', by: 'T', proof: 'PR 5' }, clock(w)).action, 'kept');
+  assert.equal(row(w, 'job', "id = 'J-1'").done_by, 'S');
+});
+
+test('job list -NotWaiting: only jobs with no waiting_on, open or done; -Open still lists waiting jobs; the row carries waiting_on', () => {
+  const w = world();
+  job(w, { id: 'wait', waitingOn: 'founder' });
+  job(w, { id: 'free' });
+  job(w, { id: 'fin', waitingOn: 'someone' });
+  job(w, { id: 'fin2' });
+  doneJob(w.db, { id: 'fin2', by: 'S', proof: 'p' }, clock(w));
+  const ids = (q) => listJobs(w.db, q, clock(w)).map((r) => r.id);
+  assert.deepEqual(ids({ open: true }).sort(), ['fin', 'free', 'wait']);
+  assert.deepEqual(ids({ notWaiting: true }).sort(), ['fin2', 'free']);
+  assert.deepEqual(ids({ open: true, notWaiting: true }), ['free']);
+  assert.equal(listJobs(w.db, {}, clock(w)).find((r) => r.id === 'wait').waiting_on, 'founder');
+  assert.equal(listJobs(w.db, {}, clock(w)).find((r) => r.id === 'fin2').done_by, 'S');
+});
+
+test('cli: job upsert --waiting-on / --not-waiting and job list --not-waiting', () => {
+  const w = world();
+  w.db.close();
+  const run = (...a) => cli(w, a);
+  assert.deepEqual(run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--waiting-on', 'the founder').out, ['created J-1']);
+  assert.match(run('job', 'list').out[0], /^J-1 R open started=S+ due=- done=- waiting=the_founder | x$/);
+  assert.deepEqual(run('job', 'list', '--not-waiting').out, ['no jobs']);
+  assert.equal(JSON.parse(run('job', 'list', '--json').out[0]).jobs[0].waiting_on, 'the founder');
+  const both = run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--waiting-on', 'y', '--not-waiting');
+  assert.deepEqual([both.code, both.err.length], [1, 1]);
+  assert.deepEqual(run('job', 'upsert', '--id', 'J-1', '--owner', 'R', '--job', 'x', '--by', 'S', '--not-waiting').out, ['updated J-1 (waiting_on)']);
+  assert.match(run('job', 'list', '--not-waiting').out[0], /^J-1 R open /);
 });

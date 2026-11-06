@@ -1,7 +1,7 @@
 // Jobs and signals as `horde job` and `horde signal` use them (design: planning/fleet-db-design.md "Jobs and signals"):
-//   node jobs-cli.mjs job upsert --id <id> --owner <o> (--job <text> | --file <path>) [--session <uuid>] [--started <ms or ISO>] [--due <ms or ISO>] --by <who>
+//   node jobs-cli.mjs job upsert --id <id> --owner <o> (--job <text> | --file <path>) [--session <uuid>] [--started <ms or ISO>] [--due <ms or ISO>] [--waiting-on <text> | --not-waiting] --by <who>
 //   node jobs-cli.mjs job done   --id <id> (--proof <text> | --file <path>) --by <who> [--at <ms or ISO>]
-//   node jobs-cli.mjs job list   [--open] [--owner <o>] [--overdue] [--json]
+//   node jobs-cli.mjs job list   [--open] [--owner <o>] [--overdue] [--not-waiting] [--json]
 //   node jobs-cli.mjs signal raise --key <k> --kind <kind> [--owner <o>] (--text <text> | --file <path>) [--at <ms or ISO>]
 //   node jobs-cli.mjs signal close --key <k> --by <who>
 //   node jobs-cli.mjs signal list  [--open] [--owner <o>] [--unwoken] [--mark-woke [--at <ms or ISO>]] [--json]
@@ -25,9 +25,9 @@ const BUSY_MS_DEFAULT = 3000;
 
 // Flags that take a value, and flags that stand alone, per noun and verb. An unknown flag or one given twice is refused.
 const FLAGS = {
-  'job upsert': { value: ['--id', '--owner', '--job', '--file', '--session', '--started', '--due', '--by'], bare: [] },
+  'job upsert': { value: ['--id', '--owner', '--job', '--file', '--session', '--started', '--due', '--waiting-on', '--by'], bare: ['--not-waiting'] },
   'job done': { value: ['--id', '--proof', '--file', '--by', '--at'], bare: [] },
-  'job list': { value: ['--owner'], bare: ['--open', '--overdue', '--json'] },
+  'job list': { value: ['--owner'], bare: ['--open', '--overdue', '--not-waiting', '--json'] },
   'signal raise': { value: ['--key', '--kind', '--owner', '--text', '--file', '--at'], bare: [] },
   'signal close': { value: ['--key', '--by'], bare: [] },
   'signal list': { value: ['--owner', '--at'], bare: ['--open', '--unwoken', '--mark-woke', '--json'] },
@@ -126,7 +126,7 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
     const clock = { now };
     switch (verb) {
       case 'job upsert': {
-        const r = upsertJob(db, { id: flags['--id'], owner: flags['--owner'], job: text, session: flags['--session'], started: flags['--started'], due: flags['--due'], by: flags['--by'] }, clock);
+        const r = upsertJob(db, { id: flags['--id'], owner: flags['--owner'], job: text, session: flags['--session'], started: flags['--started'], due: flags['--due'], waitingOn: flags['--waiting-on'], notWaiting: flags['--not-waiting'] === true, by: flags['--by'] }, clock);
         out(r.action + ' ' + ascii(flags['--id']) + (r.action === 'updated' ? ' (' + r.changed.join(', ') + ')' : ''));
         return 0;
       }
@@ -136,11 +136,11 @@ export function main(argv, env = process.env, out = (s) => process.stdout.write(
         return 0;
       }
       case 'job list': {
-        const rows = listJobs(db, { open: flags['--open'] === true, owner: flags['--owner'] ?? null, overdue: flags['--overdue'] === true }, clock);
+        const rows = listJobs(db, { open: flags['--open'] === true, owner: flags['--owner'] ?? null, overdue: flags['--overdue'] === true, notWaiting: flags['--not-waiting'] === true }, clock);
         if (flags['--json']) { out(ascii(JSON.stringify({ jobs: rows }))); return 0; }
         if (rows.length === 0) { out('no jobs'); return 0; }
         for (const r of rows) {
-          out(ascii([r.id, r.owner, r.overdue ? 'overdue' : r.state, 'started=' + r.started, 'due=' + show(r.due), 'done=' + show(r.done), '|', oneLine(r.job)].join(' ')));
+          out(ascii([r.id, r.owner, r.overdue ? 'overdue' : r.state, 'started=' + r.started, 'due=' + show(r.due), 'done=' + show(r.done), ...(r.waiting_on === null ? [] : ['waiting=' + oneLine(r.waiting_on).replace(/ /g, '_')]), '|', oneLine(r.job)].join(' ')));
         }
         return 0;
       }

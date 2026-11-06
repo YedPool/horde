@@ -927,7 +927,8 @@ export const MIGRATIONS = [
   // Neither table has a file behind it: fleet.db is their only home, so a backup of the file is their backup.
   `
   -- A piece of promised work somebody is on. Open while done_at is NULL. due_at is optional: a job with no due time is
-  -- never overdue, but it is still listed. done_proof is what shows it is done (a PR, a path, a line); a job is never
+  -- never overdue, but it is still listed. done_proof is what shows it is done (a PR, a path, a line) and done_by who closed it (both set
+  -- exactly when done_at is); a job is never
   -- closed without one.
   CREATE TABLE job (
     id TEXT NOT NULL PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 120 AND id NOT GLOB '*[^!-~]*'),
@@ -938,9 +939,13 @@ export const MIGRATIONS = [
     due_at INTEGER CHECK (due_at >= 0),
     done_at INTEGER CHECK (done_at >= 0),
     done_proof TEXT CHECK (length(done_proof) BETWEEN 1 AND 4000),
+    done_by TEXT CHECK (length(done_by) BETWEEN 1 AND 64 AND done_by NOT GLOB '*[^!-~]*'),
+    -- Someone else is holding it up (the overseer does not nag an owner whose job waits on another: its IDLE-OPEN-JOB rule skips it).
+    waiting_on TEXT CHECK (length(waiting_on) BETWEEN 1 AND 4000),
     created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 64 AND created_by NOT GLOB '*[^!-~]*'),
     CHECK (done_at IS NULL OR done_at >= started_at),
-    CHECK ((done_at IS NULL) = (done_proof IS NULL))
+    CHECK ((done_at IS NULL) = (done_proof IS NULL)),
+    CHECK ((done_at IS NULL) = (done_by IS NULL))
   ) STRICT;
   -- What the overseer reads: the open jobs, soonest due first (NULLs, which have no due time, sort first and are skipped).
   CREATE INDEX job_open_due ON job (due_at) WHERE done_at IS NULL;
