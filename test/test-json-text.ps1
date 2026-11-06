@@ -94,7 +94,7 @@ function Get-StrictSignature {
         "infinity" = 'Infinity'; "hex" = '0x10'; "single-quotes" = "{'a':1}"; "bare-key" = '{a:1}'
         "raw-tab" = ('"a' + [char]9 + 'b"'); "bom" = ([char]0xFEFF + '{"a":1}'); "comment" = '{"a":1 /* c */}'
         "nested-100" = (& $deep 100); "nested-101" = (& $deep 101); "spaced" = ' true '; "empty" = ''
-        "two-values" = '1 2'; "escape" = '"\u00e9\n"'; "bad-escape" = '"\x"'
+        "two-values" = '1 2'; "escape" = '"\u00e9\n"'; "bad-escape" = '"\x"'; "u-escape-space" = '"\u 123"'
         "repeated-key" = '{"a":1,"a":"two"}'; "case-keys" = '{"a":1,"A":2}'; "empty-key" = '{"":1}'; "psobject-key" = '{"PSObject":1}'
     }
     $parts = foreach ($name in $cases.Keys) {
@@ -118,7 +118,7 @@ $wantStrict = (@(
     "infinity=THROW", "hex=THROW", "single-quotes=THROW", "bare-key=THROW",
     "raw-tab=THROW", "bom=THROW", "comment=THROW",
     "nested-100=array[1](array)", "nested-101=THROW", "spaced=Boolean", "empty=null",
-    "two-values=THROW", "escape=String:233.10", "bad-escape=THROW",
+    "two-values=THROW", "escape=String:233.10", "bad-escape=THROW", "u-escape-space=THROW",
     "repeated-key=object(a=String:two)", "case-keys=THROW", "empty-key=THROW", "psobject-key=THROW"
 ) -join ";")
 $strictHere = Get-StrictSignature

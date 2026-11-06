@@ -80,6 +80,12 @@
         @{ Name = "unknown-escape-allowed"
            Find = 'default: throw Bad(i, "an escape JSON does not have");'
            Replace = 'default: sb.Append(e); break;' }
+        @{ Name = "u-escape-takes-spaces"
+           Find = 'NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out code'
+           Replace = 'NumberStyles.HexNumber, CultureInfo.InvariantCulture, out code' }
+        @{ Name = "u-escape-digits-read-again"
+           Find = 'i += 4;'
+           Replace = '' }
         @{ Name = "repeated-key-keeps-the-first"
            Find = 'StringComparison.Ordinal)) { have.Value = value; }'
            Replace = 'StringComparison.Ordinal)) { }' }
