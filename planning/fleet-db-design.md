@@ -626,3 +626,13 @@ and the first stop after that checks again at once (a nudge a little early, neve
 **Exit codes** (the node command; `horde` itself reports 0 or 1, and the message names the finer code): 0 done, 1 refused or failed (one line), 2 no home, 3 `fleet.db busy` (the lock was not free within `HORDE_JOBS_BUSY_MS`, default 3000), 4 no `fleet.db` yet. These verbs never make or migrate the database: it is opened read-only first, which refuses a file older or newer than this code in words (`horde db init` owns the migration).
 
 **Reading it.** `horde db status` counts both tables like every other; `horde db check` needs no new rule (the CHECKs and triggers hold the shape of one row, and no row points at another table).
+
+## One allocator of T-numbers (T-0299; Orc M's order 2026-11-06)
+
+`task.py open` used to give max+1 from its own file while fleet.db saw that file minutes later, so two allocators could give one number to two sessions, and `label_seq` still read 1 after the importer had brought 414 tasks in. Now `node fleet-db/label-cli.mjs take-task --above <highest in the ledger>` is the only allocator: under one write lock it raises the counter past the task rows and `--above`, never lowers it, and takes one. `task.py` still writes its file, and the sync brings that row in, as before.
+
+- A number taken and not used is a gap, which is harmless; a duplicate is not. So there is no fallback to max+1.
+- Busy (exit 3): `task.py open` retries for up to 30 seconds, then refuses and says to try again. No fleet.db (exit 4), no home (2) or a refusal (1): it refuses at once. Nothing is recorded in any of these.
+- Only `open` needs fleet.db. Every other `task.py` verb works with fleet.db down, so a promise or a merged event is never lost.
+- A ledger named by `FLEET_TASK_LEDGER` is a test's: it numbers itself, and never reaches a real fleet.db, unless `FLEET_TASK_LABEL_CLI` names the allocator for that test.
+- `task.py` is not in this repository: it lives in the analyst's folder, so its change goes live when saved.
