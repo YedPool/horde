@@ -499,7 +499,7 @@ Check ($g2.state -ceq "known" -and @($g2.value.members).Count -eq 12 -and $g2.va
 Check ((Get-HordeRestoreFinding -Sessions (New-Mixed 7) -Now $t0 -Settings $settings -UncountedDuplicates 1).state -ceq "known" -and (Get-HordeRestoreFinding -Sessions @(New-Mixed 7)[0..6] -Now $t0 -Settings $settings -UncountedDuplicates 5).state -ceq "absent") "the share is the edge: 7 of 11 is a restore and 7 of 12 is not"
 # THE MINIMUMS STAY ON REAL MEMBERS: duplicates never make up the numbers of a restore.
 $two = Get-HordeRestoreFinding -Sessions @($threeTogether[0..1]) -Now $t0 -Settings $settings -UncountedDuplicates 5
-Check ($two.state -ceq "absent" -and "$($two.reason)".Contains("fewer than the 3")) "two real sessions with five duplicates are too few: the minimum counts real members only (found when the duplicates clear, inside restoreMaxAgeSeconds)"
+Check ($two.state -ceq "absent" -and "$($two.reason)".Contains("running sessions have an earlier life, fewer than the 3")) "two real sessions with five duplicates are too few: the minimum counts real members only (found when the duplicates clear, inside restoreMaxAgeSeconds)"
 # EVERY SESSION DOUBLED: no members, no finding, no crash, no restore.
 $none = Get-HordeRestoreFinding -Sessions @() -Now $t0 -Settings $settings -UncountedDuplicates 12
 Check ($none.state -ceq "absent") "no running session counted and twelve duplicates is an absent finding, not a throw and not a restore"

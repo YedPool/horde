@@ -352,7 +352,9 @@ Check (@($r16c.duplicates | Where-Object { $_.sessionId -eq (Sid 95) }).Count -e
 # T-0116: complete is unchanged by a duplicate (every other reader leans on it), and a NEW member says an agent is short ONLY
 # because of named duplicates - the one fact the restore source needs to go on counting the rest.
 Check ($r16.wholeButDuplicates["claude"] -eq $true -and (St $r16.complete.claude) -eq "unknown") "an agent short only by a duplicate: complete still says unknown, and wholeButDuplicates says true"
-Check ($r16.wholeButDuplicates["codex"] -eq $false -and (St $r16.complete.codex) -eq "unknown") "an agent with no duplicate (codex, no control folder) is false there, and unknown in complete, as before"
+Check ($r16.wholeButDuplicates["codex"] -eq $false) "an agent with no duplicate (codex) is false there: only a duplicate makes it true"
+$rNoCodex = Get-HordeIdentity -ClaudeDir $d16b -ProjectsDir $pDir -CodexDir (Join-Path $empty "no-such-control-folder") -Processes (Table @(@(612, "claude.exe", (Created 500)), @(613, "claude.exe", (Created 60)))) -Now $now
+Check ($rNoCodex.wholeButDuplicates["codex"] -eq $false) "codex with no control folder is false there (its complete is untouched)"
 Check ($r16b.wholeButDuplicates["claude"] -eq $false -and (St $r16b.complete.claude) -eq "known") "a whole listing with no duplicate is not 'whole but for duplicates'"
 Check (@($dup[0].agents) -contains "claude") "each duplicate names the agents whose files it came from"
 $d16d = NewDir "claude"
