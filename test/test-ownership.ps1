@@ -96,7 +96,7 @@ Check ($controlKeys.Count -eq 32 -and $x2Reads.Count -ge 10) ("CONTROL: the cens
 Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
 # The version the keys were surveyed against, so a live file written by a newer Claude Code fails
 # the identity suite until someone looks at what that version writes (ledger L-056).
-Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.285") "the table records the claude version its control-file keys were surveyed against"
+Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.318") "the table records the claude version its control-file keys were surveyed against"
 # Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
 # of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
 # an engine must still hold after the session exits and Claude removes its control file - a
