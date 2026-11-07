@@ -557,14 +557,66 @@ Check ($cmdText.Contains('$tools["Tell"] = { param($Key, $Body, $Values, $Gen) r
 Check ($cmdText.Contains('$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay"') -and $cmdText.Contains('$tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice')) "the relay watch tells through the unmarked teller, and the founder's notice is unchanged"
 
 Write-Host ""
-Write-Host "--- the two tools of a pass run in one process, in either order (the real blocks of cli/commands/analyst.ps1) ---" -ForegroundColor Cyan
+Write-Host "--- the REAL Tell and TellTaken blocks of cli/commands/analyst.ps1, cut out with the parser and run (T-0391 round 2, item 5) ---" -ForegroundColor Cyan
+function Get-CommandBlock {
+    # The right-hand side of $tools["<Name>"] = { ... } in the command file: the block as the file has it.
+    param([string]$Name)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\analyst.ps1"), [ref]$null, [ref]$null)
+    foreach ($a in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))) {
+        if ($a.Left.Extent.Text -ceq ('$tools["' + $Name + '"]') -and $a.Right.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { return $a.Right.Expression.ScriptBlock.GetScriptBlock() }
+    }
+    return $null
+}
+$blkTell = Get-CommandBlock "Tell"
+$blkLook = Get-CommandBlock "TellTaken"
+Check ($null -ne $blkTell -and $null -ne $blkLook) "CONTROL: the command file has both blocks, and the parser cut them out"
+# The blocks read $hordeHome as the command has it. Its seat is the stand-in's; the folder the guard of a test's home looks at is pointed
+# elsewhere for the length of these checks, so the real teller goes past the guard to the stand-in messenger.
+# (Not $seat: the callee would read the teller's own -Seat parameter, which is null here.)
+$script:standInSeat = $seat
+function Get-HordeRoleSeat { param([string]$Role) return (& $script:standInSeat) }
+$keepTemp = $env:TEMP; $keepTmp = $env:TMP
+$env:TEMP = $notTemp; $env:TMP = $notTemp
+try {
+    $hordeHome = New-Home
+    # 1. THE GENERATION REACHES THE ID: a block that drops -Gen tells every event as generation 0.
+    $r = & $blkTell "no-analyst" "FLEET ANALYST SUPERVISOR`nwords" $vals 3
+    Check ($r.ok -eq $true -and (Posts-Of (Id-Of "no-analyst" 3)) -eq 1 -and @(Marks-Of $hordeHome (Id-Of "no-analyst" 3)).Count -eq 1 -and (Posts-Of (Id-Of "no-analyst" 0)) -eq 0) ("the real Tell block: generation 3 is the id that is posted and marked (" + $r.detail + ")")
+    $r = & $blkTell "no-analyst" "FLEET ANALYST SUPERVISOR`nwords" $vals 4
+    Check ($r.ok -eq $true -and (Posts-Of (Id-Of "no-analyst" 4)) -eq 1 -and @(Marks-Of $hordeHome (Id-Of "no-analyst" 4)).Count -eq 1) "and generation 4 is a new notice with its own id"
+    # 2. THE TWO SETTINGS REACH THE LOOK. A mark 30 s old, takenAlarmSeconds 10: it alarms (the default, 90, would not).
+    $hordeHome = New-Home
+    $tiny = [pscustomobject]@{ fromLabel = "AS"; tellWarchief = $true; takenAlarmSeconds = 10; takenAfterAlarmSeconds = 10 }
+    $idS = Id-Of "no-analyst" 0
+    $null = Send-HordeAnalystWarchiefTaken -Key "no-analyst" -Body "x" -Values $tiny -Gen 0 -HordeHome $hordeHome -Now ([datetime]::UtcNow.AddSeconds(-30)) -Seat $seat -TempRoot $notTemp
+    $out = @(& $blkLook $tiny)
+    Check ((Alarms-In ($out -join " | ")) -eq 1 -and @(Marks-Of $hordeHome $idS | Where-Object { $_.alarmed }).Count -eq 1) ("the real TellTaken block: takenAlarmSeconds reaches the look - a notice 30 s old alarms at 10 s (" + ($out -join " | ") + ")")
+    # takenAfterAlarmSeconds: the alarmed mark was last asked 60 s ago; at a cadence of 10 s it is asked again (the default, 300, would not).
+    $nowMs = Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)
+    $okW = Write-HordeAnalystTellAsked -HordeHome $hordeHome -Table @{ ($idS.Replace("-", "")) = [long]($nowMs - 60000) }
+    $asks = [int]$script:askedIds[$idS]
+    $out = @(& $blkLook $tiny)
+    Check ($okW -eq $true -and [int]$script:askedIds[$idS] -eq ($asks + 1)) ("and takenAfterAlarmSeconds reaches it - an alarmed notice last asked 60 s ago is asked again at 10 s (asked " + $script:askedIds[$idS] + " after " + $asks + ")")
+    # A REAL MARK REACHES A REAL OUTCOME: the notice is taken, and the real look says so and takes the mark off.
+    $script:stages[$idS] = "handed-over"
+    $null = Write-HordeAnalystTellAsked -HordeHome $hordeHome -Table @{ ($idS.Replace("-", "")) = [long]((Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)) - 60000) }
+    $out = @(& $blkLook $tiny)
+    Check (($out -join " | ").Contains("TAKEN: analyst supervisor notice " + $idS) -and @(Marks-Of $hordeHome $idS).Count -eq 0) ("and a notice the session took is said TAKEN and its mark is off (" + ($out -join " | ") + ")")
+    # No mark: the look asks nothing.
+    $hordeHome = New-Home
+    $out = @(& $blkLook $tiny)
+    Check ($out.Count -eq 0 -and $script:askedIds.Count -eq 0) "and with nothing awaiting the real look says nothing and asks no messenger"
+} finally { $env:TEMP = $keepTemp; $env:TMP = $keepTmp }
+
+Write-Host ""
+Write-Host "--- the load comes from the command itself, and its two tools run in one process in either order (a fresh process each) ---" -ForegroundColor Cyan
 $shell = (Get-Process -Id $PID).Path
-$loader = Join-Path $fx "load-twice.ps1"
+$loader = Join-Path $fx "run-command-blocks.ps1"
 foreach ($order in @("TellTaken,Tell", "Tell,TellTaken")) {
-    $got = @(& $shell -NoProfile -File $loader -Root $root -Order $order -Home_ (Join-Path $work ("loader-" + $order.Replace(",", "-"))))
-    $steps = @($order -split ",")
+    $got = @(& $shell -NoProfile -File $loader -Root $root -Order $order -Home_ (Join-Path $work ("loader-" + $order.Replace(",", "-"))) -TempAway $notTemp)
     $said = $got -join " | "
-    Check ($got.Count -eq 2 -and $said.Contains($order + " " + $steps[0] + " OK") -and $said.Contains($order + " " + $steps[1] + " OK")) ($order + ": both blocks run in one process (" + $said + ")")
+    Check ($said -match 'LOADED [^|]*wezfleet' -and -not $said.Contains("THREW")) ($order + ": the command's own statement loaded the messenger port and the fleet messenger, and no block threw (" + $said + ")")
+    Check ($said -match "Tell ok=False detail=the warchief's session cannot be told" -and $said -match 'TellTaken lines=[^|]*cannot be read') ($order + ": the real Tell went past the guard to the warchief's seat, and the real look reached the awaiting list (" + $said + ")")
 }
 }
 finally {

@@ -12,6 +12,23 @@
         @{ Name = "analyst-command-look-tool-missing"
            Find = '$tools["TellTaken"] = {'
            Replace = '$tools["TellTakenOff"] = {' }
+        # Round 2, item 5: the three mutants a reviewer's own run left alive, and the second load.
+        @{ Name = "analyst-command-tell-drops-the-generation"
+           Find = '-Gen ([long]$Gen) -HordeHome $hordeHome) }'
+           Replace = '-HordeHome $hordeHome) }' }
+        @{ Name = "analyst-command-look-ignores-the-alarm-setting"
+           Find = '-AlarmSeconds ([double]$Values.takenAlarmSeconds)'
+           Replace = '-AlarmSeconds 90' }
+        @{ Name = "analyst-command-look-ignores-the-cadence-setting"
+           Find = '-AfterAlarmSeconds ([double]$Values.takenAfterAlarmSeconds)'
+           Replace = '-AfterAlarmSeconds 300' }
+        @{ Name = "analyst-command-never-loads-the-messengers"
+           Find = 'foreach ($f in @(Get-HordeMessengerFiles)) { . $f }'
+           Replace = '$null = 0' }
+        # A second load of the messenger port by one of the tools throws "already registered" (PR 430, round 1): the suite must FAIL a check, not break.
+        @{ Name = "analyst-command-look-loads-the-messengers-again"
+           Find = 'param($Values)'
+           Replace = 'param($Values); foreach ($f in @(Get-HordeMessengerFiles)) { . $f }' }
         @{ Name = "analyst-command-relay-tell-marked"
            Find = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay"'
            Replace = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchiefTaken -Key "relay"' }
