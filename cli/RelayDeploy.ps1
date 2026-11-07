@@ -42,6 +42,7 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "surfaces\pwa\Site.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 $script:HordeRelayDeployBusyReason = "another deploy of the relay is running on this machine; this one did nothing"
 $script:HordeRelayDeployedSchemaVersion = 1
@@ -64,10 +65,10 @@ function Get-HordeRelayDeployBuildFiles {
 }
 
 function Get-HordeRelayDeployMachineryFiles {
-    # The deploy's own code outside the relay's folder: this file, and the port that runs a relay's
-    # deploy. A change to it is a change to how a deploy is made, which the supervisor never runs by
+    # The deploy's own code outside the relay's folder: this file, the parser that reads its record, and
+    # the port that runs a relay's deploy. A change to it is a change to how a deploy is made, which the supervisor never runs by
     # itself (review of PR 263): it counts as the Worker, warned, never deployed (cli/RelayPublish.ps1).
-    return @("cli/RelayDeploy.ps1", "relays/Port.ps1")
+    return @("cli/RelayDeploy.ps1", "core/JsonText.ps1", "relays/Port.ps1")
 }
 
 function Get-HordeRelayDeploySiteHashes {
@@ -126,7 +127,7 @@ function Read-HordeRelayDeployed {
     try {
         $bytes = [System.IO.File]::ReadAllBytes($path)
         if ($bytes.Length -gt $script:HordeRelayDeployedMaxBytes) { return (New-HordeUnknown -Reason ("the deploy record " + $path + " is larger than one is")) }
-        $r = [System.Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
+        $r = ConvertFrom-HordeJson -Text ([System.Text.Encoding]::ASCII.GetString($bytes))
     } catch { return (New-HordeUnknown -Reason ("the deploy record " + $path + " could not be read") -ErrorRecord $_) }
     $ok = ($null -ne $r -and $r.schemaVersion -eq $script:HordeRelayDeployedSchemaVersion -and ("" + $r.commit) -cmatch '\A([0-9a-f]{40})?\z' -and $r.clean -is [bool] -and ("" + $r.origin) -cmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z')
     $at = [datetime]::MinValue
