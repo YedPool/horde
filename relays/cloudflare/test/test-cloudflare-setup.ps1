@@ -33,6 +33,11 @@
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
+# 5.1 ONLY. Started from PowerShell 7, the shipped command runs itself again under 5.1
+# (cli/commands/setup.ps1), so setup's steps never run under 7. This suite walks them in this process, where
+# under 7 the real requirements step would stop the walk. The route from 7 is not lost: the 5.1 run below
+# starts a real pwsh.exe and checks the run-again. A skip, never a green.
+if (("" + $PSVersionTable.PSEdition) -cne "Desktop") { Complete-HordeSuite -Success "NOTHING RUN: setup's steps run under Windows PowerShell 5.1 only; the 5.1 run checks the start from 7" -PassCode 3 }
 trap { Register-HordeSuiteError $_; continue }
 foreach ($f in @("Tristate", "Home", "ModuleSettings", "Heartbeat", "Services")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
 . (Join-Path $root "relays\Port.ps1")
