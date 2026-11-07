@@ -76,6 +76,8 @@ function New-Rig {
         Post     = { param($SessionId, $MessageId, $Body, $Values) [void]$rig.posts.Add([pscustomobject]@{ to = $SessionId; id = $MessageId; body = $Body }); return [pscustomobject]@{ ok = $rig.postOk; woken = $true; detail = $(if ($rig.postOk) { "" } else { "the mailbox is full" }) } }.GetNewClosure()
         Tell     = { param($Key, $Body, $Values) [void]$rig.tells.Add([pscustomobject]@{ key = $Key; body = $Body }); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
         Notify   = { param($Line) [void]$rig.notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+        # The stand-in Tell above always posts, so its notice is always on the awaiting list (the real tool reads the list).
+        Watching = { param($Key, $Gen) return "listed" }
         Spawn    = { param($Script, $Handover, $Reason, $Values) [void]$rig.spawns.Add([pscustomobject]@{ script = $Script; handover = $Handover; reason = $Reason }); return [pscustomobject]@{ ok = $rig.spawnOk; detail = $(if ($rig.spawnOk) { "" } else { "exited 1" }) } }.GetNewClosure()
     }
     return $rig
@@ -447,7 +449,7 @@ try {
     # unacked rounds, and the notice says the warchief was NOT told.
     foreach ($case in @("off", "failing")) {
         $q = $(if ($case -ceq "off") { New-Rig ("quiet-" + $case) -Settings '"tellWarchief": false' } else { New-Rig ("quiet-" + $case) })
-        if ($case -ceq "failing") { $q.tools["Tell"] = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $false; detail = "the mail store is locked" } } }
+        if ($case -ceq "failing") { $q.tools["Tell"] = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $false; detail = "the mail store is locked" } }; $q.tools["Watching"] = { param($Key, $Gen) return "gone" } }
         Write-Handover -Folder $q.folder -Sid $sidA -At $t0
         $q.listing = New-Listing -Live @($sidA)
         $q.now = $t0.AddMinutes(1); $null = Pass $q

@@ -503,6 +503,111 @@ $bad3 = Read-HordeAnalystState -Path $sp3
 Check ($bad3.state -ceq "known" -and @($bad3.value.tellRetry).Count -eq 1 -and @($bad3.value.tellRetry)[0] -ceq "started-gone=") "and a row that is not a row is left out when it is read"
 
 Write-Host ""
+Write-Host "--- AN ACK ENDS A RUN BEFORE THE RETRIES (T-0391 round 3, item 2) ---" -ForegroundColor Cyan
+# The acks are read before the retries: a no-answer kept for a round the analyst has since acked is dropped with its run, not told.
+$HK = New-HomeR "none" @($lateRound)
+$script:noMessenger = $true
+$null = Pass-R $HK 0
+Check ((Retry-Of $HK) -ccontains "no-answer=20261013T110000Z-r" -and (Posts-Of $idN) -eq 0) "CONTROL: a refused no-answer is kept for a retry, nothing posted"
+$script:noMessenger = $false
+$pathsK = Get-HordeAnalystPaths -Folder (Get-HordeAnalystFolder -Values (Get-HordeAnalystPolicy -HordeHome $HK).values -HordeHome $HK)
+[System.IO.File]::AppendAllText($pathsK.acks, "round 20261013T110000Z-r done`n")
+$r = Pass-R $HK 60
+$sayK = $r.lines -join " | "
+Check ((Posts-Of $idN) -eq 0 -and @(Marks-Of $HK $idN).Count -eq 0 -and (Retry-Of $HK).Count -eq 0 -and @((State-Of $HK).told) -cnotcontains "no-answer" -and -not $sayK.Contains("no-answer")) ("the ack arrived: the retry is dropped with the run it belonged to - no post, no mark, no row (" + $sayK + ")")
+# Acks that cannot be read end nothing: the retry is told as it was.
+$HK2 = New-HomeR "none" @($lateRound)
+$script:noMessenger = $true
+$null = Pass-R $HK2 0
+$script:noMessenger = $false
+$pathsK2 = Get-HordeAnalystPaths -Folder (Get-HordeAnalystFolder -Values (Get-HordeAnalystPolicy -HordeHome $HK2).values -HordeHome $HK2)
+New-Item -ItemType Directory -Path $pathsK2.acks -Force | Out-Null
+$null = Pass-R $HK2 60
+Check ((Posts-Of $idN) -eq 1 -and @((State-Of $HK2).told) -ccontains "no-answer") "and acks that cannot be read end nothing: the row is still told (no guess)"
+
+Write-Host ""
+Write-Host "--- THE FOUNDER'S PHONE IS TOLD WHAT IS KNOWN OF THE NOTICE, IN EACH STATE (T-0391 round 3, item 3) ---" -ForegroundColor Cyan
+$script:notices = New-Object System.Collections.ArrayList
+$script:notifyOk = $true
+$passToolsR["Notify"] = { param($Line) if ($script:notifyOk) { [void]$script:notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }; return [pscustomobject]@{ ok = $false; detail = "the stand-in notifier says no" } }
+$passToolsR["Watching"] = { param($Key, $Gen) return (Get-HordeAnalystNoticeWatch -HordeHome $script:passHome -Key $Key -Gen ([long]$Gen)) }
+function Late-Round { param([string]$Id, [int]$Min) return [pscustomobject]@{ id = $Id; kind = "round"; at = $t0.AddMinutes($Min); sessionId = $sidR; alerted = $false; woken = "yes" } }
+function Phone { return (@($script:notices.ToArray()) -join " // ") }
+# 1. posted and watched.
+$script:notices.Clear()
+$HP1 = New-HomeR "none" @($lateRound)
+$null = Pass-R $HP1 0
+Check ((Phone).Contains("a notice to the warchief was posted and is being watched for its taking.") -and @(Marks-Of $HP1 $idN).Count -eq 1) ("state posted and watched: " + (Phone))
+# 2. posted, then TAKEN, then a second late round tells the founder (the first Notify failed): not "being watched".
+$script:notices.Clear()
+$HP2 = New-HomeR "none" @($lateRound)
+$script:notifyOk = $false
+$null = Pass-R $HP2 0
+$script:notifyOk = $true
+$script:stages[$idN] = "seen"
+$null = Pass-R $HP2 30
+$stP2 = State-Of $HP2
+$stP2.rounds = @(@($stP2.rounds) + (Late-Round "20261013T113000Z-r" -30))
+Write-HordeAnalystState -Path (Join-Path (Get-HordeAnalystFolder -Values (Get-HordeAnalystPolicy -HordeHome $HP2).values -HordeHome $HP2) "supervisor.json") -State $stP2
+$null = Pass-R $HP2 60
+Check (@(Marks-Of $HP2 $idN).Count -eq 0 -and (Phone).Contains("was posted and is not being watched now; it may already have been taken.") -and -not (Phone).Contains("is being watched for") -and -not (Phone).Contains("was not posted")) ("state posted, mark gone (taken): " + (Phone))
+# 3. the result was UNKNOWN: it may have landed.
+$script:notices.Clear()
+$HP3 = New-HomeR "none" @($lateRound)
+$script:postSays = "unknown"
+$null = Pass-R $HP3 0
+$script:postSays = "accepted"
+Check (@(Marks-Of $HP3 $idN).Count -eq 1 -and (Phone).Contains("may have been posted; the supervisor cannot tell.") -and -not (Phone).Contains("was not posted")) ("state unknown: " + (Phone))
+# 4. a known refusal: no messenger.
+$script:notices.Clear()
+$HP4 = New-HomeR "none" @($lateRound)
+$script:noMessenger = $true
+$null = Pass-R $HP4 0
+$script:noMessenger = $false
+Check (@(Marks-Of $HP4 $idN).Count -eq 0 -and (Phone).Contains("a notice to the warchief was not posted.") -and -not (Phone).Contains("may have")) ("state refused: " + (Phone))
+# 5. the other states, by the words themselves: telling off, a list that cannot be read, no tool to ask.
+$stW = New-HordeAnalystState
+$onTools = @{ Tell = { }; Watching = { param($Key, $Gen) return "unread" } }
+$offVals = [pscustomobject]@{ tellWarchief = $false }
+$onVals = [pscustomobject]@{ tellWarchief = $true }
+Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools $onTools -Values $offVals -Key "no-answer") -ceq "a notice to the warchief was not posted.") "telling off: not posted"
+Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools @{ Tell = $null } -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was not posted.") "no teller: not posted"
+Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools $onTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was not confirmed as posted.") "not told and the list cannot be read: not confirmed as posted, no guess"
+$stW.told = [string[]]@("no-answer")
+Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools $onTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted; whether it is still being watched is not known.") "told and the list cannot be read: posted, the watch not known"
+Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools @{ Tell = { }; Watching = { throw "x" } } -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted; whether it is still being watched is not known.") "and a tool that throws is the same: no guess"
+
+Write-Host ""
+Write-Host "--- THE RETRY ROWS: who keeps one and who drops it (T-0391 round 3, item 4) ---" -ForegroundColor Cyan
+# A start skips the retry of the keys it declares over: a row for start-silent is dropped, not told, when a fresh session is started.
+$HX = New-HomeR "running"
+$polX = Get-HordeAnalystPolicy -HordeHome $HX
+$foldX = Get-HordeAnalystFolder -Values $polX.values -HordeHome $HX
+$stX = (Read-HordeAnalystState -Path (Join-Path $foldX "supervisor.json")).value
+$stX.tellRetry = [string[]]@("start-silent=")
+Write-HordeAnalystState -Path (Join-Path $foldX "supervisor.json") -State $stX
+$null = Pass-R $HX 0
+Check ($script:spawns -eq 1 -and (Posts-Of (Id-Of "start-silent" 0)) -eq 0 -and (Posts-Of (Id-Of "start-silent" 1)) -eq 0 -and (Retry-Of $HX).Count -eq 0) "a start drops the pending tell of a key it declares over, and does not tell it first"
+# Telling off takes the row: a row kept while telling is off would be told the day it is switched on, for an event long over.
+$stO = New-HordeAnalystState
+$stO.tellRetry = [string[]]@("no-answer=20261013T110000Z-r")
+$lineO = Send-HordeAnalystTell -State $stO -Key "no-answer" -Tools @{ Tell = { param($Key, $Body, $Values, $Gen) throw "must not be called" } } -Values $offVals -Round "20261013T110000Z-r" -Retry
+Check ($lineO.Contains("telling is off") -and @($stO.tellRetry).Count -eq 0) "telling off: the key is not told and its pending row is dropped"
+# A key already told keeps no row.
+$stT = New-HordeAnalystState
+$stT.told = [string[]]@("no-answer")
+$stT.tellRetry = [string[]]@("no-answer=20261013T110000Z-r")
+$lineT = Send-HordeAnalystTell -State $stT -Key "no-answer" -Tools @{ Tell = { param($Key, $Body, $Values, $Gen) throw "must not be called" } } -Values $onVals -Round "20261013T110000Z-r" -Retry
+Check ($lineT -ceq "" -and @($stT.tellRetry).Count -eq 0) "a key already told is not told again and its pending row is dropped"
+# A key the session decides every pass gets no row, whatever the answer: it is decided again next pass, and a row would tell it twice.
+$stE2 = New-HordeAnalystState
+$refuse = @{ Tell = { param($Key, $Body, $Values, $Gen) return [pscustomobject]@{ ok = $false; detail = "the stand-in refuses" } } }
+$null = Send-HordeAnalystTell -State $stE2 -Key "no-analyst" -Tools $refuse -Values $onVals
+Check (@($stE2.tellRetry).Count -eq 0 -and @($stE2.told) -cnotcontains "no-analyst") "a refused session-decided key (no -Retry) gets no row"
+$null = Send-HordeAnalystTell -State $stE2 -Key "spawn-failed" -Tools $refuse -Values $onVals -Retry
+Check (@($stE2.tellRetry) -ccontains "spawn-failed=") "CONTROL: a refused key told with -Retry does get its row"
+
+Write-Host ""
 Write-Host "--- A LATER EVENT OF THE SAME KEY IS HEARD; A RESTART IS NOT HEARD TWICE (through the real clear and tell) ---" -ForegroundColor Cyan
 $HE = New-Home
 $pol = Get-HordeAnalystPolicy -HordeHome $HE
@@ -569,6 +674,11 @@ function Get-CommandBlock {
 }
 $blkTell = Get-CommandBlock "Tell"
 $blkLook = Get-CommandBlock "TellTaken"
+function Run-Block {
+    # A real block run so that its throwing is a FAILED CHECK, not a break of the suite (a mutant that makes the block throw must be a catch).
+    param([scriptblock]$Block, [object[]]$With = @(), [string]$Name = "block")
+    try { return @(& $Block @With) } catch { Check $false ("the real " + $Name + " block threw: " + $_.Exception.Message); return @() }
+}
 Check ($null -ne $blkTell -and $null -ne $blkLook) "CONTROL: the command file has both blocks, and the parser cut them out"
 # The blocks read $hordeHome as the command has it. Its seat is the stand-in's; the folder the guard of a test's home looks at is pointed
 # elsewhere for the length of these checks, so the real teller goes past the guard to the stand-in messenger.
@@ -580,31 +690,38 @@ $env:TEMP = $notTemp; $env:TMP = $notTemp
 try {
     $hordeHome = New-Home
     # 1. THE GENERATION REACHES THE ID: a block that drops -Gen tells every event as generation 0.
-    $r = & $blkTell "no-analyst" "FLEET ANALYST SUPERVISOR`nwords" $vals 3
+    $r = Run-Block $blkTell @("no-analyst", "FLEET ANALYST SUPERVISOR`nwords", $vals, 3) "Tell"
     Check ($r.ok -eq $true -and (Posts-Of (Id-Of "no-analyst" 3)) -eq 1 -and @(Marks-Of $hordeHome (Id-Of "no-analyst" 3)).Count -eq 1 -and (Posts-Of (Id-Of "no-analyst" 0)) -eq 0) ("the real Tell block: generation 3 is the id that is posted and marked (" + $r.detail + ")")
-    $r = & $blkTell "no-analyst" "FLEET ANALYST SUPERVISOR`nwords" $vals 4
+    $r = Run-Block $blkTell @("no-analyst", "FLEET ANALYST SUPERVISOR`nwords", $vals, 4) "Tell"
     Check ($r.ok -eq $true -and (Posts-Of (Id-Of "no-analyst" 4)) -eq 1 -and @(Marks-Of $hordeHome (Id-Of "no-analyst" 4)).Count -eq 1) "and generation 4 is a new notice with its own id"
     # 2. THE TWO SETTINGS REACH THE LOOK. A mark 30 s old, takenAlarmSeconds 10: it alarms (the default, 90, would not).
     $hordeHome = New-Home
     $tiny = [pscustomobject]@{ fromLabel = "AS"; tellWarchief = $true; takenAlarmSeconds = 10; takenAfterAlarmSeconds = 10 }
     $idS = Id-Of "no-analyst" 0
     $null = Send-HordeAnalystWarchiefTaken -Key "no-analyst" -Body "x" -Values $tiny -Gen 0 -HordeHome $hordeHome -Now ([datetime]::UtcNow.AddSeconds(-30)) -Seat $seat -TempRoot $notTemp
-    $out = @(& $blkLook $tiny)
+    $out = Run-Block $blkLook @($tiny) "TellTaken"
     Check ((Alarms-In ($out -join " | ")) -eq 1 -and @(Marks-Of $hordeHome $idS | Where-Object { $_.alarmed }).Count -eq 1) ("the real TellTaken block: takenAlarmSeconds reaches the look - a notice 30 s old alarms at 10 s (" + ($out -join " | ") + ")")
     # takenAfterAlarmSeconds: the alarmed mark was last asked 60 s ago; at a cadence of 10 s it is asked again (the default, 300, would not).
     $nowMs = Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)
     $okW = Write-HordeAnalystTellAsked -HordeHome $hordeHome -Table @{ ($idS.Replace("-", "")) = [long]($nowMs - 60000) }
     $asks = [int]$script:askedIds[$idS]
-    $out = @(& $blkLook $tiny)
+    $out = Run-Block $blkLook @($tiny) "TellTaken"
     Check ($okW -eq $true -and [int]$script:askedIds[$idS] -eq ($asks + 1)) ("and takenAfterAlarmSeconds reaches it - an alarmed notice last asked 60 s ago is asked again at 10 s (asked " + $script:askedIds[$idS] + " after " + $asks + ")")
     # A REAL MARK REACHES A REAL OUTCOME: the notice is taken, and the real look says so and takes the mark off.
     $script:stages[$idS] = "handed-over"
     $null = Write-HordeAnalystTellAsked -HordeHome $hordeHome -Table @{ ($idS.Replace("-", "")) = [long]((Get-HordeDecisionNoticeTakenNowMs -Now ([datetime]::UtcNow)) - 60000) }
-    $out = @(& $blkLook $tiny)
+    $out = Run-Block $blkLook @($tiny) "TellTaken"
     Check (($out -join " | ").Contains("TAKEN: analyst supervisor notice " + $idS) -and @(Marks-Of $hordeHome $idS).Count -eq 0) ("and a notice the session took is said TAKEN and its mark is off (" + ($out -join " | ") + ")")
+    # THE WATCH TOOL (T-0391 round 3, item 3): the real block says "listed" for a mark on the list and "gone" for one that is not.
+    $blkWatch = Get-CommandBlock "Watching"
+    $hordeHome = New-Home
+    $null = Send-HordeAnalystWarchiefTaken -Key "no-answer" -Body "x" -Values $tiny -Gen 2 -HordeHome $hordeHome -Now ([datetime]::UtcNow) -Seat $seat -TempRoot $notTemp
+    $wOn = @(Run-Block $blkWatch @("no-answer", 2) "Watching")
+    $wOff = @(Run-Block $blkWatch @("no-answer", 3) "Watching")
+    Check ($null -ne $blkWatch -and $wOn.Count -eq 1 -and $wOn[0] -ceq "listed" -and $wOff.Count -eq 1 -and $wOff[0] -ceq "gone") ("the real Watching block: a marked notice is listed, another generation is gone (" + ($wOn -join ",") + " / " + ($wOff -join ",") + ")")
     # No mark: the look asks nothing.
     $hordeHome = New-Home
-    $out = @(& $blkLook $tiny)
+    $out = Run-Block $blkLook @($tiny) "TellTaken"
     Check ($out.Count -eq 0 -and $script:askedIds.Count -eq 0) "and with nothing awaiting the real look says nothing and asks no messenger"
 } finally { $env:TEMP = $keepTemp; $env:TMP = $keepTmp }
 

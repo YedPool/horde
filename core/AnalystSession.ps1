@@ -183,7 +183,7 @@ function Read-HordeAnalystState {
         $s.transcriptLength = [long]$doc.transcriptLength
         $s.told = [string[]]@($doc.told | Where-Object { $_ -is [string] })
         # How many times each told key's condition has been over (cli/AnalystTend.ps1, ONE ID PER EVENT); absent in an older file.
-        $s.tellGen = $(if ($null -ne $doc.PSObject.Properties["tellGen"]) { [string[]]@($doc.tellGen | Where-Object { $_ -is [string] -and $_ -cmatch '\A[a-z0-9-]{1,40}=[0-9]{1,9}\z' }) } else { [string[]]@() })
+        if ($null -ne $doc.PSObject.Properties["tellGen"]) { $s.tellGen = [string[]]@($doc.tellGen | Where-Object { $_ -is [string] -and $_ -cmatch '\A[a-z0-9-]{1,40}=[0-9]{1,9}\z' }) }
         # The tells a messenger refused, to be told again on a later pass ("<key>=<round id or nothing>", cli/AnalystTend.ps1, THE RETRY); absent in an older file.
         if ($null -ne $doc.PSObject.Properties["tellRetry"]) { $s.tellRetry = [string[]]@($doc.tellRetry | Where-Object { $_ -is [string] -and $_ -cmatch '\A[a-z0-9-]{1,40}=[0-9A-Za-z-]{0,40}\z' }) }
         $rounds = New-Object System.Collections.ArrayList

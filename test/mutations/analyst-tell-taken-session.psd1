@@ -22,7 +22,7 @@
            Find = '$_ -cmatch ''\A[a-z0-9-]{1,40}=[0-9A-Za-z-]{0,40}\z'''
            Replace = '$true' }
         @{ Name = "analyst-state-without-generations-refused"
-           Find = '} else { [string[]]@() })'
-           Replace = '} else { throw "no generations" })' }
+           Find = 'if ($null -ne $doc.PSObject.Properties["tellGen"]) { $s.tellGen ='
+           Replace = 'if ($null -eq $doc.PSObject.Properties["tellGen"]) { throw "no generations" }; if ($null -ne $doc.PSObject.Properties["tellGen"]) { $s.tellGen =' }
     )
 }

@@ -51,6 +51,7 @@ $HordeCommand = @{
                 if (-not (Test-HordeAnalystTellAwaiting -HordeHome $hordeHome)) { return @() }
                 return @(Invoke-HordeAnalystTellTakenTick -HordeHome $hordeHome -Now ([datetime]::UtcNow) -AlarmSeconds ([double]$Values.takenAlarmSeconds) -AfterAlarmSeconds ([double]$Values.takenAfterAlarmSeconds))
             }
+            $tools["Watching"] = { param($Key, $Gen) return (Get-HordeAnalystNoticeWatch -HordeHome $hordeHome -Key $Key -Gen ([long]$Gen)) }
             $tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) }
             $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason) }
         }

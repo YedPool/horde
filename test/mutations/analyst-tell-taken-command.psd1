@@ -29,6 +29,13 @@
         @{ Name = "analyst-command-look-loads-the-messengers-again"
            Find = 'param($Values)'
            Replace = 'param($Values); foreach ($f in @(Get-HordeMessengerFiles)) { . $f }' }
+        # Round 3, item 3: the tool the pass asks whether a notice is still watched.
+        @{ Name = "analyst-command-watching-tool-missing"
+           Find = '$tools["Watching"] = {'
+           Replace = '$tools["WatchingOff"] = {' }
+        @{ Name = "analyst-command-watching-ignores-the-generation"
+           Find = '-Key $Key -Gen ([long]$Gen)) }'
+           Replace = '-Key $Key -Gen 0) }' }
         @{ Name = "analyst-command-relay-tell-marked"
            Find = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay"'
            Replace = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchiefTaken -Key "relay"' }

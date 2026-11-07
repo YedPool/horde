@@ -37,8 +37,8 @@
            Find = 'if ($r.detail -clike "already-posted*" -and -not $wasListed) {'
            Replace = 'if ($false) {' }
         @{ Name = "analyst-tell-already-posted-keeps-mark"
-           Find = '$null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id'
-           Replace = '$null = 0' }
+           Find = '$removedAgain = Remove-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id'
+           Replace = '$removedAgain = [pscustomobject]@{ ok = $true; reason = "" }' }
         @{ Name = "analyst-tell-already-posted-not-said"
            Find = '[void]$lines.Add("analyst: the notice " + $id'
            Replace = '$null = ("analyst: the notice " + $id' }
@@ -166,6 +166,36 @@
         @{ Name = "analyst-tell-pass-look-failure-kills-pass"
            Find = 'catch { & $say ("the awaiting notices could not be asked: " + $_.Exception.Message) }'
            Replace = 'catch { throw }' }
+        # Round 3, item 4: the four places a reviewer's own mutants left alive in round 2.
+        @{ Name = "analyst-retry-skip-on-start-dropped"
+           Find = '"start" { $script:HordeAnalystClearOnStart }'
+           Replace = '"start" { @() }' }
+        @{ Name = "analyst-telling-off-keeps-the-row"
+           Find = 'if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { Remove-HordeAnalystTellRetry -State $State -Key $Key; return'
+           Replace = 'if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return' }
+        @{ Name = "analyst-every-key-gets-a-row"
+           Find = 'if ($Retry) { Set-HordeAnalystTellRetry'
+           Replace = 'if ($true) { Set-HordeAnalystTellRetry' }
+        @{ Name = "analyst-told-key-keeps-the-row"
+           Find = 'if (@($State.told) -ccontains $Key) { Remove-HordeAnalystTellRetry -State $State -Key $Key; return "" }'
+           Replace = 'if (@($State.told) -ccontains $Key) { return "" }' }
+        # Round 3, item 2: the ack that ends a run is read before the retries.
+        @{ Name = "analyst-ack-ends-the-run-after-the-retries-not-before"
+           Find = '$s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
+           Replace = '$s.lastAckId = $newestAcked[0].id }' }
+        # Round 3, item 3: what the phone is told in each state.
+        @{ Name = "analyst-phone-always-says-watched-when-told"
+           Find = 'if ($watch -ceq "gone") { return "a notice to the warchief was posted and is not being watched now'
+           Replace = 'if ($false) { return "a notice to the warchief was posted and is not being watched now' }
+        @{ Name = "analyst-phone-says-not-posted-for-an-unknown-result"
+           Find = 'if ($watch -ceq "listed") { return "a notice to the warchief may have been posted'
+           Replace = 'if ($false) { return "a notice to the warchief may have been posted' }
+        @{ Name = "analyst-phone-never-asks-the-list"
+           Find = 'try { $w = Invoke-HordeAnalystTool -Tools $Tools -Name "Watching"'
+           Replace = 'try { $w = $null; Invoke-HordeAnalystTool -Tools $Tools -Name "Watching"' }
+        @{ Name = "analyst-phone-guesses-when-the-list-is-unread"
+           Find = 'return "a notice to the warchief was not confirmed as posted."'
+           Replace = 'return "a notice to the warchief was not posted."' }
         @{ Name = "analyst-tell-pass-unreadable-state-hides-lines"
            Find = 'lines = @($lines.ToArray()) + @("the supervisor''s state cannot be read: '
            Replace = 'lines = @("the supervisor''s state cannot be read: ' }
