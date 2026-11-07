@@ -244,8 +244,8 @@
            Find = '[System.IO.File]::AppendAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))'
            Replace = '[System.IO.File]::WriteAllText($Path, ($prefix + $Line + "`n"), (New-Object System.Text.UTF8Encoding($false)))' }
         @{ Name = "nightly-names-the-last-red-merge"
-           Find = '$item.lines = @($step.lines); $found = $true; break }'
-           Replace = '$item.lines = @($step.lines); $found = $true }' }
+           Find = '$item.lines = @($step.lines); $item.fresh = $true; $found = $true; break }'
+           Replace = '$item.lines = @($step.lines); $item.fresh = $true; $found = $true }' }
         @{ Name = "nightly-skips-the-baseline"
            Find = 'if ($bl.red) { $item.note ='
            Replace = 'if ($false) { $item.note =' }
@@ -388,16 +388,22 @@
            Find = '$ok = $false; & $say ("COULD NOT ASK GITHUB whether "'
            Replace = '& $say ("COULD NOT ASK GITHUB whether "' }
         @{ Name = "intent-unknown-merge-settled"
-           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
-           Replace = '$gitHubSaid = $true' }
-        @{ Name = "intent-timed-out-merge-settled"
-           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
-           Replace = '$gitHubSaid = ($null -ne $after)' }
-        @{ Name = "intent-unanswered-view-settled"
-           Find = '$gitHubSaid = ($null -ne $after -and $m.code -ne -1)'
+           Find = '            else { $unknown = "; GitHub''s answer is unknown, so the intent stays open and the nightly run will ask" }'
+           Replace = '            else { $unknown = "; GitHub''s answer is unknown, so the intent stays open and the nightly run will ask"; & $settle "not-merged" }' }
+        @{ Name = "intent-refused-merge-settled"
+           Find = '            if ($gitHubSaid) { $unknown = "; GitHub shows it still OPEN right now'
+           Replace = '            if ($gitHubSaid) { & $settle "not-merged"; $unknown = "; GitHub shows it still OPEN right now' }
+        @{ Name = "intent-timed-out-merge-told-as-answered"
+           Find = '$gitHubSaid = ($answered -and $m.code -ne -1)'
+           Replace = '$gitHubSaid = $answered' }
+        @{ Name = "intent-unanswered-view-told-as-answered"
+           Find = '$gitHubSaid = ($answered -and $m.code -ne -1)'
            Replace = '$gitHubSaid = ($m.code -ne -1)' }
+        @{ Name = "view-with-no-state-counts-as-an-answer"
+           Find = '$answered = ($null -ne $after -and $null -ne $after.PSObject.Properties["state"])'
+           Replace = '$answered = ($null -ne $after)' }
         @{ Name = "open-red-guard-loses-own-since"
-           Find = 'if ($null -ne $have) { [void]$kept.Add($have); continue }'
+           Find = 'if ($null -ne $have -and $d2.fresh -ne $true) { [void]$kept.Add($have); continue }'
            Replace = 'if ($false) { [void]$kept.Add($have); continue }' }
         @{ Name = "open-red-new-guard-no-own-merge"
            Find = '[void]$kept.Add([pscustomobject]@{ guard = $d2.guard; since = $stamp; merge = $mrec; note = $d2.note })'
@@ -417,5 +423,65 @@
         @{ Name = "owed-same-merge-walked-twice"
            Find = 'if ($seen.ContainsKey($v["mergeSha"])) { continue }'
            Replace = '' }
+        @{ Name = "walked-merge-keeps-the-old-record"
+           Find = 'if ($null -ne $have -and $d2.fresh -ne $true) { [void]$kept.Add($have); continue }'
+           Replace = 'if ($null -ne $have) { [void]$kept.Add($have); continue }' }
+        @{ Name = "walked-red-never-fresh"
+           Find = '$item.entry = $e; $item.shells = @($step.shells); $item.lines = @($step.lines); $item.fresh = $true; $found = $true; break }'
+           Replace = '$item.entry = $e; $item.shells = @($step.shells); $item.lines = @($step.lines); $found = $true; break }' }
+        @{ Name = "open-red-guard-off-the-list-not-kept"
+           Find = 'foreach ($og in @($OpenGuards)) {'
+           Replace = 'foreach ($og in @()) {' }
+        @{ Name = "dropped-guard-line-omits-not-run"
+           Find = 'if ($d.kind -ceq "dropped" -and $who -cnotlike "*NOT RUN*") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "clear-red-takes-a-guard-on-the-list"
+           Find = '    if (@($list.guards) -ccontains $name) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "clear-red-takes-a-guard-not-in-the-record"
+           Find = '    if ($null -eq $entry) { return (& $refuse ("the guard "'
+           Replace = '    if ($false) { return (& $refuse ("the guard "' }
+        @{ Name = "clear-red-takes-no-reason"
+           Find = '    if ($Reason -cnotmatch $script:HordeMergeReasonPattern) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "clear-red-writes-no-report-line"
+           Find = '    $wroteClear = Add-HordeMergeLine -Path $reportPath -Line $line'
+           Replace = '    $wroteClear = [pscustomobject]@{ ok = $true; detail = "" }' }
+        @{ Name = "clear-red-clears-the-whole-branch"
+           Find = '    $left = @(@($rec.guards) | Where-Object { $_.guard -cne $entry.guard })'
+           Replace = '    $left = @()' }
+        @{ Name = "clear-red-never-writes-the-record"
+           Find = '    $saved = Write-HordeMergeOpenReds -Path $redPath -Reds $redNow.reds'
+           Replace = '    $saved = [pscustomobject]@{ ok = $true; detail = "" }' }
+        @{ Name = "walk-in-file-order"
+           Find = '    if ($walk.Count -gt 1) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "open-red-schema-version-ignored"
+           Find = 'if ($null -eq $sv -or ($sv.Value -isnot [int] -and $sv.Value -isnot [long]) -or [long]$sv.Value -ne $script:HordeMergeRedSchemaVersion) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-reds-object-taken"
+           Find = 'if ($o.reds -isnot [System.Array]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-record-without-guards-taken"
+           Find = 'if ($null -eq $e.PSObject.Properties["guards"] -or $e.guards -isnot [System.Array] -or @($e.guards).Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-empty-guards-taken"
+           Find = '-or $e.guards -isnot [System.Array] -or @($e.guards).Count -eq 0) {'
+           Replace = '-or $e.guards -isnot [System.Array]) {' }
+        @{ Name = "open-red-guard-without-since-taken"
+           Find = 'if ($gv["since"] -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "open-red-merge-string-taken"
+           Find = 'if ($null -ne $ge.PSObject.Properties["merge"] -and $null -ne $ge.merge) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "whole-repo-failure-names-no-open-red"
+           Find = '($er.base -ceq "" -or $_ -ceq ($r + "|" + $er.base))'
+           Replace = '($_ -ceq ($r + "|" + $er.base))' }
+        @{ Name = "whole-repo-failure-hides-the-open-count"
+           Find = '$(if ($openKeys.Count -gt 0) { " and "'
+           Replace = '$(if ($false) { " and "' }
+        @{ Name = "json-note-contradicts-the-merge-it-names"
+           Find = 'note = $(if ($null -ne $mj -and $null -eq $d.entry) {'
+           Replace = 'note = $(if ($false) {' }
     )
 }
