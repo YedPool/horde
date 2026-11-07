@@ -9,7 +9,7 @@
     "schemaVersion": { "type": "integer", "description": "Absent in every file today; absence means 1. Reserved so a later format can say what it is." },
     "session_id": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id. wezfleet refuses a file whose id does not have this shape." },
     "transcript_path": { "type": "string", "description": "Where the conversation's transcript is. A snapshot that can rot: Horde derives the path rather than trusting this (core/ownership.json)." },
-    "cwd": { "type": "string", "description": "The working directory when the session started." },
+    "cwd": { "type": "string", "description": "The working directory when the hook wrote the file: where the session is at the end of a turn in a Stop file, not where it started." },
     "hook_event_name": { "type": "string", "enum": ["SessionStart", "Stop"], "description": "The hook that wrote the file. Stop files replaced most SessionStart files after the census of 2026-09-29. Any other hook is refused: a new one must be looked at." },
     "source": { "type": "string", "description": "Why the session started; a Stop file has none. Seen: startup 117, resume 32, compact 11, wezfleet-backfill 2 (written by wezfleet pane-sessions -Apply, not the hook), clear 1. Not an enum: Claude Code may add values." },
     "model": { "type": "string" },
