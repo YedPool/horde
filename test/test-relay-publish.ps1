@@ -180,7 +180,7 @@ try {
     }
     $sh = Get-HordeRelayPublishShipped -Checkout $repo
     Check ($sh.state -ceq "known" -and (@($sh.value.workerPrefixes) -join ",") -ceq "relays/zorbrelay/" -and (@($sh.value.workerExcept) -join ",") -ceq "relays/zorbrelay/test/") "the deployed relay's folder, from the port, is the Worker's, but its tests"
-    Check ((@($sh.value.workerFiles) -join ",") -ceq "cli/RelayDeploy.ps1,relay/js/more.js,relay/js/protocol.js,relays/Port.ps1") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
+    Check ((@($sh.value.workerFiles) -join ",") -ceq "cli/RelayDeploy.ps1,core/JsonText.ps1,relay/js/more.js,relay/js/protocol.js,relays/Port.ps1") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
     Check ((@($sh.value.pageFiles) -ccontains "surfaces/pwa/page/app.js") -and (@($sh.value.pageFiles) -ccontains "surfaces/pwa/Site.ps1") -and -not (@($sh.value.pageFiles) -ccontains "cli/RelayDeploy.ps1")) "the site's sources and its builder are the page, and the deploy's own code is not"
     Check ((@($sh.value.sharedFiles) -join ",") -ceq "relay/js/protocol.js") ("shared: the Worker's files the site serves too, and not one it imports that the site does not serve (" + (@($sh.value.sharedFiles) -join ",") + ")")
 
