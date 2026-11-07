@@ -13,10 +13,11 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 
 $schema = Get-HordeSchema -Name "pane-session.v1"
 $fx = Join-Path $root "test\fixtures\pane-session"
-function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
+function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = ConvertFrom-HordeJson -Text $t; return ,$v }
 function Findings { param($Value) return @(Test-HordeSchema -Value $Value -Schema $schema) }
 # Does any finding match Like? Findings are asserted by their TEXT, so a check cannot pass on some other
 # finding. Like is a wildcard pattern: write a literal [ or ] as `[ and `].
@@ -137,7 +138,7 @@ Check (Has (Test-HordeSchema -Value @{ A = 1 } -Schema $exactSchema) "$ has no '
 # MEASURED 2026-09-29 on Windows PowerShell 5.1: ConvertFrom-Json refuses text holding two keys that
 # differ only in case ("contains the duplicated keys 'a' and 'A'"), so such a file never reaches the
 # validator; the real-file check below reports it as not JSON.
-Check (Throws { '{"a":1,"A":2}' | ConvertFrom-Json } "duplicated keys") "CONTROL: ConvertFrom-Json refuses keys differing only in case, so no file can carry both"
+Check (Throws { ConvertFrom-HordeJson -Text '{"a":1,"A":2}' } "differ only in case") "CONTROL: the parser refuses keys differing only in case, so no file can carry both"
 
 Write-Host ""
 Write-Host "--- a pattern means what it means in JSON Schema (ECMA-262), not in .NET ---" -ForegroundColor Cyan
@@ -162,8 +163,18 @@ Write-Host "--- an integer or an array is recognised however PowerShell holds it
 # 99999999999999999999 gives Decimal, 1 gives Int32. JSON Schema calls any number with no fractional
 # part an integer, so all but 1.5 are integers.
 $intSchema = [pscustomobject]@{ type = "integer" }
-function Read-JsonNumber { param([string]$Text) return ('{"n":' + $Text + '}' | ConvertFrom-Json).n }
-Check ((Read-JsonNumber "1.0") -is [decimal] -and (Read-JsonNumber "1e3") -is [double]) "CONTROL: 5.1 parses 1.0 as Decimal and 1e3 as Double"
+function Read-JsonNumber { param([string]$Text) return (ConvertFrom-HordeJson -Text ('{"n":' + $Text + '}')).n }
+# THESE CHECKS READ THROUGH core/JsonText.ps1, which answers alike in both shells. Readers such as core/PaneSessions.ps1
+# still parse bare under 5.1, and what the checks once measured there must stay true of them, so 5.1 is held to it here.
+if (("" + $PSVersionTable.PSEdition) -ceq "Desktop") {
+    foreach ($t in @("1", "1.0", "1e3", "1.5", "99999999999999999999", "1e30", "79228162514264337593543950336", "0.99999999999999999999", "1.00000000000000000001", "0.1", "1e-1", "9.007199254740993e15")) {
+        $bare = ('{"n":' + $t + '}' | ConvertFrom-Json).n
+        $strict = Read-JsonNumber $t
+        Check ($bare.GetType() -eq $strict.GetType() -and $bare -eq $strict) ("5.1's ConvertFrom-Json and the parser read " + $t + " alike (" + $bare.GetType().Name + " " + $bare + ", " + $strict.GetType().Name + " " + $strict + ")")
+    }
+    Check (Throws { '{"a":1,"A":2}' | ConvertFrom-Json } "duplicated keys") "CONTROL: 5.1's ConvertFrom-Json refuses keys differing only in case too"
+}
+Check ((Read-JsonNumber "1.0") -is [decimal] -and (Read-JsonNumber "1e3") -is [double]) "CONTROL: the parser reads 1.0 as Decimal and 1e3 as Double"
 foreach ($t in @("1.0", "1e3", "99999999999999999999")) {
     Check (@(Test-HordeSchema -Value (Read-JsonNumber $t) -Schema $intSchema).Count -eq 0) ($t + " is an integer")
 }
@@ -178,7 +189,7 @@ function Enum-Findings {
     param($Value, $Schema)
     try { return ,@(Test-HordeSchema -Value $Value -Schema $Schema) } catch { return ,@("THREW: " + $_.Exception.Message) }
 }
-Check ((Read-JsonNumber "1e30") -is [double] -and (Read-JsonNumber "79228162514264337593543950336") -is [double]) "CONTROL: 5.1 parses 1e30 and 2^96 as Double"
+Check ((Read-JsonNumber "1e30") -is [double] -and (Read-JsonNumber "79228162514264337593543950336") -is [double]) "CONTROL: the parser reads 1e30 and 2^96 as Double"
 foreach ($t in @("1e30", "-1e30", "79228162514264337593543950336")) {
     $found = Enum-Findings (Read-JsonNumber $t) $one
     Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a whole number beyond Decimal's range, " + $t + ", is refused by enum [1], not thrown on (" + ($found -join "; ") + ")")
@@ -223,7 +234,7 @@ Write-Host "--- local `$ref and definitions, for a recursive shape ---" -Foregro
 # follows "#/definitions/<name>" and nothing else. Each call here turns an error into a finding, so a
 # validator that throws where it should validate fails a check rather than only recording an error.
 function RefFindings { param($Value, $Schema) try { return @(Test-HordeSchema -Value $Value -Schema $Schema) } catch { return @("THREW: " + $_.Exception.Message) } }
-function Obj { param([string]$Json) return ($Json | ConvertFrom-Json) }
+function Obj { param([string]$Json) return (ConvertFrom-HordeJson -Text $Json) }
 $intRef = Obj '{ "definitions": { "n": { "type": "integer" } }, "type": "object", "properties": { "a": { "$ref": "#/definitions/n" } } }'
 $f = @(RefFindings (Obj '{ "a": "x" }') $intRef)
 Check ($f.Count -eq 1 -and $f[0] -ceq '$.a should be integer') ("a local `$ref applies its definition, at the referring path (" + ($f -join "; ") + ")")
@@ -410,7 +421,7 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = 
 # would call it equal to 1. So a Decimal and a Double are compared as the exact values they hold.
 $nines = Read-JsonNumber "0.99999999999999999999"
 $justOver = Read-JsonNumber "1.00000000000000000001"
-Check ($nines -is [decimal] -and [double]$nines -eq 1 -and $justOver -is [decimal] -and [double]$justOver -eq 1) "CONTROL: 5.1 reads both as Decimal, and each is 1 as a Double"
+Check ($nines -is [decimal] -and [double]$nines -eq 1 -and $justOver -is [decimal] -and [double]$justOver -eq 1) "CONTROL: the parser reads both as Decimal, and each is 1 as a Double"
 Check (Has (Test-HordeSchema -Value $nines -Schema ([pscustomobject]@{ minimum = 1 })) '$ is 0.99999999999999999999, below the minimum 1') "a Decimal a hair below a whole-number minimum is refused"
 # 1 - 2^-53, the largest Double below 1: it prints as 1 and [decimal] rounds it to 1 (15 significant
 # digits), so only an exact comparison refuses it.
@@ -442,7 +453,7 @@ Write-Host "--- a minimum means the same number however the JSON wrote it (issue
 # Compared exactly, {"minimum": 1e-1} refused the value 0.1 that {"minimum": 0.1} accepted (measured
 # 2026-09-30, before the fix). So a minimum must be a whole number of magnitude at most 2^53 - 1, which every
 # type the parser gives holds exactly; a fraction is refused, never normalised (see core/Schema.ps1).
-Check ((Read-JsonNumber "0.1") -is [decimal] -and (Read-JsonNumber "1e-1") -is [double]) "CONTROL: 5.1 parses 0.1 as Decimal and 1e-1 as Double"
+Check ((Read-JsonNumber "0.1") -is [decimal] -and (Read-JsonNumber "1e-1") -is [double]) "CONTROL: the parser reads 0.1 as Decimal and 1e-1 as Double"
 foreach ($t in @("0.1", "1e-1", "-0.5", "1.00000000000000000001")) {
     Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + " is refused: a fraction's meaning depends on how it was written")
 }
@@ -450,7 +461,7 @@ foreach ($t in @("0.1", "1e-1", "-0.5", "1.00000000000000000001")) {
 # 9.007199254740995e15 the Double 9007199254740996, and 9.007199254740993e15 the Double 2^53. At
 # 2^53 - 1 the two readings agree.
 $safe = [long]9007199254740991
-Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9.007199254740993e15") ([long]9007199254740992)) -eq 0) "CONTROL: 5.1 reads 9.007199254740993e15 as 2^53, one less than it says"
+Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9.007199254740993e15") ([long]9007199254740992)) -eq 0) "CONTROL: the parser reads 9.007199254740993e15 as 2^53, one less than it says"
 Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740991.0") (Read-JsonNumber "9.007199254740991e15")) -eq 0 -and (Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740995.0") (Read-JsonNumber "9.007199254740995e15")) -ne 0) "CONTROL: 2^53 - 1 read as Decimal and as Double is one number; 2^53 + 3 is two"
 foreach ($t in @("9007199254740995.0", "9.007199254740995e15", "9.007199254740993e15", "9007199254740992", "-9007199254740995.0", "-9007199254740992", "1e30")) {
     Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + ", beyond 2^53 - 1, is refused")
