@@ -492,9 +492,12 @@ function Send-HordeAnalystWarchiefTaken {
         return (& $done $true "")
     }
     # A REFUSED POST LEAVES NO MARK (the notice is in no mailbox, so a mark would alarm "not taken" for something never sent). ONLY A KNOWN
-    # ANSWER removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched.
+    # ANSWER removes it: an UNKNOWN result may have landed, and a notice that landed must stay watched. AND ONLY A MARK THIS CALL WROTE: one
+    # that was already listed (-WasListed, read before the mark was added) belongs to an earlier post that may have landed - a restart before
+    # the state was written, an unknown result - so this call's refusal says nothing of it and it stays (round 2 of PR 455: with it gone the
+    # next pass, finding no messenger, took the key as unposted and the notice nobody took never alarmed).
     $detail = "" + $r.detail
-    if ($r.known -eq $true) {
+    if ($r.known -eq $true -and -not $wasListed) {
         $removed = Remove-HordeDecisionNoticeTaken -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -NoticeId $id
         if (-not $removed.ok) { $detail = $detail + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
     }

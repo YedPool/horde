@@ -22,8 +22,12 @@
            Replace = '$removed = [pscustomobject]@{ ok = $true; reason = "" }' }
         # An unknown result loses its mark (a notice that landed is no longer watched).
         @{ Name = "analyst-tell-unknown-loses-mark"
-           Find = 'if ($r.known -eq $true) {'
-           Replace = 'if ($true) {' }
+           Find = 'if ($r.known -eq $true -and -not $wasListed) {'
+           Replace = 'if (-not $wasListed) {' }
+        # A refusal removes a mark that was already listed (an earlier post that landed stops being watched, and never alarms).
+        @{ Name = "analyst-tell-refusal-removes-listed-mark"
+           Find = 'if ($r.known -eq $true -and -not $wasListed) {'
+           Replace = 'if ($r.known -eq $true) {' }
         # A refused stage is counted as the messenger having taken it (a held post).
         @{ Name = "analyst-tell-refused-stage-counts-as-taken"
            Find = '$script:HordeAnalystTakenStages = @("accepted", "handed-over", "seen")'

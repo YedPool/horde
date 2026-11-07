@@ -62,6 +62,14 @@ $stubStatus = {
 }
 $null = Register-HordeMessenger -Folder (Join-Path $fx "atell") -Post $stubPost -Status $stubStatus
 $seat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "3"; instance = "t1" })) }
+# TWO SHIMS over the real lookups the post makes before it reaches a messenger, so the two refusals that happen BEFORE any post (no messenger
+# can be found; this machine's device id cannot be had) can be made on demand. Off, each is the real function.
+$origFindMessenger = ${function:Find-HordeMessenger}
+$origDeviceId = ${function:Get-HordeDeviceId}
+$script:noMessenger = $false
+$script:noDevice = $false
+function Find-HordeMessenger { param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Require) if ($script:noMessenger) { return (New-HordeAbsent -Note "the shim holds no messenger") }; return (& $origFindMessenger -Require $Require) }
+function Get-HordeDeviceId { param([string]$HomeRoot = "") if ($script:noDevice) { throw "the shim has no device id" }; return (& $origDeviceId -HomeRoot $HomeRoot) }
 # A folder that is not above the suite's homes, so they are not taken for a test's (A TEST'S HOME TELLS NOBODY).
 $notTemp = Join-Path $env:TEMP ("horde-analyst-tell-taken-elsewhere-" + [guid]::NewGuid().ToString("N"))
 $t0 = [datetime]::new(2026, 10, 13, 12, 0, 0, [System.DateTimeKind]::Utc)
@@ -217,6 +225,41 @@ Check (@(Marks-Of $H6 $id6).Count -eq 1 -and $s.ok -eq $false -and $s.detail.Con
 $l = Tick $H6 100
 Check ((Alarms-In $l) -eq 1 -and $l.Contains($id6)) ("and, never taken, it alarms (" + $l + ")")
 $script:postSays = "accepted"
+
+Write-Host ""
+Write-Host "--- A KNOWN refusal never removes a mark that was ALREADY on the list (T-0391 round 2, item 1) ---" -ForegroundColor Cyan
+# The story: the post was accepted and marked, the supervisor restarted before it wrote its state, and the next pass cannot post (no
+# messenger / no device id / a held answer). The first post is still in the warchief's mailbox, so its mark must stay.
+foreach ($why in @("no-messenger", "no-device-id", "held")) {
+    $HL = New-Home
+    $idL = Id-Of "no-analyst" 0
+    $null = Send-One $HL "no-analyst" 0 0
+    $before = @(Marks-Of $HL $idL)
+    if ($why -ceq "no-messenger") { $script:noMessenger = $true } elseif ($why -ceq "no-device-id") { $script:noDevice = $true } else { $script:postSays = "held" }
+    $s = Send-One $HL "no-analyst" 0 60
+    $script:noMessenger = $false; $script:noDevice = $false; $script:postSays = "accepted"
+    $after = @(Marks-Of $HL $idL)
+    Check ($before.Count -eq 1 -and $s.ok -eq $false -and $after.Count -eq 1 -and $after[0].postedMs -eq $before[0].postedMs) ("REFUSED AFTER A POST THAT LANDED (" + $why + "): the mark stays, with its clock (" + $s.detail + ")")
+    $l = Tick $HL 100
+    Check ((Alarms-In $l) -eq 1 -and $l.Contains($idL)) ("and the notice nobody took still alarms at takenAlarmSeconds (" + $why + "; " + $l + ")")
+}
+# The same after an UNKNOWN post that did land, then a refusal.
+$HK = New-Home
+$idK = Id-Of "no-spawn-gone" 0
+$script:postSays = "unknown"
+$null = Send-One $HK "no-spawn-gone" 0 0
+$script:postSays = "held"
+$s = Send-One $HK "no-spawn-gone" 0 30
+$script:postSays = "accepted"
+Check ($s.ok -eq $false -and @(Marks-Of $HK $idK).Count -eq 1) "UNKNOWN THEN REFUSED: the mark of a post that may have landed stays"
+# CONTROLS: nothing was listed before, so a known refusal still leaves no mark, whatever the refusal.
+foreach ($why in @("no-messenger", "no-device-id")) {
+    $HN = New-Home
+    if ($why -ceq "no-messenger") { $script:noMessenger = $true } else { $script:noDevice = $true }
+    $s = Send-One $HN "no-analyst" 0 0
+    $script:noMessenger = $false; $script:noDevice = $false
+    Check ($s.ok -eq $false -and @(Marks-Of $HN (Id-Of "no-analyst" 0)).Count -eq 0 -and (Posts-Of (Id-Of "no-analyst" 0)) -eq 0) ("CONTROL: with nothing listed before, a refusal (" + $why + ") leaves no mark and posts nothing (" + $s.detail + ")")
+}
 
 Write-Host ""
 Write-Host "--- GIVE-UP: held for good, and 7 days without a TAKEN, each with an ALARM ---" -ForegroundColor Cyan
