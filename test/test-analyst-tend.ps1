@@ -76,6 +76,8 @@ function New-Rig {
         Post     = { param($SessionId, $MessageId, $Body, $Values) [void]$rig.posts.Add([pscustomobject]@{ to = $SessionId; id = $MessageId; body = $Body }); return [pscustomobject]@{ ok = $rig.postOk; woken = $true; detail = $(if ($rig.postOk) { "" } else { "the mailbox is full" }) } }.GetNewClosure()
         Tell     = { param($Key, $Body, $Values) [void]$rig.tells.Add([pscustomobject]@{ key = $Key; body = $Body }); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
         Notify   = { param($Line) [void]$rig.notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+        # The stand-in Tell above always posts, so its notice is always on the awaiting list (the real tool reads the list).
+        Watching = { param($Key, $Gen) return "listed" }
         Spawn    = { param($Script, $Handover, $Reason, $Values) [void]$rig.spawns.Add([pscustomobject]@{ script = $Script; handover = $Handover; reason = $Reason }); return [pscustomobject]@{ ok = $rig.spawnOk; detail = $(if ($rig.spawnOk) { "" } else { "exited 1" }) } }.GetNewClosure()
     }
     return $rig
@@ -447,21 +449,21 @@ try {
     # unacked rounds, and the notice says the warchief was NOT told.
     foreach ($case in @("off", "failing")) {
         $q = $(if ($case -ceq "off") { New-Rig ("quiet-" + $case) -Settings '"tellWarchief": false' } else { New-Rig ("quiet-" + $case) })
-        if ($case -ceq "failing") { $q.tools["Tell"] = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $false; detail = "the mail store is locked" } } }
+        if ($case -ceq "failing") { $q.tools["Tell"] = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $false; detail = "the mail store is locked" } }; $q.tools["Watching"] = { param($Key, $Gen) return "gone" } }
         Write-Handover -Folder $q.folder -Sid $sidA -At $t0
         $q.listing = New-Listing -Live @($sidA)
         $q.now = $t0.AddMinutes(1); $null = Pass $q
         foreach ($m in @(2, 33, 64, 95, 126)) { Finding $q ("alarm:q" + $m); $q.now = $t0.AddMinutes($m); $null = Pass $q }
         $q.now = $t0.AddMinutes(150); $null = Pass $q
         Check ($q.posts.Count -eq 5 -and $q.notices.Count -eq 1) ("warchief telling " + $case + ": five unacked rounds tell the founder once (" + $q.notices.Count + ")")
-        Check ($q.notices.Count -ge 1 -and $q.notices[0] -like "*the warchief was not told*" -and $q.notices[0] -notlike "*the warchief was told.*") ("warchief telling " + $case + ": and the notice says the warchief was not told")
+        Check ($q.notices.Count -ge 1 -and $q.notices[0] -like "*a notice to the warchief was not posted*" -and $q.notices[0] -notlike "*the warchief was told*" -and $q.notices[0] -notlike "*is being watched*") ("warchief telling " + $case + ": and the notice says no notice was posted to the warchief, never that he was told")
         Ack $q ((State $q).rounds[-1].id)
         Finding $q "alarm:q-after-ack"
         $q.now = $t0.AddMinutes(160); $null = Pass $q
         $q.now = $t0.AddMinutes(176); $null = Pass $q
         Check ($q.notices.Count -eq 2) ("warchief telling " + $case + ": after an ack, the next run tells the founder again")
     }
-    Check ($w.notices[0] -like "*the warchief was told.*") "when the warchief's tell is taken, the notice says so"
+    Check ($w.notices[0] -like "*a notice to the warchief was posted and is being watched for its taking*" -and $w.notices[0] -notlike "*the warchief was told*") "when the warchief's tell is posted, the notice says what is known: posted and watched, not told"
 
     Write-Host ""
     Write-Host "--- review of PR 306: a fresh session that never acks is still told ---" -ForegroundColor Cyan
