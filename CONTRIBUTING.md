@@ -310,19 +310,20 @@ its branch can break main when main moved under it").
    its specs. "Mergeable" on GitHub means the text merges; it says nothing about whether the merged
    tree is green. Why whole specs run at all, and not only `-Changed`: first, `-Changed` is blind
    to every change that is not on a mutant's own line (rule 1): whole specs see those on their own
-   targets, and the nightly sweep sees the rest. Second, a spec on `main` can break without anyone
+   targets, and no run sees the rest (see below). Second, a spec on `main` can break without anyone
    running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
 
-   **The full mutation sweep, every spec, runs nightly and not per pull request** (2026-10-21).
-   It was then 470 specs and 9039 mutants: many hours of the one local heavy slot. One pull
-   request's gate held that slot for over an hour and a half, and about ten runs from other
-   lanes queued behind it. The changed-target specs and `-Changed` cover the edited targets and
-   suites; the nightly sweep covers what they cannot see, an edited helper or config that is no
-   spec's target, and a spec broken on `main`, within a day. Until the nightly run is live, the
-   sweep is run by hand once a night.
-   A pull request body names the specs it ran and says the full sweep is left to the nightly run.
+   **No full mutation sweep runs, nightly or otherwise, and nothing may lean on one** (T-0437,
+   2026-11-07). The full sweep left the per-pull-request gate on 2026-10-21, at 470 specs and 9039
+   mutants, because one pull request's gate held the one local heavy slot for over an hour and a
+   half with about ten runs from other lanes queued behind it. This rule then said the sweep ran
+   nightly, but the nightly net never ran mutants, and the by-hand run promised until it did had
+   no owner or schedule. It is now 562 specs and 10600 mutants. The changed-target specs and `-Changed` cover the edited
+   targets and suites. `test\test-mutation-specs.ps1` catches a mutant that no longer applies. So
+   an edited helper or config that is no spec's target has no mutation check at all: say so when
+   a change is one. A pull request body names the specs it ran and does not claim a sweep.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
