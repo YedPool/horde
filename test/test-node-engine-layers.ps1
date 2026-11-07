@@ -80,7 +80,7 @@ Clear-Layers
 $e = Read-Layers
 $p = Joined $e
 $expected = ""
-try { $null = "{ not json" | ConvertFrom-Json } catch { $expected = $_.Exception.Message }
+try { $null = ConvertFrom-HordeJson "{ not json" } catch { $expected = $_.Exception.Message }
 Check ($expected -ne "" -and $p -like ("*" + $l1 + ": not JSON - *") -and $p.Contains($expected)) ("an engine.json that does not parse names the file and the parser's reason (" + $p + ")")
 Clear-Layers
 [System.IO.File]::WriteAllText($l4, "[ 1,")

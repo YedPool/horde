@@ -83,9 +83,9 @@ $script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-
     # the walk does not check inline. Each takes plain values and runs nothing it is given. Added 2026-10-02.
     "Get-HordeSchemaNode", "Assert-HordeSchema", "Test-HordeSchemaType", "Test-HordeSchemaIsNumber", "Compare-HordeSchemaNumber",
     # ConvertFrom-HordeJson (core/JsonText.ps1, T-0366): ConvertFrom-Json, already allowed, made the same under
-    # both shells - text in, parsed values out, every string left a string. Under 7.0 to 7.4 it walks the result
-    # with ConvertTo-HordeJsonDateText, which rewrites [datetime] values as text. Neither runs anything it is given.
-    "ConvertFrom-HordeJson", "ConvertTo-HordeJsonDateText")
+    # both shells - text in, parsed values out, every string left a string - by one compiled strict parser that
+    # runs nothing it is given.
+    "ConvertFrom-HordeJson")
 # Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
 $script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1", "JsonText.ps1")
 

@@ -61,38 +61,48 @@
         @{ Name = "tab-refused"
            Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
            Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
-        # The one parse (issue #274). Caught under pwsh by the suite's child-process probe.
-        @{ Name = "date-kind-not-asked"
-           Find = '{ $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }'
-           Replace = '{ $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }' }
-        @{ Name = "array-enumerated-with-date-kind"
-           Find = '{ $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }'
-           Replace = '{ $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }' }
-        @{ Name = "array-enumerated-in-fallback"
-           Find = '{ $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop | ForEach-Object'
-           Replace = '{ $Text | ConvertFrom-Json -ErrorAction Stop | ForEach-Object' }
-        @{ Name = "fallback-not-walked"
-           Find = '| ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }'
-           Replace = '}' }
-        @{ Name = "date-not-written-back"
-           Find = '[datetimeoffset]) { return $Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }'
-           Replace = '[datetimeoffset]) { return $Value }' }
-        @{ Name = "date-written-in-another-form"
-           Find = '$Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
-           Replace = '$Value.ToString("s", [System.Globalization.CultureInfo]::InvariantCulture)' }
-        @{ Name = "objects-not-walked"
-           Find = 'foreach ($p in @($Value.PSObject.Properties)) { $p.Value = ConvertTo-HordeJsonDateText -Value $p.Value }'
+        # The one parse (issue #274, T-0366). Caught in this shell and, through the suite's child processes, the other.
+        @{ Name = "array-unrolled-on-return"
+           Find = 'if ($parsed -is [array]) { return , $parsed }'
            Replace = '' }
-        @{ Name = "lists-not-walked"
-           Find = 'for ($i = 0; $i -lt $Value.Count; $i++) { $Value[$i] = ConvertTo-HordeJsonDateText -Value $Value[$i] }'
+        @{ Name = "no-text-reads-as-nothing"
+           Find = 'if ($null -eq $Text) { throw (New-Object System.ArgumentNullException "Text", "there is no text to parse") }'
            Replace = '' }
-        @{ Name = "list-unrolled-on-return"
-           Find = 'return , $Value'
-           Replace = 'return $Value' }
-        @{ Name = "parse-error-swallowed"
-           Find = 'else { $Text | ConvertFrom-Json -ErrorAction Stop }'
-           Replace = 'else { $Text | ConvertFrom-Json -ErrorAction SilentlyContinue }'
-           Expect = "survives"
-           Reason = "ConvertFrom-Json raises a terminating error on text that is not JSON whatever -ErrorAction says, so the caller's catch fires either way; -ErrorAction Stop states the intent" }
+        @{ Name = "reason-left-wrapped"
+           Find = 'catch [System.Management.Automation.MethodInvocationException] { throw $_.Exception.InnerException }'
+           Replace = 'catch [System.Management.Automation.MethodInvocationException] { throw }' }
+        @{ Name = "text-after-the-value-allowed"
+           Find = 'if (i != text.Length) { throw Bad(i, "text after the value"); }'
+           Replace = '' }
+        @{ Name = "raw-control-character-allowed"
+           Find = 'if (c < '' '') { throw Bad(i, "a control character inside a string"); }'
+           Replace = '' }
+        @{ Name = "unknown-escape-allowed"
+           Find = 'default: throw Bad(i, "an escape JSON does not have");'
+           Replace = 'default: sb.Append(e); break;' }
+        @{ Name = "u-escape-takes-spaces"
+           Find = 'NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out code'
+           Replace = 'NumberStyles.HexNumber, CultureInfo.InvariantCulture, out code' }
+        @{ Name = "u-escape-digits-read-again"
+           Find = 'i += 4;'
+           Replace = '' }
+        @{ Name = "repeated-key-keeps-the-first"
+           Find = 'StringComparison.Ordinal)) { have.Value = value; }'
+           Replace = 'StringComparison.Ordinal)) { }' }
+        @{ Name = "keys-by-case-overwrite"
+           Find = 'else { throw new InvalidOperationException("not JSON a PowerShell object can hold: keys ''" + have.Name + "'' and ''" + key + "'' differ only in case"); }'
+           Replace = 'else { have.Value = value; }' }
+        @{ Name = "nesting-limit-raised"
+           Find = 'private const int MaxDepth = 100;'
+           Replace = 'private const int MaxDepth = 200;' }
+        @{ Name = "int64-read-as-decimal"
+           Find = 'if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) { return l; }'
+           Replace = 'if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) { return (decimal)l; }' }
+        @{ Name = "fraction-read-as-double"
+           Find = 'if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out m)) { return m; }'
+           Replace = 'if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out m)) { return (double)m; }' }
+        @{ Name = "number-too-large-is-infinity"
+           Find = 'throw Bad(start, "a number too large to hold");'
+           Replace = 'return double.PositiveInfinity;' }
     )
 }

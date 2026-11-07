@@ -18,34 +18,186 @@
 # decodes, and every one of them already loads this file, so no reader can call it without loading it
 # (core/NodePolicy.ps1 once called it from a file it never loaded; tools/CoreLoad.ps1 now guards that).
 
-# THE ONE PARSE, the same under both PowerShells (issue #274). PowerShell 7's ConvertFrom-Json reads a
-# date-shaped string as a [datetime]; Windows PowerShell 5.1 never does. Measured 2026-10-14 on 7.6.6:
-# '{"at":"2026-10-14T12:00:00.0000000Z"}' gave $o.at as System.DateTime under pwsh and System.String
-# under 5.1 ("2026-10-14" alone stayed a string under both). So every Horde record read under 7 carried
-# its timestamps as dates, and `horde decisions add` refused its own new record before writing it:
-# "it is not a decision-event.v1 record: $.at should be string". ConvertFrom-HordeJson is the parse a
-# Horde reader uses instead of ConvertFrom-Json, so a string in the text is a string in the result.
-#   - 7.5 and later: -DateKind String, which leaves every string exactly as written.
-#   - 7.0 to 7.4 have no -DateKind: the parsed value is walked and each [datetime] is written back as
-#     round-trip ("o") text. Exact for every timestamp Horde writes itself (UTC, "o"); a date-shaped
-#     string written another way ("...T12:00:00Z", or with an offset) comes back as the same instant in
-#     "o" form, not as typed. OWED: an exact reader for 7.0 to 7.4.
-#   - 5.1 never converts, so the text is parsed as it is.
-# A TOP-LEVEL ARRAY IS ONE VALUE UNDER BOTH. 5.1 writes it as one array; 7 writes its items one at a
-# time unless told -NoEnumerate (measured 2026-10-14 on 7.6.6: through this function '[7]' came back as
-# the number 7 and '[]' as nothing, against an array of one and an empty array under 5.1). Every 7 path
-# passes -NoEnumerate (7.0 has it), so @(ConvertFrom-HordeJson '[1,2]').Count is 1 under both.
-# WHOLE NUMBERS ARE NOT THE SAME TYPE: Int64 under 7, Int32 under 5.1, so a caller must not test -is [int].
-$script:HordeJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")
+# THE ONE PARSE, the same under both PowerShells (issue #274; made one strict parser for T-0366, M's
+# option A, 2026-10-28). ConvertFrom-HordeJson is the parse a Horde reader uses instead of ConvertFrom-Json.
+# Each shell's own ConvertFrom-Json gave its own answer for the same text (measured 2026-10-28, 7.6.6 and 5.1):
+#   - 7 read a date-shaped string as a [datetime] (5.1 never did), so `horde decisions add` refused its own
+#     new record: "it is not a decision-event.v1 record: $.at should be string";
+#   - 7 wrote a top-level array's items one at a time, so '[7]' came back as the number 7 and '[]' as nothing;
+#   - a whole number was Int64 under 7 and Int32 under 5.1; 1.5 was a Double under 7 and a Decimal under 5.1;
+#   - each read more than JSON, and not the same more: both took 01, .5, NaN, Infinity, a raw tab inside a
+#     string and 'single quotes'; 7 alone took [1,] and 0x10, 5.1 alone took +1; 7 read 1e400 as Infinity.
+# So the text is read here by ONE PARSER, compiled into whichever shell loads this file (C# 5, which 5.1's
+# compiler is), and every answer below is that parser's, the same under both:
+#   - JSON as RFC 8259 writes it and nothing else: anything else throws, as text that is not JSON;
+#   - every string is a string, exactly as written;
+#   - an object is a PSCustomObject, as ConvertFrom-Json gives it; a repeated key keeps the last value, as both
+#     shells did; two keys differing only in case, an empty key, or a key a PSCustomObject keeps for itself
+#     (PSObject) throw, as both shells did;
+#   - an array is one object[], at the top level too, so @(ConvertFrom-HordeJson '[1,2]').Count is 1;
+#   - a number takes 5.1's types, in 5.1's order: Int32, else Int64, else Decimal (a fraction, or a whole
+#     number past Int64), else a Double (an exponent); one too large for a Double throws;
+#   - nesting past 100 levels throws (5.1's limit, near enough: it took 101 arrays and refused 102 objects);
+#   - text that is empty or only whitespace is $null, and lines given as a list are one text joined by
+#     newlines, as ConvertFrom-Json took them from the pipeline.
 $script:HordeJsonMakesDates = ("" + $PSVersionTable.PSEdition) -ceq "Core"
+if (-not ("HordeJsonStrictReader" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Management.Automation;
+using System.Text;
+public static class HordeJsonStrictReader {
+    private const int MaxDepth = 100;
+    public static object Read(string text) {
+        int i = 0;
+        SkipSpace(text, ref i);
+        if (i == text.Length) { return null; }
+        object value = ReadValue(text, ref i, 0);
+        SkipSpace(text, ref i);
+        if (i != text.Length) { throw Bad(i, "text after the value"); }
+        return value;
+    }
+    private static FormatException Bad(int at, string what) {
+        return new FormatException("not JSON: " + what + " at character " + at.ToString(CultureInfo.InvariantCulture));
+    }
+    private static void SkipSpace(string text, ref int i) {
+        while (i < text.Length && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r')) { i++; }
+    }
+    private static object ReadValue(string text, ref int i, int depth) {
+        if (i >= text.Length) { throw Bad(i, "the end where a value should be"); }
+        char c = text[i];
+        if (c == '{') { return ReadObject(text, ref i, depth + 1); }
+        if (c == '[') { return ReadArray(text, ref i, depth + 1); }
+        if (c == '"') { return ReadString(text, ref i); }
+        if (c == '-' || (c >= '0' && c <= '9')) { return ReadNumber(text, ref i); }
+        if (Word(text, ref i, "true")) { return true; }
+        if (Word(text, ref i, "false")) { return false; }
+        if (Word(text, ref i, "null")) { return null; }
+        throw Bad(i, "a character no value starts with");
+    }
+    private static bool Word(string text, ref int i, string word) {
+        if (i + word.Length > text.Length || string.CompareOrdinal(text, i, word, 0, word.Length) != 0) { return false; }
+        i += word.Length;
+        return true;
+    }
+    private static PSObject ReadObject(string text, ref int i, int depth) {
+        if (depth > MaxDepth) { throw Bad(i, "nesting past " + MaxDepth.ToString(CultureInfo.InvariantCulture) + " levels"); }
+        PSObject o = new PSObject();
+        i++;
+        SkipSpace(text, ref i);
+        if (i < text.Length && text[i] == '}') { i++; return o; }
+        while (true) {
+            SkipSpace(text, ref i);
+            if (i >= text.Length || text[i] != '"') { throw Bad(i, "a key that is not a string"); }
+            int keyAt = i;
+            string key = ReadString(text, ref i);
+            SkipSpace(text, ref i);
+            if (i >= text.Length || text[i] != ':') { throw Bad(i, "a key with no colon after it"); }
+            i++;
+            SkipSpace(text, ref i);
+            object value = ReadValue(text, ref i, depth);
+            if (key.Length == 0) { throw new InvalidOperationException("not JSON a PowerShell object can hold: an empty key at character " + keyAt.ToString(CultureInfo.InvariantCulture)); }
+            PSPropertyInfo have = o.Properties[key];
+            if (have == null) { o.Properties.Add(new PSNoteProperty(key, value)); }
+            else if (string.Equals(have.Name, key, StringComparison.Ordinal)) { have.Value = value; }
+            else { throw new InvalidOperationException("not JSON a PowerShell object can hold: keys '" + have.Name + "' and '" + key + "' differ only in case"); }
+            SkipSpace(text, ref i);
+            if (i < text.Length && text[i] == ',') { i++; continue; }
+            if (i < text.Length && text[i] == '}') { i++; return o; }
+            throw Bad(i, "an object not closed");
+        }
+    }
+    private static object[] ReadArray(string text, ref int i, int depth) {
+        if (depth > MaxDepth) { throw Bad(i, "nesting past " + MaxDepth.ToString(CultureInfo.InvariantCulture) + " levels"); }
+        List<object> list = new List<object>();
+        i++;
+        SkipSpace(text, ref i);
+        if (i < text.Length && text[i] == ']') { i++; return list.ToArray(); }
+        while (true) {
+            SkipSpace(text, ref i);
+            list.Add(ReadValue(text, ref i, depth));
+            SkipSpace(text, ref i);
+            if (i < text.Length && text[i] == ',') { i++; continue; }
+            if (i < text.Length && text[i] == ']') { i++; return list.ToArray(); }
+            throw Bad(i, "an array not closed");
+        }
+    }
+    private static string ReadString(string text, ref int i) {
+        StringBuilder sb = new StringBuilder();
+        i++;
+        while (true) {
+            if (i >= text.Length) { throw Bad(i, "a string not closed"); }
+            char c = text[i];
+            if (c == '"') { i++; return sb.ToString(); }
+            if (c < ' ') { throw Bad(i, "a control character inside a string"); }
+            if (c != '\\') { sb.Append(c); i++; continue; }
+            if (i + 1 >= text.Length) { throw Bad(i, "a string not closed"); }
+            char e = text[i + 1];
+            switch (e) {
+                case '"': sb.Append('"'); break;
+                case '\\': sb.Append('\\'); break;
+                case '/': sb.Append('/'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'u':
+                    int code;
+                    if (i + 6 > text.Length || !int.TryParse(text.Substring(i + 2, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out code)) { throw Bad(i, "a \\u escape without four hex digits"); }
+                    sb.Append((char)code);
+                    i += 4;
+                    break;
+                default: throw Bad(i, "an escape JSON does not have");
+            }
+            i += 2;
+        }
+    }
+    private static object ReadNumber(string text, ref int i) {
+        int start = i;
+        if (text[i] == '-') { i++; }
+        if (i < text.Length && text[i] == '0') { i++; }
+        else if (i < text.Length && text[i] >= '1' && text[i] <= '9') { while (i < text.Length && text[i] >= '0' && text[i] <= '9') { i++; } }
+        else { throw Bad(i, "a number with no digits"); }
+        if (i < text.Length && text[i] == '.') {
+            i++;
+            if (i >= text.Length || text[i] < '0' || text[i] > '9') { throw Bad(i, "a number with no digits after its point"); }
+            while (i < text.Length && text[i] >= '0' && text[i] <= '9') { i++; }
+        }
+        if (i < text.Length && (text[i] == 'e' || text[i] == 'E')) {
+            i++;
+            if (i < text.Length && (text[i] == '+' || text[i] == '-')) { i++; }
+            if (i >= text.Length || text[i] < '0' || text[i] > '9') { throw Bad(i, "a number with no digits in its exponent"); }
+            while (i < text.Length && text[i] >= '0' && text[i] <= '9') { i++; }
+        }
+        if (i < text.Length && ((text[i] >= '0' && text[i] <= '9') || text[i] == '.' || char.IsLetter(text[i]))) { throw Bad(i, "a number written as JSON does not write one"); }
+        string s = text.Substring(start, i - start);
+        int n; long l; decimal m; double d;
+        if (int.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out n)) { return n; }
+        if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) { return l; }
+        if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out m)) { return m; }
+        if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d) && !double.IsInfinity(d)) { return d; }
+        throw Bad(start, "a number too large to hold");
+    }
+}
+'@
+}
 
 function ConvertFrom-HordeJson {
-    # -Text parsed as JSON, with every string left a string and a top-level array kept one array.
-    # Throws as ConvertFrom-Json throws on text that is not JSON.
+    # -Text parsed as JSON by the one strict parser above, the same under both shells. Throws on text that is
+    # not JSON, as ConvertFrom-Json threw, so a caller's try/catch is unchanged.
     param($Text)
-    if ($script:HordeJsonDateKind) { $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }
-    elseif ($script:HordeJsonMakesDates) { $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop | ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }
-    else { $Text | ConvertFrom-Json -ErrorAction Stop }
+    if ($null -eq $Text) { throw (New-Object System.ArgumentNullException "Text", "there is no text to parse") }
+    if ($Text -is [array]) { $Text = @($Text | ForEach-Object { "" + $_ }) -join "`n" }
+    # A .NET call wraps what it throws: unwrapped, a caller's reason read 'Exception calling "Read" with "1"
+    # argument(s): "not JSON: ..."' (measured, test-node-engine-layers). The reason is the parser's own words.
+    try { $parsed = [HordeJsonStrictReader]::Read(("" + $Text)) }
+    catch [System.Management.Automation.MethodInvocationException] { throw $_.Exception.InnerException }
+    # The comma keeps a top-level array one value on the way out.
+    if ($parsed -is [array]) { return , $parsed }
+    return $parsed
 }
 
 # THE DICTIONARY PARSE (T-0323): ConvertFrom-HordeJsonObject is the parse for a reader that wants plain .NET
@@ -106,23 +258,6 @@ function ConvertFrom-HordeJsonObject {
         $script:HordeJsonObjectSerializer.MaxJsonLength = [int]::MaxValue
     }
     return , $script:HordeJsonObjectSerializer.DeserializeObject($Text)
-}
-
-function ConvertTo-HordeJsonDateText {
-    # -Value with every [datetime] or [datetimeoffset] in it, at any depth, turned back into round-trip
-    # ("o") text: in place for objects and lists, and returned. For PowerShell 7.0 to 7.4 (above).
-    param($Value)
-    if ($Value -is [datetime] -or $Value -is [datetimeoffset]) { return $Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
-    if ($Value -is [System.Management.Automation.PSCustomObject]) {
-        foreach ($p in @($Value.PSObject.Properties)) { $p.Value = ConvertTo-HordeJsonDateText -Value $p.Value }
-        return $Value
-    }
-    if ($Value -is [System.Collections.IList]) {
-        for ($i = 0; $i -lt $Value.Count; $i++) { $Value[$i] = ConvertTo-HordeJsonDateText -Value $Value[$i] }
-        # The comma keeps a list one value on the way out, as ConvertFrom-Json gave it.
-        return , $Value
-    }
-    return $Value
 }
 
 function Assert-HordeAsciiBytes {
