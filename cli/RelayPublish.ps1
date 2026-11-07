@@ -101,7 +101,7 @@
 # also refuses a Horde home under the temp folder before any of them is made.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Requires core/Tristate.ps1,
-# core/Home.ps1, core/FileAtomic.ps1 and cli/RelayDeploy.ps1 (its record, read and written there).
+# core/Home.ps1, core/FileAtomic.ps1 and cli/RelayDeploy.ps1 (its record, read and written there; it loads core/JsonText.ps1).
 
 $script:HordeRelayPublishRetrySeconds = 3600
 $script:HordeRelayPublishStateVersion = 1
@@ -146,7 +146,7 @@ function Read-HordeRelayPublishState {
     $path = Get-HordeRelayPublishStatePath -HordeHome $HordeHome
     if (-not [System.IO.File]::Exists($path)) { return (New-HordeAbsent -Note "nothing kept yet") }
     $r = $null
-    try { $r = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::ASCII) | ConvertFrom-Json }
+    try { $r = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($path, [System.Text.Encoding]::ASCII)) }
     catch { return (New-HordeUnknown -Reason ("its state file " + $path + " could not be read") -ErrorRecord $_) }
     if ($null -eq $r -or $r.schemaVersion -ne $script:HordeRelayPublishStateVersion) { return (New-HordeUnknown -Reason ("its state file " + $path + " is not one this wrote; mend it or remove it")) }
     $when = {

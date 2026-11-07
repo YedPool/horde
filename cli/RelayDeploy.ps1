@@ -65,10 +65,10 @@ function Get-HordeRelayDeployBuildFiles {
 }
 
 function Get-HordeRelayDeployMachineryFiles {
-    # The deploy's own code outside the relay's folder: this file, and the port that runs a relay's
-    # deploy. A change to it is a change to how a deploy is made, which the supervisor never runs by
+    # The deploy's own code outside the relay's folder: this file, the parser that reads its record, and
+    # the port that runs a relay's deploy. A change to it is a change to how a deploy is made, which the supervisor never runs by
     # itself (review of PR 263): it counts as the Worker, warned, never deployed (cli/RelayPublish.ps1).
-    return @("cli/RelayDeploy.ps1", "relays/Port.ps1")
+    return @("cli/RelayDeploy.ps1", "core/JsonText.ps1", "relays/Port.ps1")
 }
 
 function Get-HordeRelayDeploySiteHashes {
