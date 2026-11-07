@@ -364,6 +364,41 @@ $r = Invoke-HordeAnalystPass -Tools $passTools -Policy $pol -Folder $fold
 Check ($r.problem -ne "" -and (Alarms-In ($r.lines -join " | ")) -eq 1) ("an unreadable state does not hide an ALARM (" + ($r.lines -join " | ") + ")")
 
 Write-Host ""
+Write-Host "--- A LIST THAT CANNOT BE WRITTEN: one ALARM and one TAKEN for a notice, across looks that are new calls (T-0391 round 2, item 4) ---" -ForegroundColor Cyan
+# The cadence file keeps what the engine remembers (alarmed-*, delivered-*) beside when each mark was asked, so a list that cannot be written
+# does not make every look say the same ALARM and the same TAKEN again. Each Tick here is a new call, as each pass of a restarted supervisor is.
+$HW = New-Home
+$idW = Id-Of "no-analyst" 0
+$null = Send-One $HW "no-analyst" 0 0
+$listW = Join-Path $HW "analyst\tell-taken.json"
+(Get-Item -LiteralPath $listW).IsReadOnly = $true
+try {
+    $said = New-Object System.Collections.ArrayList
+    foreach ($sec in @(100, 160, 220, 280, 340)) { [void]$said.Add((Tick $HW $sec)) }
+    $all = $said -join " | "
+    Check ((Alarms-In $all) -eq 1) ("a list that cannot be written: ONE ALARM for the notice across five looks, not one at each (" + (Alarms-In $all) + ")")
+    Check ($all.Contains("could not be written")) "and the failed write is still said, so a person can see the list is stuck"
+    Check ([System.IO.File]::Exists((Join-Path $HW "analyst\tell-taken-asked.txt")) -and ([System.IO.File]::ReadAllText((Join-Path $HW "analyst\tell-taken-asked.txt"))).Contains("alarmed-")) "the alarm is kept in the analyst's own asked file, which the list's being stuck does not touch"
+    $script:stages[$idW] = "handed-over"
+    $said2 = New-Object System.Collections.ArrayList
+    foreach ($sec in @(400, 460, 520)) { [void]$said2.Add((Tick $HW $sec)) }
+    $all2 = $said2 -join " | "
+    Check (([regex]::Matches($all2, "TAKEN: analyst supervisor notice")).Count -eq 1) ("and ONE TAKEN across three looks while the mark cannot be taken off (" + ([regex]::Matches($all2, "TAKEN: analyst supervisor notice")).Count + ")")
+    Check (@(Marks-Of $HW $idW).Count -eq 1) "CONTROL: the mark is still there, as the list could not be written"
+} finally { (Get-Item -LiteralPath $listW).IsReadOnly = $false }
+$l = Tick $HW 580
+Check (@(Marks-Of $HW $idW).Count -eq 0 -and -not $l.Contains("TAKEN: analyst supervisor notice")) ("once the list can be written the mark goes, and the TAKEN is not said a second time (" + $l + ")")
+Check (-not [System.IO.File]::Exists((Join-Path $HW "analyst\tell-taken-asked.txt"))) "and the asked file forgets a notice that is over, its alarm and its taken with it"
+# CONTROL: a writable list still says one ALARM and one TAKEN (the memory is no new silence).
+$HW2 = New-Home
+$idW2 = Id-Of "start-silent" 0
+$null = Send-One $HW2 "start-silent" 0 0
+$a1 = Tick $HW2 100
+$script:stages[$idW2] = "seen"
+$a2 = Tick $HW2 160
+Check ((Alarms-In $a1) -eq 1 -and $a2.Contains("TAKEN: analyst supervisor notice " + $idW2) -and @(Marks-Of $HW2 $idW2).Count -eq 0) "CONTROL: with a writable list the ALARM and the TAKEN are each said once"
+
+Write-Host ""
 Write-Host "--- A REFUSED OR UNKNOWN TELL IS RETRIED ON THE NEXT PASS, FOR EVERY KEY, UNDER THE SAME ID (T-0391 round 2, item 3) ---" -ForegroundColor Cyan
 # started-gone and spawn-failed are told in the pass that starts a session, and no-answer in the pass that finds a late round; none of them is
 # decided again next pass, so a tell the messenger refused was lost for good. They are kept in the state (tellRetry) and told again.

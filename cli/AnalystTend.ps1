@@ -79,6 +79,8 @@ $script:HordeAnalystFromSession = "horde-analyst"
 $script:HordeAnalystTtlSeconds = 604800
 $script:HordeAnalystTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeAnalystTakenStages = @("accepted", "handed-over", "seen")
+# The engine's memory keys that are kept between passes besides the last-asked times: alarmed-<32 hex> and delivered-<uuid>.
+$script:HordeAnalystTellMemoryKeyPattern = 'alarmed-[0-9a-f]{32}|delivered-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 # The keys a new session and a fresh start declare over (Clear-HordeAnalystTold): the pass also skips the retry of these (Invoke-HordeAnalystTellRetries).
 $script:HordeAnalystClearOnAdopt = @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "no-answer", "no-answer-founder")
 $script:HordeAnalystClearOnStart = @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
@@ -564,20 +566,27 @@ function Test-HordeAnalystTellAwaiting {
 }
 
 function Read-HordeAnalystTellAsked {
-    # When each mark was last asked about, by message id (UTC ms): the supervisor's tend may be a new process each time, so the cadence
-    # after an alarm needs it kept. A missing or unreadable file is an empty table (every mark is then simply asked).
+    # What the supervisor keeps about the marks between passes: when each was last asked about, by message id (UTC ms), AND what the engine
+    # remembers (decisions/NoticeTaken.ps1, -Memory): that an alarm was said ("alarmed-<id>") and that a taken was said ("delivered-<uuid>").
+    # The tend may be a new process each time, so the cadence after an alarm needs the first kept, and a list that cannot be written
+    # (read-only, locked) needs the others: the engine keeps them only in the table, and a table lost between passes made every look say the
+    # same ALARM and the same TAKEN again (round 2 of PR 455: five ALARMs for one notice in 340 s). A missing or unreadable file is an
+    # empty table (every mark is then simply asked).
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     $table = @{}
     $path = [System.IO.Path]::Combine($HordeHome, "analyst", $script:HordeAnalystTellTakenAskedFile)
     try {
         if (-not [System.IO.File]::Exists($path)) { return $table }
-        foreach ($line in @([System.IO.File]::ReadAllLines($path))) { if ($line -cmatch '\A([0-9a-f]{32}) ([0-9]{1,15})\z') { $table[$Matches[1]] = [long]$Matches[2] } }
+        foreach ($line in @([System.IO.File]::ReadAllLines($path))) {
+            if ($line -cmatch '\A([0-9a-f]{32}) ([0-9]{1,15})\z') { $table[$Matches[1]] = [long]$Matches[2] }
+            elseif ($line -cmatch ('\A(' + $script:HordeAnalystTellMemoryKeyPattern + ') 1\z')) { $table[$Matches[1]] = $true }
+        }
     } catch { return @{} }
     return $table
 }
 
 function Write-HordeAnalystTellAsked {
-    # The table, for the marks still awaiting only, replaced whole in one rename. $true when written; never throws.
+    # The table (Read-HordeAnalystTellAsked), for the marks still awaiting only, replaced whole in one rename. $true when written; never throws.
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][hashtable]$Table)
     $path = [System.IO.Path]::Combine($HordeHome, "analyst", $script:HordeAnalystTellTakenAskedFile)
     $tmp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
@@ -586,7 +595,12 @@ function Write-HordeAnalystTellAsked {
         if ($r.state -cne "known") { return $false }
         $live = @{}
         foreach ($mark in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $mark; if ($null -ne $e) { $live[$e.messageId] = $true } }
-        $rows = @(foreach ($k in @($Table.Keys | Sort-Object)) { if ($live.ContainsKey($k) -and $Table[$k] -is [long]) { $k + " " + $Table[$k] } })
+        $rows = @(foreach ($k in @($Table.Keys | Sort-Object)) {
+            $id = ("" + $k).Replace("alarmed-", "").Replace("delivered-", "").Replace("-", "")
+            if (-not $live.ContainsKey($id)) { continue }
+            if (("" + $k) -cmatch '\A[0-9a-f]{32}\z' -and $Table[$k] -is [long]) { $k + " " + $Table[$k] }
+            elseif (("" + $k) -cmatch ('\A(' + $script:HordeAnalystTellMemoryKeyPattern + ')\z') -and $Table[$k] -eq $true) { $k + " 1" }
+        })
         if ($rows.Count -eq 0) { if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }; return $true }
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
         [System.IO.File]::WriteAllBytes($tmp, [System.Text.Encoding]::ASCII.GetBytes(($rows -join "`n") + "`n"))
@@ -604,9 +618,12 @@ function Invoke-HordeAnalystTellTakenTick {
     try { $found = Find-HordeMessenger -Require $script:HordeAnalystTellNeeds; if ($found.state -ceq "known") { $messenger = $found.value } } catch { $messenger = $null }
     try {
         $memory = Read-HordeAnalystTellAsked -HordeHome $HordeHome
+        # A TAKEN said by an earlier look is not said again by one that finds the mark still there (the list could not be written).
+        $saidTaken = @{}
+        foreach ($k in @($memory.Keys)) { if (("" + $k).StartsWith("delivered-", [System.StringComparison]::Ordinal)) { $saidTaken[("" + $k)] = $true } }
         $tick = Invoke-HordeDecisionNoticeTakenTick -Kind $script:HordeAnalystTellTakenKind -HordeHome $HordeHome -Messenger $messenger -Now $Now.ToUniversalTime() -AlarmSeconds $AlarmSeconds -AfterAlarmSeconds $AfterAlarmSeconds -TtlSeconds $script:HordeAnalystTtlSeconds -Memory $memory
         [void](Write-HordeAnalystTellAsked -HordeHome $HordeHome -Table $memory)
-        return @($tick.lines)
+        return @(@($tick.lines) | Where-Object { -not (("" + $_) -cmatch '\ATAKEN: analyst supervisor notice ([0-9a-f-]{36}) ' -and $saidTaken.ContainsKey("delivered-" + $Matches[1])) })
     } catch { return @("analyst: the awaiting list of analyst supervisor notices could not be asked: " + $_.Exception.Message) }
 }
 

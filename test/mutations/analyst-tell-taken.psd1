@@ -95,8 +95,24 @@
            Find = '[void](Write-HordeAnalystTellAsked -HordeHome $HordeHome -Table $memory)'
            Replace = '$null = 0' }
         @{ Name = "analyst-tell-asked-table-keeps-the-over"
-           Find = 'if ($live.ContainsKey($k) -and $Table[$k] -is [long])'
-           Replace = 'if ($Table[$k] -is [long])' }
+           Find = 'if (-not $live.ContainsKey($id)) { continue }'
+           Replace = '$null = 0' }
+        # What the engine remembers is kept beside it (round 2, item 4): the alarm said and the taken said survive a new process.
+        @{ Name = "analyst-tell-alarm-memory-not-kept"
+           Find = '$script:HordeAnalystTellMemoryKeyPattern = ''alarmed-[0-9a-f]{32}|delivered-'
+           Replace = '$script:HordeAnalystTellMemoryKeyPattern = ''alarmed-[0-9a-f]{3}|delivered-' }
+        @{ Name = "analyst-tell-taken-memory-not-kept"
+           Find = '|delivered-[0-9a-f]{8}-'
+           Replace = '|delivered-[0-9a-f]{9}-' }
+        @{ Name = "analyst-tell-memory-not-read"
+           Find = ' 1\z'')) { $table[$Matches[1]] = $true }'
+           Replace = ' 1\z'')) { $null = 0 }' }
+        @{ Name = "analyst-tell-memory-not-written"
+           Find = '-and $Table[$k] -eq $true) { $k + " 1" }'
+           Replace = '-and $false) { $k + " 1" }' }
+        @{ Name = "analyst-tell-taken-said-again"
+           Find = '$saidTaken.ContainsKey("delivered-" + $Matches[1])'
+           Replace = '$false' }
         # The look is made for a list with nothing on it (the file stays after the last mark).
         @{ Name = "analyst-tell-awaiting-when-file-exists"
            Find = 'return (@($r.value.awaiting).Count -gt 0)'
