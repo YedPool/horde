@@ -34,7 +34,7 @@ schema/pane-session.v1.json | 5 | documents the existing pane-session file exact
 schema/restore-plan.v1.json | 6 | the restore plan's resume kinds and agent field name the harness that produced each argv, until the engines plan's step K1 makes the kind the harness field
 test/mutations/identity.psd1 | 9 | mutations of core code that names the harness must quote that code exactly to apply
 test/mutations/restore-plan.psd1 | 6 | mutations of core code that names the harness must quote that code exactly to apply
-test/test-identity.ps1 | 187 | tests core/Identity.ps1, which reads the harness's control files and processes, and must name what it builds and reads
+test/test-identity.ps1 | 186 | tests core/Identity.ps1, which reads the harness's control files and processes, and must name what it builds and reads
 test/test-ownership.ps1 | 13 | asserts the ownership table's rows for the harness's own stores, quoting the table
 test/test-roles.ps1 | 19 | builds old-system session records whose key field carries the harness's name, to test the role reader
 test/test-fleet-record.ps1 | 1 | builds old-system session records whose key field carries the harness's name, to test which sessions a hibernation records
