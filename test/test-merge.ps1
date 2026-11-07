@@ -146,8 +146,9 @@ function Test-MergeCall { param($Case) return [bool](@(Get-GhCalls $Case | Where
 
 # PART 1'S TOOLS. Everything a tool sees and does is kept in $script: tables the checks read.
 function New-SuiteTools {
-    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null)
+    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null, [switch]$IntentFails)
     $script:gitFails = $GitFails
+    $script:intentFails = [bool]$IntentFails
     $script:guardOverride = $GuardOverride
     $script:said = New-Object System.Collections.ArrayList
     $script:told = New-Object System.Collections.ArrayList
@@ -179,6 +180,7 @@ function New-SuiteTools {
         LedgerLine = $real["LedgerLine"]
         Tell = { param([string]$Body) [void]$script:told.Add($Body); if ($script:tellFails) { return [pscustomobject]@{ ok = $false; detail = "no session holds the role of warchief" } }; return [pscustomobject]@{ ok = $true; detail = "accepted" } }
         Owed = { param([string]$Line) if ($script:owedFails) { return [pscustomobject]@{ ok = $false; detail = "the merge folder is read-only" } }; return (Add-HordeMergeLine -Path (Join-Path $script:toolCase.owed "guards-owed.jsonl") -Line $Line) }
+        Intent = { param([string]$Line) if ($script:intentFails) { return [pscustomobject]@{ ok = $false; detail = "the merge folder is read-only" } }; return (Add-HordeMergeLine -Path (Join-Path $script:toolCase.owed "guards-intent.jsonl") -Line $Line) }
         Mail = { param([string]$Text) [void]$script:mailed.Add($Text); if ($script:mailFails) { return [pscustomobject]@{ ok = $false; detail = "the mail folder is read-only" } }; return [pscustomobject]@{ ok = $true; detail = "left for the analyst" } }
         Wait = { param([int]$Seconds) [void]$script:waited.Add($Seconds) }
         Say = { param([string]$Line) [void]$script:said.Add($Line) }
@@ -187,10 +189,12 @@ function New-SuiteTools {
 
 function Invoke-Case {
     # Invoke-HordeMerge on one case: the answer.
-    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails)
+    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [string]$Guards = "now", [switch]$OwedFails, [switch]$IntentFails, [scriptblock]$GhWrap = $null)
     $req = Test-HordeMergeRequest -Pr $Pr -Task $Task -State $State -By $By -On $On -Reason $Reason -Guards $Guards
     if (-not $req.ok) { throw ("the suite built a bad request: " + $req.why) }
-    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails -OwedFails:$OwedFails
+    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails -OwedFails:$OwedFails -IntentFails:$IntentFails
+    # A GhWrap sees each gh call first ($Arguments, and $script:innerGh for the stand-in) and may answer in its place.
+    if ($null -ne $GhWrap) { $script:innerGh = $tools["Gh"]; $script:ghWrap = $GhWrap; $tools["Gh"] = { param([string[]]$Arguments) return (& $script:ghWrap $Arguments) } }
     # A throw is an answer of its own, so a mutant that makes the command crash fails a check by name
     # (tools\Mutate.ps1 counts only a failed check as caught).
     try { return (Invoke-HordeMerge -Request $req -Tools $tools -WorkFolder $Case.work) }
@@ -581,9 +585,12 @@ Check ($r.outcome -ceq "refused" -and -not (Test-MergeCall $c) -and @(Read-OwedL
 Write-Host "== the nightly run (horde merge -RunOwed): which queued merge turned a guard red"
 $nightly = [datetime]::new(2026, 10, 23, 3, 0, 0, [System.DateTimeKind]::Utc)
 function Invoke-OwedRun {
-    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null)
+    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null, $Now = $null, [scriptblock]$GhWrap = $null)
     $tools = New-SuiteTools -Case $Case -GuardOverride $GuardOverride
-    try { return (Invoke-HordeMergeRunOwed -Tools $tools -WorkFolder $Case.work -Folder $Case.owed -Repo $Repo -Now $nightly) }
+    # A GhWrap sees each gh call first ($Arguments, and $script:innerGh for the stand-in) and may answer in its place.
+    if ($null -ne $GhWrap) { $script:innerGh = $tools["Gh"]; $script:ghWrap = $GhWrap; $tools["Gh"] = { param([string[]]$Arguments) return (& $script:ghWrap $Arguments) } }
+    if ($null -eq $Now) { $Now = $nightly }
+    try { return (Invoke-HordeMergeRunOwed -Tools $tools -WorkFolder $Case.work -Folder $Case.owed -Repo $Repo -Now $Now) }
     catch { return [pscustomobject]@{ exit = -9; json = ""; repos = @(); threw = $_.Exception.Message } }
 }
 function Add-QueuedMerges {
@@ -626,10 +633,11 @@ $sum = ConvertFrom-HordeJson -Text $run.json
 Check ($sum.exit -eq 1 -and @($sum.repos).Count -eq 1 -and $sum.repos[0].status -ceq "red" -and $sum.repos[0].merges -eq 3 -and $sum.repos[0].reds[0].guard -ceq "test\test-mutation-specs.ps1" -and $sum.repos[0].reds[0].merge.pr -ceq "YedPool/horde#4" -and $sum.repos[0].reds[0].merge.mergeSha -ceq $shas[1]) ("the JSON summary names the repo, the guard and the merge: " + $run.json)
 Check ($sum.repos[0].report -ceq $reportFile) "  and the report's path"
 
-# A SECOND RUN skips what is checked.
+# A SECOND RUN skips what is checked - but main is still red, and a red main reads red until a run finds it green (T-0347:
+# this check used to enshrine exit 0 and "nothing is owed" here, which read the red main as green on the next quiet night).
 $run = Invoke-OwedRun -Case $c
-Check ($run.exit -eq 0 -and @($script:guardRuns).Count -eq 0 -and (Said "nothing is owed: every queued merge has been checked") -and @(Read-CheckedLines $c).Count -eq 3) "a second run finds nothing owed, runs nothing and adds nothing"
-Check ((ConvertFrom-HordeJson -Text $run.json).exit -eq 0 -and @((ConvertFrom-HordeJson -Text $run.json).repos).Count -eq 0) "  and its JSON says so"
+Check ($run.exit -eq 1 -and @($script:guardRuns).Count -eq 6 -and (Said "RED test\test-mutation-specs.ps1 in *STILL RED since*") -and @(Read-CheckedLines $c).Count -eq 3) "a second run finds nothing new owed, adds nothing checked, and main still reads RED"
+Check ((ConvertFrom-HordeJson -Text $run.json).exit -eq 1 -and @((ConvertFrom-HordeJson -Text $run.json).repos).Count -eq 1) "  and its JSON says so"
 # ...and a merge queued after it is the only one run.
 Check ((Add-QueuedMerges $c @(,@("3", "F"))) -cmatch "\Amerged\z") "a fourth PR is merged and queued"
 $run = Invoke-OwedRun -Case $c
@@ -829,6 +837,528 @@ Check ($run.exit -eq 0 -and @($sum.repos).Count -eq 1 -and $sum.repos[0].repo -c
 $report = [System.IO.File]::ReadAllText((Join-Path $h.c.owed "nightly\2026-10-23-yedpool-horde.txt"))
 Check ($report -clike ("*queue: " + (Join-Path $h.c.owed "guards-owed.jsonl") + " on " + [Environment]::MachineName + " - this machine*queue only*")) "S4: the report names the machine and the queue it covered, and says other machines have their own"
 
+Write-Host "== T-0347: two writers meet, and a writer meets the nightly run's read"
+$busy = Join-Path $work "busy\q.jsonl"
+[void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $busy))
+[System.IO.File]::WriteAllText($busy, "{""x"":1}`n", $utf8)
+$script:hold = New-Object System.IO.FileStream($busy, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+$script:slept = 0
+$releaseOnSecond = { param([int]$Ms) $script:slept++; if ($script:slept -eq 2 -and $null -ne $script:hold) { $script:hold.Dispose(); $script:hold = $null } }
+try {
+    $busyRun = Add-HordeMergeLine -Path $busy -Line "{""x"":2}" -Sleep $releaseOnSecond -DelayMs 1
+    Check ($busyRun.ok -eq $true -and $script:slept -eq 2 -and [System.IO.File]::ReadAllText($busy) -ceq "{""x"":1}`n{""x"":2}`n") ("a line meeting another writer waits and lands once the other lets go (" + $script:slept + " waits)")
+    $script:hold = New-Object System.IO.FileStream($busy, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $script:slept = 0
+    $never = { param([int]$Ms) $script:slept++ }
+    $stuck = Add-HordeMergeLine -Path $busy -Line "{""x"":3}" -Attempts 3 -Sleep $never -DelayMs 1
+    Check ($stuck.ok -eq $false -and $stuck.detail -clike "could not append to *after 3 tries*" -and $script:slept -eq 2) ("a file that stays in use is still a loud failure, after a bounded number of tries: " + $stuck.detail)
+    # THE NIGHTLY RUN'S READ must not shut a writer out, and a writer must not shut the read out.
+    $c = New-Case
+    Check ((Add-QueuedMerges $c @(,@("1", "F"))) -ceq "merged") "a PR is merged and queued"
+    $script:hold.Dispose()
+    $script:hold = New-Object System.IO.FileStream((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $run = Invoke-OwedRun -Case $c
+    Check ($run.exit -eq 0 -and (Said "all green over 1 merges") -and -not (Said "could not read *")) ("the nightly run reads the queue while a writer has it open (exit " + $run.exit + ")")
+    $script:hold.Dispose(); $script:hold = $null
+    $c = New-Case
+    Check ((Add-QueuedMerges $c @(,@("1", "F"))) -ceq "merged") "a PR is merged and queued"
+    $rd = [System.IO.File]::Open((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try { $late = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line "{}" -Attempts 2 -Sleep { param([int]$Ms) } } finally { $rd.Dispose() }
+    Check ($late.ok -eq $false) "CONTROL: a reader that shuts writers out does make an append fail (the failure this retry is for)"
+    $readerView = Read-HordeMergeFileText -Path (Join-Path $c.owed "guards-owed.jsonl")
+    $wr = New-Object System.IO.FileStream((Join-Path $c.owed "guards-owed.jsonl"), [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try { $readerView2 = Read-HordeMergeFileText -Path (Join-Path $c.owed "guards-owed.jsonl") } finally { $wr.Dispose() }
+    Check ($readerView -ceq $readerView2 -and $readerView -clike "*mergeSha*") "the queue's reader does not shut a writer out and is not shut out by one"
+} finally { if ($null -ne $script:hold) { $script:hold.Dispose() } }
+
+Write-Host "== T-0347: a branch that is gone, and a guard that hangs, read as could-not-run with the way out"
+# A stacked PR's base branch deleted after its merge: the fetch of it fails in every run.
+$h = New-HandCase -Steps @(@{ f = @{ "one.txt" = "1" }; by = "F" }, @{ f = @{ "two.txt" = "2" }; by = "K" }) -Base "stack"
+$null = G $h.c.origin branch -D stack
+$run = Invoke-OwedRun -Case $h.c
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on stack: fetching stack failed*") -and -not (Said "RED *")) ("a deleted base branch: exit 2, could not run, no red (exit " + $run.exit + ")")
+Check ((Said ("STAYS OWED: YedPool/horde#100 (mergeSha " + $h.shas[0] + ") is tried again in every run. If it can never run*give it up by adding this line to *guards-checked.jsonl: {*" + $h.shas[0] + "*given-up*")) -and (Said ("STAYS OWED: YedPool/horde#101 (mergeSha " + $h.shas[1] + ")*"))) "  and it prints the way out for each owed merge, the line that gives it up"
+$wayOut = @($script:said | Where-Object { $_ -clike "STAYS OWED: *#100 *" })[0]
+$wayLine = $wayOut.Substring($wayOut.IndexOf(": {") + 2)
+$wayOut2 = @($script:said | Where-Object { $_ -clike "STAYS OWED: *#101 *" })[0]
+$wayLine2 = $wayOut2.Substring($wayOut2.IndexOf(": {") + 2)
+Check ((ConvertFrom-HordeJson -Text $wayLine).mergeSha -ceq $h.shas[0] -and (ConvertFrom-HordeJson -Text $wayLine2).mergeSha -ceq $h.shas[1]) ("  each merge's line gives up that merge's own sha, not the first one's: " + $wayLine + " | " + $wayLine2)
+Check (@(Read-CheckedLines $h.c).Count -eq 0) "  nothing was marked checked: the merges are not dropped"
+$null = Add-HordeMergeLine -Path (Join-Path $h.c.owed "guards-checked.jsonl") -Line $wayLine
+$run = Invoke-OwedRun -Case $h.c
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on stack*") -and -not (Said "STAYS OWED: *#100 *") -and (Said "STAYS OWED: *#101 *")) "  the printed line gives up exactly that merge and no other"
+# A hung guard: the tool kills it and answers code -1. It is never a red and never a green.
+$hung = { param($Checkout, $Suite, $Shell) return [pscustomobject]@{ code = -1; out = ""; err = "powershell.exe ran past 900 s and was stopped" } }
+$h = New-HandCase -Steps @(@{ f = @{ "one.txt" = "1" }; by = "F" })
+$run = Invoke-OwedRun -Case $h.c -GuardOverride $hung
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on main: the guard * could not be run in *ran past 900 s and was stopped*") -and -not (Said "RED *")) ("a hung guard reads as 'could not run', exit 2, never red (exit " + $run.exit + ")")
+Check ((Said "1 merge(s) stay owed and will be tried again; a guard that cannot run or hangs reads as 'could not run' (exit 2 in every run until it runs), never as red or green") -and @(Read-CheckedLines $h.c).Count -eq 0 -and (ConvertFrom-HordeJson -Text $run.json).repos[0].status -ceq "error") "  and it says so plainly, marks nothing checked, and the JSON says error"
+
+Write-Host "== T-0347: a red main stays red until a run finds it green"
+. (Join-Path $root "core\NightlyNet.ps1")
+function Get-NetState {
+    # What tools/NightlyNet.ps1 records for the guards from the wrapper's exit: 0 green, 1 RED, anything else not run.
+    param([int]$WrapExit)
+    if ($WrapExit -eq 0) { return "green" } elseif ($WrapExit -eq 1) { return "RED" } else { return "could not run" }
+}
+function Get-WrapperAnswer {
+    # The REAL tools/nightly/guards-wrap.ps1, with a stand-in horde that prints what -RunOwed -Json printed and exits as the
+    # horde process does (0 for exit 0, else 1): the state word the net records for the night, at the seam.
+    param($Case, $Run)
+    $dir = Join-Path $Case.dir "wrap"
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    [System.IO.File]::WriteAllText((Join-Path $dir "said.json"), $Run.json, $utf8)
+    $procExit = $(if ($Run.exit -eq 0) { 0 } else { 1 })
+    [System.IO.File]::WriteAllText((Join-Path $dir "horde.ps1"), ("[Console]::Out.WriteLine('stand-in horde'); [Console]::Out.WriteLine([System.IO.File]::ReadAllText((Join-Path `$PSScriptRoot 'said.json')).Trim()); exit " + $procExit), $utf8)
+    $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $o = @(& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $dir "horde.ps1") -Repo "YedPool/horde")
+    return [pscustomobject]@{ code = $LASTEXITCODE; state = (Get-NetState -WrapExit $LASTEXITCODE); last = ("" + $o[-1]) }
+}
+$c = New-Case
+Check ((Add-QueuedMerges $c @(@("1", "F"), @("4", "K"))) -ceq "merged,merged") "two PRs are merged and queued, the second turning a guard red"
+$shas = @(@(Read-OwedLines $c) | ForEach-Object { (ConvertFrom-HordeJson -Text $_).mergeSha })
+$run = Invoke-OwedRun -Case $c
+$redFile = Join-Path $c.owed "guards-red.json"
+Check ($run.exit -eq 1 -and [System.IO.File]::Exists($redFile)) ("night 1: the red is reported, and recorded in guards-red.json (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED" -and $w.last -ceq "guards-wrap: RED") ("  the net reads night 1 as RED: " + $w.last)
+
+# NIGHT 2: nothing is owed, and main is still red. It must read red, and name the merge that first turned it red.
+$run = Invoke-OwedRun -Case $c
+$gr = @($script:guardRuns)
+Check ($run.exit -eq 1 -and -not (Said "nothing is owed*")) ("night 2, nothing owed and main still red: exit 1, not 'nothing is owed' (exit " + $run.exit + ")")
+Check (Said ("RED test\test-mutation-specs.ps1 in *: STILL RED since 2026-10-23T03:00:00Z: first red at the merge of YedPool/horde#4 (task T-0247, by K, mergeSha " + $shas[1] + ")*")) "  it says STILL RED and names the original merge"
+Check ($gr.Count -eq 6 -and @($gr | ForEach-Object { $_.commit } | Select-Object -Unique).Count -eq 1) ("  it ran the guards at the tip only, no walk (" + $gr.Count + " runs)")
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($sum.exit -eq 1 -and $sum.repos[0].status -ceq "red" -and $sum.repos[0].merges -eq 0 -and $sum.repos[0].reds[0].open -eq $true -and $sum.repos[0].reds[0].merge.pr -ceq "YedPool/horde#4" -and $sum.repos[0].reds[0].merge.mergeSha -ceq $shas[1]) ("  and the JSON: " + $run.json)
+Check (@(Read-CheckedLines $c).Count -eq 2) "  nothing new is marked checked"
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net reads night 2 as RED, not green: " + $w.last)
+$report = [System.IO.File]::ReadAllText((Join-Path $c.owed "nightly\2026-10-23-yedpool-horde.txt"))
+Check ($report -clike "*STILL RED since*YedPool/horde#4*") "  the report holds it too"
+
+# A merge that cannot be walked (not in main's history) must not skip the re-run at the tip.
+$bogus = '{"repo":"YedPool/horde","pr":"YedPool/horde#9","task":"T-0247","by":"F","at":"2026-10-22T10:00:00Z","headSha":"' + ("b" * 40) + '","mergeSha":"' + ("a" * 40) + '","firstParent":"' + ("c" * 40) + '"}'
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line $bogus
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 1 -and (Said "RED * STILL RED since*YedPool/horde#4*") -and -not (Said "GREEN AGAIN*")) ("an unwalkable queued merge does not hide the open red (exit " + $run.exit + ")")
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-checked.jsonl") -Line (ConvertTo-Json -InputObject ([ordered]@{ repo = "yedpool/horde"; mergeSha = ("a" * 40); at = "2026-10-23T03:00:00Z"; result = "given-up" }) -Compress)
+
+# A RERUN THAT COULD NOT RUN leaves the red open and reads as not-run, never green.
+$notRun7 = { param($Checkout, $Suite, $Shell) if ($Shell -ceq "7") { return [pscustomobject]@{ code = -1; out = ""; err = "PowerShell 7 is not at C:\nowhere\pwsh.exe; install the MSI" } }; return $null }
+$run = Invoke-OwedRun -Case $c -GuardOverride $notRun7
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN on main*") -and (Said "STILL OPEN: the red on main (since 2026-10-23T03:00:00Z) stays open*") -and [System.IO.File]::Exists($redFile)) ("a rerun that could not run: exit 2, and the red stays open (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  the net reads it as could not run: " + $w.last)
+
+# THE RECORD CANNOT BE WRITTEN: nothing is marked checked, and the finding is still printed.
+$c2 = New-Case
+Check ((Add-QueuedMerges $c2 @(,@("4", "K"))) -ceq "merged") "another red PR is merged and queued"
+[void][System.IO.Directory]::CreateDirectory((Join-Path $c2.owed "guards-red.json.tmp"))
+$run = Invoke-OwedRun -Case $c2
+Check ($run.exit -eq 1 -and (Said "COULD NOT RECORD THE OPEN RED: *no merge is marked checked*") -and @(Read-CheckedLines $c2).Count -eq 0 -and (ConvertFrom-HordeJson -Text $run.json).repos[0].status -ceq "error") ("a record that cannot be written marks nothing checked (exit " + $run.exit + ")")
+
+# THE FIX LANDS: main is green again. The next run clears the red; the one after is a quiet night again.
+$tipNow = G $c.origin rev-parse refs/heads/main
+$null = G $seed fetch -q $c.origin "refs/heads/main"
+$fixed = New-SeedCommit -From $tipNow -Files @{ "guard.txt" = "green" } -Message "the fix"
+$null = G $seed push -q -f $c.origin ($fixed + ":refs/heads/main")
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said ("GREEN AGAIN: main was red since 2026-10-23T03:00:00Z (first red at the merge of YedPool/horde#4*mergeSha " + $shas[1] + ")*")) -and -not (Said "RED *")) ("night 3, main fixed: green, and it says the red is cleared (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 0 -and $w.state -ceq "green") ("  the net reads it as green: " + $w.last)
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "nothing is owed: every queued merge has been checked") -and @($script:guardRuns).Count -eq 0) "night 4: a quiet night with no open red runs nothing and is green"
+$w = Get-WrapperAnswer -Case $c -Run $run
+Check ($w.code -eq 0 -and $w.state -ceq "green") "  and the net reads it as green"
+
+# TWO GUARDS RED ON ONE BRANCH, EACH WITH ITS OWN SINCE AND MERGE (round 2): G1 (test-mutation-specs) red behind M1, G2
+# (test-host-names) red behind M2 a night later, then G1 fixed. G2's later nights must name M2, not M1.
+function Add-HandMerge {
+    # One more merge on main of a hand case: a commit with -Files pushed onto main and its owed line. Returns the merge sha.
+    param($Case, [hashtable]$Files, [string]$By, [int]$Number, [switch]$Unqueued)
+    $tipNow = G $Case.origin rev-parse refs/heads/main
+    $null = G $seed fetch -q $Case.origin "refs/heads/main"
+    $sha = New-SeedCommit -From $tipNow -Files $Files -Message "hand merge"
+    $null = G $seed push -q -f $Case.origin ($sha + ":refs/heads/main")
+    if (-not $Unqueued) {
+        $o = [ordered]@{ repo = "yedpool/horde"; baseRefName = "main"; pr = ("YedPool/horde#" + $Number); task = "T-0247"; by = $By; at = "2026-10-22T10:00:00Z"; headSha = $sha; mergeSha = $sha; firstParent = $tipNow }
+        $null = Add-HordeMergeLine -Path (Join-Path $Case.owed "guards-owed.jsonl") -Line (ConvertTo-Json -InputObject $o -Compress)
+    }
+    return $sha
+}
+$g1 = "test\test-mutation-specs.ps1"
+$g2 = "test\test-host-names.ps1"
+$n1 = $nightly
+$n2 = $nightly.AddDays(1)
+$n3 = $nightly.AddDays(2)
+$n4 = $nightly.AddDays(3)
+$st1 = $n1.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+$st2 = $n2.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$run = Invoke-OwedRun -Case $h.c -Now $n1
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#100*")) -and -not (Said ("RED " + $g2 + "*"))) ("per guard, night 1: G1 red behind M1 (exit " + $run.exit + ")")
+$m2 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red hostnames-red" } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+$gs2 = @($rec[0].guards)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: first red at the merge of YedPool/horde#200 (task T-0247, by K, mergeSha " + $m2 + ") on main; its owner fixes it first thing")) -and -not (Said ("RED " + $g2 + "*the red has been open since*"))) ("  night 2: G2 turns red behind M2 while G1 is red, and is not given the red's old date (" + @($script:said | Where-Object { $_ -clike ("RED " + $g2 + "*") })[0] + ")")
+Check (@($rec).Count -eq 1 -and $gs2.Count -eq 2 -and @($gs2 | Where-Object { $_.guard -ceq $g1 -and $_.since -ceq $st1 -and $_.merge.mergeSha -ceq $m1 }).Count -eq 1 -and @($gs2 | Where-Object { $_.guard -ceq $g2 -and $_.since -ceq $st2 -and $_.merge.mergeSha -ceq $m2 }).Count -eq 1) ("  the record holds each guard's own since and merge: " + (($gs2 | ForEach-Object { $_.guard + "@" + $_.since }) -join ", "))
+$sum = ConvertFrom-HordeJson -Text $run.json
+$j2 = @($sum.repos[0].reds | Where-Object { $_.guard -ceq $g2 })[0]
+Check ($j2.open -eq $false -and $j2.since -ceq $st2 -and $j2.merge.mergeSha -ceq $m2) "  and the JSON gives G2 its own since, and says it was not open before"
+# NIGHT 3: G1 is fixed (a push outside the queue); G2 stays red.
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "hostnames-red" } -By "F" -Number 300 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: STILL RED since " + $st2 + ": first red at the merge of YedPool/horde#200 (task T-0247, by K, mergeSha " + $m2 + ")*")) -and -not (Said "*YedPool/horde#100*mergeSha*on main; its owner*")) ("night 3, G1 fixed: STILL RED names G2's own merge and date, not G1's (" + @($script:said | Where-Object { $_ -clike ("RED " + $g2 + "*") })[0] + ")")
+Check ((Said ("GREEN AGAIN: " + $g1 + " on main was red since " + $st1 + " (first red at the merge of YedPool/horde#100*) and is green at the tip now; " + $g2 + " stays red there")) -and -not (Said ("GREEN AGAIN: main *"))) "  a guard that went green while another stays red gets its own line"
+Check (@($rec).Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $rec[0].guards[0].guard -ceq $g2 -and $rec[0].guards[0].since -ceq $st2) "  and leaves the record; the branch stays open on G2 alone"
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($sum.repos[0].reds[0].open -eq $true -and $sum.repos[0].reds[0].since -ceq $st2 -and $sum.repos[0].reds[0].merge.mergeSha -ceq $m2) "  and the JSON carries G2's own since and merge"
+$w = Get-WrapperAnswer -Case $h.c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net still reads it as RED: " + $w.last)
+# NIGHT 4: G2 fixed too: the branch clears.
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 301 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n4
+$rec = (ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $h.c.owed "guards-red.json")))).reds
+Check ($run.exit -eq 0 -and (Said ("GREEN AGAIN: main was red since " + $st2 + "*") ) -and @($rec).Count -eq 0) ("night 4, nothing red: the branch clears and the run is green (exit " + $run.exit + ")")
+
+# A RECORD THAT CANNOT BE READ IS NOT GREEN.
+foreach ($junk in @("this is not json", "", "{""reds"":[{""repo"":""not a repo"",""base"":""main""}]}", "{""nope"":1}", "{""reds"":[{""repo"":""YedPool/horde"",""base"":""main"",""guards"":[""test\\a.ps1""]}]}", "{""reds"":[{""repo"":""YedPool/horde"",""base"":""main"",""guards"":[{""since"":""x""}]}]}")) {
+    $c3 = New-Case
+    [void][System.IO.Directory]::CreateDirectory($c3.owed)
+    [System.IO.File]::WriteAllText((Join-Path $c3.owed "guards-red.json"), $junk, $utf8)
+    $run = Invoke-OwedRun -Case $c3
+    Check ($run.exit -eq 2 -and (Said "COULD NOT READ THE RECORD OF OPEN REDS: *is not green*") -and @($script:guardRuns).Count -eq 0) ("an unreadable open-red record (" + $(if ($junk -eq "") { "empty" } else { $junk.Substring(0, [Math]::Min(18, $junk.Length)) }) + ") is not green: exit 2, nothing run (exit " + $run.exit + ")")
+}
+$w = Get-WrapperAnswer -Case $c3 -Run $run
+Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  and the net reads it as could not run: " + $w.last)
+
+Write-Host "== T-0347: a merge begun and never queued is not lost"
+function Read-IntentLines {
+    param($Case)
+    $f = Join-Path $Case.owed "guards-intent.jsonl"
+    if (-not [System.IO.File]::Exists($f)) { return @() }
+    return @(([System.IO.File]::ReadAllText($f) -split "\r?\n") | Where-Object { $_.Trim() -ne "" })
+}
+# The intent log's own lines.
+$iReq = Test-HordeMergeRequest -Pr "YedPool/horde#7" -Task "T-0247" -State "done" -By "F" -Guards "later"
+$iLine = Format-HordeMergeIntentLine -Request $iReq -HeadSha ("d" * 40) -BaseRef "main" -Now $nightly
+$sLine = Format-HordeMergeIntentLine -Request $iReq -HeadSha ("d" * 40) -BaseRef "main" -Kind "settled" -How "queued" -Now $nightly
+Check ($iLine -cmatch '\A[\x20-\x7E]+\z' -and (Read-HordeMergeOpenIntents -Text ($iLine + "`n")).open.Count -eq 1 -and (Read-HordeMergeOpenIntents -Text ($iLine + "`n" + $sLine + "`n")).open.Count -eq 0) "an intent line is plain ASCII, open until a settled line for the same PR and head follows"
+Check ((Read-HordeMergeOpenIntents -Text ($iLine + "`n" + $sLine + "`n" + $iLine + "`nnot json`n")).open.Count -eq 1 -and (Read-HordeMergeOpenIntents -Text ($iLine + "`nnot json`n")).bad -eq 1) "  a later intent opens it again, and a damaged line is counted, never taken for an intent"
+
+# A DAYTIME MERGE WRITES ITS INTENT FIRST AND SETTLES IT AFTER ITS QUEUE LINE.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later
+$il = @(Read-IntentLines $c)
+Check ($r.outcome -ceq "merged" -and $il.Count -eq 2 -and $il[0] -clike '{"kind":"intent",*' -and $il[1] -clike '{"kind":"settled",*"how":"queued"*' -and (Read-HordeMergeOpenIntents -Text ([string]::Join("`n", $il))).open.Count -eq 0) ("later: an intent line before the merge, a settled line after the queue line: " + ($il -join " | "))
+$before = @(Get-GhCalls $c).Count
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Get-GhCalls $c | Select-Object -Skip $before | Where-Object { $_ -clike "pr view*" }).Count -eq 0) "  and a settled intent costs the nightly run no question to GitHub"
+
+# THE INTENT CANNOT BE WRITTEN: nothing is merged.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -IntentFails
+Check ($r.outcome -ceq "refused" -and $r.why -clike "the intent to merge could not be written, so nothing was merged: *" -and -not (Test-MergeCall $c)) ("later: an intent that cannot be written refuses the merge (" + $r.outcome + ")")
+
+# THE QUEUE LINE IS LOST AFTER THE MERGE: the intent stays open, and the nightly run queues the merge.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -OwedFails
+$main = Get-Main $c
+Check ($r.outcome -ceq "merged-unfinished" -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) "a merge whose queue line was lost: queued nowhere, its intent still open"
+$run = Invoke-OwedRun -Case $c
+$ow = @(Read-OwedLines $c)
+Check ($run.exit -eq 0 -and (Said ("recovered YedPool/horde#1: it was merged as " + $main + " and never queued*")) -and $ow.Count -eq 1 -and (ConvertFrom-HordeJson -Text $ow[0]).mergeSha -ceq $main -and (ConvertFrom-HordeJson -Text $ow[0]).task -ceq "T-0247" -and (ConvertFrom-HordeJson -Text $ow[0]).baseRefName -ceq "main" -and (Said "all green over 1 merges")) ("the nightly run queues it from GitHub's word, and checks it (exit " + $run.exit + ")")
+Check ((Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0) "  and settles the intent"
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "nothing is owed*") -and @(Read-OwedLines $c).Count -eq 1) "  and the next run finds nothing more to recover"
+
+# THE MERGED-UNFINISHED RETURN (gh said merged, GitHub did not show it) queued nothing: the intent covers it too.
+$c = New-Case -Pr @{ "1" = @{ hideMerged = $true } }
+$r = Invoke-Case -Case $c -Guards later
+Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "*the intent to merge stays recorded*" -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) ("a merge GitHub does not yet show: merged-unfinished, nothing queued, the intent kept (" + $r.outcome + ")")
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and @(Read-IntentLines $c).Count -eq 1) "  a young intent whose PR is not merged is left alone (it may still be in flight)"
+$gst = Read-MergeStandInState -Path $c.gh
+$gst.prs."1".hideMerged = $false
+Write-MergeStandInState -Path $c.gh -State $gst
+$main = Get-Main $c
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 1 -and (ConvertFrom-HordeJson -Text @(Read-OwedLines $c)[0]).mergeSha -ceq $main) "  once GitHub shows it MERGED, the nightly run queues it"
+
+# AN OLD INTENT WHOSE PR WAS NEVER MERGED is settled, not asked about for ever.
+$c = New-Case
+$old = Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool/horde#2" -Task "T-0247" -State "done" -By "F" -Guards "later") -HeadSha $heads["2"] -BaseRef "main" -Now ([datetime]::new(2026, 10, 1, 0, 0, 0, [System.DateTimeKind]::Utc))
+[void][System.IO.Directory]::CreateDirectory($c.owed)
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line $old
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0 -and (@(Read-IntentLines $c)[-1]) -clike '*"how":"not-merged"*') "an old intent whose PR is still open is settled as not merged"
+
+# AN UNKNOWN MERGE IS NOT SETTLED AS NOT MERGED (round 2): only GitHub's own word settles it.
+function Get-IntentHows { param($Case) return @(Read-IntentLines $Case | Where-Object { $_ -clike '{"kind":"settled"*' }) }
+# a. gh refuses the merge and the view right after fails too.
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$script:mergeSeen = $false
+$r = Invoke-Case -Case $c -Guards later -GhWrap {
+    param($a)
+    $j = @($a) -join " "
+    if ($j -clike "pr merge*") { $script:mergeSeen = $true }
+    if ($script:mergeSeen -and $j -clike "pr view*") { return [pscustomobject]@{ code = 1; out = ""; err = "gh: connection reset" } }
+    return (& $script:innerGh $a)
+}
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub's answer is unknown*nightly run will ask*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a refused merge whose view also failed: the intent stays open, the refusal says GitHub's answer is unknown (" + $r.why + ")")
+# b. gh timed out (code -1) and the view says OPEN.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -GhWrap {
+    param($a)
+    $j = @($a) -join " "
+    if ($j -clike "pr merge*") { return [pscustomobject]@{ code = -1; out = ""; err = "gh ran past 120 s and was stopped" } }
+    return (& $script:innerGh $a)
+}
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub's answer is unknown*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a timed-out merge whose view says OPEN: the intent stays open (" + $r.why + ")")
+# c. a plain refusal, GitHub answering OPEN: NOT settled either (round 3 of T-0347). gh can answer with an error after GitHub accepted the
+# merge, and the single view right after can still say OPEN, so a refusal is never the daytime merge's to settle: the night asks.
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$r = Invoke-Case -Case $c -Guards later
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub shows it still OPEN right now*the intent stays open and the nightly run will ask GitHub*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a plain refused merge leaves the intent open and says the night will confirm (" + $r.why + ")")
+
+# THE SAME MERGE QUEUED TWICE (the merge queues itself first, and the nightly run, which asked GitHub about its still-open intent,
+# appends a second line for it with no first parent): the reader keeps the first line, so the merge is walked and marked checked once.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later
+$own = @(Read-OwedLines $c)[0]
+$recovered = ConvertFrom-HordeJson -Text $own
+$recovered.firstParent = ""
+$recovered.at = "2026-10-22T09:00:00Z"
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-owed.jsonl") -Line (ConvertTo-Json -InputObject $recovered -Compress)
+Check (@(Read-OwedLines $c).Count -eq 2 -and (Read-HordeMergeOwedEntries -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-owed.jsonl")))).entries.Count -eq 1) "CONTROL: the queue holds the same mergeSha twice, and reads as one entry"
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "all green over 1 merges") -and @(Read-CheckedLines $c).Count -eq 1 -and @($script:guardRuns | Where-Object { $_.commit -ceq (Get-Main $c) }).Count -gt 0) ("  and the nightly run walks it once and marks it checked once (exit " + $run.exit + ")")
+
+# GITHUB CANNOT BE ASKED: the intent stays, the run ends 2 (never 0), and the merge is not forgotten.
+$c = New-Case
+$null = Add-HordeMergeLine -Path (Join-Path $c.owed "guards-intent.jsonl") -Line (Format-HordeMergeIntentLine -Request (Test-HordeMergeRequest -Pr "YedPool/horde#99" -Task "T-0247" -State "done" -By "F" -Guards "later") -HeadSha ("e" * 40) -BaseRef "main" -Now ([datetime]::new(2026, 10, 1, 0, 0, 0, [System.DateTimeKind]::Utc)))
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 2 -and (Said "COULD NOT ASK GITHUB whether YedPool/horde#99*asked again next run") -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("an intent GitHub cannot answer for ends the run 2 and stays open (exit " + $run.exit + ")")
+
+Write-Host "== T-0347 round 3: a refused merge is never settled, so a merge GitHub accepted is never lost"
+# (the cases a, b and c above are the unknown ones and the plain refusal.) d: gh answers 502 after GitHub accepted the merge, and the
+# view right after still says OPEN.
+$c = New-Case
+$r = Invoke-Case -Case $c -Guards later -GhWrap { param($a); $j = @($a) -join " "; if ($j -clike "pr merge*") { return [pscustomobject]@{ code = 1; out = ""; err = "HTTP 502: Bad Gateway (https://api.github.com/graphql)" } }; return (& $script:innerGh $a) }
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*HTTP 502*the intent stays open and the nightly run will ask GitHub and queue the merge if it happened*" -and @(Get-IntentHows $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1) ("a 502 with the view saying OPEN: refused, told the night will confirm, the intent NOT settled (" + $r.why + ")")
+$late = Invoke-MergeStandInGh -StatePath $c.gh -Arguments @("pr", "merge", "1", "--repo", "YedPool/horde", "--merge", "--match-head-commit", $heads["1"])
+$main = Get-Main $c
+Check ($late.code -eq 0 -and $main -cne $c1) "CONTROL: GitHub did finish the merge that gh answered with an error"
+$run = Invoke-OwedRun -Case $c
+$ow = @(Read-OwedLines $c)
+Check ($run.exit -eq 0 -and (Said ("recovered YedPool/horde#1: it was merged as " + $main + " and never queued*")) -and $ow.Count -eq 1 -and (ConvertFrom-HordeJson -Text $ow[0]).mergeSha -ceq $main -and (Said "all green over 1 merges") -and -not (Said "nothing is owed*")) ("  the night finds it MERGED, queues it and checks it: the merge is not lost (exit " + $run.exit + ")")
+$again = Invoke-Case -Case $c -Guards later
+Check ($again.outcome -ceq "refused" -and $again.why -clike "*is not open: GitHub says MERGED*" -and @(Read-OwedLines $c).Count -eq 1) "  and a retry afterwards is refused as merged and queues nothing a second time"
+# e: a retry of a refused merge while its intent is open merges, queues once, and settles the one open key.
+$c = New-Case
+$script:failOnce = $true
+$r1 = Invoke-Case -Case $c -Guards later -GhWrap { param($a); $j = @($a) -join " "; if ($j -clike "pr merge*" -and $script:failOnce) { $script:failOnce = $false; return [pscustomobject]@{ code = 1; out = ""; err = "HTTP 502: Bad Gateway" } }; return (& $script:innerGh $a) }
+$open1 = (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count
+$r2 = Invoke-Case -Case $c -Guards later
+$open2 = (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count
+Check ($r1.outcome -ceq "refused" -and $open1 -eq 1 -and $r2.outcome -ceq "merged" -and $open2 -eq 0 -and @(Read-OwedLines $c).Count -eq 1) ("an open intent does not block a retry: it merges, queues once and settles the one intent (open " + $open1 + " then " + $open2 + ")")
+$before = @(Get-GhCalls $c).Count
+$run = Invoke-OwedRun -Case $c
+Check ($run.exit -eq 0 -and (Said "all green over 1 merges") -and -not (Said "recovered *") -and @(Read-OwedLines $c).Count -eq 1 -and @(Get-GhCalls $c | Select-Object -Skip $before | Where-Object { $_ -clike "pr view*" }).Count -eq 0) "  and the night has nothing to recover and queues nothing twice"
+# f: a refused merge that GitHub never took: the intent stays open until the night, which leaves a young one alone and settles an old one.
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$r = Invoke-Case -Case $c -Guards later
+$run = Invoke-OwedRun -Case $c -Now ([datetime]::UtcNow.AddMinutes(10))
+Check ($run.exit -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 1 -and @(Get-IntentHows $c).Count -eq 0) "a refused merge's intent, a night later than ten minutes: still open (a merge may be in flight)"
+$run = Invoke-OwedRun -Case $c -Now ([datetime]::UtcNow.AddHours(3))
+Check ($run.exit -eq 0 -and @(Read-OwedLines $c).Count -eq 0 -and (Read-HordeMergeOpenIntents -Text ([System.IO.File]::ReadAllText((Join-Path $c.owed "guards-intent.jsonl")))).open.Count -eq 0 -and (@(Get-IntentHows $c)[-1]) -clike '*"how":"not-merged"*') "  three hours on, the night asks GitHub, finds it OPEN and settles it as not merged"
+# g: a view that answers {} is no answer (it holds no state).
+$c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
+$script:mergeSeen = $false
+$r = Invoke-Case -Case $c -Guards later -GhWrap {
+    param($a)
+    $j = @($a) -join " "
+    if ($j -clike "pr merge*") { $script:mergeSeen = $true }
+    if ($script:mergeSeen -and $j -clike "pr view*") { return [pscustomobject]@{ code = 0; out = "{}"; err = "" } }
+    return (& $script:innerGh $a)
+}
+Check ($r.outcome -ceq "refused" -and $r.why -clike "*GitHub's answer is unknown*" -and $r.why -cnotlike "*shows it still OPEN*") ("a view that answers {} is an unknown, not GitHub's word (" + $r.why + ")")
+
+Write-Host "== T-0347 round 3: a red guard that is not on the tip's list stays red, and the way out"
+function Get-RedRecord {
+    param($Case)
+    $f = Join-Path $Case.owed "guards-red.json"
+    if (-not [System.IO.File]::Exists($f)) { return @() }
+    return @((ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($f))).reds)
+}
+function Get-RedState {
+    # The state word the net records, through the REAL guards-wrap.ps1, for a run's answer.
+    param($Case, $Run)
+    return (Get-WrapperAnswer -Case $Case -Run $Run)
+}
+# A: dropped from the list by a queued merge.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$run = Invoke-OwedRun -Case $h.c -Now $n1
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#100*"))) ("CONTROL, night 1: G1 is red behind M1 (exit " + $run.exit + ")")
+$m2 = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: dropped from the list by the merge of YedPool/horde#200*NOT RUN*")) -and -not (Said "GREEN AGAIN*")) ("night 2, M2 drops the red G1 from the list: still RED, not run, not green again (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $rec[0].guards[0].guard -ceq $g1 -and $rec[0].guards[0].since -ceq $st1 -and $rec[0].guards[0].merge.mergeSha -ceq $m1) "  its record keeps its own since and the merge that first turned it red"
+$w = Get-RedState -Case $h.c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net reads night 2 as RED: " + $w.last)
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$gr = @($script:guardRuns)
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100 (task T-0247, by F, mergeSha " + $m1 + ")*NOT RUN*")) -and -not (Said "nothing is owed*") -and -not (Said "GREEN AGAIN*") -and -not (Said "*every guard is green*")) ("night 3, quiet: still RED, names the first merge, never 'nothing is owed' (exit " + $run.exit + ")")
+Check (@($gr | Where-Object { $_.suite -ceq $g1 }).Count -eq 0 -and $rec.Count -eq 1 -and $rec[0].guards[0].since -ceq $st1) "  the dropped guard was not run, and its record is unchanged"
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($sum.exit -eq 1 -and $sum.repos[0].status -ceq "red" -and $sum.repos[0].reds[0].kind -ceq "dropped" -and $sum.repos[0].reds[0].open -eq $true) ("  and the JSON is red: " + $run.json)
+$w = Get-RedState -Case $h.c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net reads night 3 as RED: " + $w.last)
+
+# THE WAY OUT: -ClearRed.
+$clearTools = New-SuiteTools -Case $h.c
+$cl = Invoke-HordeMergeClearRed -Tools $clearTools -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "" -Who "tester@box" -Now $n3
+Check ($cl.ok -eq $false -and $cl.exit -eq 1 -and $cl.why -clike "*reason*" -and @(Get-RedRecord $h.c).Count -eq 1) "-ClearRed with no reason is refused, nothing cleared"
+$cl = Invoke-HordeMergeClearRed -Tools $clearTools -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard "test\no-such-guard.ps1" -Reason "x" -Who "tester@box" -Now $n3
+Check ($cl.ok -eq $false -and $cl.exit -eq 1 -and $cl.why -clike "*is not in the open red of yedpool/horde main*" -and @(Get-RedRecord $h.c).Count -eq 1) "  a guard that is not in the record is refused"
+$cl = Invoke-HordeMergeClearRed -Tools $clearTools -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "stack" -Guard $g1 -Reason "x" -Who "tester@box" -Now $n3
+Check ($cl.ok -eq $false -and $cl.exit -eq 1 -and $cl.why -clike "*there is no open red on yedpool/horde stack*") "  and so is a branch with no open red"
+$cl = Invoke-HordeMergeClearRed -Tools $clearTools -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "retired on purpose" -Who "tester@box" -Now $n3
+$rep = [System.IO.File]::ReadAllText((Join-Path $h.c.owed "nightly\2026-10-25-yedpool-horde.txt"))
+Check ($cl.ok -eq $true -and $cl.exit -eq 0 -and @(Get-RedRecord $h.c).Count -eq 0) "-ClearRed on a guard gone from the tip's list clears it from the record"
+Check ($rep -clike ("*CLEARED ON PURPOSE: tester@box cleared the open red of " + $g1 + " on yedpool/horde main at 2026-10-25T03:00:00Z (UTC); it was red since " + $st1 + " (first red at the merge of YedPool/horde#100*); it is not on the guard list at the tip *; reason: retired on purpose*")) ("  the report says who cleared what and why: " + $rep.Trim())
+$run = Invoke-OwedRun -Case $h.c -Now $n4
+$w = Get-RedState -Case $h.c -Run $run
+Check ($run.exit -eq 0 -and (Said "nothing is owed*") -and $w.code -eq 0 -and $w.state -ceq "green") ("  and the next quiet night is green (exit " + $run.exit + "; the net: " + $w.state + ")")
+# A guard still on the tip's list cannot be cleared by hand: it is run, and clears when green.
+$h2 = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h2.c -Now $n1
+$tools2 = New-SuiteTools -Case $h2.c
+$cl = Invoke-HordeMergeClearRed -Tools $tools2 -WorkFolder $h2.c.work -Folder $h2.c.owed -Repo "YedPool/horde" -Base "main" -Guard "test/test-mutation-specs.ps1" -Reason "wrongly" -Who "tester@box" -Now $n2
+Check ($cl.ok -eq $false -and $cl.exit -eq 1 -and $cl.why -clike "*is still on the guard list of main*" -and @(Get-RedRecord $h2.c).Count -eq 1 -and -not [System.IO.File]::Exists((Join-Path $h2.c.owed "nightly\2026-10-24-yedpool-horde.txt"))) "a guard still on the tip's list is refused, and no report line is written"
+# A record that cannot be read clears nothing (exit 2).
+[System.IO.File]::WriteAllText((Join-Path $h2.c.owed "guards-red.json"), "this is not json", $utf8)
+$cl = Invoke-HordeMergeClearRed -Tools $tools2 -WorkFolder $h2.c.work -Folder $h2.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "x" -Who "tester@box" -Now $n2
+Check ($cl.ok -eq $false -and $cl.exit -eq 2 -and $cl.why -clike "*cannot be read, so nothing is cleared*") "  and an unreadable record clears nothing: exit 2"
+
+# B: dropped by a push outside the queue.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: STILL RED since " + $st1 + "*NOT RUN*")) -and -not (Said "GREEN AGAIN*") -and -not (Said "nothing is owed*")) ("dropped by a push outside the queue: the next night is RED, not green (exit " + $run.exit + ")")
+$w = Get-RedState -Case $h.c -Run $run
+Check ($w.code -eq 1 -and $w.state -ceq "RED") ("  the net reads it as RED: " + $w.last)
+# C: two red, one dropped by a push, the other still red: no GREEN AGAIN for the one that never ran.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red hostnames-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and -not (Said "GREEN AGAIN*") -and (Said ("RED " + $g1 + " dropped from test\guards.txt: STILL RED since " + $st1 + "*NOT RUN*")) -and (Said ("RED " + $g2 + " in *STILL RED since " + $st1 + "*"))) ("one red guard dropped, the other still red: neither is 'green again' (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and @($rec[0].guards).Count -eq 2) "  and both stay in the record"
+$tools3 = New-SuiteTools -Case $h.c
+$cl = Invoke-HordeMergeClearRed -Tools $tools3 -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "retired" -Who "tester@box" -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($cl.ok -eq $true -and $rec.Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $rec[0].guards[0].guard -ceq $g2) "-ClearRed clears only the guard named: the other red on the branch stays open"
+# D: renamed while red, the new name green; then put back on the list and fixed: it clears on its own.
+$renamed = "test/test-renamed.ps1`ntest/test-host-names.ps1`n"
+$okGuard = "Write-Output '  [PASS] x'; Write-Output '==== green ===='; exit 0`n"
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $renamed; "test\test-renamed.ps1" = $okGuard } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt:*NOT RUN*")) -and -not (Said "GREEN AGAIN*")) ("renamed while red: the old name stays RED, not run (exit " + $run.exit + ")")
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = ("test/test-mutation-specs.ps1`n" + $renamed); "guard.txt" = "green" } -By "F" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+Check ($run.exit -eq 0 -and (Said ("GREEN AGAIN: main was red since " + $st1 + "*")) -and @(Get-RedRecord $h.c).Count -eq 0) ("  back on the list and green, it ran, and the red clears itself (exit " + $run.exit + ")")
+
+Write-Host "== T-0347 round 3: a recovered merge is walked in the order of the history"
+$recoveredNight = {
+    param([string]$First, [string]$Second, [switch]$Normal)
+    $rc = New-Case
+    $a = Invoke-Case -Case $rc -Pr ("YedPool/horde#" + $First) -Guards later -OwedFails:(-not $Normal)
+    $b = Invoke-Case -Case $rc -Pr ("YedPool/horde#" + $Second) -Guards later
+    return [pscustomobject]@{ c = $rc; a = $a.outcome; b = $b.outcome }
+}
+$ctl = & $recoveredNight "10" "1" -Normal
+Check ($ctl.a -ceq "merged" -and $ctl.b -ceq "merged") "CONTROL: two merges, the first dropping a guard from the list, both queued in order"
+$run = Invoke-OwedRun -Case $ctl.c
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: dropped from the list by the merge of YedPool/horde#10 *"))) ("  the night names the first one (exit " + $run.exit + ")")
+$rcase = & $recoveredNight "10" "1"
+Check ($rcase.a -ceq "merged-unfinished" -and $rcase.b -ceq "merged" -and @(Read-OwedLines $rcase.c).Count -eq 1) "the first merge lost its queue write; the second was queued normally"
+$run = Invoke-OwedRun -Case $rcase.c
+$ql = @(Read-OwedLines $rcase.c)
+Check ($ql.Count -eq 2 -and (ConvertFrom-HordeJson -Text $ql[1]).pr -ceq "YedPool/horde#10" -and (ConvertFrom-HordeJson -Text $ql[1]).firstParent -ceq "") "  the night's recovery appended the first merge AFTER the second, with no first parent"
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: dropped from the list by the merge of YedPool/horde#10 *")) -and (Said "the queue file is not in merge order*walked in the order of the history of main")) ("  and the walk follows the history: the recovered merge dropped the guard, and is named (exit " + $run.exit + ")")
+# A recovered merge that turned a guard red.
+$rcase = & $recoveredNight "4" "1"
+$run = Invoke-OwedRun -Case $rcase.c
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#4 (task T-0247, by F, mergeSha *")) -and -not (Said "*red before today's first queued merge*")) ("a recovered merge that turned a guard red is named, not 'red before the first queued merge' (exit " + $run.exit + ")")
+
+Write-Host "== T-0347 round 3: a record that is not what this command writes is not green, on a green tip too"
+$goodGuard = [ordered]@{ guard = $g1; since = $st1; merge = $null; note = "n" }
+$goodRec = [ordered]@{ repo = "yedpool/horde"; base = "main"; guards = @($goodGuard) }
+$variants = [ordered]@{
+    "no guards key" = ([ordered]@{ schemaVersion = 1; reds = @([ordered]@{ repo = "yedpool/horde"; base = "main" }) })
+    "empty guards" = ([ordered]@{ schemaVersion = 1; reds = @([ordered]@{ repo = "yedpool/horde"; base = "main"; guards = @() }) })
+    "a guard with no since" = ([ordered]@{ schemaVersion = 1; reds = @([ordered]@{ repo = "yedpool/horde"; base = "main"; guards = @([ordered]@{ guard = $g1; merge = $null; note = "n" }) }) })
+    "a since that is a number" = ([ordered]@{ schemaVersion = 1; reds = @([ordered]@{ repo = "yedpool/horde"; base = "main"; guards = @([ordered]@{ guard = $g1; since = 5; merge = $null; note = "n" }) }) })
+    "merge a string" = ([ordered]@{ schemaVersion = 1; reds = @([ordered]@{ repo = "yedpool/horde"; base = "main"; guards = @([ordered]@{ guard = $g1; since = $st1; merge = "YedPool/horde#4"; note = "n" }) }) })
+    "reds an object" = ([ordered]@{ schemaVersion = 1; reds = $goodRec })
+    "schemaVersion 99" = ([ordered]@{ schemaVersion = 99; reds = @($goodRec) })
+    "no schemaVersion" = ([ordered]@{ reds = @($goodRec) })
+}
+foreach ($vk in @($variants.Keys)) {
+    $vc = New-Case
+    Check ((Add-QueuedMerges $vc @(,@("1", "F"))) -ceq "merged") ("a green merge is queued (" + $vk + ")")
+    [System.IO.File]::WriteAllText((Join-Path $vc.owed "guards-red.json"), (ConvertTo-Json -InputObject $variants[$vk] -Compress -Depth 8), $utf8)
+    $before = [System.IO.File]::ReadAllText((Join-Path $vc.owed "guards-red.json"))
+    $run = Invoke-OwedRun -Case $vc
+    Check ($run.exit -eq 2 -and (Said "COULD NOT READ THE RECORD OF OPEN REDS: *is not green*") -and @($script:guardRuns).Count -eq 0 -and @(Read-CheckedLines $vc).Count -eq 0 -and [System.IO.File]::ReadAllText((Join-Path $vc.owed "guards-red.json")) -ceq $before) ("a record with " + $vk + ": exit 2, nothing run, nothing checked, the record untouched (exit " + $run.exit + ")")
+    $w = Get-WrapperAnswer -Case $vc -Run $run
+    Check ($w.code -eq 2 -and $w.state -ceq "could not run") ("  and the net reads it as could not run: " + $w.last)
+}
+$vc = New-Case
+Check ((Add-QueuedMerges $vc @(,@("1", "F"))) -ceq "merged") "CONTROL: a green merge is queued"
+[System.IO.File]::WriteAllText((Join-Path $vc.owed "guards-red.json"), (ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; reds = @($goodRec) }) -Compress -Depth 8), $utf8)
+$run = Invoke-OwedRun -Case $vc
+Check ($run.exit -eq 0 -and (Said "GREEN AGAIN: main was red since *") -and @(Get-RedRecord $vc).Count -eq 0) ("  a well-formed record of the same shape is read, and a green tip clears it (exit " + $run.exit + ")")
+
+Write-Host "== T-0347 round 3: a walked merge replaces the record of a red that had ended"
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and -not (Said "*owner*#100*")) ("G1 red behind #100, fixed by a push, broken again by #300: night 2 names #300 (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $rec[0].guards[0].merge.mergeSha -ceq $m3 -and $rec[0].guards[0].since -ceq $st2) ("  and the record now names #300 and night 2, not #100: " + (ConvertTo-Json -InputObject $rec[0].guards[0] -Compress))
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st2 + ": first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and -not (Said "*horde#100*")) ("  night 3 blames #300's owner, not #100's (exit " + $run.exit + ")")
+# A walk whose baseline is still red keeps the old record, and the JSON no longer says "no merge is named" beside a merge.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*")) -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "a later merge that did not touch the red: the old record stands"
+Check ($sum.repos[0].reds[0].merge.mergeSha -ceq $m1 -and $sum.repos[0].reds[0].note -cnotlike "*no merge is named*") ("  and the JSON's note does not say no merge is named beside the merge it names: " + $sum.repos[0].reds[0].note)
+
+Write-Host "== T-0347 round 3: when the whole repo fails, every open red is still named"
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$run = Invoke-OwedRun -Case $h.c -Now $n2 -GhWrap { param($a); if ((@($a) -join " ") -clike "repo view*") { return [pscustomobject]@{ code = 1; out = ""; err = "gh: network is down" } }; return (& $script:innerGh $a) }
+Check ($run.exit -eq 2 -and (Said "COULD NOT RUN: gh could not say where yedpool/horde is*") -and (Said ("STILL OPEN: the red on main (since " + $st1 + ") stays open*")) -and (Said "0 merge(s) stay owed and 1 open red(s) stay open and will be tried again*")) ("gh fails for the whole repo: the open red is named, and the count of open reds is true (exit " + $run.exit + ")")
+
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.
@@ -881,6 +1411,64 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     Check ($run.code -eq 2 -and $run.out -clike "*-Repo and -Json belong to merge -RunOwed*") "-Json without -RunOwed is a usage error, exit 2"
     $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-12", "-State", "done", "-By", "F", "-Guards", "now") -Env $env1
     Check ($run.code -eq 2 -and $run.out -clike "*'T-12' is not a task id*usage: horde merge*") "a malformed task id is a usage error, exit 2"
+
+    # T-0347 ROUND 3, THE SEAM THROUGH THE REAL PROCESS (and the real guards-wrap.ps1 under 5.1): a red guard dropped from the list stays RED
+    # (exit 1), -ClearRed is the way out (exit 0), a damaged record is could-not-run (exit 2). The state words are the net's own, unchanged.
+    $cr = New-CliCase
+    $redSha = New-SeedCommit -From $c1 -Files @{ "guard.txt" = "specs-red" } -Message "cli red"
+    $null = G $seed push -q -f $cr.origin ($redSha + ":refs/heads/main")
+    $crLine = ConvertTo-Json -InputObject ([ordered]@{ repo = "yedpool/horde"; baseRefName = "main"; pr = "YedPool/horde#400"; task = "T-0247"; by = "K"; at = "2026-10-22T10:00:00Z"; headSha = $redSha; mergeSha = $redSha; firstParent = $c1 }) -Compress
+    $null = Add-HordeMergeLine -Path (Join-Path $cr.home "merge\guards-owed.jsonl") -Line $crLine
+    $envR = @{ HORDE_HOME = $cr.home }
+    $wrapIt = {
+        param($Home2)
+        $was = $env:HORDE_HOME
+        $env:HORDE_HOME = $Home2
+        try {
+            $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+            $o = @(& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $root "horde.ps1") -Repo "YedPool/horde")
+            return [pscustomobject]@{ code = $LASTEXITCODE; last = ("" + $o[-1]) }
+        } finally { if ($null -eq $was) { Remove-Item Env:HORDE_HOME -ErrorAction SilentlyContinue } else { $env:HORDE_HOME = $was } }
+    }
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-RunOwed", "-Json") -Env $envR
+    Check ($run.code -eq 1 -and $run.out -clike "*RED test\test-mutation-specs.ps1 in *first red at the merge of YedPool/horde#400*") ("round 3, night 1 through the real command: G1 red behind #400 (" + $run.code + ")")
+    $dropSha = New-SeedCommit -From $redSha -Files @{ "test\guards.txt" = $onlyHost } -Message "cli drop"
+    $null = G $seed push -q -f $cr.origin ($dropSha + ":refs/heads/main")
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-RunOwed", "-Json") -Env $envR
+    $jl = @(($run.out -split "\r?\n") | Where-Object { $_ -clike '{"exit":*' })
+    Check ($run.code -eq 1 -and $run.out -clike "*RED test\test-mutation-specs.ps1 dropped from test\guards.txt: STILL RED since*first red at the merge of YedPool/horde#400*NOT RUN*" -and $run.out -cnotlike "*GREEN AGAIN*" -and $run.out -cnotlike "*nothing is owed*" -and $jl.Count -eq 1 -and $jl[0] -clike '{"exit":1,*') ("  night 2, the guard dropped from the list by a push: still RED, not run, exit 1 (" + $run.code + ")")
+    if ($shell -ceq "powershell.exe") {
+        $w = & $wrapIt $cr.home
+        Check ($w.code -eq 1 -and $w.last -ceq "guards-wrap: RED") ("  the real guards-wrap.ps1 reads it as RED: " + $w.last)
+    }
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-ClearRed", "-Repo", "YedPool/horde", "-Base", "main", "-Guard", "test\test-mutation-specs.ps1") -Env $envR
+    Check ($run.code -eq 2 -and $run.out -clike "*merge -ClearRed needs -Reason*") ("-ClearRed with no -Reason is a usage error, exit 2 (" + $run.code + ")")
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-ClearRed", "-RunOwed", "-Repo", "YedPool/horde") -Env $envR
+    Check ($run.code -eq 2 -and $run.out -clike "*two commands*") ("  and -ClearRed with -RunOwed is one too (" + $run.code + ")")
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-RunOwed", "-Guard", "x") -Env $envR
+    Check ($run.code -eq 2 -and $run.out -clike "*merge -RunOwed takes only -Repo and -Json, not -Guard*") ("  and -RunOwed takes no -Guard (" + $run.code + ")")
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-ClearRed", "-Repo", "YedPool/horde", "-Base", "main", "-Guard", "test\test-mutation-specs.ps1", "-Reason", "retired on purpose") -Env $envR
+    Check ($run.code -eq 0 -and $run.out -clike "*CLEARED ON PURPOSE:*cleared the open red of test\test-mutation-specs.ps1 on yedpool/horde main at *reason: retired on purpose*" -and $run.out -clike "*the branch has no open red left*") ("-ClearRed through the real command clears it and says who, what and why (" + $run.code + ")")
+    $report = @([System.IO.Directory]::GetFiles((Join-Path $cr.home "merge\nightly"), "*.txt") | ForEach-Object { [System.IO.File]::ReadAllText($_) }) -join "`n"
+    Check ($report -clike "*CLEARED ON PURPOSE:*reason: retired on purpose*") "  and the day's report holds the line"
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-ClearRed", "-Repo", "YedPool/horde", "-Base", "main", "-Guard", "test\test-mutation-specs.ps1", "-Reason", "again") -Env $envR
+    Check ($run.code -eq 1 -and $run.out -clike "*there is no open red on yedpool/horde main*") ("  a second clearing is refused: nothing is open (" + $run.code + ")")
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-RunOwed", "-Json") -Env $envR
+    $jl = @(($run.out -split "\r?\n") | Where-Object { $_ -clike '{"exit":*' })
+    Check ($run.code -eq 0 -and $run.out -clike "*nothing is owed*" -and $jl.Count -eq 1 -and $jl[0] -clike '{"exit":0,*') ("  and the next night is green, exit 0 (" + $run.code + ")")
+    if ($shell -ceq "powershell.exe") {
+        $w = & $wrapIt $cr.home
+        Check ($w.code -eq 0) ("  the real guards-wrap.ps1 reads it as green, exit 0: " + $w.last)
+    }
+    # A DAMAGED RECORD on a green tip: could not run, exit 2 in the JSON and for the net.
+    [System.IO.File]::WriteAllText((Join-Path $cr.home "merge\guards-red.json"), '{"schemaVersion":1,"reds":[{"repo":"yedpool/horde","base":"main","guards":[]}]}', $utf8)
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "-RunOwed", "-Json") -Env $envR
+    $jl = @(($run.out -split "\r?\n") | Where-Object { $_ -clike '{"exit":*' })
+    Check ($run.code -eq 1 -and $run.out -clike "*COULD NOT READ THE RECORD OF OPEN REDS*is not green*" -and $jl.Count -eq 1 -and $jl[0] -clike '{"exit":2,*') ("a record with an empty guards list, on a green tip: could not run, exit 2 in the JSON (" + $run.code + ")")
+    if ($shell -ceq "powershell.exe") {
+        $w = & $wrapIt $cr.home
+        Check ($w.code -eq 2 -and $w.last -ceq "guards-wrap: could not run") ("  the real guards-wrap.ps1 reads it as could not run: " + $w.last)
+    }
     if ($shell -ceq "pwsh.exe") { continue }
 
     # THE DEFAULT IS DAYTIME MODE, through the real command: PR 4's guard is red and it is merged anyway, queued; -RunOwed names it.
@@ -892,9 +1480,14 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     Check ($run.code -eq 1 -and $run.out -clike "*MERGED, NOT FINISHED:*the warchief was not told*" -and $run.out -cnotlike "*NOT QUEUED*") ("  and ends 1 only for the warchief a test home cannot tell (" + $run.code + ")")
     # A QUEUE THAT CANNOT BE WRITTEN, through the real command: loud, the line to add by hand, exit 1.
     $cq = New-CliCase
-    [System.IO.File]::WriteAllText((Join-Path $cq.home "merge"), "in the way", $utf8)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $cq.home "merge\guards-owed.jsonl"))
     $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $cq.home }
     Check ($run.code -eq 1 -and $run.out -clike "*THE MERGE HAPPENED, BUT IT WAS NOT QUEUED FOR THE NIGHTLY GUARDS RUN*add this line to guards-owed.jsonl by hand: {*" -and $run.out -clike "*MERGED, NOT FINISHED:*not queued*" -and $run.out -cnotlike "*guards not run: queued*") ("a queue that cannot be written: exit 1, loud, the line to add (" + $run.code + ")")
+    # T-0347: THE INTENT FOLDER IN THE WAY refuses the merge before it is made, since the queue is beside the intent.
+    $ci = New-CliCase
+    [System.IO.File]::WriteAllText((Join-Path $ci.home "merge"), "in the way", $utf8)
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $ci.home }
+    Check ($run.code -eq 1 -and $run.out -clike "*refused, nothing merged: the intent to merge could not be written, so nothing was merged*" -and -not (Test-MergeCall $ci)) ("a merge folder that cannot be written to refuses the merge before it is made (" + $run.code + ")")
     # S3: A DAYTIME MERGE TAKES NO MACHINE LOCK, so a long nightly run (or a -Guards now merge) never holds it up.
     $cl = New-CliCase
     $held = Get-HordeMergeLock -WorkFolder $cl.work
