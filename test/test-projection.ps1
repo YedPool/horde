@@ -844,8 +844,9 @@ if (Section "platform" "the process table is the platform's") {
     # of PR #31, finding 5): core/identity used to call it directly.
     # A comment naming the class is not a read of it (core/Services.ps1 quotes a measurement), so the file's
     # tokens are asked, not its text. A string still counts: that is how the class is named to a CIM call.
-    function Test-NamesWin32Process { param([string]$Text) $tok = $null; $bad = $null; $null = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tok, [ref]$bad); return (@($tok | Where-Object { $_.Kind -ne "Comment" -and $_.Text -match 'Win32_Process' }).Count -gt 0) }
-    Check (-not (Test-NamesWin32Process "# measured with Win32_Process.Create") -and (Test-NamesWin32Process "Get-CimInstance -ClassName Win32_Process") -and (Test-NamesWin32Process "Get-CimInstance -ClassName 'Win32_Process'")) "CONTROL: a comment naming the process table is no read of it, and a call is, with or without quotes"
+    # A file that does not parse is not cleared: an unclosed block comment would hide the rest of it.
+    function Test-NamesWin32Process { param([string]$Text) $tok = $null; $bad = $null; $null = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tok, [ref]$bad); if (@($bad).Count -gt 0) { return $true }; return (@($tok | Where-Object { $_.Kind -ne "Comment" -and $_.Text -match 'Win32_Process' }).Count -gt 0) }
+    Check (-not (Test-NamesWin32Process "# measured with Win32_Process.Create") -and (Test-NamesWin32Process "Get-CimInstance -ClassName Win32_Process") -and (Test-NamesWin32Process "Get-CimInstance -ClassName 'Win32_Process'") -and (Test-NamesWin32Process "<# open``nGet-CimInstance Win32_Process")) "CONTROL: a comment naming the process table is no read of it, a call is, with or without quotes, and a file that does not parse is never cleared"
     $w32 = @(Get-ChildItem -LiteralPath (Join-Path $root "core") -Filter "*.ps1" | Where-Object { Test-NamesWin32Process (Get-Content -LiteralPath $_.FullName -Raw) } | ForEach-Object { $_.Name })
     foreach ($x in @($w32 | Where-Object { $_ -ne "Platform.ps1" })) { Write-Host ("  reads Win32_Process: core/" + $x) -ForegroundColor Red }
     Check ($w32.Count -eq 1 -and $w32[0] -eq "Platform.ps1") "the process table is read only behind the platform seam"
