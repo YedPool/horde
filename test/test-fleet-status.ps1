@@ -304,7 +304,10 @@ Check ($handed.state -ceq "refused" -and @($handed.orcs).Count -eq 0) "settings 
 # path"). The catch here is the test's own, so that a throw is a failed check.
 $r = $null
 try { $r = Get-HordeFleetStatus -HordeHome (New-Home "home-nomachine" '{"statusFolder":"\\\\horde-no-such-machine\\orcs"}') -Now $now } catch { $r = [pscustomobject]@{ state = "threw"; reason = "$($_.Exception.Message)"; orcs = @() } }
-Check ($r.state -ceq "unreadable" -and $r.reason -like "the setting of where status records are (statusFolder) names a folder that could not be looked for: *" -and @($r.orcs).Count -eq 0) ("a setting naming a folder on a machine that does not answer is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
+# Under pwsh 7 the test for the folder answers no and does not throw (measured 2026-11-07 on 7.6.7), so the
+# reader says the folder does not exist. The promise is the same in both: unreadable, never a throw.
+$noMachineSaid = $(if (("" + $PSVersionTable.PSEdition) -ceq "Desktop") { "could not be looked for" } else { "does not exist" })
+Check ($r.state -ceq "unreadable" -and $r.reason -like ("the setting of where status records are (statusFolder) names a folder that " + $noMachineSaid + ": *") -and @($r.orcs).Count -eq 0) ("a setting naming a folder on a machine that does not answer is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
 # The name no path may hold does not get as far as this reader through the settings (the folder kind
 # refuses it, measured 2026-10-07: a finding, and no folder), so it is handed over as a caller would.
 $r = Get-HordeFleetStatus -HordeHome (New-Home "home-nopath" '{"statusFolder":"C:\\orcs<of>|a?fleet"}') -Now $now

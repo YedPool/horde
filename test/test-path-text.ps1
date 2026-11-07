@@ -256,14 +256,20 @@ try {
 } finally { Pop-Location }
 # AND THE OTHER WAY ROUND: a PowerShell drive over a share is a network path only once resolved. The
 # drive is made here, which looks its host up, so only the answers are checked.
+# Under pwsh 7 New-PSDrive refuses a share it cannot reach (measured 2026-11-07 on 7.6.7), so this case runs under
+# 5.1 only, and under 7 it says it did not run.
 $psLetter = $nothingThere[0]
 $psHost = New-NoHost
+if (("" + $PSVersionTable.PSEdition) -cne "Desktop") {
+    Write-Host "  (not checked under PowerShell 7: it will not make a drive over a share that is not there)" -ForegroundColor Yellow
+} else {
 $null = New-PSDrive -Name $psLetter -PSProvider FileSystem -Root ("\\" + $psHost + "\share") -Scope Script
 try {
     $psResolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($psLetter + ":\x.md")
     Check ($psResolved -ceq ("\\" + $psHost + "\share\x.md")) ("CONTROL: a PowerShell drive " + $psLetter + ": was made over a share, and a path on it resolves to the share")
     Check ((Test-NotRefused ($psLetter + ":\x.md")) -and (Test-NetworkPath $psResolved)) "asked of the path as written the function says nothing, and asked of what it resolved to it refuses: the question comes after the resolve too"
 } finally { Remove-PSDrive -Name $psLetter -Scope Script }
+}
 
 Write-Host ""
 Write-Host "--- the reason is every caller's: it says nothing of what the caller was doing ---" -ForegroundColor Cyan
