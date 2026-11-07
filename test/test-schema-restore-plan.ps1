@@ -8,6 +8,7 @@
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
@@ -16,7 +17,7 @@ trap { Register-HordeSuiteError $_; continue }
 
 $schema = Get-HordeSchema -Name "restore-plan.v1"
 $fx = Join-Path $root "test\fixtures\restore-plan"
-function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
+function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = ConvertFrom-HordeJson -Text $t; return ,$v }
 function Findings { param($Plan) return @(Test-HordeRestorePlan -Plan $Plan) }
 
 Write-Host ""
@@ -59,7 +60,7 @@ $objectNodes = @(Get-SchemaObjectNodes $schema "#")
 Check ($objectNodes.Count -eq 8) ("CONTROL: the walk finds the 8 object nodes: plan, session, resume, layout, workspace, window, tab, node (" + $objectNodes.Count + ")")
 $open = @($objectNodes | Where-Object { -not ($null -ne $_.Node.PSObject.Properties["additionalProperties"] -and $_.Node.additionalProperties -is [bool] -and $_.Node.additionalProperties -eq $false) } | ForEach-Object { $_.At })
 Check ($open.Count -eq 0) ("every object node of the schema has additionalProperties false (" + ($open -join ", ") + ")")
-$loose = [System.IO.File]::ReadAllText((Join-Path $root "schema\restore-plan.v1.json")) | ConvertFrom-Json
+$loose = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $root "schema\restore-plan.v1.json")))
 $loose.properties.layout.PSObject.Properties.Remove("additionalProperties")
 $looseOpen = @(Get-SchemaObjectNodes $loose "#" | Where-Object { $null -eq $_.Node.PSObject.Properties["additionalProperties"] } | ForEach-Object { $_.At })
 Check (($looseOpen -join ",") -ceq "#/properties/layout") ("CONTROL: the walk sees one node that lacks it (" + ($looseOpen -join ", ") + ")")
@@ -353,12 +354,12 @@ Check (@(Findings (Read-Fixture "valid\section-4-example.json")).Count -eq 0) "C
 
 Write-Host ""
 Write-Host "--- a ratio is compared as the number it was read as ---" -ForegroundColor Cyan
-# 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a Decimal, which is strictly between 0 and 1,
+# The parser, as 5.1's ConvertFrom-Json does (test-schema-pane-session compares them), reads 0.99999999999999999999 as a Decimal, which is strictly between 0 and 1,
 # and which is 1 as a Double. The gate converted the ratio to [double], so it refused this ratio as
 # "not strictly below 1" (review of PR #17). Measured 2026-09-30.
-function Read-JsonNumber { param([string]$Text) return ('{"n":' + $Text + '}' | ConvertFrom-Json).n }
+function Read-JsonNumber { param([string]$Text) return (ConvertFrom-HordeJson -Text ('{"n":' + $Text + '}')).n }
 $nines = Read-JsonNumber "0.99999999999999999999"
-Check ($nines -is [decimal] -and [double]$nines -eq 1) "CONTROL: 5.1 reads 0.99999999999999999999 as a Decimal that is 1 as a Double"
+Check ($nines -is [decimal] -and [double]$nines -eq 1) "CONTROL: the parser reads 0.99999999999999999999 as a Decimal that is 1 as a Double"
 $rp = Read-Fixture "valid\section-4-example.json"
 $rp.layout.workspaces[0].windows[0].tabs[0].root.ratio = $nines
 $found = @(Findings $rp)

@@ -10,6 +10,7 @@ $root = Split-Path -Parent $here
 # $ErrorActionPreference = "Stop" for the suite; the checks that are about a reader's non-terminating
 # errors set Continue in their own scope, because that is the preference such a reader runs under.
 . (Join-Path $root "test\lib\Suite.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 trap { Register-HordeSuiteError $_; continue }
 # The whole suite runs under the strictest mode, so the module is proved to work for a caller that
 # uses it. The module once switched strict mode off at file scope, which - dot-sourced - switched it
@@ -218,7 +219,7 @@ $cased = ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "Know
 Check ($cased.state -eq "unknown") "a state word in the wrong case is not recognised either"
 Check ((ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ value = 1 })).state -eq "unknown") "a stored answer with no state is unknown, never inferred from its value"
 # ["known"] is not "known": it only stringifies to it. JSON can carry either.
-$listState = ConvertFrom-HordeAnswerRecord -Record ('{"state":["known"],"value":1}' | ConvertFrom-Json)
+$listState = ConvertFrom-HordeAnswerRecord -Record (ConvertFrom-HordeJson -Text '{"state":["known"],"value":1}')
 Check ($listState.state -eq "unknown") "a stored state that is a list, not a word, is not recognised"
 $forgedList = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = @("known"); value = 1; reason = ""; observedAt = $null }
 Check ((Test-HordeAnswer $forgedList) -eq $false) "an answer whose state is a list is not an answer"
@@ -260,7 +261,7 @@ function Get-AnswerShape { param($A)
     return $shape }
 foreach ($orig in @((New-HordeKnown -Value @() -ObservedAt $now), (New-HordeKnown -Value @(5) -ObservedAt $now), (New-HordeKnown -Value 0 -ObservedAt $now), (New-HordeKnown -Value $false -ObservedAt $now), (New-HordeKnown -Value "" -ObservedAt $now), (New-HordeAbsent -ObservedAt $now), $u)) {
     $json = ConvertTo-HordeAnswerRecord $orig | ConvertTo-Json -Compress -Depth 5
-    $back = ConvertFrom-HordeAnswerRecord -Record ($json | ConvertFrom-Json)
+    $back = ConvertFrom-HordeAnswerRecord -Record (ConvertFrom-HordeJson -Text $json)
     Check ($back.state -eq $orig.state) ("the stored form of an " + $orig.state + " answer survives a JSON round trip as " + $orig.state + " (" + $json + ")")
     Check ((Get-AnswerShape $back) -eq (Get-AnswerShape $orig)) ("and its value keeps its shape: " + (Get-AnswerShape $orig))
 }
@@ -294,12 +295,12 @@ Check ((Limit-HordeAge -Answer $skewed -TtlSeconds 60 -Now $t).state -eq "known"
 # is local. Compared as they stood, a UTC- zone saw every stored answer as observed in the future,
 # so none ever expired (measured at UTC-4, 2026-09-29: 120s old read as known with a 60s TTL).
 $oldJson = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value "idle" -ObservedAt (Get-Date).AddSeconds(-120)) | ConvertTo-Json -Compress -Depth 5
-$oldBack = ConvertFrom-HordeAnswerRecord -Record ($oldJson | ConvertFrom-Json)
+$oldBack = ConvertFrom-HordeAnswerRecord -Record (ConvertFrom-HordeJson -Text $oldJson)
 Check ((Limit-HordeAge -Answer $oldBack -TtlSeconds 60).state -eq "unknown") "a stored answer read back and aged with the default clock expires"
 $utcStamped = New-HordeKnown -Value "idle" -ObservedAt ([datetime]::UtcNow.AddSeconds(-120))
 Check ((Limit-HordeAge -Answer $utcStamped -TtlSeconds 60).state -eq "unknown") "an answer stamped in UTC expires against the default clock"
 $freshJson = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value "idle" -ObservedAt (Get-Date).AddSeconds(-10)) | ConvertTo-Json -Compress -Depth 5
-Check ((Limit-HordeAge -Answer (ConvertFrom-HordeAnswerRecord -Record ($freshJson | ConvertFrom-Json)) -TtlSeconds 60).state -eq "known") "CONTROL: a stored answer read back inside its TTL stays known"
+Check ((Limit-HordeAge -Answer (ConvertFrom-HordeAnswerRecord -Record (ConvertFrom-HordeJson -Text $freshJson)) -TtlSeconds 60).state -eq "known") "CONTROL: a stored answer read back inside its TTL stays known"
 # The checks above do not isolate the UTC rule (review, 2026-09-29): west of UTC the broken module
 # reads a stored answer as observed in the future, and the future-skew rule makes it unknown anyway.
 # So the same instant is put on both clocks - observedAt in UTC, -Now in local time, and the reverse -
