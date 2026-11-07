@@ -444,11 +444,12 @@ Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b
 # which only a waiting session writes (core-identity L-054) - has a row.
 # The 11 more are the keys the Claude Code 2.1.285 reader accepts that no file here has carried,
 # dropped provisionally in the table (core-ownership L-056).
-$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor") + @("jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux")
+# asksForConvertedSkills first appeared in 2.1.318 and is dropped the same way (T-0430).
+$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor") + @("jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux") + @("asksForConvertedSkills")
 $x2Known = @(Get-HordeOwnershipStoreKeys -Doc $ownership -Store "X2")
 $noRow = @($keys | Where-Object { $x2Known -cnotcontains $_ })
 foreach ($n in $noRow) { Write-Host ("  control file key with no row: " + $n) -ForegroundColor Red }
-Check ($keys.Count -eq 32 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
+Check ($keys.Count -eq 33 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
 
 Write-Host ""
 Write-Host "--- self identity ---" -ForegroundColor Cyan
@@ -562,18 +563,19 @@ if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
     # so it must be shown to have read something whenever there were files to read (review finding 6
     # of PR #19).
     Check ($realFiles.Count -eq 0 -or ($keyFiles -ge 1 -and @($realKeys).Count -ge 1)) ("CONTROL: the keys of the real control files were read (" + $keyFiles + " of " + $realFiles.Count + " files, " + @($realKeys | Sort-Object -Unique).Count + " distinct keys)")
-    # DRIFT FAILS, AND WAITING DOES NOT (core-identity L-056). The table keeps or drops every key the
-    # Claude Code version it was surveyed against can write - the 21 seen on disk and the 11 more its
-    # 2.1.285 reader accepts - so a session that happens to be waiting, or in any state that version
-    # knows, cannot turn this red. What does: a key in neither list, which a newer or unsurveyed
-    # writer added, and a file written by a Claude Code newer than the survey, which must be looked
-    # at before its keys are trusted to be the known ones. A yellow line in a green run reached no
-    # one (review of PR #24), so both fail.
+    # DRIFT FAILS, AND WAITING DOES NOT (core-identity L-056). The table keeps or drops every key seen
+    # on disk and the 11 more the 2.1.285 reader accepts, so a session that happens to be waiting, or in
+    # any state that version knows, cannot turn this red. What does: a key in neither list, which a newer
+    # or unsurveyed writer added. A newer version alone is said, not failed (T-0430): Claude Code updates
+    # itself most days, so a check on the number stayed red from 10-26 on and stopped being read, while
+    # the key check is what finds a change this table must answer. A version that cannot be read fails.
     $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Known -cnotcontains $_ })
     Check ($realNoRow.Count -eq 0) ("every key in this machine's control files is kept or dropped in the ownership table (" + ($realNoRow -join ", ") + ")")
     $surveyed = Get-HordeOwnershipSurveyedVersion -Doc $ownership -Store "X2"
-    $newer = @($realVersions | Sort-Object -Unique | Where-Object { $pv = $null; (-not [version]::TryParse("$_", [ref]$pv)) -or $null -eq $surveyed -or $pv -gt $surveyed })
-    Check ($null -ne $surveyed -and ($realFiles.Count -eq 0 -or $realVersions.Count -ge 1) -and $newer.Count -eq 0) ("no control file on this machine was written by a Claude Code newer than the table's survey (surveyed " + $surveyed + "; newer: " + ($newer -join ", ") + ")")
+    $unreadable = @($realVersions | Sort-Object -Unique | Where-Object { $pv = $null; -not [version]::TryParse("$_", [ref]$pv) })
+    $newer = @($realVersions | Sort-Object -Unique | Where-Object { $pv = $null; [version]::TryParse("$_", [ref]$pv) -and $null -ne $surveyed -and $pv -gt $surveyed })
+    if ($newer.Count -gt 0) { Write-Host ("  control files newer than the table's survey (surveyed " + $surveyed + "): " + ($newer -join ", ")) -ForegroundColor DarkGray }
+    Check ($null -ne $surveyed -and ($realFiles.Count -eq 0 -or $realVersions.Count -ge 1) -and $unreadable.Count -eq 0) ("every control file on this machine names a Claude Code version the table's survey can be compared with (surveyed " + $surveyed + "; unreadable: " + ($unreadable -join ", ") + ")")
 }
 
 Complete-HordeSuite -Success "every agent's control files read into one record shape, and nothing written"

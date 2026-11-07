@@ -29,13 +29,13 @@
   "storeIdGaps": {
     "W7": "No store is numbered W7. The ids were fixed when the table was drafted and are kept rather than renumbered, so citations of W8 stay valid. Which store the draft numbered W7 is in no committed file. The wezfleet stores this table does not list are read by no field of the session record: mail, registry\\labels (label reservation markers; the allocator derives its counter from the registry itself), the run index, the delivery and raw-send logs, and locks."
   },
-  "surveyedVersions": { "X2": "2.1.285" },
+  "surveyedVersions": { "X2": "2.1.318" },
   "required": [ "sessionId", "agent", "pid", "cwd", "projectCwd", "transcriptPath", "resumeCommand", "pane", "window",
                 "hostInstance", "role", "parent", "owner", "label", "name", "origin", "fleetSessionId", "liveStatus",
                 "workState", "report", "lastActivity", "startedAt", "retired", "messagingAddress", "lastSeen", "runId",
                 "labelCycle", "nameSource", "remoteControl", "retiredAt", "lastTool", "title", "dependsOn", "spawnedAt",
                 "procStart", "bridgeSessionId", "formerNames", "agentVersion", "peerProtocol", "peerFeatures", "sessionKind",
-                "entrypoint", "pidDomain", "nameSince", "statusUpdatedAt", "waitingFor", "jobId", "parkedJobId",
+                "entrypoint", "pidDomain", "nameSince", "statusUpdatedAt", "waitingFor", "asksForConvertedSkills", "jobId", "parkedJobId",
                 "spare", "logPath", "hostSessionId", "agentTemplate", "reportedState", "reportedDetail", "tempo",
                 "needs", "tmux" ],
   "fields": [
@@ -153,6 +153,7 @@
   "dropped": [
     { "name": "remoteControl", "reason": "wezfleet's registry has the field and Set-WfSessionFields accepts it, but no shipped caller passes it, so it is always empty; whether a session is bridged for remote control is the agent's own bridgeSessionId, read from its control file" },
     { "name": "statusUpdatedAt", "store": "X2", "field": "statusUpdatedAt", "reason": "the time the agent last wrote its live status is carried as the observation time of liveStatus, the answer's observedAt, so a field of its own would be a second copy of one fact; lastActivity already reads the control file's updatedAt, which equalled statusUpdatedAt in 10 of 10 control files on 2026-09-30" },
+    { "name": "asksForConvertedSkills", "store": "X2", "field": "asksForConvertedSkills", "provisional": "first seen 2026-11-07, false in 17 of 17 control files written by Claude Code 2.1.318, so what it holds in practice is unmeasured", "reason": "Horde has no field for it and no reader of it, so it is not carried until one is needed" },
     { "name": "jobId", "store": "X2", "field": "jobId", "provisional": "never seen in a control file on this machine (0 of 10 on 2026-09-30): known only from the control-file reader in the Claude Code 2.1.285 binary, so what it holds in practice is unmeasured", "reason": "the id of the background job a session runs as; the 2.1.285 writer sets it only for a background session (kind bg) from CLAUDE_JOB_DIR. Horde has no background-job field to hold it, so it is not carried until one is seen" },
     { "name": "parkedJobId", "store": "X2", "field": "parkedJobId", "provisional": "never seen in a control file on this machine (0 of 10 on 2026-09-30): known only from the control-file reader in the Claude Code 2.1.285 binary, so what it holds in practice is unmeasured", "reason": "set and cleared by the 2.1.285 writer as a session parks and resumes a background job. Nothing in Horde reads a parked job, so it is not carried until one is seen" },
     { "name": "spare", "store": "X2", "field": "spare", "provisional": "never seen in a control file on this machine (0 of 10 on 2026-09-30): known only from the control-file reader in the Claude Code 2.1.285 binary, so what it holds in practice is unmeasured", "reason": "true when the 2.1.285 writer started the process as a pre-warmed spare waiting to be claimed. A spare is not yet anyone's session, which a reader may one day need, but nothing in Horde reads it today" },

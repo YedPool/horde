@@ -85,18 +85,19 @@ Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dro
 $controlKeys = @("pid", "sessionId", "cwd", "startedAt", "procStart", "version", "peerProtocol", "peerFeatures", "kind",
                  "entrypoint", "pidDomain", "messagingSocketPath", "name", "nameSource", "nameSince", "updatedAt", "status",
                  "statusUpdatedAt", "bridgeSessionId", "formerNames", "waitingFor",
-                 "jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux")
+                 "jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux",
+                 "asksForConvertedSkills")
 $x2Reads = @($doc.fields | ForEach-Object { $ownField = $_; @($ownField.read) | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { [pscustomobject]@{ key = "$($_.field)"; owner = "$($ownField.owner)"; name = "$($ownField.name)" } } })
 # The keys the table accounts for come from one helper, the same one the identity suite's live
 # check uses, so the two cannot count differently.
 $x2Known = @(Get-HordeOwnershipStoreKeys -Doc $doc -Store "X2")
 $unaccounted = @($controlKeys | Where-Object { $x2Known -cnotcontains $_ })
 foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
-Check ($controlKeys.Count -eq 32 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
+Check ($controlKeys.Count -eq 33 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
 Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
-# The version the keys were surveyed against, so a live file written by a newer Claude Code fails
-# the identity suite until someone looks at what that version writes (ledger L-056).
-Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.285") "the table records the claude version its control-file keys were surveyed against"
+# The version the keys were surveyed against. A live file written by a newer Claude Code is said by
+# the identity suite, and a key it adds fails there until the table answers it (T-0430).
+Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.318") "the table records the claude version its control-file keys were surveyed against"
 # Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
 # of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
 # an engine must still hold after the session exits and Claude removes its control file - a
