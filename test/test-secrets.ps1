@@ -215,7 +215,9 @@ $attacks = @(
     @{ found = $false; what = "KNOWN LIMIT: a value that is a list holding the secret"; text = ('{"' + $six[3] + '":["' + $made + '"]}') },
     @{ found = $true; what = "a PREFIXED member name, the name at the end of a longer one (my_api_key)"; text = (Get-Member ("my_" + $six[4]) $made) },
     @{ found = $false; what = "the name at the start of a longer member name"; text = (Get-Member ($six[4] + "_id") $made) },
-    @{ found = $false; what = "a look-alike letter in the name (U+212A for k)"; text = (Get-Member $kelvin $made) },
+    # Under pwsh 7 the regex engine takes U+212A for k even with CultureInvariant (measured 2026-11-07 on 7.6.7): it
+    # finds more, never less, and the shipped commands run under 5.1. Pinned for each shell, so a change is seen.
+    @{ found = (("" + $PSVersionTable.PSEdition) -cne "Desktop"); what = "a look-alike letter in the name (U+212A for k)"; text = (Get-Member $kelvin $made) },
     @{ found = $true; what = "YAML: the name with no quotes before a colon"; text = ($six[5] + ": " + $made) },
     @{ found = $false; what = "KNOWN LIMIT: JSON written inside a JSON string, its quotes escaped"; text = ('{"body":"{\"' + $six[5] + '\":\"' + $made + '\"}"}') },
     # --- each placeholder form, in a member ---
