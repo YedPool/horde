@@ -298,9 +298,10 @@ function Invoke-HordeAnalystPass {
             if (-not (@($s.told) -ccontains "no-answer")) { & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Extra ("`nRound: " + $id)) }
             # THE FOUNDER'S NOTICE HAS ITS OWN TOLD KEY (review of PR 306): tied to the warchief's tell, telling
             # switched off or fleet mail failing left "no-answer" untold, so every late round notified the
-            # founder again - up to 48 a day - each saying the warchief was told when he was not.
+            # founder again - up to 48 a day - each saying the warchief was told when he was not (and now it says what is known: a notice posted and watched, or not posted).
             if ((@($s.told) -ccontains "no-answer-founder") -or $null -eq $Tools["Notify"] -or $v.notifyFounder -ne $true) { continue }
-            $warchief = $(if (@($s.told) -ccontains "no-answer") { "the warchief was told." } else { "the warchief was not told." })
+            # WHAT IS KNOWN, NOT MORE: the told list means "posted and watched" (header), never "the warchief has it", and this goes to a phone.
+            $warchief = $(if (@($s.told) -ccontains "no-answer") { "a notice to the warchief was posted and is being watched for its taking." } else { "a notice to the warchief was not posted." })
             $n = $null
             try { $n = Invoke-HordeAnalystTool -Tools $Tools -Name "Notify" -With @(("The fleet analyst has not answered round " + $id + " for " + $v.ackMinutes + " minutes; " + $warchief)) } catch { $n = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
             if ($null -ne $n -and $n.ok -eq $true) { $s.told = [string[]]@(@($s.told) + "no-answer-founder"); & $say ("told the founder: no answer to round " + $id + "; " + $warchief) }

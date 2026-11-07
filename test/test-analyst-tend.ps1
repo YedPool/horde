@@ -454,14 +454,14 @@ try {
         foreach ($m in @(2, 33, 64, 95, 126)) { Finding $q ("alarm:q" + $m); $q.now = $t0.AddMinutes($m); $null = Pass $q }
         $q.now = $t0.AddMinutes(150); $null = Pass $q
         Check ($q.posts.Count -eq 5 -and $q.notices.Count -eq 1) ("warchief telling " + $case + ": five unacked rounds tell the founder once (" + $q.notices.Count + ")")
-        Check ($q.notices.Count -ge 1 -and $q.notices[0] -like "*the warchief was not told*" -and $q.notices[0] -notlike "*the warchief was told.*") ("warchief telling " + $case + ": and the notice says the warchief was not told")
+        Check ($q.notices.Count -ge 1 -and $q.notices[0] -like "*a notice to the warchief was not posted*" -and $q.notices[0] -notlike "*the warchief was told*" -and $q.notices[0] -notlike "*is being watched*") ("warchief telling " + $case + ": and the notice says no notice was posted to the warchief, never that he was told")
         Ack $q ((State $q).rounds[-1].id)
         Finding $q "alarm:q-after-ack"
         $q.now = $t0.AddMinutes(160); $null = Pass $q
         $q.now = $t0.AddMinutes(176); $null = Pass $q
         Check ($q.notices.Count -eq 2) ("warchief telling " + $case + ": after an ack, the next run tells the founder again")
     }
-    Check ($w.notices[0] -like "*the warchief was told.*") "when the warchief's tell is taken, the notice says so"
+    Check ($w.notices[0] -like "*a notice to the warchief was posted and is being watched for its taking*" -and $w.notices[0] -notlike "*the warchief was told*") "when the warchief's tell is posted, the notice says what is known: posted and watched, not told"
 
     Write-Host ""
     Write-Host "--- review of PR 306: a fresh session that never acks is still told ---" -ForegroundColor Cyan
