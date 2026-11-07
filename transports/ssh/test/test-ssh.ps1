@@ -136,7 +136,7 @@ try {
     Check ((Join-HordeSshCommandLine -Argv @("a", "b c")) -ceq 'a "b c"') "a plain argument is passed as it is, and one with a space is quoted"
     $echo = Join-Path $tmp "args.ps1"
     [System.IO.File]::WriteAllText($echo, '$args | ForEach-Object { [Console]::Out.WriteLine("<" + $_ + ">") }' + "`r`n")
-    $psExe = Join-Path $PSHOME "powershell.exe"
+    $psExe = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
     $p = Start-TestProcess -FilePath $psExe -Arguments ("-NoProfile -NonInteractive -File " + (Join-HordeSshCommandLine -Argv (@($echo) + $cases)))
     [void]$children.Add($p)
     $outText = $p.StandardOutput.ReadToEnd()
