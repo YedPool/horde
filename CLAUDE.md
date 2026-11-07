@@ -74,7 +74,8 @@ reason.
   PR 288's launcher lost the service worker, and four page merges went in on their own suites).
 - Once per PR, on the final head merged with current `main`: the full suite, the changed-target
   mutation specs (every spec whose Target, Suite or spec file the PR changes), and
-  `tools\Mutate.ps1 -Changed`. The full mutation sweep (every spec) runs nightly, not per PR.
+  `tools\Mutate.ps1 -Changed`. No full mutation sweep (every spec) runs, nightly or otherwise: do
+  not lean on one (T-0437).
   "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.
 - A suite over 2 minutes on fixtures is a defect: file an issue to profile it.
