@@ -575,5 +575,10 @@
         @{ Name = "label-rule-not-said"
            Find = 'if ($kind -ceq "label") { return "a hub label: '
            Replace = 'if ($false) { return "a hub label: ' }
+        @{ Name = "a-character-no-path-may-hold-passes"
+           Find = 'if ([System.IO.Path]::DirectorySeparatorChar -eq [char]''\'' -and $Path -cmatch ''["<>|\x00-\x1F]'') { return $false }'
+           Replace = ''
+           Expect = "survives"
+           Reason = "Equivalent in the shell this tool runs suites in: under 5.1 IsPathRooted throws on these characters, so the next line still answers no. Under pwsh 7 it does not throw, and the suite is red with this line removed (measured 2026-11-06)." }
     )
 }
