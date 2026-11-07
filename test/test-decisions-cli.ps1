@@ -105,7 +105,7 @@ Write-Host "--- the words a person reads, through a pipe: the bytes, from two co
 function Get-OutputBytes {
     # Run a command line under cmd in code page -CodePage; returns { code; bytes }: what it wrote to
     # its standard output, undecoded.
-    param([string]$CommandLine, [int]$CodePage)
+    param([string]$CommandLine, [int]$CodePage, [hashtable]$Environment = @{})
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "cmd.exe"
     $psi.Arguments = "/d /c chcp " + $CodePage + " >nul & " + $CommandLine
@@ -114,6 +114,7 @@ function Get-OutputBytes {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $psi.EnvironmentVariables["HORDE_HOME"] = $hordeHome
+    foreach ($name in $Environment.Keys) { $psi.EnvironmentVariables[$name] = $Environment[$name] }
     $p = [System.Diagnostics.Process]::Start($psi)
     try {
         $errTask = $p.StandardError.ReadToEndAsync()
@@ -147,10 +148,16 @@ foreach ($page in @(437, 65001)) {
     }
 }
 # CONTROL: the same letters written by a process that sets nothing, from code page 437, ARE question
-# marks - so the reading above can see the failure it guards against.
-$plainLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Write-Output ((' + (@($hebrew.ToCharArray() | ForEach-Object { "[char]" + [int]$_ }) -join "+") + '))"'
-$control = Get-OutputBytes -CommandLine $plainLine -CodePage 437
+# marks - so the reading above can see the failure it guards against. The letters reach that process
+# in its environment, never on its command line: Windows Defender calls a command line spelling them
+# as a chain of [char] codes a Severe trojan and kills it (Trojan:Win32/Commando, T-0429).
+$plainLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Write-Output $env:HORDE_TEST_WORDS"'
+$control = Get-OutputBytes -CommandLine $plainLine -CodePage 437 -Environment @{ HORDE_TEST_WORDS = $hebrew }
 Check ($control.code -eq 0 -and (Test-HoldsBytes $control.bytes ([byte[]]@(0x3F, 0x3F, 0x3F))) -and -not (Test-HoldsBytes $control.bytes ($utf8.GetBytes($hebrew)))) "CONTROL: a process that sets no encoding writes the same Hebrew as question marks from code page 437"
+# And the question marks are the code page's doing, not letters lost on the way in: from code page
+# 65001 the same process writes them whole.
+$controlWhole = Get-OutputBytes -CommandLine $plainLine -CodePage 65001 -Environment @{ HORDE_TEST_WORDS = $hebrew }
+Check ($controlWhole.code -eq 0 -and (Test-HoldsBytes $controlWhole.bytes ($utf8.GetBytes($hebrew)))) "CONTROL: from code page 65001 that same process writes the Hebrew as its own UTF-8 bytes"
 # The encoding is put back: a command that prints after horde, in the same console, is not changed.
 $after = Get-OutputBytes -CommandLine ($hordeLine + 'list >nul & powershell.exe -NoProfile -Command "[Console]::OutputEncoding.CodePage"') -CodePage 437
 Check (([System.Text.Encoding]::ASCII.GetString($after.bytes)).Trim() -ceq "437") ("after the command, the console's code page is what it was (" + ([System.Text.Encoding]::ASCII.GetString($after.bytes)).Trim() + ")")
