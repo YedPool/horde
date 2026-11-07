@@ -901,9 +901,10 @@ function Test-HordeRelayAbsolutePath {
     # settings reader and its four files with it, which every caller of the port would then pay for, and
     # the port reads no setting. test/test-relay-port.ps1 fails if the two ever answer differently.
     # IsPathRooted says yes to C:x and \x, which are not (measured there, 2026-10-07), so on Windows the
-    # answer is the pattern; it is still asked first, because it throws on a character no path may hold.
+    # answer is the pattern. A character no path may hold is named, because only 5.1 throws on it.
     param($Path)
     if ($Path -isnot [string] -or $Path -eq "") { return $false }
+    if ($Path -cmatch '["<>|\x00-\x1F]') { return $false }
     $rooted = $false
     try { $rooted = [System.IO.Path]::IsPathRooted($Path) } catch { return $false }
     if ([System.IO.Path]::DirectorySeparatorChar -eq [char]'\') { return [bool]($Path -cmatch '\A(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])') }

@@ -64,5 +64,10 @@
         @{ Name = "file-does-not-say-whose"
            Find = '[void]$out.Add([pscustomobject]@{ relay = $name; path = $whole; what = [string]$what.value })'
            Replace = '[void]$out.Add([pscustomobject]@{ relay = ""; path = $whole; what = [string]$what.value })' }
+        @{ Name = "a-character-no-path-may-hold-passes"
+           Find = 'if ($Path -cmatch ''["<>|\x00-\x1F]'') { return $false }'
+           Replace = ''
+           Expect = "survives"
+           Reason = "Equivalent in the shell this tool runs suites in: under 5.1 IsPathRooted throws on these characters, so the next line still answers no. Under pwsh 7 it does not throw, and the suite is red with this line removed (measured 2026-11-06)." }
     )
 }

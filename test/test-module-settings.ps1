@@ -201,7 +201,7 @@ Section "a folder's table entry"
 foreach ($good in @("C:\status", "c:/status", "\\server\share\status", "D:\")) {
     Check ((Declared (Table "statusFolder" @{ default = $good }) "statusFolder").default -ceq $good) ("the folder default '" + $good + "' is accepted as written")
 }
-foreach ($bad in @("status", ".\status", "..\status", "C:status", "\status", "/status", "C:\a|b", "C:\a`nb", ("C:\" + ("f" * 1022)), 5, $true, $null)) {
+foreach ($bad in @("status", ".\status", "..\status", "C:status", "\status", "/status", "C:\a|b", "C:\a<b", "C:\a>b", 'C:\a"b', "C:\a`nb", ("C:\" + ("f" * 1022)), 5, $true, $null)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " of " + ("" + $bad).Length })
     Check (Refused -Rows (Table "statusFolder" @{ default = $bad }) -Like "statusFolder", "default", "an absolute folder path") ("a folder default may not be " + $shown + " (" + $(if ($bad -is [string] -and $bad.Length -lt 20) { $bad -replace "\s", "?" } else { "..." }) + ")")
 }
