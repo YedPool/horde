@@ -137,7 +137,7 @@ function Test-HordeOwnership {
         }
     }
     # A SURVEYED VERSION says which agent version a store's keys were last checked against; the live
-    # check fails on a file written by a newer one (core-ownership L-056). It names a real store and
+    # check says so when a file was written by a newer one, and fails on a key it has no row for (T-0430). It names a real store and
     # is a dotted version, or it would compare against nothing.
     $svProp = $Doc.PSObject.Properties["surveyedVersions"]
     if ($null -ne $svProp) {
