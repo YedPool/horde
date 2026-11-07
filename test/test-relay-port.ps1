@@ -691,7 +691,7 @@ Check ((Get-HordeRelaySecretFiles -HordeHome "C:\some\home").state -ceq "known" 
 # THE TEST OF AN ABSOLUTE PATH IS core/ModuleSettings.ps1's, COPIED NOT LOADED: the port reads no setting
 # and must not make its every caller load the settings reader, so the two are compared here.
 . (Join-Path $root "core\ModuleSettings.ps1")
-$pathCases = @("C:\a\b.json", "c:/a/b.json", "\\server\share\b.json", "//server/share/b.json", "C:b.json", "\a\b.json", "/a/b.json", "a\b.json", "b.json", ".\b.json", "..\b.json", "C:", "\\", "", "C:\a|b.json", " C:\a\b.json")
+$pathCases = @("C:\a\b.json", "c:/a/b.json", "\\server\share\b.json", "//server/share/b.json", "C:b.json", "\a\b.json", "/a/b.json", "a\b.json", "b.json", ".\b.json", "..\b.json", "C:", "\\", "", "C:\a|b.json", "C:\a<b.json", "C:\a>b.json", 'C:\a"b.json', "C:\a`nb.json", " C:\a\b.json")
 $differ = @($pathCases | Where-Object { (Test-HordeRelayAbsolutePath $_) -ne (Test-HordeModuleSettingFolder -Path $_) })
 $yes = @($pathCases | Where-Object { Test-HordeRelayAbsolutePath $_ }).Count
 Check ($differ.Count -eq 0) ("the port's test of an absolute path answers as core/ModuleSettings.ps1's does for every one of " + $pathCases.Count + " paths (" + $differ.Count + " differ: " + ($differ -join " , ") + ")")
