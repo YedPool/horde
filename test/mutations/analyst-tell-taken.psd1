@@ -109,6 +109,37 @@
         @{ Name = "analyst-tell-always-awaiting"
            Find = 'if (-not [System.IO.File]::Exists($path)) { return $false }'
            Replace = 'if (-not [System.IO.File]::Exists($path)) { return $true }' }
+        # THE RETRY (round 2, item 3): a tell the messenger refused is kept, told again next pass with its round, and not for an event that is over.
+        @{ Name = "analyst-tell-retry-not-kept"
+           Find = 'if ($Retry) { Set-HordeAnalystTellRetry -State $State -Key $Key -Round $Round }'
+           Replace = '$null = 0' }
+        @{ Name = "analyst-tell-retry-never-run"
+           Find = 'foreach ($l in @(Invoke-HordeAnalystTellRetries -State $s -Tools $Tools -Values $v -Skip $skipRetry)) { & $say $l }'
+           Replace = '$null = $skipRetry' }
+        @{ Name = "analyst-tell-retry-forgets-the-round"
+           Find = '-Values $Values -Round $round -Retry))'
+           Replace = '-Values $Values -Round "" -Retry))' }
+        @{ Name = "analyst-tell-retry-for-an-event-that-is-over"
+           Find = 'if ($Skip -ccontains $key) { continue }'
+           Replace = '$null = 0' }
+        @{ Name = "analyst-tell-retry-kept-after-posted"
+           Find = 'Remove-HordeAnalystTellRetry -State $State -Key $Key; return ("posted to the warchief: "'
+           Replace = 'return ("posted to the warchief: "' }
+        @{ Name = "analyst-tell-clear-keeps-the-retry"
+           Find = 'foreach ($k in $Keys) { Remove-HordeAnalystTellRetry -State $State -Key $k }'
+           Replace = '$null = 0' }
+        @{ Name = "analyst-tell-started-not-retried"
+           Find = '-Key ("started-" + $d.reason) -Tools $Tools -Values $v -Retry)'
+           Replace = '-Key ("started-" + $d.reason) -Tools $Tools -Values $v)' }
+        @{ Name = "analyst-tell-spawn-failed-not-retried"
+           Find = '-Key "spawn-failed" -Tools $Tools -Values $v -Retry)'
+           Replace = '-Key "spawn-failed" -Tools $Tools -Values $v)' }
+        @{ Name = "analyst-tell-no-answer-not-retried"
+           Find = '-Key "no-answer" -Tools $Tools -Values $v -Round $id -Retry)'
+           Replace = '-Key "no-answer" -Tools $Tools -Values $v -Round $id)' }
+        @{ Name = "analyst-tell-no-answer-loses-its-round"
+           Find = '-Key "no-answer" -Tools $Tools -Values $v -Round $id -Retry)'
+           Replace = '-Key "no-answer" -Tools $Tools -Values $v -Retry)' }
         # THE PASS: the look is never made, its lines are not said, its failure kills the pass, or the unreadable state hides its lines.
         @{ Name = "analyst-tell-pass-never-looks"
            Find = 'if ($null -ne $Tools["TellTaken"]) {'

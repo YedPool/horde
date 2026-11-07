@@ -364,6 +364,110 @@ $r = Invoke-HordeAnalystPass -Tools $passTools -Policy $pol -Folder $fold
 Check ($r.problem -ne "" -and (Alarms-In ($r.lines -join " | ")) -eq 1) ("an unreadable state does not hide an ALARM (" + ($r.lines -join " | ") + ")")
 
 Write-Host ""
+Write-Host "--- A REFUSED OR UNKNOWN TELL IS RETRIED ON THE NEXT PASS, FOR EVERY KEY, UNDER THE SAME ID (T-0391 round 2, item 3) ---" -ForegroundColor Cyan
+# started-gone and spawn-failed are told in the pass that starts a session, and no-answer in the pass that finds a late round; none of them is
+# decided again next pass, so a tell the messenger refused was lost for good. They are kept in the state (tellRetry) and told again.
+$sidR = "11111111-2222-4333-8444-555555555555"
+$spawnFile = Join-Path $work "spawn-stand-in.ps1"
+[System.IO.File]::WriteAllText($spawnFile, "# stand-in")
+$script:spawns = 0
+$script:spawnOk = $true
+$passToolsR = @{}
+foreach ($k in $passTools.Keys) { $passToolsR[$k] = $passTools[$k] }
+$passToolsR["Spawn"] = { param($Script, $Handover, $Reason, $Values) $script:spawns++; return [pscustomobject]@{ ok = $script:spawnOk; detail = "the stand-in spawner says no" } }
+function Pass-R {
+    param([string]$Home_, [double]$Sec)
+    $script:passHome = $Home_
+    $script:now = $t0.AddSeconds($Sec)
+    $pol = Get-HordeAnalystPolicy -HordeHome $Home_
+    if (-not $pol.ok) { throw $pol.reason }
+    return (Invoke-HordeAnalystPass -Tools $passToolsR -Policy $pol -Folder (Get-HordeAnalystFolder -Values $pol.values -HordeHome $Home_))
+}
+function New-HomeR {
+    # A home whose settings name a spawn script, with a state of the given shape.
+    param([string]$Phase, $Rounds = @())
+    $h = New-Home
+    [System.IO.File]::WriteAllText((Join-Path $h "settings\analyst.json"), ('{"schemaVersion":1,"settings":{"spawnScript":' + (ConvertTo-Json -InputObject $spawnFile) + '}}'))
+    $pol = Get-HordeAnalystPolicy -HordeHome $h
+    $st = New-HordeAnalystState
+    $st.phase = $Phase
+    if ($Phase -ceq "running") { $st.sessionId = $sidR }
+    $st.rounds = @($Rounds)
+    Write-HordeAnalystState -Path (Join-Path (Get-HordeAnalystFolder -Values $pol.values -HordeHome $h) "supervisor.json") -State $st
+    $script:spawns = 0; $script:spawnOk = $true
+    return $h
+}
+function Retry-Of { param([string]$Home_) return @((State-Of $Home_).tellRetry) }
+function Body-Of { param([string]$Id) return ("" + (@($script:posts.ToArray() | Where-Object { "$($_.messageId)" -ceq $Id })[0]).body) }
+
+# started-gone: the session is gone, a fresh one is started, and the messenger is not there to be told.
+$HG = New-HomeR "running"
+# A start declares the old event over (Clear-HordeAnalystTold), so the first start of a key is generation 1.
+$idG = Id-Of "started-gone" 1
+$script:noMessenger = $true
+$r = Pass-R $HG 0
+Check ($script:spawns -eq 1 -and (Posts-Of $idG) -eq 0 -and @((State-Of $HG).told) -cnotcontains "started-gone" -and (Retry-Of $HG) -ccontains "started-gone=") ("started-gone refused: the key is not told and is kept to be told again (" + ($r.lines -join " | ") + ")")
+$script:noMessenger = $false
+$r = Pass-R $HG 60
+Check ((Posts-Of $idG) -eq 1 -and @((State-Of $HG).told) -ccontains "started-gone" -and (Retry-Of $HG).Count -eq 0 -and $script:spawns -eq 1 -and @(Marks-Of $HG $idG).Count -eq 1) ("started-gone: the next pass tells it, once, under the same id, with no second start (" + ($r.lines -join " | ") + ")")
+$null = Pass-R $HG 120
+Check ((Posts-Of $idG) -eq 1 -and (Retry-Of $HG).Count -eq 0) "and the pass after that tells nothing more"
+
+# spawn-failed, and an UNKNOWN result this time (the post may have landed: the retry is the same id, one mark).
+$HF = New-HomeR "running"
+$idF = Id-Of "spawn-failed" 1
+$script:spawnOk = $false
+$script:postSays = "unknown"
+$null = Pass-R $HF 0
+Check ($script:spawns -eq 1 -and @((State-Of $HF).told) -cnotcontains "spawn-failed" -and (Retry-Of $HF) -ccontains "spawn-failed=" -and @(Marks-Of $HF $idF).Count -eq 1) "spawn-failed, result unknown: not told, kept to be told again, its mark kept"
+$script:postSays = "accepted"
+$null = Pass-R $HF 60
+Check (@((State-Of $HF).told) -ccontains "spawn-failed" -and (Retry-Of $HF).Count -eq 0 -and @($script:posts | Where-Object { "$($_.messageId)" -cne $idF }).Count -eq 0 -and @(Marks-Of $HF $idF).Count -eq 1 -and $script:spawns -eq 1) "spawn-failed: the next pass tells it under the same id, with one mark and no second start"
+$script:spawnOk = $true
+
+# no-answer: told once for a run of late rounds; the round is marked alerted before the tell, so it was lost until the next late round.
+$lateRound = [pscustomobject]@{ id = "20261013T110000Z-r"; kind = "round"; at = $t0.AddMinutes(-60); sessionId = $sidR; alerted = $false; woken = "yes" }
+$HN3 = New-HomeR "none" @($lateRound)
+$idN = Id-Of "no-answer" 0
+$script:noMessenger = $true
+$null = Pass-R $HN3 0
+Check (@((State-Of $HN3).told) -cnotcontains "no-answer" -and (Retry-Of $HN3) -ccontains "no-answer=20261013T110000Z-r" -and (Posts-Of $idN) -eq 0 -and @((State-Of $HN3).rounds)[0].alerted -eq $true) "no-answer refused: the round is alerted, the key not told, and the tell is kept with its round"
+$script:noMessenger = $false
+$r = Pass-R $HN3 60
+Check ((Posts-Of $idN) -eq 1 -and @((State-Of $HN3).told) -ccontains "no-answer" -and (Retry-Of $HN3) -cnotcontains "no-answer=20261013T110000Z-r" -and (Body-Of $idN).Contains("Round: 20261013T110000Z-r")) ("no-answer: the next pass tells it, once, with the round it was kept with (" + ($r.lines -join " | ") + ")")
+$null = Pass-R $HN3 120
+Check ((Posts-Of $idN) -eq 1) "and no further pass tells it again"
+
+# A pending tell for an event this very pass declares over is not told: the fresh session has written its handover, so "spawn-failed" is over.
+$HS = New-HomeR "starting"
+$polS = Get-HordeAnalystPolicy -HordeHome $HS
+$foldS = Get-HordeAnalystFolder -Values $polS.values -HordeHome $HS
+$stS = (Read-HordeAnalystState -Path (Join-Path $foldS "supervisor.json")).value
+$stS.startedAt = $t0.AddMinutes(-2)
+$stS.tellRetry = [string[]]@("spawn-failed=")
+Write-HordeAnalystState -Path (Join-Path $foldS "supervisor.json") -State $stS
+[System.IO.File]::WriteAllText((Join-Path $foldS "handover.json"), ('{"v":1,"sessionId":"' + $sidR + '","writtenAt":"' + $t0.ToString("o") + '","round":"","holds":"","told":"","followUps":""}'), (New-Object System.Text.UTF8Encoding($false)))
+$null = Pass-R $HS 0
+Check ((State-Of $HS).sessionId -ceq $sidR -and (Posts-Of (Id-Of "spawn-failed" 0)) -eq 0 -and (Posts-Of (Id-Of "spawn-failed" 1)) -eq 0 -and (Retry-Of $HS).Count -eq 0) "a pending tell for an event the pass declares over (a fresh session adopted) is dropped, not told"
+
+# A key whose condition is over is not retried: adoption clears spawn-failed and its pending tell with it.
+$stC = New-HordeAnalystState
+$stC.tellRetry = [string[]]@("spawn-failed=", "started-gone=", "no-answer=20261013T110000Z-r")
+Clear-HordeAnalystTold -State $stC -Keys @("spawn-failed", "no-answer")
+Check (@($stC.tellRetry).Count -eq 1 -and @($stC.tellRetry)[0] -ceq "started-gone=") "a key whose condition is over takes its pending tell with it"
+$sp3 = Join-Path $work "state3\supervisor.json"
+$stC.tellRetry = [string[]]@("started-gone=", "no-answer=20261013T110000Z-r")
+Write-HordeAnalystState -Path $sp3 -State $stC
+$back3 = (Read-HordeAnalystState -Path $sp3).value
+Check (@($back3.tellRetry).Count -eq 2 -and @($back3.tellRetry) -ccontains "no-answer=20261013T110000Z-r") "the pending tells are in the state file and come back"
+[System.IO.File]::WriteAllText($sp3, '{"v":1,"phase":"none","sessionId":"","previousSessionId":"","startReason":"","startedAt":null,"lastRoundAt":null,"lastWakeAt":null,"contextAt":null,"findingsOffset":0,"contextTokens":-1,"transcriptLength":-1,"told":[],"rounds":[]}', (New-Object System.Text.UTF8Encoding($false)))
+$old3 = Read-HordeAnalystState -Path $sp3
+Check ($old3.state -ceq "known" -and @($old3.value.tellRetry).Count -eq 0) "a state file written before the pending tells existed is read, with none"
+[System.IO.File]::WriteAllText($sp3, '{"v":1,"phase":"none","sessionId":"","previousSessionId":"","startReason":"","startedAt":null,"lastRoundAt":null,"lastWakeAt":null,"contextAt":null,"findingsOffset":0,"contextTokens":-1,"transcriptLength":-1,"told":[],"tellRetry":["not a row","started-gone="],"rounds":[]}', (New-Object System.Text.UTF8Encoding($false)))
+$bad3 = Read-HordeAnalystState -Path $sp3
+Check ($bad3.state -ceq "known" -and @($bad3.value.tellRetry).Count -eq 1 -and @($bad3.value.tellRetry)[0] -ceq "started-gone=") "and a row that is not a row is left out when it is read"
+
+Write-Host ""
 Write-Host "--- A LATER EVENT OF THE SAME KEY IS HEARD; A RESTART IS NOT HEARD TWICE (through the real clear and tell) ---" -ForegroundColor Cyan
 $HE = New-Home
 $pol = Get-HordeAnalystPolicy -HordeHome $HE

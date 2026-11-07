@@ -54,6 +54,11 @@
 #   - A repost the messenger answers already-posted for a mark this pass has just written is not a fresh post: the first copy's stage says
 #     nothing of this one, so the mark is taken off and the line says so (else a false TAKEN would follow). The key is then told.
 #   - THE LINES (a TAKEN, an ALARM, a full list given up) are the pass's own lines, which `horde analyst run` writes to the supervisor's log.
+#   - THE RETRY (round 2 of PR 455). A key told in the one pass that finds its cause - started-gone and started-over-cap and spawn-failed (the
+#     pass that starts a session), no-answer (the pass that finds a late round, which it marks alerted first) - is decided by no later pass. A
+#     tell of these the messenger refuses, or leaves unknown, is kept in the state (tellRetry: the key and, for no-answer, its round) and told
+#     again by the NEXT pass under the same id (the generation has not moved), until it is posted and watched or its condition is declared over
+#     (Clear-HordeAnalystTold takes the row with the key). The other keys are decided by the session decision on every pass and need no row.
 # The founder's notice (Notify) goes to the notices store (notices/Decide.ps1), not through a messenger, and is left as it was. The relay
 # watch's and the watcher check's tells (Send-HordeAnalystWarchief) keep their own states and are left as they were.
 #
@@ -74,6 +79,9 @@ $script:HordeAnalystFromSession = "horde-analyst"
 $script:HordeAnalystTtlSeconds = 604800
 $script:HordeAnalystTellNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeAnalystTakenStages = @("accepted", "handed-over", "seen")
+# The keys a new session and a fresh start declare over (Clear-HordeAnalystTold): the pass also skips the retry of these (Invoke-HordeAnalystTellRetries).
+$script:HordeAnalystClearOnAdopt = @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "no-answer", "no-answer-founder")
+$script:HordeAnalystClearOnStart = @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
 # How long the spawn script may take: the fleet tool waits for the new tab to open, about 30 s for a
 # launch on this fleet; three minutes leaves room for a slow, throttled machine.
 $script:HordeAnalystSpawnSeconds = 180
@@ -144,18 +152,48 @@ function Send-HordeAnalystTell {
     # Tell the warchief one thing once: the key goes into the state's told list when the teller POSTED it and marked it for watching (header:
     # not when the session took it - the awaiting list says that), and a key already there is not told again. Returns the journal line,
     # with the teller's own lines (a full list given up, an already-posted copy) after it.
-    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string]$Extra = "")
-    if (@($State.told) -ccontains $Key) { return "" }
-    if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return ("would tell the warchief (" + $Key + "), but telling is off") }
-    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $Extra
+    # -Retry is for a key told in the one pass that finds its cause (a start, a late round), which no later pass decides again: a tell that
+    # is refused or has no known result is kept in the state with its -Round (tellRetry) and told again by the next pass (THE RETRY, header).
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string]$Round = "", [switch]$Retry)
+    if (@($State.told) -ccontains $Key) { Remove-HordeAnalystTellRetry -State $State -Key $Key; return "" }
+    if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { Remove-HordeAnalystTellRetry -State $State -Key $Key; return ("would tell the warchief (" + $Key + "), but telling is off") }
+    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $(if ($Round -ne "") { "`nRound: " + $Round } else { "" })
     $r = $null
     $gen = Get-HordeAnalystTellGen -State $State -Key $Key
     try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Tell" -With @($Key, $body, $Values, $gen) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
     $more = @()
     if ($null -ne $r -and $null -ne $r.PSObject.Properties["lines"]) { $more = @(@($r.lines) | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" }) }
     $tail = $(if ($more.Count -gt 0) { " | " + ($more -join " | ") } else { "" })
-    if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); return ("posted to the warchief: " + $Key + " (delivered only when the warchief's own session takes it)" + $tail) }
+    if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); Remove-HordeAnalystTellRetry -State $State -Key $Key; return ("posted to the warchief: " + $Key + " (delivered only when the warchief's own session takes it)" + $tail) }
+    if ($Retry) { Set-HordeAnalystTellRetry -State $State -Key $Key -Round $Round }
     return ("could not tell the warchief (" + $Key + "): " + $(if ($null -ne $r) { "" + $r.detail } else { "the teller did not answer" }) + $tail)
+}
+
+function Set-HordeAnalystTellRetry {
+    # Keep a tell to be told again: one row per key ("<key>=<round>"), the newest round winning.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [string]$Round = "")
+    Remove-HordeAnalystTellRetry -State $State -Key $Key
+    $State.tellRetry = [string[]]@(@($State.tellRetry) + ($Key + "=" + $Round))
+}
+
+function Remove-HordeAnalystTellRetry {
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key)
+    $State.tellRetry = [string[]]@(@($State.tellRetry) | Where-Object { -not ("" + $_).StartsWith($Key + "=", [System.StringComparison]::Ordinal) })
+}
+
+function Invoke-HordeAnalystTellRetries {
+    # THE RETRY (header): tell again each key whose tell was refused or unknown in an earlier pass, with the round it was kept with, under the
+    # same id (the key's generation has not moved). -Skip names the keys this pass declares over (a start, an adoption): their rows go with
+    # Clear-HordeAnalystTold, and a row is never told for an event that is over. Returns the journal lines.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string[]]$Skip = @())
+    $out = New-Object System.Collections.ArrayList
+    foreach ($row in @($State.tellRetry)) {
+        if ("" + $row -cnotmatch '\A([a-z0-9-]{1,40})=([0-9A-Za-z-]{0,40})\z') { continue }
+        $key = $Matches[1]; $round = $Matches[2]
+        if ($Skip -ccontains $key) { continue }
+        [void]$out.Add((Send-HordeAnalystTell -State $State -Key $key -Tools $Tools -Values $Values -Round $round -Retry))
+    }
+    return @($out.ToArray())
 }
 
 function Get-HordeAnalystTellGen {
@@ -172,6 +210,8 @@ function Clear-HordeAnalystTold {
     # have landed, and its event is over too.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string[]]$Keys)
     $State.told = [string[]]@(@($State.told) | Where-Object { $Keys -cnotcontains $_ })
+    # A key whose condition is over is not told again for it: its pending tell goes too.
+    foreach ($k in $Keys) { Remove-HordeAnalystTellRetry -State $State -Key $k }
     $rows = New-Object System.Collections.ArrayList
     foreach ($k in $Keys) { [void]$rows.Add($k + "=" + ((Get-HordeAnalystTellGen -State $State -Key $k) + 1)) }
     foreach ($row in @($State.tellGen)) { if ("" + $row -cmatch '\A([a-z0-9-]{1,40})=([0-9]{1,9})\z' -and $Keys -cnotcontains $Matches[1]) { [void]$rows.Add("" + $row) } }
@@ -242,6 +282,10 @@ function Invoke-HordeAnalystPass {
     # 3. The session.
     $canStart = ("" + $v.spawnScript -ne "" -and $null -ne $Tools["Spawn"])
     $d = Get-HordeAnalystSessionDecision -State $s -Alive $alive -Handover $handover -Context $context -Now $now -Policy $v -RoundDue $due -CanStart $canStart
+    # THE RETRY, before the action: a tell the messenger refused or left unknown in an earlier pass is told again now, except the keys this very
+    # pass declares over.
+    $skipRetry = $(switch -CaseSensitive ($d.action) { "adopt" { $script:HordeAnalystClearOnAdopt } "start" { $script:HordeAnalystClearOnStart } default { @() } })
+    foreach ($l in @(Invoke-HordeAnalystTellRetries -State $s -Tools $Tools -Values $v -Skip $skipRetry)) { & $say $l }
     switch -CaseSensitive ($d.action) {
         "adopt" {
             & $say ("adopted session " + $d.sessionId + ": " + $d.why)
@@ -249,7 +293,7 @@ function Invoke-HordeAnalystPass {
             # A NEW SESSION STARTS A NEW RUN (review of PR 306): the last one's untold-until-ack "no-answer"
             # would silence a fresh session that writes its handover and never acks. Its old rounds stay
             # marked alerted, so clearing here tells nothing about them again.
-            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "no-answer", "no-answer-founder")
+            Clear-HordeAnalystTold -State $s -Keys $script:HordeAnalystClearOnAdopt
             # It was awake when it wrote the handover: a session that has just said who it is is not
             # sent a heartbeat for having been silent before the supervisor knew it.
             if ($null -eq $s.lastWakeAt -or $handover.value.writtenAt -gt $s.lastWakeAt) { $s.lastWakeAt = $handover.value.writtenAt }
@@ -262,20 +306,20 @@ function Invoke-HordeAnalystPass {
             # leaves the script going, and the next pass must find "starting", not "running and gone".
             $s.previousSessionId = $s.sessionId; $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
             $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
-            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
+            Clear-HordeAnalystTold -State $s -Keys $script:HordeAnalystClearOnStart
             Write-HordeAnalystState -Path $sp.state -State $s
             $r = $null
             try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Spawn" -With @(("" + $v.spawnScript), $sp.handover, $d.reason, $v) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
             if ($null -ne $r -and $r.ok -eq $true) {
                 & $say ("started a fresh analyst session: " + $d.why)
-                & $say (Send-HordeAnalystTell -State $s -Key ("started-" + $d.reason) -Tools $Tools -Values $v)
+                & $say (Send-HordeAnalystTell -State $s -Key ("started-" + $d.reason) -Tools $Tools -Values $v -Retry)
             } else {
                 # A SPAWN THAT FAILED OR TIMED OUT MAY STILL HAVE STARTED ONE: its child can go on after the
                 # timeout, and a non-zero exit can follow a tab that opened. So it stays "starting" and
                 # waits for a handover (startWaitMinutes, then the warchief is told) - it is never taken
                 # for "nothing happened", which would start a second session later.
                 & $say ("the spawn script did not report success: " + $(if ($null -ne $r) { "" + $r.detail } else { "it did not answer" }) + "; waiting for a handover all the same")
-                & $say (Send-HordeAnalystTell -State $s -Key "spawn-failed" -Tools $Tools -Values $v)
+                & $say (Send-HordeAnalystTell -State $s -Key "spawn-failed" -Tools $Tools -Values $v -Retry)
             }
         }
         default { if ($d.action -cne "keep") { & $say ($d.action + ": " + $d.why) } }
@@ -295,7 +339,9 @@ function Invoke-HordeAnalystPass {
             $one = @($s.rounds | Where-Object { $_.id -ceq $id })[0]
             $one.alerted = $true
             & $say ("round " + $id + " has no ack after " + $v.ackMinutes + " minutes")
-            if (-not (@($s.told) -ccontains "no-answer")) { & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Extra ("`nRound: " + $id)) }
+            # The round is marked alerted just above, so no later pass finds it late again: a refused tell is kept (tellRetry) with this round and
+            # told by the next pass.
+            if (-not (@($s.told) -ccontains "no-answer")) { & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Round $id -Retry) }
             # THE FOUNDER'S NOTICE HAS ITS OWN TOLD KEY (review of PR 306): tied to the warchief's tell, telling
             # switched off or fleet mail failing left "no-answer" untold, so every late round notified the
             # founder again - up to 48 a day - each saying the warchief was told when he was not (and now it says what is known: a notice posted and watched, or not posted).

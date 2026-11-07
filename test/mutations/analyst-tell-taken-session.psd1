@@ -12,6 +12,15 @@
         @{ Name = "analyst-state-generations-not-read"
            Find = 'if ($null -ne $doc.PSObject.Properties["tellGen"])'
            Replace = 'if ($false)' }
+        @{ Name = "analyst-state-pending-tells-not-written"
+           Find = 'tellRetry = @($State.tellRetry)'
+           Replace = 'tellRetryLost = @()' }
+        @{ Name = "analyst-state-pending-tells-not-read"
+           Find = 'if ($null -ne $doc.PSObject.Properties["tellRetry"])'
+           Replace = 'if ($false)' }
+        @{ Name = "analyst-state-pending-tells-unchecked"
+           Find = '$_ -cmatch ''\A[a-z0-9-]{1,40}=[0-9A-Za-z-]{0,40}\z'''
+           Replace = '$true' }
         @{ Name = "analyst-state-without-generations-refused"
            Find = '} else { [string[]]@() })'
            Replace = '} else { throw "no generations" })' }
