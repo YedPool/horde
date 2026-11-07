@@ -24,6 +24,7 @@ param([string[]]$Section = @())
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
+. (Join-Path $root "core\JsonText.ps1")
 
 # SECTIONS (PR #31, 2026-10-01). A mutation spec names the sections that kill its mutants, so each
 # mutant runs only those: HORDE_SECTIONS="pane,runs" (tools\Mutate.ps1 passes HORDE_* variables) or
@@ -71,9 +72,9 @@ function Get-HordeWezfleetRoot { [void]$script:trips.Add("wezfleet root"); retur
 $fx = Join-Path $root "test\fixtures\projection\fleet"
 $work = Join-Path $env:TEMP ("horde-projection-" + [guid]::NewGuid().ToString("N"))
 $script:copies = 0
-$timesDoc = (Get-Content -LiteralPath (Join-Path $fx "times.json") -Raw) | ConvertFrom-Json
+$timesDoc = ConvertFrom-HordeJson -Text (Get-Content -LiteralPath (Join-Path $fx "times.json") -Raw)
 $now = [datetime]::Parse($timesDoc.now, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
-$ownership = (Get-Content -LiteralPath (Join-Path $root "core\ownership.json") -Raw) | ConvertFrom-Json
+$ownership = ConvertFrom-HordeJson -Text (Get-Content -LiteralPath (Join-Path $root "core\ownership.json") -Raw)
 $viewSchema = Get-HordeSchema -Name "session-view.v1"
 
 function Sid { param([int]$N) return ("aaaaaaaa-0000-4000-8000-" + $N.ToString("000000000000")) }
@@ -81,7 +82,7 @@ function Utc { param([string]$Text) return [datetime]::Parse($Text, [System.Glob
 function Encoding { return (New-Object System.Text.UTF8Encoding($false)) }
 function PutJson { param([string]$Path, $Obj) [System.IO.File]::WriteAllText($Path, ($Obj | ConvertTo-Json -Depth 12), (Encoding)) }
 function PutText { param([string]$Path, [string]$Text) [System.IO.File]::WriteAllText($Path, $Text, (Encoding)) }
-function ReadJson { param([string]$Path) return ((Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json) }
+function ReadJson { param([string]$Path) return (ConvertFrom-HordeJson -Text (Get-Content -LiteralPath $Path -Raw)) }
 
 function New-Fleet {
     # A fresh copy of the fixture with its file times set: git does not keep write times, so the
@@ -243,7 +244,7 @@ if (Section "view" "the view over the fixture") {
 # after every other section (60 minutes for eight of them on the always-on box, 2026-10-02).
 if (Section "scope" "the current scope (core/Projection.ps1 header, SCOPE)") {
     # One session's entry of a view document as text, by id, so two scopes compare field for field.
-    function ScopeDoc { param($P) $d = (ConvertTo-HordeSessionViewDocument $P) | ConvertTo-Json -Depth 40 | ConvertFrom-Json; $m = @{}; foreach ($x in @($d.sessions)) { $m["" + $x.sessionId] = ($x | ConvertTo-Json -Depth 40 -Compress) }; return [pscustomobject]@{ doc = $d; byId = $m } }
+    function ScopeDoc { param($P) $d = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $P) | ConvertTo-Json -Depth 40); $m = @{}; foreach ($x in @($d.sessions)) { $m["" + $x.sessionId] = ($x | ConvertTo-Json -Depth 40 -Compress) }; return [pscustomobject]@{ doc = $d; byId = $m } }
     function ScopeDiff { param($All, $Cur) return @($Cur.byId.Keys | Where-Object { -not $All.byId.ContainsKey($_) -or $All.byId[$_] -cne $Cur.byId[$_] }) }
     # A report-only session of the closed run gamma1: fleet id omega, one report, and with -Pane the
     # handle that report names, written after this instance started.
@@ -342,7 +343,7 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     $sameFields = @($nLive.sessions | Where-Object { $s = $_; $o = @($nAll.sessions | Where-Object { $_.sessionId -ceq $s.sessionId })[0]; ($s.fields | ConvertTo-Json -Depth 12 -Compress) -cne ($o.fields | ConvertTo-Json -Depth 12 -Compress) })
     Check ($sameFields.Count -eq 0) "a session the node keeps is carried exactly as the whole projection has it"
     Check ((@(NodeIds $nAll) -join ",") -ceq ((@(41, 42, 43, 44, 45) | ForEach-Object { Sid $_ }) -join ",")) "leaving sessions out changes nothing in the projection it was given"
-    $vdoc = (ConvertTo-HordeSessionViewDocument $nLive) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $vdoc = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $nLive) | ConvertTo-Json -Depth 40)
     Check (@(Test-HordeSchema -Value $vdoc -Schema $viewSchema).Count -eq 0 -and @(Test-HordeSessionViewRules -Document $vdoc).Count -eq 0) "the node's view without them still validates"
 
     # One stale file, 42, and the rules one at a time. Its control: the table whole, nothing else.
@@ -923,7 +924,7 @@ if (Section "carry" "a stored value the view cannot carry") {
     EditReg $shape 4 { param($r) $r | Add-Member -NotePropertyName label -NotePropertyValue "b-1" -Force; $r.parent = "the orchestrator" }
     $psh = Project $shape
     Check ((St (Ans $psh 4 "label")) -eq "unknown" -and (Why (Ans $psh 4 "label")) -like "*does not match*" -and (St (Ans $psh 4 "parent")) -eq "unknown") "a stored value the view cannot carry is unknown, naming why"
-    $shDoc = (ConvertTo-HordeSessionViewDocument $psh) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $shDoc = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $psh) | ConvertTo-Json -Depth 40)
     Check (@(Test-HordeSchema -Value $shDoc -Schema $viewSchema).Count -eq 0) "and the view that carries it still validates"
 
 }
@@ -1162,17 +1163,17 @@ if (Section "layout" "the layout and the resume command") {
 }
 
 if (Section "schema" "schema/session-view.v1") {
-    $doc = (ConvertTo-HordeSessionViewDocument $p) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $doc = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $p) | ConvertTo-Json -Depth 40)
     $sf = @(Test-HordeSchema -Value $doc -Schema $viewSchema)
     foreach ($x in @($sf | Select-Object -First 10)) { Write-Host ("  " + $x) -ForegroundColor Red }
     Check ($sf.Count -eq 0) "every answer validates against schema/session-view.v1"
     $rf = @(Test-HordeSessionViewRules -Document $doc)
     foreach ($x in @($rf | Select-Object -First 10)) { Write-Host ("  " + $x) -ForegroundColor Red }
     Check ($rf.Count -eq 0) "the view keeps the rules the schema cannot state"
-    $docU = (ConvertTo-HordeSessionViewDocument $pu) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $docU = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $pu) | ConvertTo-Json -Depth 40)
     Check (@(Test-HordeSchema -Value $docU -Schema $viewSchema).Count -eq 0 -and @(Test-HordeSessionViewRules -Document $docU).Count -eq 0) "a view with no host validates too"
     # CONTROLS: each check can fail.
-    $broken = $doc | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $broken = ConvertFrom-HordeJson -Text ($doc | ConvertTo-Json -Depth 40)
     $broken.sessions[0].fields.pid.PSObject.Properties.Remove("value")
     $broken.sessions[0].fields.role | Add-Member -NotePropertyName value -NotePropertyValue "master" -Force
     $broken.sessions[0].fields.role.state = "known"
@@ -1378,7 +1379,7 @@ if ($null -ne $rp) {
     $rPanes = @($rp.sessions | Where-Object { $_.fields["pane"].answer.state -ne "unknown" })
     Check ($rPanes.Count -eq 0) ("with no host attached, no real pane is known or absent (" + $rPanes.Count + " are)")
     $sw.Restart()
-    $rdoc = (ConvertTo-HordeSessionViewDocument $rp) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $rdoc = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $rp) | ConvertTo-Json -Depth 40)
     $rsf = @(Test-HordeSchema -Value $rdoc -Schema $viewSchema)
     foreach ($x in @($rsf | Select-Object -First 10)) { Write-Host ("  " + $x) -ForegroundColor Red }
     Check ($rsf.Count -eq 0) ("the real view validates against schema/session-view.v1 (" + $sw.ElapsedMilliseconds + " ms)")
@@ -1390,7 +1391,7 @@ if ($null -ne $rp) {
     $rcur = Complete-HordeProjection -C $rp.inputs -Scope Current
     $rcurMs = $sw.ElapsedMilliseconds
     $rAllById = @{}; foreach ($x in @($rdoc.sessions)) { $rAllById["" + $x.sessionId] = ($x | ConvertTo-Json -Depth 40 -Compress) }
-    $rcdoc = (ConvertTo-HordeSessionViewDocument $rcur) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $rcdoc = ConvertFrom-HordeJson -Text ((ConvertTo-HordeSessionViewDocument $rcur) | ConvertTo-Json -Depth 40)
     $rScopeBad = @($rcdoc.sessions | Where-Object { -not $rAllById.ContainsKey("" + $_.sessionId) -or $rAllById["" + $_.sessionId] -cne ($_ | ConvertTo-Json -Depth 40 -Compress) } | ForEach-Object { "" + $_.sessionId })
     foreach ($x in @($rScopeBad | Select-Object -First 10)) { Write-Host ("  differs from All: " + $x) -ForegroundColor Red }
     Write-Host ("  " + @($rcur.sessions).Count + " of " + @($rp.sessions).Count + " real sessions are current; the current scope completed in " + $rcurMs + " ms") -ForegroundColor DarkGray
