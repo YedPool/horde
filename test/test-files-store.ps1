@@ -31,6 +31,11 @@
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
+# FILES ARE SHARED UNDER WINDOWS POWERSHELL 5.1 ONLY: files\Key.ps1 refuses every share under 7, on purpose, and
+# nothing that runs for real starts it there (horde.cmd and the supervisor both start 5.1 by its path). A run under
+# 7 would count that one refusal hundreds of times, so it stops here and says so: a skip, never a green.
+# test\test-files-cli.ps1 proves the refusal itself, from 5.1, against a real pwsh.exe.
+if (("" + $PSVersionTable.PSEdition) -cne "Desktop") { Complete-HordeSuite -Success "NOTHING RUN: files are shared under Windows PowerShell 5.1 only" -PassCode 3 }
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "files\Share.ps1")
