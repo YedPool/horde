@@ -26,7 +26,7 @@
         # One no-answer alert for a run of unacked rounds, cleared only by a newer ack.
         # Send-HordeAnalystTell is where "once" lives: the caller's own check only saves a call.
         @{ Name = "no-answer-told-every-round"
-           Find = 'if (@($State.told) -ccontains $Key) { return "" }'
+           Find = 'if (@($State.told) -ccontains $Key) { Remove-HordeAnalystTellRetry -State $State -Key $Key; return "" }'
            Replace = '' }
         @{ Name = "no-answer-never-cleared-by-ack"
            Find = '$s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
@@ -41,8 +41,14 @@
         @{ Name = "founder-key-not-cleared-by-ack"
            Find = 'Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
            Replace = 'Clear-HordeAnalystTold -State $s -Keys @("no-answer") }' }
-        @{ Name = "founder-told-warchief-was-told-when-not"
-           Find = '"the warchief was not told."'
+        @{ Name = "founder-told-warchief-posted-when-not"
+           Find = 'if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return "a notice to the warchief was not posted." }'
+           Replace = 'if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return "a notice to the warchief was posted and is being watched for its taking." }' }
+        @{ Name = "founder-told-warchief-posted-when-refused"
+           Find = 'if ($watch -ceq "gone") { return "a notice to the warchief was not posted." }'
+           Replace = 'if ($watch -ceq "gone") { return "a notice to the warchief was posted and is being watched for its taking." }' }
+        @{ Name = "founder-told-warchief-was-told"
+           Find = '"a notice to the warchief was posted and is being watched for its taking."'
            Replace = '"the warchief was told."' }
         # A new session starts a new run: adoption clears both no-answer keys.
         @{ Name = "adoption-keeps-no-answer-keys"
