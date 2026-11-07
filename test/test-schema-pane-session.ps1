@@ -12,6 +12,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
+. (Join-Path $root "core\PaneSessions.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
 . (Join-Path $root "core\JsonText.ps1")
 
@@ -505,6 +506,18 @@ foreach ($k in $censusSets) {
 # this machine, 2026-09-29); the fixture must be too.
 $backfillText = Read-HordeSharedText -Path (Join-Path $fx "valid\wezfleet-backfill.json")
 Check ($backfillText.Trim().Contains("`n") -and (Read-Fixture "valid\wezfleet-backfill.json").source -ceq "wezfleet-backfill") "the wezfleet-backfill fixture is multi-line, as ConvertTo-Json writes it"
+# Since the census the Stop hook writes these files too, with no source and its own keys (T-0433). One
+# from SessionStart still carries source, and the reader takes both.
+$stopFile = Read-Fixture "valid\stop-end-of-turn.json"
+Check ("$($stopFile.hook_event_name)" -ceq "Stop" -and $null -eq $stopFile.PSObject.Properties["source"]) "CONTROL: the Stop fixture is from that hook and has no source"
+$paneDir = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-pane-session-" + [guid]::NewGuid().ToString("N"))
+$null = New-Item -ItemType Directory -Path $paneDir
+try {
+    Copy-Item -LiteralPath (Join-Path $fx "valid\stop-end-of-turn.json") -Destination (Join-Path $paneDir "7.json")
+    Copy-Item -LiteralPath (Join-Path $fx "invalid\wrong-event.json") -Destination (Join-Path $paneDir "8.json")
+    $paneRead = Read-HordePaneSessions -Dir $paneDir
+    Check (@($paneRead.files).Count -eq 1 -and "$($paneRead.files[0].sessionId)" -ceq "$($stopFile.session_id)" -and @($paneRead.refused).Count -eq 1 -and "$($paneRead.refused[0].name)" -ceq "8.json") "the reader takes a file from the Stop hook and still refuses one from another hook"
+} finally { Remove-Item -LiteralPath $paneDir -Recurse -Force }
 foreach ($f in $valid) {
     $found = Findings (Read-Fixture ("valid\" + $f.Name))
     Check ($found.Count -eq 0) ("valid: " + $f.BaseName + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
@@ -517,7 +530,7 @@ Check (Says "invalid\no-session-id.json" '*has no ''session_id''*') "a file with
 Check (Says "invalid\uppercase-session-id.json" '*has no ''session_id''*') "a file whose only id is SESSION_ID is invalid: resurrect's Lua looks up session_id case-sensitively"
 Check (Says "invalid\bad-session-id.json" '*.session_id does not match*') "a session id that is not a UUID is invalid, as wezfleet's reader refuses it"
 Check (Says "invalid\session-id-trailing-newline.json" '*.session_id does not match*') "a session id with a trailing newline is invalid"
-Check (Says "invalid\wrong-event.json" '*.hook_event_name is*not one of*') "a file from any hook but SessionStart is invalid"
+Check (Says "invalid\wrong-event.json" '*.hook_event_name is*not one of*') "a file from any hook but SessionStart or Stop is invalid"
 Check (Says "invalid\wrong-type.json" '*.context_tokens should be integer*') "a known field with the wrong type is invalid"
 Check (Says "invalid\not-an-object.json" '*should be object*') "a file that is not an object is invalid"
 

@@ -1,6 +1,6 @@
 # core/PaneSessions - Claude Code's pane-sessions files, read as schema/pane-session.v1 describes them.
 #
-# ~/.claude/pane-sessions/<n>.json is written by Claude Code's SessionStart hook: the hook's input,
+# ~/.claude/pane-sessions/<n>.json is written by Claude Code's SessionStart and Stop hooks: the hook's input,
 # verbatim, in a file named by the number of the host handle the session started in. Horde never
 # writes these files (schema/pane-session.v1, "Horde never writes these files").
 #
