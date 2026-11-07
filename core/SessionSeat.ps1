@@ -42,7 +42,7 @@
 # WHY NOT THE PER-PANE FILE (schema/pane-session.v1, core/PaneSessions.ps1), which also ties a pane to
 # a session. Measured 2026-10-07 on the measuring machine, read-only: of 151 such files 86 are refused
 # by that reader today (they are written at the end of a turn now, with hook_event_name "Stop" and no
-# source, which the schema of 2026-09-29 does not describe), the role holder's own among them; 22 of
+# source, which the schema of 2026-09-29 did not describe, and does since T-0433), the role holder's own among them; 22 of
 # the 39 live records had no usable file. A check built on it would answer unknown for the real holder.
 # The file also names no terminal (the schema says so), and is the store the old fleet's own reader
 # could not rely on with more than one terminal open (core/Identity.ps1, Get-HordeSelfSessionId). On
