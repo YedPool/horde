@@ -459,6 +459,70 @@ Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("registry")) "and so
 $a = Get-HordeRestoreSessions -Identity (New-Listing @{}) -Registry (New-Registry @{})
 Check ($a.state -ceq "known" -and @($a.value).Count -eq 0) "an empty fleet is a known empty list"
 
+Write-Host ""
+Write-Host "--- T-0116: a duplicated session does not blind the source, and does not fake a restore or a stall ---" -ForegroundColor Cyan
+
+function New-DupIdentity {
+    # An identity as core/Identity.ps1 answers it for one agent short only by duplicates (agent-one), and one
+    # that is never whole (agent-two): complete says unknown for both, wholeButDuplicates says why.
+    param($Records, [bool]$OneDupOnly = $true, $Dups = @())
+    $complete = [ordered]@{ "agent-one" = (New-HordeUnknown -Reason "the listing omits some sessions, each named by more than one control file"); "agent-two" = (New-HordeUnknown -Reason "there is no control directory") }
+    return [pscustomobject]@{ records = $Records; complete = $complete; wholeButDuplicates = [ordered]@{ "agent-one" = $OneDupOnly; "agent-two" = $false }; duplicates = @($Dups) }
+}
+$dupRecords = @{}
+$dupRecords[(Sid 1)] = New-Record (At 0) (At 4)
+$dupRecords[(Sid 2)] = New-Record (At 13) (At 80) -Word "busy"
+$oneDup = [pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-one"); sources = @("c\501.json", "c\502.json") }
+$dupRegistry = New-Registry @{ (Sid 1) = @{ role = "master" }; (Sid 2) = @{ role = "orchestrator" } }
+$d = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @($oneDup)) -Registry $dupRegistry
+Check ($d.state -ceq "known" -and (@($d.value | ForEach-Object { $_.id } | Sort-Object) -join ",") -ceq ((Sid 1) + "," + (Sid 2))) "one duplicate no longer blinds the source: the agent short only by it is taken as whole, and its other sessions are listed"
+Check ($d.state -ceq "known" -and @($d.leftOut).Count -eq 1 -and $d.leftOut[0].agent -ceq "agent-two") "the agent that is never whole is still left out, and named"
+Check ($d.state -ceq "known" -and @($d.duplicates).Count -eq 1 -and $d.duplicates[0].sessionId -ceq (Sid 9) -and @($d.duplicates[0].sources).Count -eq 2) "and the duplicate is named in the answer, with its files, for the caller to journal"
+Check ($d.state -ceq "known" -and @($d.value | Where-Object { $_.id -ceq (Sid 9) }).Count -eq 0) "none of a duplicate's two copies is chosen"
+$otherFault = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -OneDupOnly $false -Dups @($oneDup)) -Registry $dupRegistry
+Check ($otherFault.state -ceq "unknown") "an agent short for another fault as well as a duplicate is still left out: with none whole the answer is unknown"
+$allDup = Get-HordeRestoreSessions -Identity (New-DupIdentity @{} -Dups @(1..12 | ForEach-Object { [pscustomobject]@{ sessionId = (Sid (100 + $_)); agents = @("agent-one"); sources = @("a", "b") } })) -Registry $dupRegistry
+Check ($allDup.state -ceq "known" -and @($allDup.value).Count -eq 0 -and @($allDup.duplicates).Count -eq 12) "every session doubled (as on 10-16): a known empty list, each of the twelve named"
+$noMember = [pscustomobject]@{ records = $dupRecords; complete = [ordered]@{ "agent-one" = (New-HordeUnknown -Reason "x"); "agent-two" = (New-HordeUnknown -Reason "y") } }
+Check ((Get-HordeRestoreSessions -Identity $noMember -Registry $dupRegistry).state -ceq "unknown") "an identity without the new member reads as it always did"
+
+# A FALSE RESTORE: 3 of 6 together is under the 0.6 share. Drop the three others as duplicates and it is 3 of 3.
+$threeTogether = @(1..3 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At (-100 + $_)); lastChangeAt = (At (-98 + $_)); status = "idle"; firstSeenAt = ((At (-100 + $_))).AddHours(-1) } })
+Check ((Get-HordeRestoreFinding -Sessions $threeTogether -Now $t0 -Settings $settings).state -ceq "known") "CONTROL: three sessions alone, with nothing uncounted, are a restore"
+$noFake = Get-HordeRestoreFinding -Sessions $threeTogether -Now $t0 -Settings $settings -UncountedDuplicates 3
+Check ($noFake.state -ceq "absent" -and "$($noFake.reason)".Contains("3 of the 6")) "three of six, the other three dropped as duplicates, is no restore: duplicates count in the denominator and can only lower the share"
+Check ((Get-HordeRestoreFinding -Sessions $threeTogether -Now $t0 -Settings $settings -UncountedDuplicates 2).state -ceq "known") "three of five is the share, and a restore"
+# A GENUINE RESTORE with duplicates outside it is still found when the share allows.
+$twelve = New-Restored
+$g2 = Get-HordeRestoreFinding -Sessions $twelve -Now (At ($end + 100)) -Settings $settings -UncountedDuplicates 2
+Check ($g2.state -ceq "known" -and @($g2.value.members).Count -eq 12 -and $g2.value.uncountedDuplicates -eq 2) "twelve restored sessions and two duplicates (12 of 14) are a restore, which carries the number uncounted"
+Check ((Get-HordeRestoreFinding -Sessions (New-Mixed 7) -Now $t0 -Settings $settings -UncountedDuplicates 1).state -ceq "known" -and (Get-HordeRestoreFinding -Sessions @(New-Mixed 7)[0..6] -Now $t0 -Settings $settings -UncountedDuplicates 5).state -ceq "absent") "the share is the edge: 7 of 11 is a restore and 7 of 12 is not"
+# THE MINIMUMS STAY ON REAL MEMBERS: duplicates never make up the numbers of a restore.
+$two = Get-HordeRestoreFinding -Sessions @($threeTogether[0..1]) -Now $t0 -Settings $settings -UncountedDuplicates 5
+Check ($two.state -ceq "absent" -and "$($two.reason)".Contains("fewer than the 3")) "two real sessions with five duplicates are too few: the minimum counts real members only (found when the duplicates clear, inside restoreMaxAgeSeconds)"
+# EVERY SESSION DOUBLED: no members, no finding, no crash, no restore.
+$none = Get-HordeRestoreFinding -Sessions @() -Now $t0 -Settings $settings -UncountedDuplicates 12
+Check ($none.state -ceq "absent") "no running session counted and twelve duplicates is an absent finding, not a throw and not a restore"
+$noneP = Invoke-HordeRestoreSourcePass -Sessions @() -Now $t0 -Settings $settings -Post { param($m) throw "nothing may be posted" } -UncountedDuplicates 12
+Check (@($noneP.entries).Count -eq 0 -and @($noneP.known).Count -eq 0) "and a pass over it journals and posts nothing"
+
+# A FALSE STALL: the duplicate may be the one that moved.
+$held = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -UncountedDuplicates 1
+$planHeld = @(Get-HordeResumePlan -Finding $held -Now (At ($end + 300)) -Settings $settings)
+Check (@($planHeld | Where-Object { $_.kind -ceq "stall" }).Count -eq 0 -and @($planHeld | Where-Object { $_.kind -ceq "stall-held" }).Count -eq 1 -and @($planHeld | Where-Object { $_.kind -ceq "resume" }).Count -eq 3) "with a duplicate uncounted and nothing moved at 300 s there is no stall notice, one held line, and the resume mails to unmoved orcs are as ever"
+$script:postWorks = $true
+$script:mails.Clear()
+$h1 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -Post $poster -Posted @{} -UncountedDuplicates 1
+$heldLines = @($h1.entries | Where-Object { $_.outcome -ceq "held" })
+Check ($heldLines.Count -eq 1 -and $heldLines[0].kind -ceq "stall" -and "$($heldLines[0].reason)".Contains("more than one control file")) "the pass says once that the stall notice is held back, and why"
+Check (@($script:mails | Where-Object { $_.kind -ceq "stall" }).Count -eq 0 -and @($script:mails).Count -eq 3) "and posts no stall notice, only the three resume mails"
+$h2 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 330)) -Settings $settings -Post $poster -Posted $h1.posted -Known $h1.known -UncountedDuplicates 1
+Check (@($h2.entries).Count -eq 0) "the next pass says nothing more of it"
+$h3 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 360)) -Settings $settings -Post $poster -Posted $h2.posted -Known $h2.known -UncountedDuplicates 0
+Check ((Kinds $h3) -ceq "stall" -and $h3.entries[0].outcome -ceq "posted" -and @($script:mails | Where-Object { $_.kind -ceq "stall" }).Count -eq 1) "once the duplicate clears, the stall notice comes, if still true"
+$hs = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -Shadow -UncountedDuplicates 1
+Check ((@($hs.entries | ForEach-Object { $_.kind }) -contains "would-stall") -eq $false -and @($hs.entries | Where-Object { $_.outcome -ceq "held" }).Count -eq 1) "in shadow the held stall is journaled held, not would-stall"
+
 } finally {
     Exit-HordeTestPinnedHome -State $pinned
     Exit-HordeTestEmptyFleet -Pin $fleetPin

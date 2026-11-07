@@ -108,6 +108,17 @@ function Get-HordeRestoreFinding {
     # life and is handled exactly like a restore, which is wanted, and the resume text says "started or
     # restored" truthfully. A cold start of new sessions has none, and nothing is sent.
     #
+    # A DUPLICATE IS NOT A SESSION WE CAN COUNT, BUT IT IS NOT NOTHING (T-0116). A session named by more
+    # than one control file is left out of -Sessions (core/Identity.ps1 chooses neither file), and
+    # -UncountedDuplicates says how many. Each has an earlier life we cannot see, so ALL are counted in
+    # the share's denominator: a duplicate may only LOWER the share, never raise it. Without that, 3
+    # of 6 sessions that started together (no restore, under the 0.6 share) become 3 of 3 once the
+    # three outside the window are dropped as duplicates, and orcs are told everything was restored.
+    # The minimum counts (restoreMinSessions) stay on real members only. A true restore whose members
+    # fall below that minimum while duplicates last is found when they clear, inside
+    # restoreMaxAgeSeconds. The answer carries uncountedDuplicates, so Get-HordeResumePlan can hold the
+    # stall notice: the duplicate may be the very session that moved.
+    #
     # THE WINDOW is the one holding the most sessions, the earliest on a tie. windowStart is its first
     # start and windowEnd its last.
     #
@@ -148,7 +159,8 @@ function Get-HordeRestoreFinding {
     # orc is sent the one resume line, which is harmless to a session that has in fact moved. No cheap
     # and sound second signal of a turn was found: the registry's lastSeen is rewritten by the start hook,
     # so it says nothing of a turn, and reading a transcript is neither cheap nor this module's to do.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), $Known = @())
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), $Known = @(), [int]$UncountedDuplicates = 0)
+    if ($UncountedDuplicates -lt 0) { $UncountedDuplicates = 0 }
     $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
     $lived = @($all | Where-Object { $_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds })
     if ($lived.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("" + $lived.Count + " of the " + $all.Count + " running sessions have an earlier life, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
@@ -160,7 +172,8 @@ function Get-HordeRestoreFinding {
         if ($inside.Count -gt $best.Count) { $best = $inside }
     }
     if ($best.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("at most " + $best.Count + " sessions started within " + $Settings.restoreWindowSeconds + " s of each other, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
-    if (($best.Count / $lived.Count) -lt $Settings.restoreShare) { return (New-HordeAbsent -Note ("" + $best.Count + " of the " + $lived.Count + " sessions that have an earlier life started within " + $Settings.restoreWindowSeconds + " s of each other, under the share of " + $Settings.restoreShare + " a restore takes")) }
+    $denominator = $lived.Count + $UncountedDuplicates
+    if (($best.Count / $denominator) -lt $Settings.restoreShare) { return (New-HordeAbsent -Note ("" + $best.Count + " of the " + $denominator + " sessions that have an earlier life (" + $UncountedDuplicates + " of them duplicates, counted but not listed) started within " + $Settings.restoreWindowSeconds + " s of each other, under the share of " + $Settings.restoreShare + " a restore takes")) }
     $windowStart = $best[0].startedAt
     $windowEnd = $best[$best.Count - 1].startedAt
     if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) { return (New-HordeAbsent -Note ("the sessions were restored more than " + $Settings.restoreMaxAgeSeconds + " s ago, which is history")) }
@@ -194,7 +207,7 @@ function Get-HordeRestoreFinding {
     }
     $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $windowOfAnchor.from; windowEnd = $windowOfAnchor.until; members = $starts }
     $notMoved = @($members | Where-Object { $_.moved -ceq "no" } | ForEach-Object { $_.id })
-    return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor }) -ObservedAt $Now)
+    return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor; uncountedDuplicates = $UncountedDuplicates }) -ObservedAt $Now)
 }
 
 function Test-HordeRestoreSame {
@@ -261,7 +274,14 @@ function Get-HordeResumePlan {
         if ($m.role -cne "orc") { continue }
         [void]$plan.Add([pscustomobject]@{ kind = "resume"; to = $m.id; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-resume`n" + $f.restoreId + "`n" + $m.id.ToLowerInvariant())); body = "$($Settings.resumeText)" })
     }
-    if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {
+    $dupes = 0
+    if ($null -ne $f.PSObject.Properties["uncountedDuplicates"]) { $dupes = [int]$f.uncountedDuplicates }
+    if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {
+        # NO STALL NOTICE WHILE A DUPLICATE LASTS (T-0116): the duplicate may be the one that moved. A
+        # held kind is planned so the pass can say so once; the notice itself comes once the duplicate
+        # clears, if it is still true.
+        [void]$plan.Add([pscustomobject]@{ kind = "stall-held"; to = ""; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-stall-held`n" + $f.restoreId)); body = "" })
+    } elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {
         $chief = @($f.members | Where-Object { $_.role -ceq "warchief" }) | Select-Object -First 1
         $to = ""
         if ($null -ne $chief) { $to = $chief.id }
@@ -283,7 +303,7 @@ function Invoke-HordeRestoreSourcePass {
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @())
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0)
     $entries = New-Object System.Collections.ArrayList
     # WHAT IS OLDER THAN A RESTORE CAN BE IS DROPPED, from both tables: a restore older than
     # restoreMaxAgeSeconds is history and plans nothing, so neither its mails' ids nor its window can
@@ -296,11 +316,17 @@ function Invoke-HordeRestoreSourcePass {
             if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }
         }
     }
-    $finding = Get-HordeRestoreFinding -Sessions $Sessions -Now $Now -Settings $Settings -Known $Known
+    $finding = Get-HordeRestoreFinding -Sessions $Sessions -Now $Now -Settings $Settings -Known $Known -UncountedDuplicates $UncountedDuplicates
     $nextKnown = @(@($Known) | Where-Object { $null -ne $_ -and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })
     if ($finding.state -ceq "known") { $nextKnown = @(@($nextKnown | Where-Object { "$($_.restoreId)" -cne $finding.value.anchor.restoreId }) + $finding.value.anchor) }
     foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
         if ($nextPosted.ContainsKey($mail.messageId)) { continue }
+        # A STALL HELD BACK BY A DUPLICATE is journaled once per restore and posts nothing, shadow or not.
+        if ($mail.kind -ceq "stall-held") {
+            $nextPosted[$mail.messageId] = $Now
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "stall" -Id "" -Outcome "held" -Reason ("restore " + $finding.value.restoreId + ": no stall notice while " + $finding.value.uncountedDuplicates + " session(s) named by more than one control file are uncounted - one of them may be the one that moved; it comes once they clear, if still true") -MessageId $mail.messageId))
+            continue
+        }
         $kind = "post"
         if ($mail.kind -ceq "stall") { $kind = "stall" }
         # SHADOW: the mail is journaled once and marked, and nothing is handed to the poster.
@@ -355,6 +381,14 @@ function Get-HordeRestoreSessions {
     # part of a listing is not a count; and the known answer carries leftOut, a list of { agent; reason },
     # beside its value - which stays the plain list Get-HordeRestoreFinding takes - for the caller to
     # journal. The registry must be whole, as before: every session's role and parent come from it.
+    # A LISTING THAT IS NOT WHOLE ONLY BECAUSE OF NAMED DUPLICATES COUNTS AS WHOLE HERE (T-0116). One
+    # session with two running copies made the claude listing not whole, and the codex listing is never
+    # whole on a machine with no codex control folder, so no listing was whole and the source was blind
+    # for the whole fleet while one duplicate lasted (seen 2026-11-06). core/Identity.ps1 keeps complete
+    # as it was, for every other reader, and says in wholeButDuplicates which agents are short only by
+    # duplicates. A duplicate is in no record, so none is chosen; the answer carries duplicates, each
+    # { sessionId; agents; sources }, for the caller to journal by name and to count against the share
+    # (Get-HordeRestoreFinding, -UncountedDuplicates). Any other fault in the listing still leaves it out.
     # BOTH SOURCES ARE PARAMETERS, so a test hands in its own and never reads this machine.
     param($Identity = $null, $Registry = $null)
     try {
@@ -363,9 +397,12 @@ function Get-HordeRestoreSessions {
     } catch { return (New-HordeUnknown -Reason "the sessions could not be read" -ErrorRecord $_) }
     $whole = @{}
     $leftOut = New-Object System.Collections.ArrayList
+    $dupOnly = $null
+    if ($null -ne $Identity.PSObject.Properties["wholeButDuplicates"]) { $dupOnly = $Identity.wholeButDuplicates }
     foreach ($agent in @($Identity.complete.Keys)) {
         $listed = $Identity.complete[$agent]
         if ("$($listed.state)" -ceq "known") { $whole["$agent"] = $true }
+        elseif ($dupOnly -is [System.Collections.IDictionary] -and $dupOnly.Contains("$agent") -and $dupOnly["$agent"] -eq $true) { $whole["$agent"] = $true }
         else { [void]$leftOut.Add([pscustomobject]@{ agent = "$agent"; reason = "$($listed.reason)" }) }
     }
     if ($whole.Count -eq 0) { return (New-HordeUnknown -Reason ("no agent's listing of sessions is whole: " + (@($leftOut | ForEach-Object { $_.agent + ": " + $_.reason }) -join "; "))) }
@@ -393,8 +430,21 @@ function Get-HordeRestoreSessions {
         }
         [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt; status = "$($status.value)"; firstSeenAt = $firstSeenAt })
     }
+    # The duplicates that cost a counted agent a session. One only in a left-out agent is already out.
+    $dupes = New-Object System.Collections.ArrayList
+    if ($null -ne $Identity.PSObject.Properties["duplicates"]) {
+        foreach ($d in @($Identity.duplicates)) {
+            if ($null -eq $d) { continue }
+            $agents = @()
+            if ($null -ne $d.PSObject.Properties["agents"]) { $agents = @($d.agents) }
+            $counted = ($agents.Count -eq 0)
+            foreach ($a in $agents) { if ($whole.ContainsKey("$a")) { $counted = $true } }
+            if ($counted) { [void]$dupes.Add([pscustomobject]@{ sessionId = "$($d.sessionId)"; agents = $agents; sources = @($d.sources) }) }
+        }
+    }
     $answer = New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow)
     Add-Member -InputObject $answer -MemberType NoteProperty -Name "leftOut" -Value $leftOut.ToArray()
+    Add-Member -InputObject $answer -MemberType NoteProperty -Name "duplicates" -Value $dupes.ToArray()
     return $answer
 }
 

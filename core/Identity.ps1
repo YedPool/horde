@@ -503,10 +503,16 @@ function Get-HordeIdentity {
     #   records          session id -> record (New-HordeIdentityRecord), ids compared ignoring case
     #   complete         agent -> answer: known true when that agent's listing is whole, unknown with
     #                    every reason otherwise - an unreadable, refused or duplicated file among them
+    #   wholeButDuplicates  agent -> true when that agent's listing is not whole ONLY because of named
+    #                    duplicates (its own read was known and the one gap is the duplicates), false for
+    #                    every other agent and every other fault. A NEW MEMBER, AND complete IS UNCHANGED:
+    #                    a duplicate must keep reading as not whole for every reader of complete
+    #                    (core/AnalystSession.ps1 and others). Only the restore source reads this one
+    #                    (T-0116), because one duplicate must not blind it for the whole fleet.
     #   duplicates       { sessionId; sources } for every id named by more than one file, unless
     #                    exactly one is process-verified and every other is proven stale (then the
     #                    verified one is the record and the rest are findings); none of them is in
-    #                    records, and each agent it came from is incomplete
+    #                    records, and each agent it came from is incomplete; agents names them
     #   verifiedLive     answer: the session ids whose process was checked and is the one described.
     #                    Unknown when the process table or the claude listing is not whole, because a
     #                    session missing from it may be alive.
@@ -559,16 +565,19 @@ function Get-HordeIdentity {
         # Otherwise never choose: two verified files, or any that cannot be checked, is a real tie.
         # Which of two files is the live one is exactly the question that went wrong silently:
         # "seven conversations ran in both with nothing noticing" (YedPool/wezfleet 0e1c75a).
-        [void]$duplicates.Add([pscustomobject]@{ sessionId = $sid; sources = @($all | ForEach-Object { $_.record.source }) })
+        [void]$duplicates.Add([pscustomobject]@{ sessionId = $sid; sources = @($all | ForEach-Object { $_.record.source }); agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique) })
         foreach ($x in $all) {
             if (-not $dupGaps.ContainsKey($x.agent)) { $dupGaps[$x.agent] = New-Object System.Collections.ArrayList }
             if ($dupGaps[$x.agent] -notcontains $sid) { [void]$dupGaps[$x.agent].Add($sid) }
         }
     }
     $complete = [ordered]@{}
+    $wholeButDuplicates = [ordered]@{}
     $findings = New-Object System.Collections.ArrayList
     foreach ($rd in $reads) {
         $why = New-Object System.Collections.ArrayList
+        # Its own read known and the duplicates the only gap: the one case the new member answers true for.
+        $wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known" -and $dupGaps.ContainsKey($rd.agent))
         if ($rd.complete.state -ne "known") { [void]$why.Add($rd.complete.reason) }
         if ($dupGaps.ContainsKey($rd.agent)) { [void]$why.Add("the listing omits " + (@($dupGaps[$rd.agent]) -join ", ") + ", each named by more than one control file") }
         if ($why.Count -gt 0) { $complete[$rd.agent] = New-HordeUnknown -Reason (@($why) -join "; ") }
@@ -585,7 +594,7 @@ function Get-HordeIdentity {
     # image (an agent that writes no pid has none).
     $processes = @{}
     foreach ($rd in $reads) { if ($null -ne $rd.PSObject.Properties["imagePids"]) { $processes[$rd.agent] = [pscustomobject]@{ imagePids = $rd.imagePids; hostPids = $rd.hostPids; verifiedPids = $rd.verifiedPids } } }
-    return [pscustomobject]@{ PSTypeName = "Horde.Identity"; records = $records; complete = $complete; duplicates = @($duplicates)
+    return [pscustomobject]@{ PSTypeName = "Horde.Identity"; records = $records; complete = $complete; wholeButDuplicates = $wholeButDuplicates; duplicates = @($duplicates)
                               verifiedLive = $verifiedLive; orphanProcesses = $claudeRead.orphans; findings = @($findings); agentProcesses = $processes
                               provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }
 }

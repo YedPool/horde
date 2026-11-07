@@ -349,6 +349,20 @@ $kept94 = $null; if ($r16b.records.ContainsKey((Sid 94))) { $kept94 = $r16b.reco
 Check ($null -ne $kept94 -and $kept94.source -like "*613.json" -and @(Val $r16b.verifiedLive) -contains (Sid 94) -and @($r16b.duplicates).Count -eq 0 -and (St $r16b.complete.claude) -eq "known") "a leftover file for a dead process does not hide the live session it names"
 Check (@($r16b.findings | Where-Object { $_ -like ("*611.json*" + (Sid 94) + "*") }).Count -eq 1 -and @($r16b.findings | Where-Object { $_ -like ("*612.json*" + (Sid 94) + "*") }).Count -eq 1) "each leftover beside the live file is reported as a finding"
 Check (@($r16c.duplicates | Where-Object { $_.sessionId -eq (Sid 95) }).Count -eq 1 -and -not $r16c.records.ContainsKey((Sid 95)) -and (St $r16c.complete.claude) -eq "unknown") "a leftover that cannot be checked beside a live file is still a duplicate"
+# T-0116: complete is unchanged by a duplicate (every other reader leans on it), and a NEW member says an agent is short ONLY
+# because of named duplicates - the one fact the restore source needs to go on counting the rest.
+Check ($r16.wholeButDuplicates["claude"] -eq $true -and (St $r16.complete.claude) -eq "unknown") "an agent short only by a duplicate: complete still says unknown, and wholeButDuplicates says true"
+Check ($r16.wholeButDuplicates["codex"] -eq $false -and (St $r16.complete.codex) -eq "unknown") "an agent with no duplicate (codex, no control folder) is false there, and unknown in complete, as before"
+Check ($r16b.wholeButDuplicates["claude"] -eq $false -and (St $r16b.complete.claude) -eq "known") "a whole listing with no duplicate is not 'whole but for duplicates'"
+Check (@($dup[0].agents) -contains "claude") "each duplicate names the agents whose files it came from"
+$d16d = NewDir "claude"
+PutJson (Join-Path $d16d "621.json") (ClaudeRec 621 (Sid 96) (Created 0))
+PutJson (Join-Path $d16d "622.json") (ClaudeRec 622 (Sid 96) (Created 5))
+[System.IO.File]::WriteAllText((Join-Path $d16d "623.json"), "{ not json")
+$r16d = Get-HordeIdentity -ClaudeDir $d16d -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(621, "claude.exe", (Created 0)), @(622, "claude.exe", (Created 5)))) -Now $now
+Check (@($r16d.duplicates | Where-Object { $_.sessionId -eq (Sid 96) }).Count -eq 1 -and (St $r16d.complete.claude) -eq "unknown" -and $r16d.wholeButDuplicates["claude"] -eq $false) "a duplicate beside another fault (an unreadable file) is false: the other fault still blinds"
+$r16e = Get-HordeIdentity -ClaudeDir $d16c -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(614, "claude.exe", (Created 0)), @(615, "claude.exe", (Created 70)))) -Now $now
+Check ($r16e.wholeButDuplicates["claude"] -eq $true) "a tie with a file that cannot be checked is a duplicate, named, and the listing is short only by it"
 
 # A FILE REMOVED BETWEEN THE LISTING AND THE READ. Claude removes a session's file when it exits, so
 # on a live machine a file can be listed and gone a moment later. That is the session exiting during

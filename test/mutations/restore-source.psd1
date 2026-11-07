@@ -178,5 +178,29 @@
         @{ Name = "role-guessed-from-nothing"
            Find = '$role = "unknown"'
            Replace = '$role = "warg"' }
+        @{ Name = "duplicates-not-in-the-share-denominator"
+           Find = '$denominator = $lived.Count + $UncountedDuplicates'
+           Replace = '$denominator = $lived.Count' }
+        @{ Name = "duplicates-make-up-the-minimum"
+           Find = 'if ($lived.Count -lt $Settings.restoreMinSessions) { return'
+           Replace = 'if (($lived.Count + $UncountedDuplicates) -lt $Settings.restoreMinSessions) { return' }
+        @{ Name = "stall-notice-while-a-duplicate-lasts"
+           Find = '-and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
+           Replace = '-and $movedIds.Count -eq 0 -and $false) {' }
+        @{ Name = "held-stall-not-journaled"
+           Find = 'if ($mail.kind -ceq "stall-held") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "duplicate-only-listing-still-blinds-the-source"
+           Find = 'elseif ($dupOnly -is [System.Collections.IDictionary]'
+           Replace = 'elseif ($false -and $dupOnly -is [System.Collections.IDictionary]' }
+        @{ Name = "another-fault-beside-a-duplicate-counted-whole"
+           Find = '-and $dupOnly["$agent"] -eq $true) { $whole["$agent"] = $true }'
+           Replace = ') { $whole["$agent"] = $true }' }
+        @{ Name = "duplicates-not-carried-in-the-answer"
+           Find = '-Name "duplicates" -Value $dupes.ToArray()'
+           Replace = '-Name "duplicates" -Value @()' }
+        @{ Name = "uncounted-duplicates-not-handed-to-the-finding"
+           Find = '-Known $Known -UncountedDuplicates $UncountedDuplicates'
+           Replace = '-Known $Known' }
     )
 }
