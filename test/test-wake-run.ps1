@@ -186,6 +186,40 @@ Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnread
 $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $kinds = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.outcome } })
 Check (($kinds -join ",") -ceq "held:held") ("a session that may be retired is journaled once as held: the journal's kind says which rule it was (" + ($kinds -join ",") + ")")
+# T-0116: TWO RUNNING COPIES WITH MAIL WAITING. One held line and one tell per episode, however many passes;
+# the session is never nudged; another session in the same passes is nudged as ever; the episode ends when
+# the copies do, and a return is a new episode and says it again.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 3 -OldestUnreadAt (At -60) -Duplicate "yes"
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$dup = New-Object System.Collections.ArrayList
+foreach ($n in 0..9) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$dup.Add($e) } }
+$dupHeld = @($dup | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) })
+$dupTold = @($dup | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) })
+Check ($dupHeld.Count -eq 1 -and "$($dupHeld[0].reason)".Contains("two running copies") -and "$($dupHeld[0].reason)".Contains("3 unread")) ("ten live passes over a session with two running copies and 3 unread journal ONE held line, naming the copies and the count (" + $dupHeld.Count + ")")
+Check ($dupTold.Count -eq 1 -and "$($dupTold[0].reason)".StartsWith("duplicate-copies: ")) ("and the warchief would be told once (" + $dupTold.Count + ")")
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 2)).Count -eq 0) "and that session is never nudged"
+Check (@($dup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -ge 1) "while another session in the same passes is nudged as ever"
+# The copies close, the mail is taken, and a copy comes back with new mail: a new episode.
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "no"
+$gone = @(Invoke-HordeWakeTick -Run $run -Now (At 60) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@($gone | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "when the copies are gone nothing is said"
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At 50) -Duplicate "yes"
+$back = @(foreach ($n in 0..3) { Invoke-HordeWakeTick -Run $run -Now (At (70 + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check (@($back | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) }).Count -eq 1 -and @($back | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) }).Count -eq 1) "and when they return with mail it is said again, once, and told again, once"
+# A duplicate with no mail says nothing; a listing with no such word reads as before.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "yes"
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$quietDup = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check (@($quietDup | Where-Object { $_.id -ceq (Sid 2) }).Count -eq 0) "two running copies and no unread mail: no line and no tell"
+Check (@($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -eq 1 -and @($quietDup | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "and a session whose listing has no such word is nudged and said nothing of, as before"
 # THE WATCHER'S OWN SESSION AND A SENDER'S LABEL, through the tick, live: said once, never nudged.
 $h = New-Home
 Reset-HordeMemoryWaker

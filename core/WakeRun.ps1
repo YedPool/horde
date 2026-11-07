@@ -87,7 +87,7 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -383,6 +383,21 @@ function Invoke-HordeWakeTick {
         $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
+        # TWO RUNNING COPIES WITH MAIL (T-0116): one line, kind held, per episode; and one tell to the warchief
+        # per episode. A run made before this member existed gets it here. The line's words are kept while the
+        # episode lasts, so a change in the unread count does not say it again: an episode ends when the
+        # session is read and is no longer such a one, and a return is a new episode with a new instance.
+        if ($null -eq $Run.PSObject.Properties["duplicate"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicate" -Value @{} }
+        if ($null -eq $Run.PSObject.Properties["duplicateAt"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateAt" -Value @{} }
+        $dupSaid = @{}
+        foreach ($id in @($result.duplicate.Keys)) { if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } else { $dupSaid["$id"] = $result.duplicate[$id] } }
+        $dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate -Said $dupSaid -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
+        $Run.duplicate = $dupNow.seen
+        foreach ($e in @($dupNow.entries)) { [void]$entries.Add($e) }
+        $dupAt = @{}
+        foreach ($id in @($Run.duplicate.Keys)) { if ($Run.duplicateAt.ContainsKey("$id")) { $dupAt["$id"] = $Run.duplicateAt["$id"] } }
+        foreach ($e in @($dupNow.entries)) { $dupAt["$($e.id)"] = $Now }
+        $Run.duplicateAt = $dupAt
         $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
         $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
@@ -424,6 +439,9 @@ function Invoke-HordeWakeTick {
         }
         foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
             & $make { (New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)) }
+        }
+        foreach ($e in @($dupNow.entries)) {
+            & $make { (New-HordeWakeTellCondition -Kind "duplicate-copies" -Subject $e.id -Instance $Run.duplicateAt["$($e.id)"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the session " + $e.id + " has two running copies and unread mail, and is not nudged while that is so; " + $e.reason + ". Close one copy of it.")) }
         }
         foreach ($e in @($bad.entries)) {
             & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }

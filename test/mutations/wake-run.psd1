@@ -8,6 +8,15 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "duplicate-line-is-said-on-every-pass"
+           Find = '$dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate'
+           Replace = '$dupNow = Update-HordeWakeSaidOnce -Seen @{}' }
+        @{ Name = "duplicate-tell-instance-is-not-the-episode"
+           Find = '-Instance $Run.duplicateAt["$($e.id)"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
+           Replace = '-Instance "x"' }
+        @{ Name = "duplicate-line-is-not-kept-between-passes"
+           Find = '$Run.duplicate = $dupNow.seen'
+           Replace = '$Run.duplicate = @{}' }
         @{ Name = "the-heartbeat-does-not-say-the-watchers-own-session"
            Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" }'
            Replace = ' }' }

@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "any-duplicate-word-counts"
+           Find = '$dup.value -ceq "yes") { $dupWord'
+           Replace = '$dup.value -cne "zzz") { $dupWord' }
+        @{ Name = "duplicate-is-not-carried"
+           Find = 'retired = [string]$retired.value; duplicate = $dupWord'
+           Replace = 'retired = [string]$retired.value; duplicate = "no"' }
         @{ Name = "a-fleet-that-could-not-be-asked-is-a-known-empty-list"
            Find = 'return (New-HordeAbsent -Note ("waker ''" + $Waker.name + "'' could not ask its fleet which labels it reserves: " + $why.value))'
            Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() }))' }

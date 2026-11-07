@@ -386,6 +386,10 @@ function Get-HordeWakeHold {
     # REACHABLE IS DECIDED BEFORE THE LIMIT IS ASKED: a session that cannot be reached is held for that,
     # whatever is known or not known of its limit, and whatever evidence there is that others move.
     if ("$($Target.reachable)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("reachable is " + $Target.reachable) } }
+    # TWO RUNNING COPIES OF ONE SESSION ARE NEVER NUDGED (T-0116): the fleet's own nudge refuses such a
+    # target (target-instance-ambiguous), and its idle is unknown, so it waited all the same - but it
+    # waited without a word. This makes the wait explicit whatever idle says; the pass says it once.
+    if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return [pscustomobject]@{ action = "wait"; reason = "it has two running copies: it is not nudged while that is so" } }
     $limit = Get-HordeWakeLimit -State $s -Now $Now -Settings $Settings -Acks $Acks
     if ($limit.kind -ceq "until") { return [pscustomobject]@{ action = "wait"; reason = $limit.text } }
     if ("$($s.idle)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("idle is " + $s.idle) } }
@@ -1121,6 +1125,8 @@ function Invoke-HordeWakePass {
     $limited = @{}
     $held = @{}
     $never = @{}
+    # duplicate is session id -> the line for a session with unread mail and two running copies (T-0116).
+    $duplicate = @{}
     $Acks = @{}
     $open = New-Object System.Collections.ArrayList
     $entries = New-Object System.Collections.ArrayList
@@ -1211,6 +1217,10 @@ function Invoke-HordeWakePass {
                 # MAIL HANDED OVER AND NOTHING UNREAD: said once, as held, for a session that would otherwise be
                 # nudged - else its inbox shows mail and the journal shows nothing done about it.
                 elseif ($a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -gt 0 -and "$($t.retired)" -ceq "no" -and -not (Test-HordeLabelReserved "$($t.label)") -and ($Self -ceq "" -or "$($t.id)" -cne $Self)) { $held[$t.id] = "handed-over mail: " + (Get-HordeWakeHandedOver $a.value) + " handed over to it and not yet acknowledged, and none unread. It is not nudged: it has that mail already, and the fleet counts it unread again if it is never acknowledged" }
+                # TWO RUNNING COPIES, WITH MAIL: said once per episode (T-0116), by its own channel so that the
+                # tick can tell M too. Only a session that would otherwise be waited on for no word: not one
+                # that is never nudged for what it is, and not one with no unread mail.
+                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "two running copies, with " + $a.value.unreadCount + " unread: the session is not nudged while it has two, so this mail waits until one is closed" }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $moving
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {
@@ -1276,7 +1286,7 @@ function Invoke-HordeWakePass {
             }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; acks = $Acks }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; duplicate = $duplicate; acks = $Acks }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----

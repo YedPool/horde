@@ -9,6 +9,7 @@
 #   nudge-killed        a nudge the waker had to stop part-way, which may have left text in a session's box
 #   fleet-silent        every nudge answered woken for five minutes and no session took any mail: a
 #                       fleet that cannot answer (core/Wake.ps1, Update-HordeWakeSilence)
+#   duplicate-copies    a session with unread mail that has two running copies, so it cannot be nudged (T-0116)
 #   silent-probes-ended the last stretched probe of a silent fleet went unanswered too: from there it is
 #                       asked only every six hours, and somebody should look (Update-HordeWakeSilence)
 #
@@ -47,7 +48,7 @@
 
 # WHO A TELL IS FROM: this module, by a name of its own in place of a session id.
 $script:HordeWakeTellFrom = "horde-wake-watcher"
-$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended")
+$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended", "duplicate-copies")
 
 function Get-HordeWakeTellSettings {
     # The tell sender's settings, with -Overrides laid over the defaults. A name that is not a setting

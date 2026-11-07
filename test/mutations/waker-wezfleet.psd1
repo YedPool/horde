@@ -6,6 +6,12 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-duplicate-process-reason-is-not-read"
+           Find = '-ceq "duplicate-process") { return "yes" }'
+           Replace = '-ceq "duplicate-process") { return "no" }' }
+        @{ Name = "a-target-does-not-carry-duplicate"
+           Find = '; duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })'
+           Replace = ' })' }
         @{ Name = "a-wezfleet-that-does-not-know-the-verb-reserves-nothing"
            Find = 'answered = $false; why = ("wezfleet labels reserved exit " + $run.exit'
            Replace = 'answered = $true; labels = @(); why = ("wezfleet labels reserved exit " + $run.exit' }
