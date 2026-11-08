@@ -72,6 +72,9 @@ function Find-HordeMessenger { param([Parameter(Mandatory = $true)][AllowEmptyCo
 function Get-HordeDeviceId { param([string]$HomeRoot = "") if ($script:noDevice) { throw "the shim has no device id" }; return (& $origDeviceId -HomeRoot $HomeRoot) }
 # A folder that is not above the suite's homes, so they are not taken for a test's (A TEST'S HOME TELLS NOBODY).
 $notTemp = Join-Path $env:TEMP ("horde-analyst-tell-taken-elsewhere-" + [guid]::NewGuid().ToString("N"))
+# The loader child (below) runs with TEMP pointed here; Windows PowerShell 5.1 compiles core/JsonText.ps1's Add-Type into TEMP and died with
+# "Could not find a part of the path" when this folder was not there (measured 2026-11-08: four failures on 5.1, none on 7). It is made, and removed in finally.
+[void][System.IO.Directory]::CreateDirectory($notTemp)
 $t0 = [datetime]::new(2026, 10, 13, 12, 0, 0, [System.DateTimeKind]::Utc)
 $vals = [pscustomobject]@{ fromLabel = "AS"; tellWarchief = $true; takenAlarmSeconds = 90; takenAfterAlarmSeconds = 60 }
 
@@ -740,5 +743,6 @@ finally {
     $env:HORDE_HOME = $keepHome
     $env:WEZFLEET_ROOT = $keepFleet
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $notTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 Complete-HordeSuite -Success "an analyst supervisor notice is told only while it is watched until the warchief's own TAKEN, alarms once when it is not taken in time, is never dropped, a later event has a new id, and its lines reach the pass"
