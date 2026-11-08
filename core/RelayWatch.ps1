@@ -112,7 +112,7 @@ function New-HordeRelayWatchState {
     # have landed, is watched, and is posted again under the same id), "held" (the messenger holds it for good, not delivered) or "lost" (not
     # taken in time, no longer watched); downAt and backAt: when they were first posted.
     return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; healthy = 0; downSince = $null; alerted = $false; notified = $false; lastWhy = ""
-                              episode = [long]0; downTell = ""; downAt = $null; backTell = ""; backAt = $null }
+                              episode = [long]0; downTell = ""; downAt = $null; backTell = ""; backAt = $null; downLostTold = $false }
 }
 
 function Get-HordeRelayWatchDecision {
@@ -123,7 +123,7 @@ function Get-HordeRelayWatchDecision {
     $utcNow = $Now.ToUniversalTime()
     $s = [pscustomobject]@{ v = 1; lastCheckAt = $utcNow; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $State.downSince
                             alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
-                            episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $State.downAt; backTell = "" + $State.backTell; backAt = $State.backAt }
+                            episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $State.downAt; backTell = "" + $State.backTell; backAt = $State.backAt; downLostTold = [bool]$State.downLostTold }
     if ($Health.ok) {
         $s.healthy = $s.healthy + 1
         if (-not $s.alerted -and -not $s.notified -and $s.downTell -ceq "") {
@@ -161,6 +161,7 @@ function Read-HordeRelayWatchState {
         $s.failures = [int]$doc.failures; $s.healthy = [int]$doc.healthy; $s.alerted = ($doc.alerted -eq $true); $s.notified = ($doc.notified -eq $true); $s.lastWhy = "" + $doc.lastWhy
         # The fields of T-0391 slice 8 are absent from a file an earlier version wrote: absent reads as none posted, episode 0.
         if ($null -ne $doc.PSObject.Properties["episode"]) { $s.episode = [long]$doc.episode }
+        if ($null -ne $doc.PSObject.Properties["downLostTold"]) { $s.downLostTold = ($doc.downLostTold -eq $true) }
         foreach ($k in @("downTell", "backTell")) {
             $p = $doc.PSObject.Properties[$k]
             if ($null -ne $p) { if (@("", "posted", "maybe", "held", "lost") -ccontains ("" + $p.Value)) { $s.$k = "" + $p.Value } else { throw ($k + " is not a known value") } }
@@ -177,7 +178,7 @@ function Read-HordeRelayWatchState {
 function Write-HordeRelayWatchState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$State)
     $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $null; alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
-                 episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null; backTell = "" + $State.backTell; backAt = $null }
+                 episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null; backTell = "" + $State.backTell; backAt = $null; downLostTold = [bool]$State.downLostTold }
     foreach ($k in @("lastCheckAt", "downSince", "downAt", "backAt")) {
         if ($State.$k -is [datetime]) { $o[$k] = $State.$k.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
     }
@@ -204,7 +205,7 @@ function Close-HordeRelayEpisode {
     param([Parameter(Mandatory = $true)]$State)
     $State.episode = [long]$State.episode + 1
     $State.alerted = $false; $State.notified = $false
-    $State.downTell = ""; $State.downAt = $null; $State.backTell = ""; $State.backAt = $null
+    $State.downTell = ""; $State.downAt = $null; $State.backTell = ""; $State.backAt = $null; $State.downLostTold = $false
     if ([int]$State.healthy -ge 1) { $State.failures = 0; $State.healthy = 0; $State.downSince = $null; $State.lastWhy = "" }
 }
 
@@ -285,6 +286,13 @@ function Invoke-HordeRelayWatch {
     # THE TAKEN LOOK comes first, on every pass, due or not: a notice taken is counted at once.
     $res = Resolve-HordeRelayWatchTells -Tools $Tools -State $st -Now $utcNow
     foreach ($l in @($res.lines)) { [void]$lines.Add($l) }
+    # A DOWN notice that is later held (not delivered) or given up (not taken in time) makes what the phone was told - "posted and watched" -
+    # no longer the whole story: the phone is told once more, in those words (tried again on later passes until it takes it).
+    if (($st.downTell -ceq "held" -or $st.downTell -ceq "lost") -and $st.notified -and -not $st.downLostTold -and $null -ne $Tools["Notify"]) {
+        $nl = Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay outage told earlier (" + $st.lastWhy + "): " + (Get-HordeWatchLostWords -Why $st.downTell)) -Who "the founder's phone"
+        [void]$lines.Add($nl.line)
+        if ($nl.ok) { $st.downLostTold = $true; $res.changed = $true }
+    }
     if ($res.changed) { Write-HordeRelayWatchState -Path $StatePath -State $st }
     if ($st.lastCheckAt -is [datetime] -and $utcNow -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @($lines.ToArray()) } }
     $health = Get-HordeRelayHealth -Origin $Origin -Fetch $Tools["Fetch"]

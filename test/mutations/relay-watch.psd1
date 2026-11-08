@@ -116,6 +116,19 @@
         @{ Name = "phone-never-posted-says-lost"
            Find = 'return "No notice about the outage was posted to the warchief, so none about its end is posted."'
            Replace = 'return "The warchief''s notice about the outage was not taken in time, so none about its end is posted."' }
+        # A DOWN notice later held or given up: the phone is told once, in what is known (SHOULD 3).
+        @{ Name = "down-lost-phone-never-told"
+           Find = 'if (($st.downTell -ceq "held" -or $st.downTell -ceq "lost") -and $st.notified -and -not $st.downLostTold -and $null -ne $Tools["Notify"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "down-lost-phone-told-every-pass"
+           Find = 'if ($nl.ok) { $st.downLostTold = $true; $res.changed = $true }'
+           Replace = 'if ($nl.ok) { $res.changed = $true }' }
+        @{ Name = "down-lost-phone-words-say-posted"
+           Find = '(Get-HordeWatchLostWords -Why $st.downTell)) -Who "the founder''s phone"'
+           Replace = '(Get-HordeWatchTellWords -State "posted")) -Who "the founder''s phone"' }
+        @{ Name = "down-lost-phone-answer-not-kept-in-the-file"
+           Find = 'backAt = $null; downLostTold = [bool]$State.downLostTold }'
+           Replace = 'backAt = $null; downLostTold = $false }' }
         # One blip tells nobody.
         @{ Name = "down-on-first-failure"
            Find = '$s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {'

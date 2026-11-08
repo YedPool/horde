@@ -23,74 +23,100 @@
         @{ Name = "reader-boundary-moved"
            Find = 'if ($age -le $limit)'
            Replace = 'if ($age -lt $limit)' }
-        # One notice per episode, told only when taken, and the next backlog is a new episode.
+        # One alarm per episode; the phone's accept does NOT end the watch on the warchief's mail; the next backlog is a new episode.
         @{ Name = "reader-told-every-pass"
-           Find = 'if ($v.stale -and $st.alerted)'
-           Replace = 'if ($false)' }
+           Find = 'if ($v.stale -and $st.alerted -and $st.phoneAbout -cne "") { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "reader-episode-never-closes"
-           Find = 'if ($st.alerted -or $st.tell -cne "") { Write-HordeWatcherBeatState'
+           Find = 'if ($st.alerted -or $st.tell -cne "" -or $st.phoneAbout -cne "") { Write-HordeWatcherBeatState'
            Replace = 'if ($false) { Write-HordeWatcherBeatState' }
         @{ Name = "reader-notice-key-changed"
            Find = 'Key "watcher-unread"'
            Replace = 'Key "watcher-unreadx"' }
-        # The watcher's own heartbeat: told only when taken (T-0391 slice 8), and its limits.
-        @{ Name = "beat-held-or-lost-notice-posted-again"
-           Find = 'if ($St.tell -ceq "held" -or $St.tell -ceq "lost") {'
-           Replace = 'if ($false) {' }
-        @{ Name = "beat-posted-notice-posted-again"
-           Find = 'if ($St.alerted -or $St.tell -ceq "posted") { return @($lines.ToArray()) }'
-           Replace = 'if ($St.alerted) { return @($lines.ToArray()) }' }
-        @{ Name = "beat-unknown-never-posted-again"
-           Find = 'if ($St.alerted -or $St.tell -ceq "posted") { return @($lines.ToArray()) }'
-           Replace = 'if ($St.alerted -or $St.tell -ceq "posted" -or $St.tell -ceq "maybe") { return @($lines.ToArray()) }' }
+        @{ Name = "reader-unreadable-state-forgotten"
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher reader check:'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @("watcher reader check:' }
+        # A state file that cannot be read fails closed: said, kept, not written over, not taken for a fresh one (SHOULD 1).
+        @{ Name = "beat-unreadable-state-forgotten"
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher check:'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @("watcher check:' }
+        @{ Name = "state-with-an-unknown-tell-accepted"
+           Find = 'else { throw "tell is not a known value" }'
+           Replace = 'else { }' }
+        @{ Name = "state-with-an-unknown-phone-value-accepted"
+           Find = 'else { throw "phoneAbout is not a known value" }'
+           Replace = 'else { }' }
+        @{ Name = "state-from-before-the-phone-field-told-again"
+           Find = 'elseif ($s.alerted) { $s.phoneAbout = "legacy" }'
+           Replace = '' }
+        # THE PHONE ACCEPTING IS NOT THE EPISODE TOLD (MUST 1): the warchief's mail is looked at until it is taken, held or given up.
+        @{ Name = "beat-phone-accept-ends-the-watch"
+           Find = '$over = (($St.tell -ceq "" -and $phoneKnows) -or'
+           Replace = '$over = ($phoneKnows -or' }
+        @{ Name = "beat-stops-at-alerted-though-the-phone-refused"
+           Find = 'if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }'
+           Replace = 'if ($st.alerted) { return [pscustomobject]@{ lines = @() } }' }
+        @{ Name = "beat-phone-not-told-again-when-the-mail-is-held"
+           Find = '$needPhone = ($St.phoneAbout -ceq "" -or ($lost -and $St.phoneAbout -cne "held" -and $St.phoneAbout -cne "lost"))'
+           Replace = '$needPhone = ($St.phoneAbout -ceq "")' }
+        @{ Name = "beat-phone-answer-not-kept"
+           Find = 'if ($n.ok) { $St.phoneAbout = $words }'
+           Replace = 'if ($n.ok) { }' }
+        @{ Name = "beat-phone-words-always-posted"
+           Find = '(Get-HordeWatcherPhoneWords -State $words)'
+           Replace = '(Get-HordeWatcherPhoneWords -State "posted")' }
+        @{ Name = "beat-held-words-say-nothing"
+           Find = 'if ($State -ceq "held" -or $State -ceq "lost") { return (Get-HordeWatchLostWords -Why $State) }'
+           Replace = 'if ($false) { return "" }' }
+        @{ Name = "beat-taken-words-say-posted"
+           Find = 'return "A notice to the warchief was taken by his session."'
+           Replace = 'return "A notice to the warchief was posted and is being watched for its taking."' }
+        @{ Name = "beat-back-notice-needs-alerted"
+           Find = 'if ($st.alerted -or $st.phoneAbout -cne "") {'
+           Replace = 'if ($st.alerted) {' }
+        # The warchief's mail: counted only on TAKEN, looked at while awaited, posted again when unknown, aged from its first post.
+        @{ Name = "beat-taken-not-counted"
+           Find = '$State.alerted = $true; $State.since = $Now; $State.tell = "taken"'
+           Replace = '$State.since = $Now; $State.tell = "taken"' }
         @{ Name = "beat-unknown-not-looked-at"
            Find = 'if ($State.tell -cne "posted" -and $State.tell -cne "maybe") { return @() }'
            Replace = 'if ($State.tell -cne "posted") { return @() }' }
+        @{ Name = "beat-held-stored-as-lost"
+           Find = '        $State.tell = $t'
+           Replace = '        $State.tell = "lost"' }
+        @{ Name = "beat-posted-notice-posted-again"
+           Find = 'if (-not $St.alerted -and ($St.tell -ceq "" -or $St.tell -ceq "maybe")) {'
+           Replace = 'if (-not $St.alerted) {' }
+        @{ Name = "beat-unknown-never-posted-again"
+           Find = 'if (-not $St.alerted -and ($St.tell -ceq "" -or $St.tell -ceq "maybe")) {'
+           Replace = 'if (-not $St.alerted -and $St.tell -ceq "") {' }
+        @{ Name = "beat-first-post-time-forgotten-on-repost"
+           Find = 'if ($null -eq $St.tellAt) { $St.tellAt = $Now }'
+           Replace = '$St.tellAt = $Now' }
+        @{ Name = "beat-mail-accepted-counts-as-told"
+           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $St.tell = $w.state;'
+           Replace = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $St.alerted = $true; $St.tell = $w.state;' }
+        @{ Name = "beat-state-change-not-written"
+           Find = 'if ($before -cne ("" + $St.alerted'
+           Replace = 'if ($false -and $before -cne ("" + $St.alerted' }
         @{ Name = "beat-episode-never-closes"
-           Find = '        Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)'
-           Replace = '        $null = ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)' }
-        @{ Name = "alarm-told-though-nothing-was-accepted"
-           Find = 'if ($n.ok) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true'
-           Replace = 'if ($true) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true' }
-        @{ Name = "alarm-unknown-stored-as-posted"
-           Find = '$tellNow = $(if ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { $w.state }'
-           Replace = '$tellNow = $(if ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { "posted" }' }
-        @{ Name = "mail-accepted-counts-as-told"
-           Find = 'if ($n.ok) { Write-HordeWatcherBeatState'
-           Replace = 'if ($n.ok -or ($null -ne $w -and $w.ok)) { Write-HordeWatcherBeatState' }
-        @{ Name = "mail-taken-not-counted"
-           Find = 'if ($t -ceq "taken") {'
-           Replace = 'if ($false) {' }
-        @{ Name = "mail-given-up-counted-as-told"
-           Find = 'alerted = $false; since = $null; gen = [long]$State.gen; tell = $t; tellAt = $State.tellAt'
-           Replace = 'alerted = $true; since = $null; gen = [long]$State.gen; tell = $t; tellAt = $State.tellAt' }
-        @{ Name = "mail-held-stored-as-lost"
-           Find = 'alerted = $false; since = $null; gen = [long]$State.gen; tell = $t; tellAt = $State.tellAt'
-           Replace = 'alerted = $false; since = $null; gen = [long]$State.gen; tell = "lost"; tellAt = $State.tellAt' }
-        @{ Name = "alarm-phone-words-always-posted"
-           Find = '$words = Get-HordeWatchTellWords -State $w.state'
-           Replace = '$words = Get-HordeWatchTellWords -State "posted"' }
-        @{ Name = "alarm-phone-not-tried-again-for-a-held-notice"
-           Find = 'if ($NoPost) { $words = Get-HordeWatchLostWords -Why $State.tell }'
-           Replace = 'if ($NoPost) { return @() }' }
-        @{ Name = "alarm-phone-words-for-a-held-notice-say-nothing"
-           Find = 'if ($NoPost) { $words = Get-HordeWatchLostWords -Why $State.tell }'
-           Replace = 'if ($NoPost) { $words = "" }' }
+           Find = '        Write-HordeWatcherBeatState -Path $StatePath -State (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1))'
+           Replace = '        $null = (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1))' }
         @{ Name = "alarm-id-ignores-the-episode"
-           Find = '-Gen ([long]$State.gen) -Text $WarchiefBody'
+           Find = '-Gen ([long]$St.gen) -Text $WarchiefBody'
            Replace = '-Gen 0 -Text $WarchiefBody' }
         @{ Name = "episode-number-not-kept-in-the-file"
            Find = 'since = $null; gen = [long]$State.gen; tell = "" + $State.tell'
            Replace = 'since = $null; gen = 0; tell = "" + $State.tell' }
+        @{ Name = "phone-answer-not-kept-in-the-file"
+           Find = 'tellAt = $null; phoneAbout = "" + $State.phoneAbout }'
+           Replace = 'tellAt = $null; phoneAbout = "" }' }
         @{ Name = "fresh-state-reuses-episode-zero"
            Find = '$clock = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)'
            Replace = '$clock = [long]0' }
         @{ Name = "fresh-state-not-written-at-once"
            Find = 'if ($st.seeded) { Write-HordeWatcherBeatState -Path $Path -State $st; $st.seeded = $false }'
            Replace = '$st.seeded = $false' }
-        @{ Name = "unreadable-state-reuses-episode-zero"
-           Find = '} catch { $s.gen = $clock; $s.seeded = $true }'
-           Replace = '} catch { $s.gen = 0; $s.seeded = $true }' }
         @{ Name = "beat-stale-limit-moved"
            Find = 'if ($fage -gt $staleMin)'
            Replace = 'if ($fage -gt ($staleMin + 1))' }

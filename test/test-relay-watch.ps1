@@ -283,7 +283,9 @@ try {
     $w9.lost["relay-down|0"] = $true
     $w = Pass $w9 $tl9 $sp9 710
     Check ((State-Of $sp9).downTell -ceq "lost" -and -not (State-Of $sp9).alerted -and (@($w.lines) -join " ") -like "*DOWN notice to the warchief was not taken in time and is no longer watched (it may still be in his mailbox)*" -and (@($w.lines) -join " ") -cnotlike "*unread*") "a down notice the engine gave up is NOT told: the line says only that it was not taken in time, and that it may still be in his mailbox"
+    Check ($w9.notices.Count -eq 2 -and $w9.notices[-1] -clike "*The relay outage told earlier (*): The warchief's notice was not taken in time and is no longer watched; it may still be in his mailbox.") "and a DOWN notice the engine gave up: the phone is told it was not taken in time (once)"
     $null = Pass $w9 $tl9 $sp9 715
+    Check ($w9.notices.Count -eq 2) "and not again on a later pass"
     Check ($w9.tells.Count -eq 1) "and none is posted again for that outage"
     $sync.mode = "up"
     foreach ($m in @(720, 725)) { $null = Pass $w9 $tl9 $sp9 $m }
@@ -336,6 +338,7 @@ try {
     $w16.held["relay-down|0"] = $true
     $w = Pass $w16 $tl16 $sp16 1410
     Check ((State-Of $sp16).downTell -ceq "held" -and -not (State-Of $sp16).alerted -and (@($w.lines) -join " ") -clike "*DOWN notice to the warchief could not be delivered (the messenger holds it for good) and is not taken; he is not told*") "a down notice the messenger HOLDS is not told, and the line says it could not be delivered"
+    Check ($w16.notices.Count -eq 2 -and $w16.notices[-1] -clike "*The relay outage told earlier (*): The warchief's notice could not be delivered: the messenger holds it, and it was not taken." -and (State-Of $sp16).downLostTold) "ROUND 3 (SHOULD 3): the phone was told 'posted and watched'; the DOWN notice is then HELD, so the phone is told that, in the held words, once"
     $sync.mode = "up"
     foreach ($m in @(1415, 1420)) { $null = Pass $w16 $tl16 $sp16 $m }
     Check ($w16.notices[-1] -clike "*The warchief's notice about the outage could not be delivered (the messenger holds it), so none about its end is posted.*" -and $w16.notices[-1] -cnotlike "*reached*") "and the phone is told only that: not 'no notice reached the warchief'"
