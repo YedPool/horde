@@ -389,7 +389,7 @@ function Get-HordeWakeHold {
     # TWO RUNNING COPIES OF ONE SESSION ARE NEVER NUDGED (T-0116): the fleet's own nudge refuses such a
     # target (target-instance-ambiguous), and its idle is unknown, so it waited all the same - but it
     # waited without a word. This makes the wait explicit whatever idle says; the pass says it once.
-    if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return [pscustomobject]@{ action = "wait"; reason = "it has two running copies: it is not nudged while that is so" } }
+    if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return [pscustomobject]@{ action = "wait"; reason = "it has more than one running copy: it is not nudged while that is so" } }
     $limit = Get-HordeWakeLimit -State $s -Now $Now -Settings $Settings -Acks $Acks
     if ($limit.kind -ceq "until") { return [pscustomobject]@{ action = "wait"; reason = $limit.text } }
     if ("$($s.idle)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("idle is " + $s.idle) } }
@@ -1127,6 +1127,9 @@ function Invoke-HordeWakePass {
     $never = @{}
     # duplicate is session id -> the line for a session with unread mail and two running copies (T-0116).
     $duplicate = @{}
+    # duplicateOn is session id -> $true for every session READ this pass that has more than one running copy, with
+    # mail or none: an episode lasts as long as the copies do, not as long as one batch of mail (T-0116, round 3).
+    $duplicateOn = @{}
     $Acks = @{}
     $open = New-Object System.Collections.ArrayList
     $entries = New-Object System.Collections.ArrayList
@@ -1220,7 +1223,8 @@ function Invoke-HordeWakePass {
                 # TWO RUNNING COPIES, WITH MAIL: said once per episode (T-0116), by its own channel so that the
                 # tick can tell M too. Only a session that would otherwise be waited on for no word: not one
                 # that is never nudged for what it is, and not one with no unread mail.
-                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "the session " + $(if ("$($t.label)" -cne "") { "$($t.label) (" + $t.id + ")" } else { "" + $t.id }) + " is running as two copies and has " + $a.value.unreadCount + " unread. It is not nudged while that is so, so this mail waits until one copy is closed. The fleet's row does not say which processes or panes the two are." }
+                if ("$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no") { $duplicateOn[$t.id] = $true }
+                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "the session " + $(if ("$($t.label)" -cne "") { "$($t.label) (" + $t.id + ")" } else { "" + $t.id }) + " is running as more than one copy and has " + $a.value.unreadCount + " unread. It is not nudged while that is so, so this mail waits until all but one copy is closed. The fleet's row does not say which processes or panes the two are." }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $moving
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {
@@ -1286,7 +1290,7 @@ function Invoke-HordeWakePass {
             }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; duplicate = $duplicate; acks = $Acks }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; duplicate = $duplicate; duplicateOn = $duplicateOn; acks = $Acks }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----
@@ -1374,6 +1378,41 @@ function Save-HordeWakeSilence {
     if ($pa -is [datetime]) { $lastProbe = ConvertTo-HordeWakeTimeText $pa }
     $doc = [ordered]@{ schemaVersion = 1; silent = ((Get-HordeWakeEntryValue $Seen "silent") -eq $true); quietSince = $since; probes = $sent; probeAt = $lastProbe }
     Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "silence" -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+}
+
+function Save-HordeWakeDuplicate {
+    # THE EPISODES OF A SESSION RUNNING AS MORE THAN ONE COPY, replaced whole (T-0116, round 3): session id ->
+    # when it began and the line it was said by. Kept so a watcher that is started again does not say the line
+    # again, and - the episode's start being the tell's instance - does not tell the warchief again either
+    # (core/WakeTell.ps1: a restarted watcher does not repeat itself).
+    param($Text, $At, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $eps = [ordered]@{}
+    foreach ($id in @($Text.Keys | Sort-Object)) {
+        if (-not $At.ContainsKey("$id")) { continue }
+        $eps["$id"] = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At["$id"]); text = "$($Text[$id])" }
+    }
+    $doc = [ordered]@{ schemaVersion = 1; episodes = $eps }
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "duplicate" -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+}
+
+function Read-HordeWakeDuplicate {
+    # What Save-HordeWakeDuplicate wrote: known { text; at } (two tables by session id), absent when there is
+    # none, unknown when it cannot be read - the caller then starts with no episode, and says so.
+    param([string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name "duplicate" -Mode $Mode -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no episode of a duplicated session was saved in this home") }
+    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
+    catch { return (New-HordeUnknown -Reason "what was saved of duplicated sessions could not be read" -ErrorRecord $_) }
+    if ($null -eq $j -or $null -eq $j.PSObject.Properties["episodes"] -or $null -eq $j.episodes) { return (New-HordeUnknown -Reason "what was saved of duplicated sessions has no episodes") }
+    $text = @{}; $at = @{}
+    foreach ($p in @($j.episodes.PSObject.Properties)) {
+        $when = $null
+        if ($null -ne $p.Value -and $null -ne $p.Value.PSObject.Properties["at"]) { $when = ConvertFrom-HordeWakeTimeText $p.Value.at }
+        if ($null -eq $when -or $null -eq $p.Value.PSObject.Properties["text"] -or $p.Value.text -isnot [string]) { return (New-HordeUnknown -Reason "what was saved of duplicated sessions holds an episode that is not one") }
+        $text["$($p.Name)"] = [string]$p.Value.text
+        $at["$($p.Name)"] = $when
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ text = $text; at = $at }))
 }
 
 function Read-HordeWakeSilence {

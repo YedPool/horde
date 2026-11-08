@@ -7,6 +7,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-duplicate-with-no-mail-ends-its-episode"
+           Find = '{ $duplicateOn[$t.id] = $true }'
+           Replace = '{ $null = $true }' }
         @{ Name = "the-line-does-not-name-the-label"
            Find = '$(if ("$($t.label)" -cne "") {'
            Replace = '$(if ($false) {' }

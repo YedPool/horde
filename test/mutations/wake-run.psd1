@@ -8,6 +8,21 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "episode-ends-when-the-mail-is-taken"
+           Find = 'foreach ($id in @($result.duplicateOn.Keys)) {'
+           Replace = 'foreach ($id in @($result.duplicate.Keys)) {' }
+        @{ Name = "episode-is-not-saved"
+           Find = 'if ($dupMark -cne "$($Run.duplicateMark)") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "episode-is-not-read-back-at-start"
+           Find = 'if ($savedDup.state -ceq "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-session-gone-from-the-listing-is-not-forgotten"
+           Find = 'if ($listedHere -cnotcontains "$id") { $Run.duplicate.Remove($id) }'
+           Replace = 'if ($false) { $Run.duplicate.Remove($id) }' }
+        @{ Name = "a-retried-tell-carries-the-start-text"
+           Find = '$(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] })'
+           Replace = '$Run.duplicate["$dupId"]' }
         @{ Name = "count-change-says-it-again"
            Find = 'if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } else'
            Replace = 'if ($false) { $dupSaid["$id"] = $Run.duplicate["$id"] } else' }

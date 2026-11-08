@@ -9,7 +9,7 @@
 #   nudge-killed        a nudge the waker had to stop part-way, which may have left text in a session's box
 #   fleet-silent        every nudge answered woken for five minutes and no session took any mail: a
 #                       fleet that cannot answer (core/Wake.ps1, Update-HordeWakeSilence)
-#   duplicate-copies    a session with unread mail that has two running copies, so it cannot be nudged (T-0116)
+#   duplicate-copies    a session with unread mail that has more than one running copy, so it cannot be nudged (T-0116)
 #   silent-probes-ended the last stretched probe of a silent fleet went unanswered too: from there it is
 #                       asked only every six hours, and somebody should look (Update-HordeWakeSilence)
 #
