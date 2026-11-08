@@ -371,7 +371,7 @@ $d16f = NewDir "claude"
 PutJson (Join-Path $d16f "631.json") (ClaudeRec 631 (Sid 97) (Created 0))
 PutJson (Join-Path $d16f "632.json") (ClaudeRec 632 (Sid 97) (Created 5))
 PutJson (Join-Path $d16f "633.json") (ClaudeRec 633 (Sid 98) (Created 5))
-$r16f = Get-HordeIdentity -ClaudeDir $d16f -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(633, "claude.exe", (Created 5)))) -Now $now
+$r16f = Get-HordeIdentity -ClaudeDir $d16f -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(,@(633, "claude.exe", (Created 5)))) -Now $now
 $ghostDup = @($r16f.duplicates | Where-Object { $_.sessionId -eq (Sid 97) })
 Check ($ghostDup.Count -eq 1 -and $ghostDup[0].allStale -eq $true -and (St $r16f.complete.claude) -eq "unknown" -and $r16f.wholeButDuplicates["claude"] -eq $true) "two files for one id whose processes are both gone: still a duplicate and complete unchanged, but flagged allStale"
 Check ($dup[0].allStale -eq $false -and @($r16c.duplicates)[0].allStale -eq $false) "two verified files, or a file that cannot be checked beside a live one, are not allStale: a real tie stays one"
