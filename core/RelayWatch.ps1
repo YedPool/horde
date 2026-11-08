@@ -19,9 +19,13 @@
 # phone is tried as well, knowing it may not arrive, because that notice does travel through the relay.
 # While it stays down, nothing more is said. When it is healthy again - TWO healthy checks in a row, so a
 # relay that flaps does not send a notice each way - both are told once more, with how long it was down.
-# A TELL THAT FAILED IS NOT A TELL (review of PR 307): the outage counts as told only once the warchief's
-# mail was taken, so one failed fleet mail cannot silence a whole outage; the next check tries again. The
-# notice is tried once an outage and once a recovery, whatever it answers.
+# A TELL THAT FAILED IS NOT A TELL (review of PR 307), AND A TELL NOT TAKEN IS NOT ONE EITHER (T-0391 slice 8): the outage counts as
+# told only once the warchief's own session TOOK the mail (core/WatchTell.ps1), not when the messenger accepted it. The tell is marked
+# for watching and posted; the state keeps it "posted" (downTell, backTell) and every pass asks the Taken tool; "taken" sets alerted, and a
+# recovery counts as told, and the episode closes, only on its own TAKEN. A tell the messenger refuses is tried again at the next check
+# under the same id (the episode number); one given up unread ("lost", after an ALARM) is not posted again for that event. The notice
+# to the founder's phone is tried once an outage and once a recovery, whatever the tell answers, and says only what is known of the
+# warchief's mail: posted and watched, may have been posted, or not posted.
 # A STATE FILE THAT CANNOT BE READ is told to the warchief (at most once a day), never a silent stop.
 #
 # WHAT A CHECK COSTS THE RELAY: each GET /auth/google spends one of the relay's signInStartsPerMinute and
@@ -37,6 +41,7 @@
 . (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
+. (Join-Path $PSScriptRoot "WatchTell.ps1")
 
 # THE SAME RULE AS THE RELAY ADAPTER'S OWN GOOGLE CLIENT FILE (its GoogleClient.ps1, its length bounds), and
 # a client_id named twice is refused as PR 275's deploy check refuses it ("no single client_id"; PR 275 was
@@ -99,7 +104,10 @@ function Get-HordeRelayHealth {
 }
 
 function New-HordeRelayWatchState {
-    return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; healthy = 0; downSince = $null; alerted = $false; notified = $false; lastWhy = "" }
+    # episode: the number of the outage (raised each time one is closed), the generation of the notice ids. downTell and backTell: "" (not
+    # posted), "posted" (posted and watched, awaiting TAKEN) or "lost" (given up); downAt and backAt: when they were posted.
+    return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; healthy = 0; downSince = $null; alerted = $false; notified = $false; lastWhy = ""
+                              episode = [long]0; downTell = ""; downAt = $null; backTell = ""; backAt = $null }
 }
 
 function Get-HordeRelayWatchDecision {
@@ -109,10 +117,11 @@ function Get-HordeRelayWatchDecision {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Health, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)]$Policy)
     $utcNow = $Now.ToUniversalTime()
     $s = [pscustomobject]@{ v = 1; lastCheckAt = $utcNow; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $State.downSince
-                            alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy }
+                            alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
+                            episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $State.downAt; backTell = "" + $State.backTell; backAt = $State.backAt }
     if ($Health.ok) {
         $s.healthy = $s.healthy + 1
-        if (-not $s.alerted -and -not $s.notified) {
+        if (-not $s.alerted -and -not $s.notified -and $s.downTell -ceq "") {
             # Nobody told of an outage: a blip is forgotten at once. (Review of PR 307: a founder told "down"
             # whose warchief's tell was never taken is still owed "back", so notified keeps the outage open.)
             $s.failures = 0; $s.downSince = $null; $s.lastWhy = ""; $s.notified = $false
@@ -139,7 +148,14 @@ function Read-HordeRelayWatchState {
         if ($doc -isnot [System.Management.Automation.PSCustomObject] -or ("" + $doc.v) -cne "1") { throw "it is not a relay watch state, v 1" }
         $s = New-HordeRelayWatchState
         $s.failures = [int]$doc.failures; $s.healthy = [int]$doc.healthy; $s.alerted = ($doc.alerted -eq $true); $s.notified = ($doc.notified -eq $true); $s.lastWhy = "" + $doc.lastWhy
-        foreach ($k in @("lastCheckAt", "downSince")) {
+        # The fields of T-0391 slice 8 are absent from a file an earlier version wrote: absent reads as none posted, episode 0.
+        if ($null -ne $doc.PSObject.Properties["episode"]) { $s.episode = [long]$doc.episode }
+        foreach ($k in @("downTell", "backTell")) {
+            $p = $doc.PSObject.Properties[$k]
+            if ($null -ne $p) { if (@("", "posted", "lost") -ccontains ("" + $p.Value)) { $s.$k = "" + $p.Value } else { throw ($k + " is not a known value") } }
+        }
+        foreach ($k in @("lastCheckAt", "downSince", "downAt", "backAt")) {
+            if ($null -eq $doc.PSObject.Properties[$k]) { continue }
             $t = [datetime]::MinValue
             if ($doc.$k -is [string] -and [datetime]::TryParse($doc.$k, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$t)) { $s.$k = $t.ToUniversalTime() }
         }
@@ -149,9 +165,11 @@ function Read-HordeRelayWatchState {
 
 function Write-HordeRelayWatchState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$State)
-    $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $null; alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy }
-    if ($State.lastCheckAt -is [datetime]) { $o.lastCheckAt = $State.lastCheckAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
-    if ($State.downSince -is [datetime]) { $o.downSince = $State.downSince.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+    $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $null; alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
+                 episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null; backTell = "" + $State.backTell; backAt = $null }
+    foreach ($k in @("lastCheckAt", "downSince", "downAt", "backAt")) {
+        if ($State.$k -is [datetime]) { $o[$k] = $State.$k.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+    }
     [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
     $temp = $Path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
     [System.IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $o -Compress), (New-Object System.Text.UTF8Encoding($false)))
@@ -159,7 +177,8 @@ function Write-HordeRelayWatchState {
 }
 
 function Send-HordeRelayWatchWord {
-    # Hand one text to the tool -Name: { ok; line }. A tool that is $null tells nobody.
+    # Hand one text to the tool -Name (Notify): { ok; line }. A tool that is $null tells nobody. The warchief's tell is
+    # Send-HordeWatchTell (core/WatchTell.ps1): ok there is not "told".
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Who)
     if ($null -eq $Tools[$Name]) { return [pscustomobject]@{ ok = $false; line = ("relay watch: would tell " + $Who + ", but telling is off") } }
     $r = $null
@@ -168,55 +187,120 @@ function Send-HordeRelayWatchWord {
     return [pscustomobject]@{ ok = $ok; line = ("relay watch: " + $(if ($ok) { "told " + $Who } else { "could not tell " + $Who + ": " + $(if ($null -ne $r) { "" + $r.detail } else { "no answer" }) })) }
 }
 
+function Close-HordeRelayEpisode {
+    # An outage whose recovery the warchief took (or that was given up): everything of it is forgotten and the next one is a new
+    # episode, so its notices have new ids. A relay failing again by now keeps its failures and downSince: the next outage is already on.
+    param([Parameter(Mandatory = $true)]$State)
+    $State.episode = [long]$State.episode + 1
+    $State.alerted = $false; $State.notified = $false
+    $State.downTell = ""; $State.downAt = $null; $State.backTell = ""; $State.backAt = $null
+    if ([int]$State.healthy -ge 1) { $State.failures = 0; $State.healthy = 0; $State.downSince = $null; $State.lastWhy = "" }
+}
+
+function Resolve-HordeRelayWatchTells {
+    # THE TAKEN LOOK, every pass (core/WatchTell.ps1): { lines; changed }. A posted down-tell that was taken counts the outage as told; one
+    # given up is left. A posted back-tell that was taken (or given up) closes the episode.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][datetime]$Now)
+    $lines = New-Object System.Collections.ArrayList
+    $changed = $false
+    if ($State.downTell -ceq "posted") {
+        $t = Get-HordeWatchTellTaken -Tools $Tools -Key "relay-down" -Gen ([long]$State.episode) -PostedAt $State.downAt -Now $Now
+        if ($t -ceq "taken") { $State.alerted = $true; $State.downTell = ""; $State.downAt = $null; $changed = $true; [void]$lines.Add("relay watch: the warchief's session took the DOWN notice: he is told") }
+        elseif ($t -ceq "lost") { $State.downTell = "lost"; $changed = $true; [void]$lines.Add("relay watch: the DOWN notice to the warchief was given up unread; he is not told, and none is posted again for this outage") }
+    }
+    if ($State.backTell -ceq "posted") {
+        $t = Get-HordeWatchTellTaken -Tools $Tools -Key "relay-back" -Gen ([long]$State.episode) -PostedAt $State.backAt -Now $Now
+        if ($t -ceq "taken") { Close-HordeRelayEpisode -State $State; $changed = $true; [void]$lines.Add("relay watch: the warchief's session took the BACK notice: he is told, the outage is closed") }
+        elseif ($t -ceq "lost") { Close-HordeRelayEpisode -State $State; $changed = $true; [void]$lines.Add("relay watch: the BACK notice to the warchief was given up unread; the outage is closed") }
+    }
+    return [pscustomobject]@{ lines = @($lines.ToArray()); changed = $changed }
+}
+
+function Send-HordeRelayWatchStopped {
+    # The state file cannot be read: tell the warchief at most once a day (the small file beside it, read for the day's notice and for how
+    # it stands). The file holds "posted <day>" while the notice awaits TAKEN, "told" once it was taken and "lost" once given up; its time
+    # is when that happened. Nothing is posted while one is awaited.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][datetime]$Now)
+    $lines = New-Object System.Collections.ArrayList
+    $mark = $StatePath + ".told"
+    $exists = [System.IO.File]::Exists($mark)
+    $last = $(if ($exists) { [System.IO.File]::GetLastWriteTimeUtc($mark) } else { [datetime]::MinValue })
+    $content = ""
+    if ($exists) { try { $content = ("" + [System.IO.File]::ReadAllText($mark)).Trim() } catch { $content = "" } }
+    $setMark = { param([string]$Text) try { [System.IO.File]::WriteAllText($mark, $Text); [System.IO.File]::SetLastWriteTimeUtc($mark, $Now) } catch { } }
+    if ($content -cmatch '\Aposted ([0-9]{1,9})\z') {
+        $day = [long]$Matches[1]
+        $t = Get-HordeWatchTellTaken -Tools $Tools -Key "relay-stopped" -Gen $day -PostedAt $last -Now $Now
+        if ($t -ceq "taken") { & $setMark "told"; [void]$lines.Add("relay watch: the warchief's session took the STOPPED notice: he is told") }
+        elseif ($t -ceq "lost") { & $setMark "lost"; [void]$lines.Add("relay watch: the STOPPED notice to the warchief was given up unread") }
+        return @($lines.ToArray())
+    }
+    if ($Now -lt $last.AddHours(24)) { return @() }
+    $day = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalDays)
+    $w = Send-HordeWatchTell -Tools $Tools -Prefix "relay watch" -Who "the warchief" -Key "relay-stopped" -Gen $day -Text ("RELAY WATCH STOPPED`nThe relay watch's state file cannot be read, so the hosted relay is not being checked. It is " + $StatePath + "; removing it starts the watch afresh.")
+    [void]$lines.Add($w.line)
+    if ($w.state -cne "none") { & $setMark ("posted " + $day) }
+    return @($lines.ToArray())
+}
+
 function Invoke-HordeRelayWatch {
     # One look, when one is due (relayEveryMinutes since the last): { lines }. -Tools: Now; Fetch
-    # param($Url); Tell param($Body) and Notify param($Line), each answering { ok; detail } or $null to
-    # tell nobody. -Origin "" turns the watch off, and says so once a pass.
+    # param($Url); Tell param($Body, $Key, $Gen) and Taken param($Key, $Gen) (core/WatchTell.ps1); Notify param($Line) answering { ok; detail }.
+    # $null for a tool tells nobody (no Taken: nothing is ever counted as taken). -Origin "" turns the watch off, and says so once a pass.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][string]$StatePath, [AllowEmptyString()][string]$Origin)
     $lines = New-Object System.Collections.ArrayList
     if ($Origin -eq "") { return [pscustomobject]@{ lines = @("relay watch: off - no relay origin is set (relayOrigin, or pairOrigin in the relay settings)") } }
     $utcNow = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $read = Read-HordeRelayWatchState -Path $StatePath
     if ($read.state -cne "known") {
-        # A STATE THAT CANNOT BE READ IS TOLD (review of PR 307), at most once a day: the time it was last
-        # told is the time of a small file beside it, which needs no reading of the broken one.
+        # A STATE THAT CANNOT BE READ IS TOLD (review of PR 307), at most once a day, and counted as told only when TAKEN.
         [void]$lines.Add("relay watch: " + $read.reason + "; nothing is checked until it is mended or removed")
-        $mark = $StatePath + ".told"
-        $last = $(if ([System.IO.File]::Exists($mark)) { [System.IO.File]::GetLastWriteTimeUtc($mark) } else { [datetime]::MinValue })
-        if ($utcNow -ge $last.AddHours(24)) {
-            $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY WATCH STOPPED`nThe relay watch's state file cannot be read, so the hosted relay is not being checked. It is " + $StatePath + "; removing it starts the watch afresh.") -Who "the warchief"
-            [void]$lines.Add($w.line)
-            if ($w.ok) { try { [System.IO.File]::WriteAllText($mark, "told") ; [System.IO.File]::SetLastWriteTimeUtc($mark, $utcNow) } catch { } }
-        }
+        foreach ($l in @(Send-HordeRelayWatchStopped -Tools $Tools -StatePath $StatePath -Now $utcNow)) { [void]$lines.Add($l) }
         return [pscustomobject]@{ lines = @($lines.ToArray()) }
     }
     $st = $read.value
-    if ($st.lastCheckAt -is [datetime] -and $utcNow -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @() } }
+    # THE TAKEN LOOK comes first, on every pass, due or not: a notice taken is counted at once.
+    $res = Resolve-HordeRelayWatchTells -Tools $Tools -State $st -Now $utcNow
+    foreach ($l in @($res.lines)) { [void]$lines.Add($l) }
+    if ($res.changed) { Write-HordeRelayWatchState -Path $StatePath -State $st }
+    if ($st.lastCheckAt -is [datetime] -and $utcNow -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @($lines.ToArray()) } }
     $health = Get-HordeRelayHealth -Origin $Origin -Fetch $Tools["Fetch"]
     $d = Get-HordeRelayWatchDecision -State $st -Health $health -Now $utcNow -Policy $Policy
     $s = $d.state
     if ($d.alert -ceq "down") {
         [void]$lines.Add("relay watch: DOWN - " + $d.why)
-        $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY DOWN`nThe hosted relay at " + $Origin + " fails its check " + $s.failures + " times in a row: " + $d.why + ".`nThe founder's phone may get nothing from this machine, the notice sent beside this one included. You are told again when it is back.") -Who "the warchief"
-        [void]$lines.Add($w.line)
-        # TOLD ONLY WHEN TAKEN: a failed tell leaves it untold, and the next check tries again.
-        if ($w.ok) { $s.alerted = $true }
+        # A down-tell already posted (awaiting TAKEN) or given up is not posted again for this outage; a refused one is tried again, same id.
+        # (notified is set in the pass that first posts, so $tellState below is this pass's own post whenever the phone is told.)
+        $tellState = "posted"
+        if ($s.downTell -ceq "") {
+            $w = Send-HordeWatchTell -Tools $Tools -Prefix "relay watch" -Who "the warchief" -Key "relay-down" -Gen ([long]$s.episode) -Text ("RELAY DOWN`nThe hosted relay at " + $Origin + " fails its check " + $s.failures + " times in a row: " + $d.why + ".`nThe founder's phone may get nothing from this machine, the notice sent beside this one included. You are told again when it is back.")
+            [void]$lines.Add($w.line)
+            $tellState = $w.state
+            # TOLD ONLY WHEN TAKEN: posted is not told. It is kept as posted, and a pass that sees the warchief's TAKEN sets alerted.
+            if ($w.state -cne "none") { $s.downTell = "posted"; $s.downAt = $utcNow }
+        }
         if (-not $s.notified) {
             $s.notified = $true
-            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay check fails: " + $d.why + ". The warchief is told by fleet mail.") -Who "the founder's phone").line)
+            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay check fails: " + $d.why + ". " + (Get-HordeWatchTellWords -State $tellState)) -Who "the founder's phone").line)
         }
     } elseif ($d.alert -ceq "recovered") {
         [void]$lines.Add("relay watch: recovered - " + $d.why)
-        # Each is told "back" only if it was told "down": a warchief whose down-tell was never taken is
-        # not sent a "back" for an outage he never heard of.
-        $w = $(if ($s.alerted) { Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".") -Who "the warchief" }
-               else { [pscustomobject]@{ ok = $true; line = "relay watch: the warchief was never told it was down, so he is not told it is back" } })
-        [void]$lines.Add($w.line)
-        # A recovery the warchief did not take stays owed: the next healthy check tells it again, and the
-        # notice goes with the tell that was taken, so it is sent once.
-        if ($w.ok) {
-            if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ".") -Who "the founder's phone").line) }
-            $s.alerted = $false; $s.notified = $false; $s.failures = 0; $s.healthy = 0; $s.downSince = $null; $s.lastWhy = ""
+        # A "back" is owed to a warchief who was told "down" (taken), or whose down notice is posted and not yet taken (he has it in his mail):
+        # not to one who never heard of the outage.
+        $owed = ($s.alerted -or $s.downTell -ceq "posted")
+        if (-not $owed) {
+            [void]$lines.Add("relay watch: the warchief was never told it was down, so he is not told it is back")
+            if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". No notice about the outage reached the warchief, so none about its end is posted.") -Who "the founder's phone").line) }
+            Close-HordeRelayEpisode -State $s
+        } elseif ($s.backTell -ceq "") {
+            $w = Send-HordeWatchTell -Tools $Tools -Prefix "relay watch" -Who "the warchief" -Key "relay-back" -Gen ([long]$s.episode) -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".")
+            [void]$lines.Add($w.line)
+            # A recovery the warchief did not take stays owed: a refused post is tried again at the next healthy check, and a posted one
+            # closes the episode only on its TAKEN. The notice goes with the post that was made, so it is sent once.
+            if ($w.state -cne "none") {
+                $s.backTell = "posted"; $s.backAt = $utcNow
+                if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". " + (Get-HordeWatchTellWords -State $w.state)) -Who "the founder's phone").line) }
+            }
         }
     } elseif (-not $health.ok) {
         [void]$lines.Add("relay watch: failing (" + $s.failures + " in a row), " + $d.why)

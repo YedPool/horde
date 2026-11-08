@@ -14,8 +14,8 @@
            Replace = '$tools["TellTakenOff"] = {' }
         # Round 2, item 5: the three mutants a reviewer's own run left alive, and the second load.
         @{ Name = "analyst-command-tell-drops-the-generation"
-           Find = '-Gen ([long]$Gen) -HordeHome $hordeHome) }'
-           Replace = '-HordeHome $hordeHome) }' }
+           Find = '-Values $Values -Gen ([long]$Gen) -HordeHome $hordeHome) }'
+           Replace = '-Values $Values -HordeHome $hordeHome) }' }
         @{ Name = "analyst-command-look-ignores-the-alarm-setting"
            Find = '-AlarmSeconds ([double]$Values.takenAlarmSeconds)'
            Replace = '-AlarmSeconds 90' }
@@ -34,10 +34,23 @@
            Find = '$tools["Watching"] = {'
            Replace = '$tools["WatchingOff"] = {' }
         @{ Name = "analyst-command-watching-ignores-the-generation"
-           Find = '-Key $Key -Gen ([long]$Gen)) }'
-           Replace = '-Key $Key -Gen 0) }' }
-        @{ Name = "analyst-command-relay-tell-marked"
-           Find = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay"'
-           Replace = '$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchiefTaken -Key "relay"' }
+           Find = 'Get-HordeAnalystNoticeWatch -HordeHome $hordeHome -Key $Key -Gen ([long]$Gen)) }'
+           Replace = 'Get-HordeAnalystNoticeWatch -HordeHome $hordeHome -Key $Key -Gen 0) }' }
+        # T-0391 slice 8: the relay watch's and the watcher check's tools are marked too, and the watcher check has both.
+        @{ Name = "analyst-command-relay-tell-unmarked"
+           Find = '$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWatchTell -Key $Key'
+           Replace = '$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWarchief -Key $Key' }
+        @{ Name = "analyst-command-relay-tell-drops-the-generation"
+           Find = '-Values $policy.values -Gen ([long]$Gen) -HordeHome $hordeHome) }'
+           Replace = '-Values $policy.values -HordeHome $hordeHome) }' }
+        @{ Name = "analyst-command-relay-taken-tool-missing"
+           Find = '$relayTools["Taken"] = {'
+           Replace = '$relayTools["TakenOff"] = {' }
+        @{ Name = "analyst-command-relay-taken-ignores-the-generation"
+           Find = 'Get-HordeAnalystWatchTaken -HordeHome $hordeHome -Key $Key -Gen ([long]$Gen)'
+           Replace = 'Get-HordeAnalystWatchTaken -HordeHome $hordeHome -Key $Key -Gen 0' }
+        @{ Name = "analyst-command-watcher-check-has-no-taken-tool"
+           Find = 'Taken = $relayTools["Taken"]; Notify = $relayTools["Notify"] }'
+           Replace = 'Notify = $relayTools["Notify"] }' }
     )
 }

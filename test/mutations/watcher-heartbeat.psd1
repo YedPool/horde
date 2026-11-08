@@ -27,16 +27,43 @@
         @{ Name = "reader-told-every-pass"
            Find = 'if ($v.stale -and $st.alerted)'
            Replace = 'if ($false)' }
-        @{ Name = "reader-told-though-nothing-was-taken"
-           Find = '$told = ($n.ok -or $w.ok)'
-           Replace = '$told = $true' }
         @{ Name = "reader-episode-never-closes"
-           Find = 'if ($st.alerted) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null }) }'
-           Replace = '' }
-        # The watcher's own heartbeat: told only when taken, and its limits.
-        @{ Name = "beat-told-though-nothing-was-taken"
-           Find = 'if ($n.ok -or $w.ok) {'
-           Replace = 'if ($true) {' }
+           Find = 'if ($st.alerted -or $st.tell -cne "") { Write-HordeWatcherBeatState'
+           Replace = 'if ($false) { Write-HordeWatcherBeatState' }
+        @{ Name = "reader-posted-notice-posted-again"
+           Find = 'if ($st.tell -cne "") { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-unread"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-unread"' }
+        # The watcher's own heartbeat: told only when taken (T-0391 slice 8), and its limits.
+        @{ Name = "beat-posted-notice-posted-again"
+           Find = 'if ($st.tell -cne "") { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-stale"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-stale"' }
+        @{ Name = "beat-episode-never-closes"
+           Find = '        Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)'
+           Replace = '        $null = ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)' }
+        @{ Name = "alarm-told-though-nothing-was-accepted"
+           Find = 'elseif ($w.state -cne "none") {'
+           Replace = 'elseif ($true) {' }
+        @{ Name = "mail-accepted-counts-as-told"
+           Find = 'if ($n.ok) { Write-HordeWatcherBeatState'
+           Replace = 'if ($n.ok -or $w.ok) { Write-HordeWatcherBeatState' }
+        @{ Name = "mail-taken-not-counted"
+           Find = 'if ($t -ceq "taken") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "mail-given-up-counted-as-told"
+           Find = 'alerted = $false; since = $null; gen = [long]$State.gen; tell = "lost"'
+           Replace = 'alerted = $true; since = $null; gen = [long]$State.gen; tell = "lost"' }
+        @{ Name = "alarm-phone-words-always-posted"
+           Find = '($PhoneText + " " + (Get-HordeWatchTellWords -State $w.state))'
+           Replace = '($PhoneText + " " + (Get-HordeWatchTellWords -State "posted"))' }
+        @{ Name = "alarm-id-ignores-the-episode"
+           Find = '-Gen ([long]$State.gen) -Text $WarchiefBody'
+           Replace = '-Gen 0 -Text $WarchiefBody' }
+        @{ Name = "episode-number-not-kept-in-the-file"
+           Find = 'since = $null; gen = [long]$State.gen; tell = "" + $State.tell'
+           Replace = 'since = $null; gen = 0; tell = "" + $State.tell' }
+        @{ Name = "unreadable-state-reuses-episode-zero"
+           Find = 'Floor(([datetime]::UtcNow - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)'
+           Replace = 'Floor(0)' }
         @{ Name = "beat-stale-limit-moved"
            Find = 'if ($fage -gt $staleMin)'
            Replace = 'if ($fage -gt ($staleMin + 1))' }

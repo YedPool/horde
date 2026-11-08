@@ -656,10 +656,11 @@ Check (-not (Test-HordeAnalystTellAwaiting -HordeHome $HA)) "and then nothing is
 Check (Test-HordeAnalystTellAwaiting -HordeHome $HA) "a list that cannot be read counts as awaiting, so the look is made and says why it cannot be"
 
 Write-Host ""
-Write-Host "--- the founder's notice and the relay watch's tell are as they were ---" -ForegroundColor Cyan
+Write-Host "--- the founder's notice is as it was; the relay watch's and the watcher check's tells are marked too (T-0391 slice 8) ---" -ForegroundColor Cyan
 $cmdText = [System.IO.File]::ReadAllText((Join-Path $root "cli\commands\analyst.ps1"))
 Check ($cmdText.Contains('$tools["Tell"] = { param($Key, $Body, $Values, $Gen) return (Send-HordeAnalystWarchiefTaken') -and $cmdText.Contains('$tools["TellTaken"]')) "the command's Tell tool is the marked one, and a TellTaken tool is beside it"
-Check ($cmdText.Contains('$relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay"') -and $cmdText.Contains('$tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice')) "the relay watch tells through the unmarked teller, and the founder's notice is unchanged"
+Check ($cmdText.Contains('$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWatchTell -Key $Key') -and $cmdText.Contains('$relayTools["Taken"] = { param($Key, $Gen) return (Get-HordeAnalystWatchTaken') -and $cmdText.Contains('$tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice')) "the relay watch tells through the marked teller and asks the taken tool, and the founder's notice is unchanged"
+Check ($cmdText.Contains('Taken = $relayTools["Taken"]; Notify = $relayTools["Notify"] }')) "and the watcher check is handed the same Tell and Taken"
 
 Write-Host ""
 Write-Host "--- the REAL Tell and TellTaken blocks of cli/commands/analyst.ps1, cut out with the parser and run (T-0391 round 2, item 5) ---" -ForegroundColor Cyan
@@ -719,6 +720,49 @@ try {
     $wOn = @(Run-Block $blkWatch @("no-answer", 2) "Watching")
     $wOff = @(Run-Block $blkWatch @("no-answer", 3) "Watching")
     Check ($null -ne $blkWatch -and $wOn.Count -eq 1 -and $wOn[0] -ceq "listed" -and $wOff.Count -eq 1 -and $wOff[0] -ceq "gone") ("the real Watching block: a marked notice is listed, another generation is gone (" + ($wOn -join ",") + " / " + ($wOff -join ",") + ")")
+    # THE RELAY WATCH'S AND THE WATCHER CHECK'S TOOLS (T-0391 slice 8): the real blocks, cut out of the command and run.
+    function Get-RelayBlock {
+        param([string]$Name)
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\analyst.ps1"), [ref]$null, [ref]$null)
+        foreach ($a in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))) {
+            if ($a.Left.Extent.Text -ceq ('$relayTools["' + $Name + '"]') -and $a.Right.Expression -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { return $a.Right.Expression.ScriptBlock.GetScriptBlock() }
+        }
+        return $null
+    }
+    $blkRTell = Get-RelayBlock "Tell"
+    $blkRTaken = Get-RelayBlock "Taken"
+    Check ($null -ne $blkRTell -and $null -ne $blkRTaken) "CONTROL: the command file has the relay watch's Tell and Taken blocks, and the parser cut them out"
+    $policy = [pscustomobject]@{ values = $tiny }
+    $hordeHome = New-Home
+    $idR = Id-Of "relay-down" 2
+    $r = @(Run-Block $blkRTell @("RELAY DOWN`nx", "relay-down", 2) "relay Tell")
+    Check ($r.Count -eq 1 -and $r[0].ok -eq $true -and $r[0].listed -eq $true -and (Posts-Of $idR) -eq 1 -and @(Marks-Of $hordeHome $idR).Count -eq 1) "the real relay Tell block: posted under the key and generation it was given, marked BEFORE it is posted, ok and listed"
+    $tk = @(Run-Block $blkRTaken @("relay-down", 2) "relay Taken")
+    Check ($tk.Count -eq 1 -and $tk[0] -ceq "pending") ("the real relay Taken block: a marked notice nobody took is pending (" + ($tk -join ",") + ")")
+    $script:stages[$idR] = "seen"
+    $tk = @(Run-Block $blkRTaken @("relay-down", 2) "relay Taken")
+    Check ($tk[0] -ceq "taken") "and once the session's own side has it, taken"
+    $script:stages[$idR] = "handed-over"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "taken") "handed-over is taken too"
+    $script:stages[$idR] = "held"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "lost") "a notice the messenger holds for good is lost"
+    $script:stages[$idR] = "expired"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "lost") "and one it gave up is lost"
+    $script:stages.Clear()
+    Check ((@(Run-Block $blkRTaken @("relay-down", 3) "relay Taken"))[0] -ceq "unknown") "a notice never marked, with no word from the messenger, is unknown - never guessed"
+    $script:noMessenger = $true
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "pending" -and (@(Run-Block $blkRTaken @("relay-down", 3) "relay Taken"))[0] -ceq "unknown") "with no messenger to ask, a marked notice stays pending (the clock alone speaks) and an unmarked one is unknown"
+    $script:noMessenger = $false
+    $script:stages[$idR] = "accepted"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "pending") "a stage short of taken (accepted) is not taken"
+    $script:stages.Clear()
+    $script:postSays = "held"
+    $r = @(Run-Block $blkRTell @("RELAY DOWN`nx", "relay-down", 5) "relay Tell")
+    Check ($r[0].ok -eq $false -and $r[0].listed -eq $false -and @(Marks-Of $hordeHome (Id-Of "relay-down" 5)).Count -eq 0) "a post the messenger REFUSES: not ok, not listed - the mark is taken off"
+    $script:postSays = "unknown"
+    $r = @(Run-Block $blkRTell @("RELAY DOWN`nx", "relay-down", 6) "relay Tell")
+    Check ($r[0].ok -eq $false -and $r[0].listed -eq $true -and @(Marks-Of $hordeHome (Id-Of "relay-down" 6)).Count -eq 1) "an UNKNOWN result: not ok, but listed - the mark is kept, so the watch says 'may have been posted'"
+    $script:postSays = "accepted"
     # No mark: the look asks nothing.
     $hordeHome = New-Home
     $out = Run-Block $blkLook @($tiny) "TellTaken"

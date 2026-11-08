@@ -66,13 +66,31 @@ try {
 
     Write-Host ""
     Write-Host "--- one alarm per episode; told only when taken; back closes it ---" -ForegroundColor Cyan
-    $rig = [pscustomobject]@{ now = $t0; tells = (New-Object System.Collections.ArrayList); notices = (New-Object System.Collections.ArrayList); tellOk = $true; noticeOk = $true }
+    # The warchief's mailbox as the suite plays it (T-0391 slice 8): Tell marks and posts under (key, generation) like the real marked teller and
+    # answers ok only when it posted (tellOk); with tellOk off and tellListed on it answers an UNKNOWN result that left its mark. Taken says "taken"
+    # only when the suite has the warchief's session take that notice (taken[]), "pending" while marked, "lost" when the suite gives it up.
+    $rig = [pscustomobject]@{ now = $t0; tells = (New-Object System.Collections.ArrayList); posts = (New-Object System.Collections.ArrayList); notices = (New-Object System.Collections.ArrayList)
+                              tellOk = $true; tellListed = $false; noticeOk = $true; marked = @{}; taken = @{}; lost = @{} }
     $tools = @{
         Now = { return $rig.now }.GetNewClosure()
-        Tell = { param($Body) [void]$rig.tells.Add($Body); return [pscustomobject]@{ ok = $rig.tellOk; detail = "the fleet mail failed" } }.GetNewClosure()
+        Tell = {
+            param($Body, $Key, $Gen)
+            $id = "" + $Key + "|" + $Gen
+            [void]$rig.tells.Add($Body); [void]$rig.posts.Add($id)
+            if ($rig.tellOk -or $rig.tellListed) { $rig.marked[$id] = $true }
+            return [pscustomobject]@{ ok = $rig.tellOk; detail = "the fleet mail failed"; listed = ($rig.tellOk -or $rig.tellListed) }
+        }.GetNewClosure()
+        Taken = {
+            param($Key, $Gen)
+            $id = "" + $Key + "|" + $Gen
+            if ($rig.lost.ContainsKey($id)) { return "lost" }
+            if ($rig.marked.ContainsKey($id)) { if ($rig.taken.ContainsKey($id)) { return "taken" }; return "pending" }
+            return "unknown"
+        }.GetNewClosure()
         Notify = { param($Line) [void]$rig.notices.Add($Line); return [pscustomobject]@{ ok = $rig.noticeOk; detail = "the notice failed" } }.GetNewClosure()
     }
     function Look { param([int]$Minutes) $rig.now = $t0.AddMinutes($Minutes); return (Invoke-HordeWatcherHeartbeat -Tools $tools -Policy $policy -RunPath $runPath -StatePath $statePath) }
+    function Beat-State { return (Read-HordeWatcherBeatState -Path $statePath) }
     # The run file is written in minutes from t0 (Put-At); a look is taken at t0 + Minutes.
     function Put-At { param($StartedMin, $FinishedMin) Put-Run ("{""started"":""" + $t0.AddMinutes($StartedMin).ToString("o") + """,""finished"":""" + $t0.AddMinutes($FinishedMin).ToString("o") + """}") }
     Put-At -2 0
@@ -80,7 +98,9 @@ try {
     Check ($rig.tells.Count -eq 0 -and $rig.notices.Count -eq 0) "fresh: nobody told"
     $w = Look 35
     Check ($rig.notices.Count -eq 1 -and $rig.tells.Count -eq 1 -and $rig.notices[0] -like "Overseer watcher is stale (stopped)*35 minutes*" -and $rig.tells[0] -like "OVERSEER WATCHER STALE*") "stale: the founder gets one notice and the warchief one mail, with the reason"
-    Check ((@($w.lines) -join " ") -like "*STALE (stopped)*told the founder's phone*told the warchief*") "and the pass says so"
+    Check ((@($w.lines) -join " ") -like "*STALE (stopped)*told the founder's phone*posted to the warchief (counted as told only when his session takes it)*") "and the pass says so: the mail is posted, not yet told"
+    Check ($rig.notices[0] -clike "*A notice to the warchief was posted and is being watched for its taking." -and $rig.notices[0] -cnotlike "*warchief is told*") "the phone is told what is known of the warchief's mail: posted and watched"
+    Check ($rig.posts[0] -ceq "watcher-stale|0") "the mail is posted under the key watcher-stale and episode 0"
     $null = Look 40; $null = Look 90
     Check ($rig.notices.Count -eq 1 -and $rig.tells.Count -eq 1) "while it stays stale nothing more is said"
     Put-At 99 100
@@ -89,25 +109,64 @@ try {
     $null = Look 106
     Check ($rig.notices.Count -eq 2) "and then quiet while fresh"
     $null = Look 140
-    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 2 -and $rig.notices[2] -like "*stopped*") "stale again later: a new episode alarms again"
+    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 2 -and $rig.notices[2] -like "*stopped*" -and $rig.posts[1] -ceq "watcher-stale|1") "stale again later: a new episode alarms again, with a new notice id"
     Put-At 199 200; $null = Look 205
     Check ($rig.notices.Count -eq 4) "(recovered again)"
 
     Write-Host ""
-    Write-Host "--- a tell that failed is not a tell ---" -ForegroundColor Cyan
-    $rig.tells.Clear(); $rig.notices.Clear(); Remove-Item -LiteralPath $statePath
+    Write-Host "--- a tell that failed is not a tell, and a tell not taken is not one either ---" -ForegroundColor Cyan
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); Remove-Item -LiteralPath $statePath
     $rig.tellOk = $false; $rig.noticeOk = $false
     $null = Look 300
     $null = Look 301
-    Check ($rig.notices.Count -eq 2 -and $rig.tells.Count -eq 2) "neither taken: the next pass tries both again"
+    Check ($rig.notices.Count -eq 2 -and $rig.tells.Count -eq 2 -and $rig.posts[0] -ceq $rig.posts[1]) "neither accepted: the next pass tries both again, the mail under the same id"
+    Check ($rig.notices[0] -clike "*A notice to the warchief was not posted.") "and the phone's words say it was not posted"
     $rig.noticeOk = $true
     $null = Look 302
     $null = Look 303
-    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 3) "the notice taken (the mail still failing): the episode counts as told, no more tries"
+    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 3) "the phone's notice accepted (the mail still failing): the episode counts as told, no more tries"
+    # THE MAIL ACCEPTED IS NOT TOLD: only the warchief's own TAKEN counts it.
     $rig.tellOk = $true; $rig.noticeOk = $false; Remove-Item -LiteralPath $statePath
-    $rig.tells.Clear(); $rig.notices.Clear()
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear()
     $null = Look 310; $null = Look 311
-    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1) "the mail taken (the notice failing): told, no more tries"
+    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1 -and -not (Beat-State).alerted -and (Beat-State).tell -ceq "posted") "the mail accepted (the notice failing): POSTED, not told - and no more tries while it awaits"
+    $null = Look 312
+    Check (-not (Beat-State).alerted -and $rig.tells.Count -eq 1) "still not told on a later pass"
+    $rig.taken[$rig.posts[0]] = $true
+    $w = Look 313
+    Check ((Beat-State).alerted -and (Beat-State).tell -ceq "" -and (@($w.lines) -join " ") -like "*took the notice*" -and $rig.tells.Count -eq 1) "the warchief's session takes it: now it is told, and the line says so"
+    $null = Look 314
+    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1) "and then quiet"
+    # An UNKNOWN result may have landed: its mark is kept, the phone says may, and nothing is posted twice.
+    Remove-Item -LiteralPath $statePath
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $rig.tellListed = $true
+    $null = Look 320; $null = Look 321
+    Check ($rig.tells.Count -eq 1 -and $rig.notices[0] -clike "*A notice to the warchief may have been posted; the watch cannot tell." -and (Beat-State).tell -ceq "posted") "an UNKNOWN result: the phone is told it MAY have been posted (not 'not posted'), it is watched, and not posted twice"
+    # A notice the messenger gave up is not told, and not posted again for that episode.
+    $rig.lost[$rig.posts[0]] = $true
+    $w = Look 322
+    Check ((Beat-State).tell -ceq "lost" -and -not (Beat-State).alerted -and (@($w.lines) -join " ") -like "*given up unread*") "a notice given up unread is NOT told: the line says so"
+    $null = Look 323
+    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1) "and nothing more is posted or said for the episode"
+    Put-At 329 330
+    $null = Look 331
+    Check ((Beat-State).tell -ceq "" -and (Beat-State).gen -eq 1 -and -not (Beat-State).alerted) "fresh again closes the episode and raises the number, though nobody was told"
+    # With no Taken tool nothing is counted; a notice awaited a notice-ttl is given up.
+    Remove-Item -LiteralPath $statePath
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.lost.Clear()
+    $rig.tellOk = $true; $rig.tellListed = $false
+    $noTaken = @{ Now = $tools["Now"]; Tell = $tools["Tell"]; Notify = $tools["Notify"] }
+    $rig.noticeOk = $false
+    $rig.now = $t0.AddMinutes(500); $null = Invoke-HordeWatcherHeartbeat -Tools $noTaken -Policy $policy -RunPath $runPath -StatePath $statePath
+    $rig.now = $t0.AddMinutes(501); $null = Invoke-HordeWatcherHeartbeat -Tools $noTaken -Policy $policy -RunPath $runPath -StatePath $statePath
+    Check (-not (Beat-State).alerted -and (Beat-State).tell -ceq "posted" -and $rig.tells.Count -eq 1) "no Taken tool: nothing is ever counted as taken, and nothing is posted twice"
+    $rig.now = $t0.AddMinutes(500 + 8 * 24 * 60)
+    $w = Invoke-HordeWatcherHeartbeat -Tools $noTaken -Policy $policy -RunPath $runPath -StatePath $statePath
+    Check ((Beat-State).tell -ceq "lost" -and (@($w.lines) -join " ") -like "*given up unread*") "and one awaited a notice-ttl (7 days) is given up"
+    $rig.noticeOk = $true
+    [System.IO.File]::WriteAllText($statePath, '{"v":1,"alerted":true,"since":"2026-11-04T20:00:00.0000000Z"}', $utf8)
+    Check ((Beat-State).alerted -and (Beat-State).gen -eq 0 -and (Beat-State).tell -ceq "") "a state file an earlier version wrote still reads: episode 0, nothing posted"
 
     Write-Host ""
     Write-Host "--- no teller, a broken state file, a throwing teller ---" -ForegroundColor Cyan
@@ -118,7 +177,7 @@ try {
     [System.IO.File]::WriteAllText($statePath, "garbage{", $utf8)
     $rig.tells.Clear(); $rig.notices.Clear()
     $null = Look 400
-    Check ($rig.notices.Count -eq 1) "a state file that cannot be read is a fresh one: at worst one more alarm"
+    Check ($rig.notices.Count -eq 1 -and $rig.posts[-1] -cnotlike "*|0") "a state file that cannot be read is a fresh one: at worst one more alarm - under an id no earlier episode used (its number comes from the clock)"
     Remove-Item -LiteralPath $statePath
     $boom = @{ Now = { return $t0.AddMinutes(400) }; Tell = { throw "boom" }; Notify = { throw "boom" } }
     $w = Invoke-HordeWatcherHeartbeat -Tools $boom -Policy $policy -RunPath $runPath -StatePath $statePath
@@ -166,8 +225,8 @@ try {
     Check (-not (Reader).stale) "CONTROL: the same inbox, readable again, is quiet"
     Remove-Item -LiteralPath (Join-Path $inbox "denied.json")
     Put-Mail "old" (Mail-Ago 300)
-    $rig.tells.Clear(); $rig.notices.Clear(); $rig.tellOk = $true; $rig.noticeOk = $true
-    $rt = @{ Now = { return $t0 }; Tell = $tools["Tell"]; Notify = $tools["Notify"] }
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear(); $rig.lost.Clear(); $rig.tellOk = $true; $rig.tellListed = $false; $rig.noticeOk = $true
+    $rt = @{ Now = { return $t0 }; Tell = $tools["Tell"]; Taken = $tools["Taken"]; Notify = $tools["Notify"] }
     function ReaderLook { return (Invoke-HordeWatcherReaderCheck -Tools $rt -Policy $rp -SelfPath $selfPath -MailRoot $mailRoot -StatePath $rstate) }
     $w = ReaderLook
     Check ($rig.notices.Count -eq 1 -and $rig.tells.Count -eq 1 -and (@($w.lines) -join " ") -like "*STALE (unread)*") "unread mail: one notice and one tell"
@@ -182,7 +241,17 @@ try {
     Remove-Item -LiteralPath $rstate
     $rig.notices.Clear(); $rig.tellOk = $false; $rig.noticeOk = $false
     $null = ReaderLook
-    Check (-not (Test-Path $rstate)) "neither tell taken: not marked told, so the next pass tries again"
+    Check (-not (Test-Path $rstate)) "neither accepted: not marked told, so the next pass tries again"
+    # T-0391 slice 8: the same check counts the warchief's mail as told only when his session takes it.
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear()
+    $rig.tellOk = $true; $rig.noticeOk = $false
+    $w = ReaderLook
+    Check ($rig.tells.Count -eq 1 -and $rig.posts[0] -clike "watcher-unread|*" -and -not (Read-HordeWatcherBeatState -Path $rstate).alerted -and (Read-HordeWatcherBeatState -Path $rstate).tell -ceq "posted" -and $rig.notices[0] -clike "*A notice to the warchief was posted and is being watched for its taking.") "the mail accepted (the notice failing): posted, not told; the phone is told only that it is posted and watched"
+    $w = ReaderLook
+    Check ($rig.tells.Count -eq 1 -and @($w.lines).Count -eq 0) "and nothing is posted again while it awaits"
+    $rig.taken[$rig.posts[0]] = $true
+    $w = ReaderLook
+    Check ((Read-HordeWatcherBeatState -Path $rstate).alerted -and (@($w.lines) -join " ") -like "watcher reader check: the warchief's session took the notice*") "the warchief's session takes it: told, and the line says so"
     $rig.tellOk = $true; $rig.noticeOk = $true
 
     Write-Host ""
