@@ -535,5 +535,27 @@ $script:nudgeAnswer = { param($id) New-HordeUnknown -Reason "the terminal did no
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)" -ceq "the terminal did not answer") "nudge: an adapter's own unknown is passed on with its reason"
 
+Write-Host ""
+Write-Host "--- a read-only view of a waker reads as it does and cannot nudge (T-0116) ---" -ForegroundColor Cyan
+
+$script:calls = 0
+$view = Get-HordeWakerReadOnly -Waker $good
+Check ($null -ne $view -and $view.name -ceq "fixture-good" -and $null -eq $view.nudge) "the view of a registered waker has its name and no nudge"
+Check ($null -ne $good.nudge) "and the registered waker keeps its own"
+Check ([object]::ReferenceEquals($view, (Get-HordeWakerReadOnly -Waker $good))) "asked twice, it is the same view"
+Check ([object]::ReferenceEquals($view, (Get-HordeWakerReadOnly -Waker $view))) "the view of a view is the view"
+Check ((Get-HordeWakeTargets -Waker $view).state -ceq "known" -and $script:calls -eq 1) "the view's targets are read by the real waker's block"
+$null = Get-HordeWakeState -Waker $view -Id $sid
+Check ($script:calls -eq 2) "and so is its state"
+$a = Send-HordeWakeNudge -Waker $view -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without a nudge") -and $script:calls -eq 2) "a nudge through the view is refused with the reason, and no block ran"
+$null = Send-HordeWakeNudge -Waker $good -Id $sid
+Check ($script:calls -eq 3) "CONTROL: the same nudge through the registered waker does run"
+$copy = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; folder = $good.folder; capabilities = $good.capabilities; targets = { $script:calls++ }; state = { $script:calls++ }; nudge = { $script:calls++ } }
+$a = Send-HordeWakeNudge -Waker $copy -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not registered") -and $script:calls -eq 3) "a look-alike carrying a nudge is still refused: the view is the port's own object, not a shape"
+Check ([object]::ReferenceEquals($copy, (Get-HordeWakerReadOnly -Waker $copy))) "the view of a look-alike is the look-alike, which the port refuses for every call"
+Check ($null -eq (Get-HordeWakerReadOnly -Waker $null)) "and of nothing is nothing"
+
 Reset-HordeMemoryWaker
 Complete-HordeSuite -Success "a waker is registered only with valid capabilities, only yes counts, and no answer of an adapter is passed on unchecked"

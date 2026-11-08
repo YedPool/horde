@@ -124,6 +124,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
+if ($null -eq (Get-Variable -Name HordeWakerViews -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakerViews = @{} }
 $script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit", "state.between-turns")
 # What the production path requires: every one. A waker without all five is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
@@ -352,7 +353,30 @@ function Test-HordeWakerRegistered {
     if (@($Waker.PSObject.TypeNames) -notcontains "Horde.Waker") { return $false }
     $n = $Waker.PSObject.Properties["name"]
     if ($null -eq $n -or $n.Value -isnot [string] -or -not $script:HordeWakers.ContainsKey($n.Value)) { return $false }
-    return [object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)
+    if ([object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)) { return $true }
+    # The read-only view Get-HordeWakerReadOnly made of it is the registered waker's own, not a look-alike.
+    return ($script:HordeWakerViews.ContainsKey($n.Value) -and [object]::ReferenceEquals($script:HordeWakerViews[$n.Value], $Waker))
+}
+
+function Get-HordeWakerReadOnly {
+    # THE WAKER A RUN THAT MUST NOT NUDGE IS HANDED (T-0116): the registered waker with no nudge in it.
+    # Its targets, state, confirm and the rest read exactly as the real one's do, because they ARE the real
+    # one's script blocks; its nudge is $null, so Send-HordeWakeNudge refuses it and no other route to a
+    # keystroke exists on the object. A shadow run was handed the real waker and was kept from nudging by
+    # one runtime branch in core/Wake.ps1 alone; take that branch out and it typed into live sessions.
+    # Now the branch is a second guard. The same view is returned every time, and the port accepts it as
+    # the registered waker's own. Anything that is not a registered waker comes back as it was: the port
+    # refuses such an object for every call anyway.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return $Waker }
+    $name = [string]$Waker.name
+    if ($script:HordeWakerViews.ContainsKey($name) -and [object]::ReferenceEquals($script:HordeWakerViews[$name], $Waker)) { return $Waker }
+    if (-not $script:HordeWakerViews.ContainsKey($name) -or -not [object]::ReferenceEquals($script:HordeWakerViews[$name].of, $Waker)) {
+        $view = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Waker.name; folder = $Waker.folder; capabilities = $Waker.capabilities; targets = $Waker.targets; state = $Waker.state; nudge = $null; begin = $Waker.begin; confirm = $Waker.confirm; source = $Waker.source; reserved = $Waker.reserved; exit = $Waker.exit }
+        Add-Member -InputObject $view -MemberType NoteProperty -Name "of" -Value $Waker
+        $script:HordeWakerViews[$name] = $view
+    }
+    return $script:HordeWakerViews[$name]
 }
 
 function Get-HordeWakerLabel {
@@ -677,6 +701,8 @@ function Send-HordeWakeNudge {
     param($Waker, [string]$Id)
     if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so nobody was nudged")) }
     if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked to nudge it")) }
+    # A WAKER WITH NO NUDGE (Get-HordeWakerReadOnly) IS A REFUSAL, never a fall-back to another route.
+    if ($null -eq $Waker.nudge) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' was handed in without a nudge, so nobody was nudged")) }
     try { $a = & $Waker.nudge $Id }
     catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to nudge " + $Id) -ErrorRecord $_) }
     $first = ConvertFrom-HordeWakerAnswer -Answer $a -What ("the nudge of " + $Id) -Waker $Waker.name
