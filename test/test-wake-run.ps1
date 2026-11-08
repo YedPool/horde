@@ -69,7 +69,7 @@ $h = New-Home
 Reset-HordeMemoryWaker
 foreach ($n in 1..6) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 0 }
 $run = New-HordeWakeRun -HordeHome $h
-$readDup = { $a = New-HordeKnown -Value $restored; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("claude"); sources = @("c\501.json", "c\502.json") }); $a }
+$readDup = { $a = New-HordeKnown -Value $restored; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-a"); sources = @("c\501.json", "c\502.json") }); $a }
 $dupLines = New-Object System.Collections.ArrayList
 foreach ($i in 0..3) { Set-HordeMemoryWakerClock (At ($i * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($i * 3)) -Waker $memory -ReadSessions $readDup -TickSeconds 3 -ProcessId 4243 -HordeHome $h)) { [void]$dupLines.Add($e) } }
 $named = @($dupLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq ("restore:duplicate:" + (Sid 9)) })

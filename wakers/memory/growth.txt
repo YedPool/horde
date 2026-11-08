@@ -7,3 +7,4 @@ test/test-wake-run.ps1 | 146 -> 174 | 2026-10-13 | the tick's suite seats more s
 test/test-wake.ps1 | 70 -> 95 | 2026-10-13 | the watcher's suite drives the memory waker through more of its test helpers for the review's rules
 test/test-wake-run.ps1 | 174 -> 191 | 2026-10-15 | the tick's suite seats sessions in the memory waker to show the end of the silent probes is told and a limit nobody could read is released only by an acknowledgement seen to rise
 test/test-wake.ps1 | 95 -> 99 | 2026-10-15 | the watcher's suite seats sessions in the memory waker for the very slow probe after the cap and the release by a rise
+test/test-wake-run.ps1 | 191 -> 197 | 2026-11-08 | the tick's suite seats sessions in the memory waker for the duplicate-listing and bounded-stall checks of PR 472 (T-0116)
