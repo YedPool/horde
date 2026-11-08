@@ -2216,6 +2216,7 @@
             "nameSince",
             "statusUpdatedAt",
             "waitingFor",
+            "asksForConvertedSkills",
             "jobId",
             "parkedJobId",
             "spare",
@@ -2367,6 +2368,9 @@
             },
             "waitingFor": {
               "$ref": "#/definitions/answer-waitingFor"
+            },
+            "asksForConvertedSkills": {
+              "$ref": "#/definitions/answer-dropped"
             },
             "jobId": {
               "$ref": "#/definitions/answer-dropped"
