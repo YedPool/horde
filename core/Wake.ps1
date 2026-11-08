@@ -116,7 +116,7 @@ function Get-HordeWakeSettings {
         # silence, so a watcher started again does not probe at once (Get-HordeWakeDecisions).
         silentSlowProbeSeconds = 21600
         # A SESSION RUNNING AS MORE THAN ONE COPY is forgotten (its episode, so its line and its tell, are over) only
-        # after it has been missing from good listings of the fleet for this long - five minutes, the same as a
+        # after it has been missing from good listings of the fleet, or read as no longer a duplicate, for this long - five minutes, the same as a
         # tell's own retry wait (core/WakeTell.ps1, retrySeconds). A listing that leaves its row out for one
         # tick, a flap, ended the episode and the next tick began a second one: a second line and a second
         # tell (T-0116 P15). No tell is retried for it while it is missing.

@@ -211,8 +211,10 @@ Check (@($more | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "no"
 $gone = @(Invoke-HordeWakeTick -Run $run -Now (At 60) -Waker $memory -ReadSessions $none -HordeHome $h)
 Check (@($gone | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "when the copies are gone nothing is said"
+$gone2 = @(Invoke-HordeWakeTick -Run $run -Now (At 400) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@($gone2 | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0 -and -not $run.duplicate.ContainsKey((Sid 2))) "and once they have stayed gone for duplicateGoneSeconds the episode is over"
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At 50) -Duplicate "yes"
-$back = @(foreach ($n in 0..3) { Invoke-HordeWakeTick -Run $run -Now (At (70 + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+$back = @(foreach ($n in 0..3) { Invoke-HordeWakeTick -Run $run -Now (At (410 + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
 Check (@($back | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) }).Count -eq 1 -and @($back | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) }).Count -eq 1) "and when they return with mail it is said again, once, and told again, once"
 # T-0116 round 3: THE EPISODE IS THE COPIES, NOT THE MAIL. The mail is taken (by the session's own hook) with both copies
 # still running, and new mail comes four times: one line and one tell in all, never one per batch.
@@ -343,6 +345,53 @@ foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e
 Check (Test-Path -LiteralPath $file -PathType Leaf) "and on the next pass that can write, the episode is saved: the failed save did not count as saved"
 $run3 = New-HordeWakeRun -Live -Self "" -HordeHome $h
 Check ($run3.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("and a restart keeps it (" + (Said-Dup $all) + ")")
+# T-0116 P15: THE WORD ITSELF FLAPS. duplicate yes -> no (or unreadable, which the port carries as no) for a few ticks mid-episode
+# keeps the episode: no second line, no second tell.
+foreach ($word in @("no", "unknown")) {
+    $h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    $all = New-Object System.Collections.ArrayList; $c = 0
+    foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+    Seat-Dup "no" "yes" 2 $word
+    foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+    Check ($run.duplicate.ContainsKey((Sid 2))) ("a duplicate word read as '" + $word + "' for a few ticks keeps the episode")
+    Seat-Dup
+    foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+    Check ((Said-Dup $all) -ceq "line=1 tell=1" -and $run.duplicateNot.Count -eq 0) ("and when it reads yes again nothing is said twice, and its time as no is not kept (" + $word + ", " + (Said-Dup $all) + ")")
+}
+# ...but copies that REALLY closed end it after duplicateGoneSeconds, so the session is not held for ever, and a return is said again.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Seat-Dup "no" "yes" 2 "no"
+foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }
+$c += $goneFor + 1
+foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and -not $run.duplicateAt.ContainsKey((Sid 2)) -and $run.duplicateNot.Count -eq 0) "copies that stay closed for duplicateGoneSeconds end the episode, and it is forgotten"
+Seat-Dup
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=2 tell=2") ("and a return after that really is a new episode: said again, once, and told again, once (" + (Said-Dup $all) + ")")
+# a session that is RETIRED ends its episode at once even when its duplicate word reads no.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$c = 0; foreach ($n in 0..2) { $null = Tick-Dup $run $c $h; $c += 3 }
+Seat-Dup "yes" "yes" 2 "no"
+$null = Tick-Dup $run $c $h
+Check (-not $run.duplicate.ContainsKey((Sid 2))) "a retired session whose duplicate word reads no ends its episode at once, not after the wait"
+# no tell is retried for a session whose copies have closed, within the wait.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $script:closedPosts = 0
+    $flaky3 = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:closedPosts++; return (New-HordeUnknown -Reason "the messenger is away") } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    foreach ($sec in @(0, 3)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky3 -HordeHome $h }
+    Seat-Dup "no" "yes" 2 "no"
+    foreach ($sec in @(10, 301, 330)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky3 -HordeHome $h }
+    Check ($script:closedPosts -eq 1) ("a failed tell is not retried once the copies read as closed, in the wait or after (" + $script:closedPosts + " posts)")
+} finally { $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
 # SHADOW AND LIVE KEEP SEPARATE FILES, on write and on read back.
 $h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
 $runS = New-HordeWakeRun -HordeHome $h
