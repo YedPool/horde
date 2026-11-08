@@ -303,6 +303,15 @@ try {
     $sync.mode = "up"
     foreach ($m in @(1110, 1115, 1120)) { $null = Pass $w13 $tl13 $sp13 $m }
     Check ($w13.notices.Count -eq 2 -and $w13.notices[1] -clike "*A notice to the warchief may have been posted; the watch cannot tell.*" -and (Bodies $w13 "RELAY BACK*") -eq 1) "a back notice whose result is unknown: the phone is told it MAY have been posted, once, and it is not posted twice"
+    $w15 = New-World $t0; $tl15 = New-WorldTools $w15; $sp15 = Join-Path $work "back-given-up.json"
+    $sync.mode = "500"
+    foreach ($m in @(1300, 1305)) { $null = Pass $w15 $tl15 $sp15 $m }
+    $w15.taken["relay-down|0"] = $true
+    $sync.mode = "up"
+    foreach ($m in @(1310, 1315)) { $null = Pass $w15 $tl15 $sp15 $m }
+    $w15.lost["relay-back|0"] = $true
+    $w = Pass $w15 $tl15 $sp15 1320
+    Check ((State-Of $sp15).episode -eq 1 -and -not (State-Of $sp15).alerted -and (State-Of $sp15).backTell -ceq "" -and (@($w.lines) -join " ") -like "*BACK notice to the warchief was given up unread; the outage is closed*") "a back notice the messenger gave up is not told, but the outage is closed (no notice can come of it), and the line says so"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }

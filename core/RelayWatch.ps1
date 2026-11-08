@@ -290,7 +290,8 @@ function Invoke-HordeRelayWatch {
         $owed = ($s.alerted -or $s.downTell -ceq "posted")
         if (-not $owed) {
             [void]$lines.Add("relay watch: the warchief was never told it was down, so he is not told it is back")
-            if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". No notice about the outage reached the warchief, so none about its end is posted.") -Who "the founder's phone").line) }
+            # A "recovered" is only ever decided for an outage somebody was told of (notified), so the phone is told here without asking again.
+            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". No notice about the outage reached the warchief, so none about its end is posted.") -Who "the founder's phone").line)
             Close-HordeRelayEpisode -State $s
         } elseif ($s.backTell -ceq "") {
             $w = Send-HordeWatchTell -Tools $Tools -Prefix "relay watch" -Who "the warchief" -Key "relay-back" -Gen ([long]$s.episode) -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".")

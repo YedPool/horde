@@ -62,8 +62,8 @@
            Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted")'
            Replace = '$owed = $s.alerted' }
         @{ Name = "founder-told-back-though-never-told-down"
-           Find = 'if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". No notice'
-           Replace = 'if ($true) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". No notice' }
+           Find = 'if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". " + (Get-HordeWatchTellWords'
+           Replace = 'if ($true) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". " + (Get-HordeWatchTellWords' }
         # A founder told "down" whose warchief never took it is still owed "back": no blip reset.
         @{ Name = "founder-told-down-forgotten-as-a-blip"
            Find = 'if (-not $s.alerted -and -not $s.notified -and $s.downTell -ceq "") {'
