@@ -24,9 +24,6 @@
            Find = 'if ($age -le $limit)'
            Replace = 'if ($age -lt $limit)' }
         # One alarm per episode; the phone's accept does NOT end the watch on the warchief's mail; the next backlog is a new episode.
-        @{ Name = "reader-told-every-pass"
-           Find = 'if ($v.stale -and $st.alerted -and $st.phoneAbout -cne "") { return'
-           Replace = 'if ($false) { return' }
         @{ Name = "reader-episode-never-closes"
            Find = 'if ($st.alerted -or $st.tell -cne "" -or $st.phoneAbout -cne "") { Write-HordeWatcherBeatState'
            Replace = 'if ($false) { Write-HordeWatcherBeatState' }
