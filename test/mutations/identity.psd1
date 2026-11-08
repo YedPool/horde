@@ -192,8 +192,8 @@
            Find = '$wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known" -and $dupGaps.ContainsKey($rd.agent))'
            Replace = '$wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known")' }
         @{ Name = "duplicate-does-not-name-its-agents"
-           Find = 'agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique) })'
-           Replace = 'agents = @() })' }
+           Find = 'agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique);'
+           Replace = 'agents = @();' }
         @{ Name = "all-stale-never-set"
            Find = 'allStale = $staleAll })'
            Replace = 'allStale = $false })' }
