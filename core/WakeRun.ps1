@@ -292,7 +292,11 @@ function Invoke-HordeWakeTick {
                 $sourceShadow = Test-HordeWakeSendersShadow -Run $Run
                 $sourcePoster = $null
                 if (-not $sourceShadow) { $sourcePoster = { param($m) Send-HordeRestoreMail -Mail $m -Settings $RestoreSettings -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
-                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores
+                $dupList = @()
+                $dp = $read.PSObject.Properties["duplicates"]
+                if ($null -ne $dp) { $dupList = @($dp.Value) }
+                $dupCount = $dupList.Count
+                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted
@@ -302,6 +306,8 @@ function Invoke-HordeWakeTick {
                 $p = $read.PSObject.Properties["leftOut"]
                 if ($null -ne $p) { $left = @($p.Value) }
                 $Run.notes = @($left | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
+                # A DUPLICATE IS NAMED, session and why (T-0116): left out of the count, counted against the share, and it holds the stall notice.
+                $Run.notes = @(@($Run.notes) + @($dupList | ForEach-Object { [pscustomobject]@{ id = ("restore:duplicate:" + $_.sessionId); reason = ("the restore source left out session " + $_.sessionId + ", named by more than one control file (" + (@($_.sources | ForEach-Object { Split-Path -Leaf "$_" }) -join ", ") + "), so it is counted against a restore's share and no stall notice is sent while it lasts") } }))
             } else {
                 $why = "it answered with something that is not an answer"
                 if (Test-HordeAnswer $read) { $why = "$($read.reason)" }

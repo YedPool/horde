@@ -185,5 +185,20 @@
         @{ Name = "leaves-a-fresh-file-each-read"
            Find = 'try { $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }'
            Replace = 'try { if ($File.FullName -like "*horde-identity-*") { [System.IO.File]::WriteAllText((Join-Path $File.DirectoryName ([guid]::NewGuid().ToString("N") + ".seen")), "") }; $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }' }
+        @{ Name = "whole-but-duplicates-ignores-another-fault"
+           Find = '$wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known" -and $dupGaps.ContainsKey($rd.agent))'
+           Replace = '$wholeButDuplicates[$rd.agent] = ($dupGaps.ContainsKey($rd.agent))' }
+        @{ Name = "whole-but-duplicates-true-for-any-whole-listing"
+           Find = '$wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known" -and $dupGaps.ContainsKey($rd.agent))'
+           Replace = '$wholeButDuplicates[$rd.agent] = ($rd.complete.state -eq "known")' }
+        @{ Name = "duplicate-does-not-name-its-agents"
+           Find = 'agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique);'
+           Replace = 'agents = @();' }
+        @{ Name = "all-stale-never-set"
+           Find = 'allStale = $staleAll })'
+           Replace = 'allStale = $false })' }
+        @{ Name = "all-stale-on-any-stale-file"
+           Find = '"$($_.record.processCheck)" }).Count -eq $all.Count)'
+           Replace = '"$($_.record.processCheck)" }).Count -gt 0)' }
     )
 }

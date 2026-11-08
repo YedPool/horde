@@ -290,5 +290,11 @@
         @{ Name = "live-banner-does-not-say-live"
            Find = 'banner = ("LIVE - REAL NUDGES are sent'
            Replace = 'banner = ("nudges are sent' }
+        @{ Name = "duplicate-not-journaled-by-name"
+           Find = '$Run.notes = @(@($Run.notes) + @($dupList |'
+           Replace = '$Run.notes = @(@($Run.notes) + @(@() |' }
+        @{ Name = "duplicates-not-handed-to-the-restore-pass"
+           Find = '-UncountedDuplicates $dupCount'
+           Replace = '-UncountedDuplicates 0' }
     )
 }

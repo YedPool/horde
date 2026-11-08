@@ -63,6 +63,29 @@ Check ($script:reads -eq 2) ("the restore source ran beside the wake pass every 
 $again = New-HordeWakeRun -HordeHome $h
 Check ($again.ledger.Count -eq 6 -and $again.posted.Count -eq 7 -and @($again.restores).Count -eq 1) "a run that starts again reads back the shadow run's ledger, what it would have posted, and the restore it found"
 
+
+# T-0116: A DUPLICATED SESSION IS NAMED IN THE JOURNAL, and holds the stall notice back (said once).
+$h = New-Home
+Reset-HordeMemoryWaker
+foreach ($n in 1..6) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 0 }
+$run = New-HordeWakeRun -HordeHome $h
+$readDup = { $a = New-HordeKnown -Value $restored; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("claude"); sources = @("c\501.json", "c\502.json") }); $a }
+$dupLines = New-Object System.Collections.ArrayList
+foreach ($i in 0..3) { Set-HordeMemoryWakerClock (At ($i * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($i * 3)) -Waker $memory -ReadSessions $readDup -TickSeconds 3 -ProcessId 4243 -HordeHome $h)) { [void]$dupLines.Add($e) } }
+$named = @($dupLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq ("restore:duplicate:" + (Sid 9)) })
+Check ($named.Count -eq 1 -and "$($named[0].reason)".Contains((Sid 9)) -and "$($named[0].reason)".Contains("more than one control file") -and "$($named[0].reason)".Contains("501.json")) "a duplicate is journaled by name, once, with the files that name it and why it is left out"
+$heldLine = @($dupLines | Where-Object { $_.kind -ceq "stall" -and $_.outcome -ceq "held" })
+Check ($heldLine.Count -eq 1 -and @($dupLines | Where-Object { $_.kind -ceq "would-stall" }).Count -eq 0) "with a duplicate and nothing moved the stall notice is held back and said so once, never a would-stall"
+Check (@($dupLines | Where-Object { $_.kind -ceq "would-post" }).Count -eq 6) "while the six restored orcs still get their would-post resume mails: the duplicate did not blind the source"
+
+# T-0116 round 2: past the bound the held stall becomes the notice that names the duplicate.
+$h = New-Home
+Reset-HordeMemoryWaker
+foreach ($n in 1..6) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 0 }
+$run = New-HordeWakeRun -HordeHome $h
+Set-HordeMemoryWakerClock (At 2000)
+$lateLines = @(Invoke-HordeWakeTick -Run $run -Now (At 2000) -Waker $memory -ReadSessions $readDup -TickSeconds 3 -ProcessId 4244 -HordeHome $h)
+Check (@($lateLines | Where-Object { $_.kind -ceq "would-stall" }).Count -eq 1 -and @($lateLines | Where-Object { $_.outcome -ceq "held" }).Count -eq 0) "2340 s after the restore, past the bound, the held stall is no longer held: the notice is (would-stall in shadow)"
 # MAIL NOBODY CAN READ: the tick journals bad-mail once, on the second tick that shows it.
 $h = New-Home
 Reset-HordeMemoryWaker
