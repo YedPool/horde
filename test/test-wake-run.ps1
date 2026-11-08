@@ -199,7 +199,7 @@ $dup = New-Object System.Collections.ArrayList
 foreach ($n in 0..9) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$dup.Add($e) } }
 $dupHeld = @($dup | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) })
 $dupTold = @($dup | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) })
-Check ($dupHeld.Count -eq 1 -and "$($dupHeld[0].reason)".Contains("running as more than one copy") -and "$($dupHeld[0].reason)".Contains("has 3 unread") -and "$($dupHeld[0].reason)".Contains((Sid 2)) -and "$($dupHeld[0].reason)".Contains("does not say which processes or panes")) ("ten live passes over a session with two running copies and 3 unread journal ONE held line, naming the session, the copies and the count, and saying the fleet gives no pids (" + $dupHeld.Count + ")")
+Check ($dupHeld.Count -eq 1 -and "$($dupHeld[0].reason)".Contains("running as more than one copy") -and "$($dupHeld[0].reason)".Contains("has 3 unread") -and "$($dupHeld[0].reason)".Contains((Sid 2)) -and "$($dupHeld[0].reason)".Contains("does not say which processes or panes the copies are")) ("ten live passes over a session with two running copies and 3 unread journal ONE held line, naming the session, the copies and the count, and saying the fleet gives no pids (" + $dupHeld.Count + ")")
 Check ($dupTold.Count -eq 1 -and "$($dupTold[0].reason)".StartsWith("duplicate-copies: ")) ("and the warchief would be told once (" + $dupTold.Count + ")")
 Check (@(Get-HordeMemoryWakerNudges -Id (Sid 2)).Count -eq 0) "and that session is never nudged"
 Check (@($dup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -ge 1) "while another session in the same passes is nudged as ever"
@@ -241,11 +241,124 @@ Check (@($again | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tel
 [System.IO.File]::WriteAllText((Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h), "{ not json", (New-Object System.Text.UTF8Encoding($false)))
 $broken = New-HordeWakeRun -Live -Self "" -HordeHome $h
 Check ($broken.duplicate.Count -eq 0 -and @($broken.said | Where-Object { "$_".StartsWith("starting with no duplicated session known - ") }).Count -eq 1) "an unreadable file of duplicated sessions starts the run with none, and says so"
-# T-0116 round 3: A SESSION THAT IS GONE FROM THE LISTING ends its episode (and nothing is retried about it).
+# T-0116 round 3: A SESSION THAT IS GONE FROM THE LISTING is forgotten - but not on the first tick it is missing (see
+# T-0116 P15 below): after duplicateGoneSeconds of good listings without it, and nothing is retried about it.
+$goneFor = 300.0
+$gs = Get-HordeWakeSettings
+if ($null -ne $gs.PSObject.Properties["duplicateGoneSeconds"]) { $goneFor = [double]$gs.duplicateGoneSeconds }
 Reset-HordeMemoryWaker
 Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
 $null = Invoke-HordeWakeTick -Run $run2 -Now (At ($clock + 30)) -Waker $memory -ReadSessions $none -HordeHome $h
-Check (-not $run2.duplicate.ContainsKey((Sid 2)) -and -not $run2.duplicateAt.ContainsKey((Sid 2))) "a duplicated session that is gone from the listing is forgotten, and no tell about it can be retried"
+Check ($run2.duplicate.ContainsKey((Sid 2))) "a duplicated session missing from ONE good listing is not forgotten yet (a one-tick flap must not end its episode)"
+$null = Invoke-HordeWakeTick -Run $run2 -Now (At ($clock + 30 + $goneFor + 1)) -Waker $memory -ReadSessions $none -HordeHome $h
+Check (-not $run2.duplicate.ContainsKey((Sid 2)) -and -not $run2.duplicateAt.ContainsKey((Sid 2))) "a duplicated session that stays gone from the good listings for duplicateGoneSeconds is forgotten"
+# T-0116 P15: THE EPISODE SURVIVES A ONE-TICK FLAP, and a flap never gives a second line or a second tell.
+function Seat-Dup { param([string]$Retired = "no", [string]$Reachable = "yes", [int]$Unread = 2, [string]$Dup = "yes")
+    Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+    Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Retired $Retired -Reachable $Reachable -UnreadCount $Unread -OldestUnreadAt (At -60) -Duplicate $Dup
+}
+function Tick-Dup { param($Run, [double]$Sec, $H) Set-HordeMemoryWakerClock (At $Sec); return @(Invoke-HordeWakeTick -Run $Run -Now (At $Sec) -Waker $memory -ReadSessions $none -HordeHome $H) }
+function Lines-Dup { param($Es) return @($Es | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) -and "$($_.reason)".Contains("more than one copy") }).Count }
+function Tells-Dup { param($Es) return @($Es | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) }).Count }
+function Said-Dup { param($Es) return ("line=" + (Lines-Dup $Es) + " tell=" + (Tells-Dup $Es)) }
+# retired reads unknown for ONE tick (the wezfleet waker says so for a row it cannot read): same episode.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Seat-Dup "unknown"
+foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3
+Check ($run.duplicate.ContainsKey((Sid 2))) "retired unknown for one tick keeps the episode"
+Seat-Dup "no"
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=1 tell=1") ("a session whose retired reads unknown for ONE tick mid-episode is not told of twice (" + (Said-Dup $all) + ")")
+# ...retired yes really ends it.
+Seat-Dup "yes"
+$gone = Tick-Dup $run $c $h; $c += 3
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and (Lines-Dup $gone) -eq 0 -and (Tells-Dup $gone) -eq 0) "a session that is retired ends its episode and nothing is said"
+# ...a session that is retired-unknown from the start says no line and tells nothing (it is held for that, once).
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup "unknown"
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..5) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=0 tell=0" -and $run.duplicate.Count -eq 0 -and @($all | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) -and "$($_.reason)".Contains("retired") }).Count -eq 1) ("a session with two copies whose retired was never readable says no duplicate line and tells nothing; it is held for that once (" + (Said-Dup $all) + ")")
+# the row leaves a GOOD listing for ONE tick (and comes back): same episode.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3
+Seat-Dup
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=1 tell=1" -and $run.duplicateGone.Count -eq 0) ("a session absent from ONE good listing and back is not told of twice, and its time away is not kept once it is back (" + (Said-Dup $all) + ")")
+# reachable is not part of the episode: unreachable for a few ticks mid-episode keeps it, and a session first seen unreachable is said once.
+Seat-Dup "no" "no"
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Seat-Dup
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=1 tell=1") ("a session unreachable for a few ticks mid-episode is not told of twice - the episode does not need reachable (" + (Said-Dup $all) + ")")
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup "no" "no"
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..3) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check ((Said-Dup $all) -ceq "line=1 tell=1") ("a session with two copies that is unreachable from the first tick is still said once and told once (" + (Said-Dup $all) + ")")
+# A GONE SESSION IS NOT TOLD ABOUT WHILE IT IS MISSING: a tell whose post failed is not retried for a session that has left the listing.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $script:goneFlaps = 0
+    $flaky2 = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:goneFlaps++; return (New-HordeUnknown -Reason "the messenger is away") } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    foreach ($sec in @(0, 3)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky2 -HordeHome $h }
+    Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+    foreach ($sec in @(10, 301, 330)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky2 -HordeHome $h }
+    Check ($script:goneFlaps -eq 1) ("a failed tell is not retried for a session that has left the listing, in its wait or after (" + $script:goneFlaps + " posts)")
+    Check (-not $run.duplicate.ContainsKey((Sid 2))) "and once it has been gone long enough it is forgotten"
+} finally { $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
+# A LISTING THAT CANNOT BE READ keeps the episode, and starts no new one: no second line, no second tell.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+foreach ($fault in @("throw", "garbage")) {
+    Set-HordeMemoryWakerFault -Call targets -Kind $fault
+    foreach ($n in 0..3) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+    Check ($run.duplicate.ContainsKey((Sid 2))) ("a listing that fails by " + $fault + " keeps the episode")
+    Set-HordeMemoryWakerFault -Call targets -Kind ""
+    foreach ($n in 0..3) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+}
+Check ((Said-Dup $all) -ceq "line=1 tell=1") ("a failed listing in the middle of an episode neither ends it nor starts a new tell (" + (Said-Dup $all) + ")")
+# A FAILED SAVE IS NOT A SAVED EPISODE: the episode is written again on the next pass that can, and a restart then keeps it.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$file = Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h
+New-Item -ItemType Directory -Path $file -Force | Out-Null
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check (@($all | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "duplicate" }).Count -ge 1 -and $run.duplicate.ContainsKey((Sid 2))) "a save that fails is said, and the episode is still kept in the run"
+Remove-Item -LiteralPath $file -Recurse -Force
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Check (Test-Path -LiteralPath $file -PathType Leaf) "and on the next pass that can write, the episode is saved: the failed save did not count as saved"
+$run3 = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($run3.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("and a restart keeps it (" + (Said-Dup $all) + ")")
+# SHADOW AND LIVE KEEP SEPARATE FILES, on write and on read back.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$runS = New-HordeWakeRun -HordeHome $h
+$c = 0; foreach ($n in 0..2) { $null = Tick-Dup $runS $c $h; $c += 3 }
+Check ((Test-Path -LiteralPath (Get-HordeWakeStateFile -Name "duplicate" -Mode "shadow" -HordeHome $h) -PathType Leaf) -and -not (Test-Path -LiteralPath (Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h))) "a shadow run saves its episode in duplicate-shadow.json and never writes the live file"
+$runS2 = New-HordeWakeRun -HordeHome $h
+$again = New-Object System.Collections.ArrayList
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $runS2 $c $h)) { [void]$again.Add($e) }; $c += 3 }
+Check ($runS2.duplicate.ContainsKey((Sid 2)) -and @($again | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "a shadow run started again reads its own episode back from the shadow file and says nothing again"
+$runL = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($runL.duplicate.Count -eq 0) "a live run does not read the shadow run's episode"
+$liveSaid = New-Object System.Collections.ArrayList
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $runL $c $h)) { [void]$liveSaid.Add($e) }; $c += 3 }
+Check ((Said-Dup $liveSaid) -ceq "line=1 tell=1" -and (Test-Path -LiteralPath (Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h) -PathType Leaf)) "and says its own, once, and saves it in the live file"
+$runL2 = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($runL2.duplicate.ContainsKey((Sid 2))) "a live run started again reads the live file"
 # A duplicate with no mail says nothing; a listing with no such word reads as before.
 $h = New-Home
 Reset-HordeMemoryWaker
