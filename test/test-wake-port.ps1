@@ -277,6 +277,16 @@ foreach ($bad in @($null, $true, "maybe", "")) {
     Check ($got.state -ceq "unknown" -and "$($got.reason)".Contains("retired")) ("targets: a retired that is '" + $bad + "' - left out, a boolean, a word outside the list - makes the listing unknown: never read as not retired")
 }
 $script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
+# duplicate (T-0116) is OPTIONAL: left out it is no, and only the exact word yes is yes.
+$script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
+Check (@((Get-HordeWakeTargets -Waker $scripted).value)[0].duplicate -ceq "no") "targets: a listing without duplicate carries it as no"
+foreach ($pair in @(@("yes", "yes"), @("no", "no"), @("unknown", "no"), @("maybe", "no"), @($true, "no"))) {
+    $script:dupWord = $pair[0]
+    $script:targetsAnswer = { New-HordeKnown -Value @((New-Target @{ duplicate = $script:dupWord })) }
+    $got = Get-HordeWakeTargets -Waker $scripted
+    Check ($got.state -ceq "known" -and @($got.value)[0].duplicate -ceq $pair[1]) ("targets: duplicate '" + $pair[0] + "' is carried as " + $pair[1])
+}
+$script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
 foreach ($case in @(
         @{ what = "a listing that throws"; block = { throw "the far end fell over" }; like = "fell over" },
         @{ what = "a listing that is not an answer"; block = { @((New-Target)) }; like = "not an answer" },

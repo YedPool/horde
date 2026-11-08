@@ -87,7 +87,7 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -115,6 +115,9 @@ function New-HordeWakeRun {
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
+    $savedDup = Read-HordeWakeDuplicate -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
+    if ($savedDup.state -ceq "known") { $run.duplicate = $savedDup.value.text; $run.duplicateAt = $savedDup.value.at; $run.duplicateMark = (ConvertTo-Json -InputObject ([ordered]@{ t = $savedDup.value.text; a = @($savedDup.value.at.Keys | Sort-Object) }) -Compress -Depth 4) }
+    elseif ($savedDup.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no duplicated session known - " + $savedDup.reason) }
     $place = Get-HordeWakeSenderFile -Run $run -Stem "tells"
     $savedTells = Read-HordeWakeTellState -Name $place.name -Mode $place.mode -HordeHome $HordeHome
     if ($savedTells.state -ceq "known") { $run.told = $savedTells.value.told }
@@ -383,6 +386,38 @@ function Invoke-HordeWakeTick {
         $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
+        # A SESSION RUNNING AS MORE THAN ONE COPY (T-0116): ONE EPISODE, as long as the copies last. Its line is
+        # said once, when it first has unread mail, and its tell is made once; it ends when the session is read
+        # and is no longer such a one, or is gone from the listing - NOT when its mail is taken, or a session that
+        # keeps working and takes mail by its own hook would start a new episode, a new line and a new tell with
+        # every batch. The line's words are kept while it lasts (a changed count says nothing), and the episode
+        # (start and words) is saved, so a restart does not say it or tell it again. A run made before these
+        # members existed gets them here.
+        if ($null -eq $Run.PSObject.Properties["duplicate"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicate" -Value @{} }
+        if ($null -eq $Run.PSObject.Properties["duplicateAt"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateAt" -Value @{} }
+        if ($null -eq $Run.PSObject.Properties["duplicateMark"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateMark" -Value "" }
+        if ($null -ne $result.listing -and "$($result.listing.state)" -ceq "known") {
+            $listedHere = @($result.listing.value | ForEach-Object { "$($_.id)" })
+            foreach ($id in @($Run.duplicate.Keys)) { if ($listedHere -cnotcontains "$id") { $Run.duplicate.Remove($id) } }
+        }
+        $dupSaid = @{}
+        foreach ($id in @($result.duplicateOn.Keys)) {
+            if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] }
+            elseif ($result.duplicate.ContainsKey($id)) { $dupSaid["$id"] = $result.duplicate[$id] }
+        }
+        $dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate -Said $dupSaid -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
+        $Run.duplicate = $dupNow.seen
+        foreach ($e in @($dupNow.entries)) { [void]$entries.Add($e) }
+        $dupAt = @{}
+        foreach ($id in @($Run.duplicate.Keys)) { if ($Run.duplicateAt.ContainsKey("$id")) { $dupAt["$id"] = $Run.duplicateAt["$id"] } }
+        foreach ($e in @($dupNow.entries)) { $dupAt["$($e.id)"] = $Now }
+        $Run.duplicateAt = $dupAt
+        $dupMark = ""
+        if ($Run.duplicate.Count -gt 0) { $dupMark = ConvertTo-Json -InputObject ([ordered]@{ t = $Run.duplicate; a = @($Run.duplicateAt.Keys | Sort-Object) }) -Compress -Depth 4 }
+        if ($dupMark -cne "$($Run.duplicateMark)") {
+            try { Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome; $Run.duplicateMark = $dupMark }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "duplicate"; reason = ("what is known of duplicated sessions could not be saved: " + $_.Exception.Message) }) }
+        }
         $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
         $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
@@ -424,6 +459,13 @@ function Invoke-HordeWakeTick {
         }
         foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
             & $make { (New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)) }
+        }
+        # BUILT ON EVERY PASS WHILE THE EPISODE LASTS, not only on the pass that starts it: the tell pass retries a
+        # post that failed only when its condition is made again, and the same Subject and Instance (the episode's
+        # start) keep it one message, so a tell that was told is not sent twice (T-0116, round 2).
+        foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {
+            if (-not $Run.duplicateAt.ContainsKey("$dupId")) { continue }
+            & $make { (New-HordeWakeTellCondition -Kind "duplicate-copies" -Subject "$dupId" -Instance $Run.duplicateAt["$dupId"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ($(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] }) + " Close all but one of the copies.")) }
         }
         foreach ($e in @($bad.entries)) {
             & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }

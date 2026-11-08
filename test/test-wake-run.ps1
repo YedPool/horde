@@ -186,6 +186,94 @@ Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnread
 $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $kinds = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.outcome } })
 Check (($kinds -join ",") -ceq "held:held") ("a session that may be retired is journaled once as held: the journal's kind says which rule it was (" + ($kinds -join ",") + ")")
+# T-0116: TWO RUNNING COPIES WITH MAIL WAITING. One held line and one tell per episode, however many passes;
+# the session is never nudged; another session in the same passes is nudged as ever; the episode ends when
+# the copies do, and a return is a new episode and says it again.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 3 -OldestUnreadAt (At -60) -Duplicate "yes"
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$dup = New-Object System.Collections.ArrayList
+foreach ($n in 0..9) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$dup.Add($e) } }
+$dupHeld = @($dup | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) })
+$dupTold = @($dup | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) })
+Check ($dupHeld.Count -eq 1 -and "$($dupHeld[0].reason)".Contains("running as more than one copy") -and "$($dupHeld[0].reason)".Contains("has 3 unread") -and "$($dupHeld[0].reason)".Contains((Sid 2)) -and "$($dupHeld[0].reason)".Contains("does not say which processes or panes")) ("ten live passes over a session with two running copies and 3 unread journal ONE held line, naming the session, the copies and the count, and saying the fleet gives no pids (" + $dupHeld.Count + ")")
+Check ($dupTold.Count -eq 1 -and "$($dupTold[0].reason)".StartsWith("duplicate-copies: ")) ("and the warchief would be told once (" + $dupTold.Count + ")")
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 2)).Count -eq 0) "and that session is never nudged"
+Check (@($dup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -ge 1) "while another session in the same passes is nudged as ever"
+# MORE MAIL ARRIVES MID-EPISODE: the count changes and nothing is said again, line or tell.
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "Scribe" -UnreadCount 5 -OldestUnreadAt (At -60) -Duplicate "yes"
+$more = @(foreach ($n in 0..3) { Invoke-HordeWakeTick -Run $run -Now (At (40 + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check (@($more | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "a change in the unread count in the middle of the episode says nothing again: not the line, not the tell"
+# The copies close, the mail is taken, and a copy comes back with new mail: a new episode.
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "no"
+$gone = @(Invoke-HordeWakeTick -Run $run -Now (At 60) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@($gone | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) "when the copies are gone nothing is said"
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At 50) -Duplicate "yes"
+$back = @(foreach ($n in 0..3) { Invoke-HordeWakeTick -Run $run -Now (At (70 + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check (@($back | Where-Object { $_.kind -ceq "held" -and $_.id -ceq (Sid 2) }).Count -eq 1 -and @($back | Where-Object { $_.kind -ceq "would-tell" -and $_.id -ceq (Sid 2) }).Count -eq 1) "and when they return with mail it is said again, once, and told again, once"
+# T-0116 round 3: THE EPISODE IS THE COPIES, NOT THE MAIL. The mail is taken (by the session's own hook) with both copies
+# still running, and new mail comes four times: one line and one tell in all, never one per batch.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 2 -OldestUnreadAt (At -60) -Duplicate "yes"
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$batches = New-Object System.Collections.ArrayList
+$clock = 0
+foreach ($n in 0..2) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $clock) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$batches.Add($e) }; $clock += 3 }
+foreach ($batch in 1..4) {
+    Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "yes"
+    foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $clock) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$batches.Add($e) }; $clock += 3
+    Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At ($clock - 5)) -Duplicate "yes"
+    foreach ($n in 0..2) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $clock) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$batches.Add($e) }; $clock += 3 }
+}
+Check (@($batches | Where-Object { $_.kind -ceq "held" }).Count -eq 1 -and @($batches | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 1) ("mail taken with both copies still running, and new mail four times: ONE line and ONE tell in all, not one per batch (" + @($batches | Where-Object { $_.kind -ceq "held" }).Count + " lines, " + @($batches | Where-Object { $_.kind -ceq "would-tell" }).Count + " tells)")
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 2)).Count -eq 0) "and the session is never nudged through all of it"
+# T-0116 round 3: A RESTART MID-EPISODE says nothing again, line or tell: the episode's start and words are kept in the home.
+$run2 = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$again = New-Object System.Collections.ArrayList
+foreach ($n in 0..3) { foreach ($e in @(Invoke-HordeWakeTick -Run $run2 -Now (At ($clock + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$again.Add($e) } }
+Check (@($again | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" -or $_.kind -ceq "tell" }).Count -eq 0) ("a watcher started again in the middle of the episode says nothing again: no second line, no second tell (" + @($again | ForEach-Object { $_.kind }) + ")")
+# ...and a file of episodes that cannot be read is unknown, never a throw: the run starts with no episode and says so.
+[System.IO.File]::WriteAllText((Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h), "{ not json", (New-Object System.Text.UTF8Encoding($false)))
+$broken = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($broken.duplicate.Count -eq 0 -and @($broken.said | Where-Object { "$_".StartsWith("starting with no duplicated session known - ") }).Count -eq 1) "an unreadable file of duplicated sessions starts the run with none, and says so"
+# T-0116 round 3: A SESSION THAT IS GONE FROM THE LISTING ends its episode (and nothing is retried about it).
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+$null = Invoke-HordeWakeTick -Run $run2 -Now (At ($clock + 30)) -Waker $memory -ReadSessions $none -HordeHome $h
+Check (-not $run2.duplicate.ContainsKey((Sid 2)) -and -not $run2.duplicateAt.ContainsKey((Sid 2))) "a duplicated session that is gone from the listing is forgotten, and no tell about it can be retried"
+# A duplicate with no mail says nothing; a listing with no such word reads as before.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -Duplicate "yes"
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$quietDup = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check (@($quietDup | Where-Object { $_.id -ceq (Sid 2) }).Count -eq 0) "more than one running copy and no unread mail: no line and no tell"
+Check (@($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -eq 2 -and @($quietDup | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) ("and a session whose listing has no such word is nudged and said nothing of, as before (" + @($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count + " nudges)")
+# T-0116 round 2: a tell whose first post FAILS is tried again by a later pass, and told once. The condition is made on
+# every pass while the episode lasts, so the tell pass's own retry (after retrySeconds) has something to retry.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "Scribe" -UnreadCount 2 -OldestUnreadAt (At -60) -Duplicate "yes"
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $script:dupPosts = 0
+    $script:dupBodies = New-Object System.Collections.ArrayList
+    $flaky = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:dupPosts++; if ($script:dupPosts -eq 1) { return (New-HordeUnknown -Reason "the messenger is away") }; [void]$script:dupBodies.Add("$($m.body)"); New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "accepted"; at = [datetime]::UtcNow }) } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    $tellKinds = New-Object System.Collections.ArrayList
+    foreach ($sec in @(0, 3, 6, 100, 310, 313, 400, 700)) { if ($sec -eq 100) { Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "Scribe" -UnreadCount 6 -OldestUnreadAt (At -60) -Duplicate "yes" }; Set-HordeMemoryWakerClock (At $sec); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky -HordeHome $h)) { if ($e.kind -ceq "tell") { [void]$tellKinds.Add($e.outcome) } } }
+    Check ((@($tellKinds) -join ",") -ceq "unknown,posted" -and $script:dupPosts -eq 2) ("a first post that fails is tried again by a later pass and told, once, and not again after (" + (@($tellKinds) -join ",") + ", " + $script:dupPosts + " posts)")
+    Check ($script:dupBodies.Count -eq 1 -and "$($script:dupBodies[0])".Contains("has 6 unread") -and "$($script:dupBodies[0])".Contains("Scribe") -and "$($script:dupBodies[0])".Contains((Sid 2)) -and "$($script:dupBodies[0])".Contains("Close all but one of the copies")) "and the retried mail carries the CURRENT count, names the session by its label and id, and says what to do"
+} finally { $script:HordeWakeSendersPost = $postWas }
 # THE WATCHER'S OWN SESSION AND A SENDER'S LABEL, through the tick, live: said once, never nudged.
 $h = New-Home
 Reset-HordeMemoryWaker

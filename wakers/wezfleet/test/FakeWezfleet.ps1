@@ -149,6 +149,9 @@ function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Det
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
 if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
+# More than one running copy (the row's reason says duplicate-process): the real command refuses, nothing typed (T-0116).
+if (@(@($row.reason) + @($row.reasons)) -ccontains "duplicate-process") { Write-FakeNudge "unreachable" "target-instance-ambiguous" "the session has more than one running copy; nothing is typed" }
+# (after retired and no-unread, in the real command's order, MailNudge.ps1)
 # THE BUDGET, before anything is typed: with too little of it left, typing is not begun.
 $budget = 0
 if (($argvList -ccontains "-BudgetSeconds") -and (-not [int]::TryParse((Get-FakeArg "-BudgetSeconds"), [ref]$budget) -or $budget -lt 35 -or $budget -gt 300)) { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-budget"; target = $to; pane = ""; instance = ""; detail = "a budget is a whole number of seconds from 35 to 300"; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }

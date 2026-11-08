@@ -5,3 +5,4 @@ test/mutations/waker-wezfleet.psd1 | 36 -> 50 | 2026-10-13 | the mutation spec q
 test/test-waker-wezfleet.ps1 | 2 -> 4 | 2026-10-13 | a suite or spec of the wake watcher names the waker it drives
 wakers/start-sites.txt | 19 -> 22 | 2026-10-13 | the family's list of start sites names this waker's changed start calls
 wakers/start-sites.txt | 22 -> 25 | 2026-10-16 | the family's list of start sites names this waker's exit command, its one call of the start
+test/mutations/waker-wezfleet.psd1 | 50 -> 53 | 2026-11-08 | a mutation spec quotes the changed target line, which now carries duplicate (T-0116)

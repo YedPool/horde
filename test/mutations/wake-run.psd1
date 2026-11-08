@@ -8,6 +8,36 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "episode-ends-when-the-mail-is-taken"
+           Find = 'foreach ($id in @($result.duplicateOn.Keys)) {'
+           Replace = 'foreach ($id in @($result.duplicate.Keys)) {' }
+        @{ Name = "episode-is-not-saved"
+           Find = 'if ($dupMark -cne "$($Run.duplicateMark)") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "episode-is-not-read-back-at-start"
+           Find = 'if ($savedDup.state -ceq "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-session-gone-from-the-listing-is-not-forgotten"
+           Find = 'if ($listedHere -cnotcontains "$id") { $Run.duplicate.Remove($id) }'
+           Replace = 'if ($false) { $Run.duplicate.Remove($id) }' }
+        @{ Name = "a-retried-tell-carries-the-start-text"
+           Find = '$(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] })'
+           Replace = '$Run.duplicate["$dupId"]' }
+        @{ Name = "count-change-says-it-again"
+           Find = 'if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] }'
+           Replace = 'if ($false) { $dupSaid["$id"] = $Run.duplicate["$id"] }' }
+        @{ Name = "duplicate-tell-is-made-only-on-the-first-pass"
+           Find = 'foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {'
+           Replace = 'foreach ($dupId in @($dupNow.entries | ForEach-Object { $_.id })) {' }
+        @{ Name = "duplicate-line-is-said-on-every-pass"
+           Find = '$dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate'
+           Replace = '$dupNow = Update-HordeWakeSaidOnce -Seen @{}' }
+        @{ Name = "duplicate-tell-instance-is-not-the-episode"
+           Find = '-Instance $Run.duplicateAt["$dupId"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
+           Replace = '-Instance "x"' }
+        @{ Name = "duplicate-line-is-not-kept-between-passes"
+           Find = '$Run.duplicate = $dupNow.seen'
+           Replace = '$Run.duplicate = @{}' }
         @{ Name = "the-heartbeat-does-not-say-the-watchers-own-session"
            Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" }'
            Replace = ' }' }

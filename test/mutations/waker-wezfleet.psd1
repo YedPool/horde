@@ -6,6 +6,12 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-duplicate-process-reason-is-not-read"
+           Find = '-ceq "duplicate-process") { return "yes" }'
+           Replace = '-ceq "duplicate-process") { return "no" }' }
+        @{ Name = "a-target-does-not-carry-duplicate"
+           Find = '; duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })'
+           Replace = ' })' }
         @{ Name = "a-wezfleet-that-does-not-know-the-verb-reserves-nothing"
            Find = 'answered = $false; why = ("wezfleet labels reserved exit " + $run.exit'
            Replace = 'answered = $true; labels = @(); why = ("wezfleet labels reserved exit " + $run.exit' }
@@ -121,8 +127,8 @@
            Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
            Replace = 'if ("$($Row.label)" -ceq "") { return "unknown" }' }
         @{ Name = "the-listing-says-nobody-is-retired"
-           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })'
-           Replace = 'reachable = $row.reachable; retired = "no" })' }
+           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row); duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })'
+           Replace = 'reachable = $row.reachable; retired = "no"; duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })' }
         @{ Name = "a-reset-with-no-zone-is-read-as-local"
            Find = '[ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }'
            Replace = '[ref]$parsed)) { $until = $parsed.ToUniversalTime() }' }

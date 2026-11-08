@@ -297,6 +297,19 @@ Check ((Get-Retired 1) -ceq "no") "a row with a role and no label had a record: 
 Check ((Get-Retired 1) -ceq "no") "a reason that is about the mail says nothing of the record: no"
 & $fx.SetRow $state (New-Row 1 @{ retired = $true; reason = "record-unreadable"; reasons = @("record-unreadable") })
 Check ((Get-Retired 1) -ceq "yes") "retired true is yes whatever else the row says"
+# T-0116: duplicate-process in reason or reasons is the one word read for duplicate; anything else is no.
+function Get-Dup { param([int]$N) $l = Get-HordeWakeTargets -Waker $w; if ($l.state -cne "known") { return ("listing " + $l.state) }; return "$(@($l.value | Where-Object { $_.id -ceq (Sid $N) })[0].duplicate)" }
+& $fx.SetRow $state (New-Row 1)
+Check ((Get-Dup 1) -ceq "no") "duplicate: a row with no such reason is no"
+& $fx.SetRow $state (New-Row 1 @{ reason = "duplicate-process"; reasons = @("duplicate-process"); idle = "unknown" })
+Check ((Get-Dup 1) -ceq "yes") "duplicate: reason duplicate-process is yes"
+& $fx.SetRow $state (New-Row 1 @{ reason = "mail-unreadable"; reasons = @("mail-unreadable", "duplicate-process") })
+Check ((Get-Dup 1) -ceq "yes") "duplicate: and so when it is one reason among several"
+& $fx.SetRow $state (New-Row 1 @{ reason = "duplicate-processes-later"; reasons = @("not-duplicate-process") })
+Check ((Get-Dup 1) -ceq "no") "duplicate: only the exact word counts"
+& $fx.SetRow $state (New-Row 1 @{ reason = "duplicate-process"; reasons = @("duplicate-process"); idle = "unknown" })
+$st = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($st.state -ceq "known" -and $st.value.unreadCount -eq 1) "duplicate: the row is still a state like any other (rule 1): its mail is read"
 # THE WATCHER, THROUGH THIS WAKER: a retired session with mail, idle and with an empty box, is not nudged.
 & $fx.SetRow $state (New-Row 1 @{ retired = $true; oldestUnreadAt = "2026-10-12T07:00:00Z" })
 & $fx.Clock $state $t0

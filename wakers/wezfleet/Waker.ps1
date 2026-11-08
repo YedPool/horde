@@ -39,6 +39,12 @@
 #   1. A ROW IS NEVER SKIPPED OR DISTRUSTED BECAUSE IT CARRIES A REASON. A mailbox with good mail and one
 #      corrupt record has mail known, unreadCount above 0 and reason mail-unreadable, and it MUST still
 #      be nudged. Nothing here reads reason or reasons to decide; only mail, the counts and the three words.
+#      THE TWO EXCEPTIONS, each one word and nothing else of them: record-unreadable, read by
+#      Get-HordeWezfleetWakerRetired to say a retired that cannot be told is unknown; and
+#      duplicate-process, read by Get-HordeWezfleetWakerDuplicate (T-0116) to tell the watcher that the
+#      session has two running copies, so that it can SAY why the mail waits. The second decides no
+#      nudge here: the fleet's own nudge refuses such a session (target-instance-ambiguous) and the
+#      watcher holds it; the word only lets the watcher say so once.
 #   2. A COUNT IS A WHOLE NUMBER OR NULL, AND NULL IS UNKNOWN. It is never read as 0: "no unread mail"
 #      and "I could not count" are different answers, and the second makes the state unknown, saying so.
 #   3. A FAILURE CAN BE PERMANENT (records-unreadable is, until a person mends the file). The answer is
@@ -724,6 +730,23 @@ function Get-HordeWezfleetWakerRetired {
     return "no"
 }
 
+function Get-HordeWezfleetWakerDuplicate {
+    # Does this row's session have two running copies, as the port's word: yes or no (T-0116).
+    # THE ONE WORD READ OUT OF reason / reasons for this: duplicate-process, which the fleet's mail state
+    # gives a session with two live processes (its idle is then unknown and its nudge refuses with
+    # target-instance-ambiguous, read from the real command 2026-11-06). Anything else - no such word, a
+    # row of an older command, a reason that is not text - is no. It is NEVER read as a reason to skip or
+    # distrust the row (rule 1): the row is a target and a state like any other, and only the watcher's
+    # journal and its tell to the warchief use this.
+    param([Parameter(Mandatory = $true)]$Row)
+    foreach ($n in @("reason", "reasons")) {
+        $p = $Row.PSObject.Properties[$n]
+        if ($null -eq $p) { continue }
+        foreach ($v in @($p.Value)) { if ($v -is [string] -and $v -ceq "duplicate-process") { return "yes" } }
+    }
+    return "no"
+}
+
 function Get-HordeWezfleetWakerTargets {
     # The port's Targets: form A's rows that are not retired, or that have unread mail (the header). A
     # retired one with mail is LISTED, saying retired, so the watcher can say once that its mail waits
@@ -742,7 +765,7 @@ function Get-HordeWezfleetWakerTargets {
     foreach ($row in @($fleet.rows.Values)) {
         $hasMail = ($null -ne $row.unreadCount -and $row.unreadCount -gt 0)
         if ($row.retired -and -not $hasMail) { continue }
-        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })
+        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row); duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })
     }
     return (New-HordeKnown -Value $list.ToArray() -ObservedAt (Get-HordeWezfleetWakerTime))
 }

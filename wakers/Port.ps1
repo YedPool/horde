@@ -67,7 +67,10 @@
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
 #   Targets  param()             -> known: a list of { id; label; role; parent; reachable; retired }, or
-#            unknown. reachable and retired are each yes, no or unknown.
+#            unknown. reachable and retired are each yes, no or unknown. A target may also carry
+#            duplicate: yes when the session has two running copies (so it cannot be nudged, and the
+#            watcher says so once), else no. OPTIONAL: a target without it is no, and any word but yes
+#            is no, so a waker that does not know of it changes nothing for any session.
 #            An unknown may carry failures, a whole number: how many readings in a row have failed. A
 #            waker that backs its readings off knows that count and the watcher cannot - its passes are
 #            not the waker's readings - and the watcher uses it to tell a hiccup from a fleet that
@@ -520,7 +523,11 @@ function Get-HordeWakeTargets {
         # never nudged, and one that may be is held, is the watcher's rule (core/Wake.ps1, Get-HordeWakeHold).
         $retired = Get-HordeWakerMember $t "retired"
         if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with retired that is not one of " + ($script:HordeWakerWords -join ", "))) }
-        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value; retired = [string]$retired.value })
+        # duplicate: OPTIONAL, and only the exact word yes counts (T-0116). Left out, or anything else, is no.
+        $dup = Get-HordeWakerMember $t "duplicate"
+        $dupWord = "no"
+        if ($dup.has -and $dup.value -is [string] -and $dup.value -ceq "yes") { $dupWord = "yes" }
+        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value; retired = [string]$retired.value; duplicate = $dupWord })
     }
     return (New-HordeKnown -Value $out.ToArray() -ObservedAt $a.observedAt)
 }

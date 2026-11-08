@@ -82,10 +82,12 @@ function Set-HordeMemoryWakerSession {
         [string]$Acked = "known",
         $LastAckedAt = $null,
         $HandedOverCount = 0,
-        $OldestHandedOverAt = $null
+        $OldestHandedOverAt = $null,
+        # T-0116: "" leaves the member out of the listing (a waker that does not know of it); yes or no says it.
+        [string]$Duplicate = ""
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; retired = $Retired; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; rule = $Rule; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; rule = $Rule; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt; duplicate = $Duplicate }
 }
 
 function Set-HordeMemoryWakerAcked {
@@ -168,7 +170,7 @@ function Invoke-HordeMemoryWakerFault {
 $null = Register-HordeWaker -Name "memory" `
     -Targets {
         if (Invoke-HordeMemoryWakerFault "targets") { return "not an answer" }
-        $list = @($script:HordeMemoryWakerSessions.Values | ForEach-Object { [pscustomobject]@{ id = $_.id; label = $_.label; role = $_.role; parent = $_.parent; reachable = $_.reachable; retired = $_.retired } })
+        $list = @($script:HordeMemoryWakerSessions.Values | ForEach-Object { $t = [pscustomobject]@{ id = $_.id; label = $_.label; role = $_.role; parent = $_.parent; reachable = $_.reachable; retired = $_.retired }; if ($_.duplicate -cne "") { Add-Member -InputObject $t -MemberType NoteProperty -Name "duplicate" -Value $_.duplicate }; $t })
         return (New-HordeKnown -Value $list -ObservedAt (Get-HordeMemoryWakerTime))
     } `
     -State { param([string]$Id) Get-HordeMemoryWakerState -Id $Id } `

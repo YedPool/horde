@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "any-duplicate-word-counts"
+           Find = '$dup.value -ceq "yes") { $dupWord'
+           Replace = '$dup.value -cne "zzz") { $dupWord' }
+        @{ Name = "duplicate-is-not-carried"
+           Find = 'retired = [string]$retired.value; duplicate = $dupWord'
+           Replace = 'retired = [string]$retired.value; duplicate = "no"' }
         @{ Name = "a-fleet-that-could-not-be-asked-is-a-known-empty-list"
            Find = 'return (New-HordeAbsent -Note ("waker ''" + $Waker.name + "'' could not ask its fleet which labels it reserves: " + $why.value))'
            Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() }))' }
@@ -96,8 +102,8 @@
            Find = 'if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "retired-is-not-carried"
-           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
-           Replace = 'reachable = [string]$reach.value; retired = "no" })' }
+           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value; duplicate = $dupWord })'
+           Replace = 'reachable = [string]$reach.value; retired = "no"; duplicate = $dupWord })' }
         @{ Name = "limited-not-carried"
            Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
            Replace = 'midTurn = $words["midTurn"]; limited = "no"; limitedUntil = $limitedUntil; betweenTurns' }
