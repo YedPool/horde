@@ -77,6 +77,15 @@ Check ($named.Count -eq 1 -and "$($named[0].reason)".Contains((Sid 9)) -and "$($
 $heldLine = @($dupLines | Where-Object { $_.kind -ceq "stall" -and $_.outcome -ceq "held" })
 Check ($heldLine.Count -eq 1 -and @($dupLines | Where-Object { $_.kind -ceq "would-stall" }).Count -eq 0) "with a duplicate and nothing moved the stall notice is held back and said so once, never a would-stall"
 Check (@($dupLines | Where-Object { $_.kind -ceq "would-post" }).Count -eq 6) "while the six restored orcs still get their would-post resume mails: the duplicate did not blind the source"
+
+# T-0116 round 2: past the bound the held stall becomes the notice that names the duplicate.
+$h = New-Home
+Reset-HordeMemoryWaker
+foreach ($n in 1..6) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 0 }
+$run = New-HordeWakeRun -HordeHome $h
+Set-HordeMemoryWakerClock (At 2000)
+$lateLines = @(Invoke-HordeWakeTick -Run $run -Now (At 2000) -Waker $memory -ReadSessions $readDup -TickSeconds 3 -ProcessId 4244 -HordeHome $h)
+Check (@($lateLines | Where-Object { $_.kind -ceq "would-stall" }).Count -eq 1 -and @($lateLines | Where-Object { $_.outcome -ceq "held" }).Count -eq 0) "2340 s after the restore, past the bound, the held stall is no longer held: the notice is (would-stall in shadow)"
 # MAIL NOBODY CAN READ: the tick journals bad-mail once, on the second tick that shows it.
 $h = New-Home
 Reset-HordeMemoryWaker

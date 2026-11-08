@@ -512,7 +512,8 @@ function Get-HordeIdentity {
     #   duplicates       { sessionId; sources } for every id named by more than one file, unless
     #                    exactly one is process-verified and every other is proven stale (then the
     #                    verified one is the record and the rest are findings); none of them is in
-    #                    records, and each agent it came from is incomplete; agents names them
+    #                    records, and each agent it came from is incomplete; agents names them, and
+    #                    allStale is true when every file is proven gone or reused (nothing is running)
     #   verifiedLive     answer: the session ids whose process was checked and is the one described.
     #                    Unknown when the process table or the claude listing is not whole, because a
     #                    session missing from it may be alive.
@@ -565,7 +566,12 @@ function Get-HordeIdentity {
         # Otherwise never choose: two verified files, or any that cannot be checked, is a real tie.
         # Which of two files is the live one is exactly the question that went wrong silently:
         # "seven conversations ran in both with nothing noticing" (YedPool/wezfleet 0e1c75a).
-        [void]$duplicates.Add([pscustomobject]@{ sessionId = $sid; sources = @($all | ForEach-Object { $_.record.source }); agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique) })
+        # allStale: EVERY file is proven stale (its process gone, or its pid now another process), so nothing
+        # named by it is running. It is still a duplicate here - none is chosen, and complete is as it was -
+        # but the restore source does not count it (core/RestoreSource.ps1, T-0116). One file that cannot be
+        # checked, or is verified, makes it false: that tie stays a real one.
+        $staleAll = (@($all | Where-Object { @("gone", "reused") -ccontains "$($_.record.processCheck)" }).Count -eq $all.Count)
+        [void]$duplicates.Add([pscustomobject]@{ sessionId = $sid; sources = @($all | ForEach-Object { $_.record.source }); agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique); allStale = $staleAll })
         foreach ($x in $all) {
             if (-not $dupGaps.ContainsKey($x.agent)) { $dupGaps[$x.agent] = New-Object System.Collections.ArrayList }
             if ($dupGaps[$x.agent] -notcontains $sid) { [void]$dupGaps[$x.agent].Add($sid) }

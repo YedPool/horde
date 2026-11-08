@@ -296,7 +296,7 @@ function Invoke-HordeWakeTick {
                 $dp = $read.PSObject.Properties["duplicates"]
                 if ($null -ne $dp) { $dupList = @($dp.Value) }
                 $dupCount = $dupList.Count
-                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount
+                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted

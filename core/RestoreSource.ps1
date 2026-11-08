@@ -68,6 +68,12 @@ function Get-HordeRestoreSettings {
         restoreSettleSeconds = 120
         # With no session moved this long after the last one started, the warchief is told.
         stallSeconds = 300
+        # A stall notice held back because a session named by more than one control file is uncounted is
+        # held at most this long past stallSeconds (T-0116). A duplicate is normally one stray copy a
+        # person closes within minutes; 30 minutes is long enough for that, and far inside
+        # restoreMaxAgeSeconds, after which the restore is history and a notice held for ever would be
+        # lost for good. Past it the warchief gets a true notice that names the sessions that could not be read.
+        stallHeldSeconds = 1800
         # A restore older than this is history: nothing is planned for it any more.
         restoreMaxAgeSeconds = 86400
         # The hub label a resume mail wears as its sender. A messenger that knows senders by session id
@@ -79,6 +85,7 @@ function Get-HordeRestoreSettings {
         # BOTH TEXTS SAY FIRST THAT THEY ARE AUTOMATED: the reader is an agent session, and it must not
         # take a machine's line for a person's instruction or answer it as one (review of PR #208).
         resumeText = "AUTOMATED, from the restore source: START OR RESTORE. Every session on this machine was started or restored together and you have not taken a turn since. Background agents and shell commands from before did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and mail the subsessions you still need: they are not woken unless you ask."
+        stallDuplicatesText = "AUTOMATED, from the restore source: STALLED START OR RESTORE, BUT NOT ALL SESSIONS COULD BE READ. Every session on this machine that could be read was started or restored together and none of them has taken a turn since. {0} session(s) are each named by more than one control file and could not be told apart, so they were not counted and one of them may have moved: {1}. Each orc was told to resume. Check the sessions you still need."
         stallText = "AUTOMATED, from the restore source: STALLED START OR RESTORE. Every session on this machine was started or restored together and none has taken a turn since. Each orc was told to resume. Check the sessions you still need."
     }
     foreach ($k in @($Overrides.Keys)) {
@@ -159,7 +166,7 @@ function Get-HordeRestoreFinding {
     # orc is sent the one resume line, which is harmless to a session that has in fact moved. No cheap
     # and sound second signal of a turn was found: the registry's lastSeen is rewritten by the start hook,
     # so it says nothing of a turn, and reading a transcript is neither cheap nor this module's to do.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), $Known = @(), [int]$UncountedDuplicates = 0)
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @())
     if ($UncountedDuplicates -lt 0) { $UncountedDuplicates = 0 }
     $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
     $lived = @($all | Where-Object { $_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds })
@@ -207,7 +214,7 @@ function Get-HordeRestoreFinding {
     }
     $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $windowOfAnchor.from; windowEnd = $windowOfAnchor.until; members = $starts }
     $notMoved = @($members | Where-Object { $_.moved -ceq "no" } | ForEach-Object { $_.id })
-    return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor; uncountedDuplicates = $UncountedDuplicates }) -ObservedAt $Now)
+    return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor; uncountedDuplicates = $UncountedDuplicates; duplicateNames = @($DuplicateNames) }) -ObservedAt $Now)
 }
 
 function Test-HordeRestoreSame {
@@ -276,10 +283,26 @@ function Get-HordeResumePlan {
     }
     $dupes = 0
     if ($null -ne $f.PSObject.Properties["uncountedDuplicates"]) { $dupes = [int]$f.uncountedDuplicates }
-    if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {
+    $heldFor = $Settings.stallSeconds
+    if ($null -ne $Settings.PSObject.Properties["stallHeldSeconds"]) { $heldFor = $Settings.stallSeconds + $Settings.stallHeldSeconds }
+    if ($sinceEnd -ge $heldFor -and $movedIds.Count -eq 0 -and $dupes -gt 0) {
+        # THE HOLD HAS A BOUND (T-0116, stallHeldSeconds): a notice held for ever is lost once the restore is
+        # history. Past the bound the warchief is told what is true - nothing counted moved, and these
+        # sessions could not be read. It is the stall notice's own mail id, so it is posted once, counts as
+        # told only when taken, and the plain notice that would follow if the duplicates clear is the same
+        # mail and is not sent a second time.
+        $chief = @($f.members | Where-Object { $_.role -ceq "warchief" }) | Select-Object -First 1
+        $to = ""
+        if ($null -ne $chief) { $to = $chief.id }
+        $names = @()
+        if ($null -ne $f.PSObject.Properties["duplicateNames"]) { $names = @($f.duplicateNames) }
+        $namesText = "unnamed"
+        if ($names.Count -gt 0) { $namesText = ($names -join ", ") }
+        [void]$plan.Add([pscustomobject]@{ kind = "stall"; to = $to; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-stall`n" + $f.restoreId)); body = ("$($Settings.stallDuplicatesText)" -f $dupes, $namesText) })
+    } elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {
         # NO STALL NOTICE WHILE A DUPLICATE LASTS (T-0116): the duplicate may be the one that moved. A
         # held kind is planned so the pass can say so once; the notice itself comes once the duplicate
-        # clears, if it is still true.
+        # clears (or the bound above passes), if it is still true.
         [void]$plan.Add([pscustomobject]@{ kind = "stall-held"; to = ""; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-stall-held`n" + $f.restoreId)); body = "" })
     } elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {
         $chief = @($f.members | Where-Object { $_.role -ceq "warchief" }) | Select-Object -First 1
@@ -303,7 +326,7 @@ function Invoke-HordeRestoreSourcePass {
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0)
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @())
     $entries = New-Object System.Collections.ArrayList
     # WHAT IS OLDER THAN A RESTORE CAN BE IS DROPPED, from both tables: a restore older than
     # restoreMaxAgeSeconds is history and plans nothing, so neither its mails' ids nor its window can
@@ -316,7 +339,7 @@ function Invoke-HordeRestoreSourcePass {
             if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }
         }
     }
-    $finding = Get-HordeRestoreFinding -Sessions $Sessions -Now $Now -Settings $Settings -Known $Known -UncountedDuplicates $UncountedDuplicates
+    $finding = Get-HordeRestoreFinding -Sessions $Sessions -Now $Now -Settings $Settings -Known $Known -UncountedDuplicates $UncountedDuplicates -DuplicateNames $DuplicateNames
     $nextKnown = @(@($Known) | Where-Object { $null -ne $_ -and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })
     if ($finding.state -ceq "known") { $nextKnown = @(@($nextKnown | Where-Object { "$($_.restoreId)" -cne $finding.value.anchor.restoreId }) + $finding.value.anchor) }
     foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
@@ -435,6 +458,12 @@ function Get-HordeRestoreSessions {
     if ($null -ne $Identity.PSObject.Properties["duplicates"]) {
         foreach ($d in @($Identity.duplicates)) {
             if ($null -eq $d) { continue }
+            # A DUPLICATE WHOSE FILES ARE ALL PROVEN STALE IS NOT RUNNING (T-0116, core/Identity.ps1 allStale):
+            # a ghost, like every dead session, is no session seen alive, so it is not in the denominator
+            # either. That cannot make a false restore: the share is taken among running sessions with an
+            # earlier life, and a session that is not running was never among them. A tie where any file is
+            # verified or cannot be checked is not stale and is still counted.
+            if ($null -ne $d.PSObject.Properties["allStale"] -and $d.allStale -eq $true) { continue }
             $agents = @()
             if ($null -ne $d.PSObject.Properties["agents"]) { $agents = @($d.agents) }
             $counted = ($agents.Count -eq 0)

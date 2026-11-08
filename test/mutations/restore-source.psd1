@@ -185,8 +185,8 @@
            Find = 'if ($lived.Count -lt $Settings.restoreMinSessions) { return'
            Replace = 'if (($lived.Count + $UncountedDuplicates) -lt $Settings.restoreMinSessions) { return' }
         @{ Name = "stall-notice-while-a-duplicate-lasts"
-           Find = '-and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
-           Replace = '-and $movedIds.Count -eq 0 -and $false) {' }
+           Find = '} elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
+           Replace = '} elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $false) {' }
         @{ Name = "held-stall-not-journaled"
            Find = 'if ($mail.kind -ceq "stall-held") {'
            Replace = 'if ($false) {' }
@@ -202,5 +202,35 @@
         @{ Name = "uncounted-duplicates-not-handed-to-the-finding"
            Find = '-Known $Known -UncountedDuplicates $UncountedDuplicates'
            Replace = '-Known $Known' }
+        @{ Name = "held-shares-the-stall-id"
+           Find = '("horde-wake-stall-held`n" + $f.restoreId)'
+           Replace = '("horde-wake-stall`n" + $f.restoreId)' }
+        @{ Name = "held-though-something-moved"
+           Find = '} elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
+           Replace = '} elseif ($sinceEnd -ge $Settings.stallSeconds -and $dupes -gt 0) {' }
+        @{ Name = "held-before-the-stall-time"
+           Find = '} elseif ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
+           Replace = '} elseif ($movedIds.Count -eq 0 -and $dupes -gt 0) {' }
+        @{ Name = "negative-duplicates-allowed"
+           Find = 'if ($UncountedDuplicates -lt 0) { $UncountedDuplicates = 0 }'
+           Replace = '' }
+        @{ Name = "duplicate-only-in-a-left-out-agent-counted"
+           Find = '$counted = ($agents.Count -eq 0)'
+           Replace = '$counted = $true' }
+        @{ Name = "stall-hold-unbounded"
+           Find = '$heldFor = $Settings.stallSeconds + $Settings.stallHeldSeconds'
+           Replace = '$heldFor = $Settings.stallSeconds + 99999999' }
+        @{ Name = "bounded-notice-without-names"
+           Find = '-f $dupes, $namesText)'
+           Replace = '-f $dupes, "unnamed")' }
+        @{ Name = "bounded-notice-though-something-moved"
+           Find = 'if ($sinceEnd -ge $heldFor -and $movedIds.Count -eq 0 -and $dupes -gt 0) {'
+           Replace = 'if ($sinceEnd -ge $heldFor -and $dupes -gt 0) {' }
+        @{ Name = "bounded-notice-has-its-own-id"
+           Find = 'messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-stall`n" + $f.restoreId)); body = ("$($Settings.stallDuplicatesText)"'
+           Replace = 'messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-stall-bounded`n" + $f.restoreId)); body = ("$($Settings.stallDuplicatesText)"' }
+        @{ Name = "stale-duplicate-counted"
+           Find = '$d.allStale -eq $true) { continue }'
+           Replace = '$d.allStale -eq $false) { continue }' }
     )
 }

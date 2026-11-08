@@ -366,6 +366,22 @@ Check (@($r16d.duplicates | Where-Object { $_.sessionId -eq (Sid 96) }).Count -e
 $r16e = Get-HordeIdentity -ClaudeDir $d16c -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(614, "claude.exe", (Created 0)), @(615, "claude.exe", (Created 70)))) -Now $now
 Check ($r16e.wholeButDuplicates["claude"] -eq $true) "a tie with a file that cannot be checked is a duplicate, named, and the listing is short only by it"
 
+# T-0116 round 2: a duplicate whose files are ALL proven stale is flagged allStale; a real tie is not.
+$d16f = NewDir "claude"
+PutJson (Join-Path $d16f "631.json") (ClaudeRec 631 (Sid 97) (Created 0))
+PutJson (Join-Path $d16f "632.json") (ClaudeRec 632 (Sid 97) (Created 5))
+PutJson (Join-Path $d16f "633.json") (ClaudeRec 633 (Sid 98) (Created 5))
+$r16f = Get-HordeIdentity -ClaudeDir $d16f -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(633, "claude.exe", (Created 5)))) -Now $now
+$ghostDup = @($r16f.duplicates | Where-Object { $_.sessionId -eq (Sid 97) })
+Check ($ghostDup.Count -eq 1 -and $ghostDup[0].allStale -eq $true -and (St $r16f.complete.claude) -eq "unknown" -and $r16f.wholeButDuplicates["claude"] -eq $true) "two files for one id whose processes are both gone: still a duplicate and complete unchanged, but flagged allStale"
+Check ($dup[0].allStale -eq $false -and @($r16c.duplicates)[0].allStale -eq $false) "two verified files, or a file that cannot be checked beside a live one, are not allStale: a real tie stays one"
+$d16g = NewDir "claude"
+PutJson (Join-Path $d16g "641.json") (ClaudeRec 641 (Sid 99) (Created 0))
+PutJson (Join-Path $d16g "642.json") (ClaudeRec 642 (Sid 99) (Created 5) -Drop @("procStart"))
+$r16g = Get-HordeIdentity -ClaudeDir $d16g -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(641, "claude.exe", (Created 500)), @(642, "claude.exe", (Created 5)))) -Now $now
+$halfDup = @($r16g.duplicates | Where-Object { $_.sessionId -eq (Sid 99) })
+Check ($halfDup.Count -eq 1 -and $halfDup[0].allStale -eq $false) "one file proven gone beside one that cannot be checked is not allStale: never chosen, and still counted"
+
 # A FILE REMOVED BETWEEN THE LISTING AND THE READ. Claude removes a session's file when it exits, so
 # on a live machine a file can be listed and gone a moment later. That is the session exiting during
 # the read - a finding - not an unreadable file that makes the listing incomplete (review finding 5 of

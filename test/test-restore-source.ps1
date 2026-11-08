@@ -523,6 +523,61 @@ Check ((Kinds $h3) -ceq "stall" -and $h3.entries[0].outcome -ceq "posted" -and @
 $hs = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -Shadow -UncountedDuplicates 1
 Check ((@($hs.entries | ForEach-Object { $_.kind }) -contains "would-stall") -eq $false -and @($hs.entries | Where-Object { $_.outcome -ceq "held" }).Count -eq 1) "in shadow the held stall is journaled held, not would-stall"
 
+Write-Host ""
+Write-Host "--- T-0116 round 2: the hold is bounded, ghosts are not counted, and the edges of the hold ---" -ForegroundColor Cyan
+
+# THE EDGES OF THE HOLD: held only when the stall is due AND nothing moved.
+$movedHeld = Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 7 = "busy" }) -Now (At ($end + 300)) -Settings $settings -UncountedDuplicates 1
+$planMovedHeld = @(Get-HordeResumePlan -Finding $movedHeld -Now (At ($end + 300)) -Settings $settings)
+Check (@($planMovedHeld | Where-Object { $_.kind -ceq "stall-held" -or $_.kind -ceq "stall" }).Count -eq 0) "something moved and a duplicate is uncounted: nothing is held and no stall is planned, there is nothing to hold back"
+$earlyHeld = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 100)) -Settings $settings -UncountedDuplicates 1
+Check (@(Get-HordeResumePlan -Finding $earlyHeld -Now (At ($end + 100)) -Settings $settings | Where-Object { $_.kind -ceq "stall-held" -or $_.kind -ceq "stall" }).Count -eq 0) "before the stall time nothing is held either: the held line is for a stall that would have been sent"
+$negative = Get-HordeRestoreFinding -Sessions $threeTogether -Now $t0 -Settings $settings -UncountedDuplicates -2
+Check ($negative.state -ceq "known" -and $negative.value.uncountedDuplicates -eq 0) "a negative duplicate count is no count: it can neither raise the share nor read as a duplicate"
+
+Check (@(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 7 = "busy" }) -Now (At ($end + 2100)) -Settings $settings -UncountedDuplicates 1) -Now (At ($end + 2100)) -Settings $settings | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "past the bound, with something moved, no notice is sent: it is not true that nothing moved"
+
+# THE BOUND: held to stallSeconds + stallHeldSeconds, then the warchief is told the truth.
+$bound = $settings.stallSeconds + $settings.stallHeldSeconds
+Check ($settings.stallHeldSeconds -eq 1800 -and $bound -lt $settings.restoreMaxAgeSeconds) "the hold is bounded at 1800 s past the stall time, far inside the age after which a restore is history"
+$dupNames = @((Sid 91), (Sid 92))
+$fBound = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + $bound)) -Settings $settings -UncountedDuplicates 2 -DuplicateNames $dupNames
+$planBound = @(Get-HordeResumePlan -Finding $fBound -Now (At ($end + $bound)) -Settings $settings)
+$boundStall = @($planBound | Where-Object { $_.kind -ceq "stall" })
+Check ($boundStall.Count -eq 1 -and $boundStall[0].to -ceq (Sid 1) -and @($planBound | Where-Object { $_.kind -ceq "stall-held" }).Count -eq 0) "at the bound the hold ends: the warchief is sent a stall notice, and no held line"
+Check ($boundStall.Count -eq 1 -and $boundStall[0].body.StartsWith("AUTOMATED, from the restore source: ") -and $boundStall[0].body.Contains("2 session(s)") -and $boundStall[0].body.Contains((Sid 91)) -and $boundStall[0].body.Contains((Sid 92)) -and $boundStall[0].body -cne $settings.stallText) "and it says what is true: nothing counted moved, and it names the sessions that could not be read"
+$fBefore = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + $bound - 1)) -Settings $settings -UncountedDuplicates 2 -DuplicateNames $dupNames
+Check (@(Get-HordeResumePlan -Finding $fBefore -Now (At ($end + $bound - 1)) -Settings $settings | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "one second before the bound it is still held"
+$fPlain = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + $bound)) -Settings $settings
+$plainStall = @(Get-HordeResumePlan -Finding $fPlain -Now (At ($end + $bound)) -Settings $settings | Where-Object { $_.kind -ceq "stall" })
+Check ($plainStall.Count -eq 1 -and $plainStall[0].messageId -ceq $boundStall[0].messageId) "the notice after the bound and the plain notice are one mail id: told once between them"
+# Through the pass: posted once, counted as told only when taken.
+$script:postWorks = $false
+$script:mails.Clear()
+$b1 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + $bound)) -Settings $settings -Post $poster -Posted @{} -UncountedDuplicates 2 -DuplicateNames $dupNames
+$b1Stall = @($b1.entries | Where-Object { $_.kind -ceq "stall" })
+Check ($b1Stall.Count -eq 1 -and $b1Stall[0].outcome -ceq "unknown" -and -not $b1.posted.ContainsKey($boundStall[0].messageId)) "a notice the mailbox did not take is journaled unknown and is not marked told"
+$script:postWorks = $true
+$script:mails.Clear()
+$b2 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + $bound + 3)) -Settings $settings -Post $poster -Posted $b1.posted -Known $b1.known -UncountedDuplicates 2 -DuplicateNames $dupNames
+Check (@($script:mails | Where-Object { $_.kind -ceq "stall" }).Count -eq 1 -and $b2.posted.ContainsKey($boundStall[0].messageId)) "the next pass sends it, and then it is marked told"
+$script:mails.Clear()
+$b3 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + $bound + 6)) -Settings $settings -Post $poster -Posted $b2.posted -Known $b2.known -UncountedDuplicates 2 -DuplicateNames $dupNames
+$b4 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + $bound + 9)) -Settings $settings -Post $poster -Posted $b3.posted -Known $b3.known -UncountedDuplicates 0
+Check ($script:mails.Count -eq 0 -and @($b3.entries).Count -eq 0 -and @($b4.entries).Count -eq 0) "once told it is not told again, not on a later pass and not when the duplicates clear"
+
+# A GHOST: a session whose files are all proven stale is not running, and is not counted.
+$ghostIdentity = New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-one"); sources = @("c\501.json", "c\502.json"); allStale = $true })
+$ghost = Get-HordeRestoreSessions -Identity $ghostIdentity -Registry $dupRegistry
+Check ($ghost.state -ceq "known" -and @($ghost.duplicates).Count -eq 0 -and @($ghost.value).Count -eq 2) "a duplicate whose files are all proven stale is not counted, and the other sessions are still listed"
+$mixedIdentity = New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-one"); sources = @("c\501.json", "c\502.json"); allStale = $false })
+Check (@((Get-HordeRestoreSessions -Identity $mixedIdentity -Registry $dupRegistry).duplicates).Count -eq 1) "a tie where one file cannot be checked is still counted"
+Check (@((Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @($oneDup)) -Registry $dupRegistry).duplicates).Count -eq 1) "an identity that does not say allStale is counted as before"
+
+# A DUPLICATE ONLY IN A LEFT-OUT AGENT is already out of the count: it is not named as a cost.
+$leftOutDup = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-two"); sources = @("a", "b") })) -Registry $dupRegistry
+Check ($leftOutDup.state -ceq "known" -and @($leftOutDup.duplicates).Count -eq 0) "a duplicate that lives only in a left-out agent is not counted: that agent's sessions are all out already"
+
 } finally {
     Exit-HordeTestPinnedHome -State $pinned
     Exit-HordeTestEmptyFleet -Pin $fleetPin

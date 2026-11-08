@@ -194,5 +194,11 @@
         @{ Name = "duplicate-does-not-name-its-agents"
            Find = 'agents = @($all | ForEach-Object { "$($_.agent)" } | Select-Object -Unique) })'
            Replace = 'agents = @() })' }
+        @{ Name = "all-stale-never-set"
+           Find = 'allStale = $staleAll })'
+           Replace = 'allStale = $false })' }
+        @{ Name = "all-stale-on-any-stale-file"
+           Find = '"$($_.record.processCheck)" }).Count -eq $all.Count)'
+           Replace = '"$($_.record.processCheck)" }).Count -gt 0)' }
     )
 }
