@@ -42,7 +42,10 @@
 #      the holder keeps a record (-HolderFile: the run's process id, start time and script), and a later
 #      holder that finds a record of a run still alive - the same id AND the same start time, so a reused
 #      id is not mistaken for it - waits for that run to end first. A record that cannot be read is
-#      ignored: refusing on it would block every run for ever;
+#      ignored: refusing on it would block every run for ever. Since T-0445 the record also carries the worktree
+#      and the time the slot was taken (UTC), after the first three lines, which stay as every older reader reads
+#      them; a waiter that gives up on the slot, or has waited 10 s on it, names the holder from the record; and
+#      a slot log beside the record (.log) keeps one line per take, release and give-up, never the run's arguments;
 #   3. (the memory wait is step 1 now, before the slot);
 #   4. runs the script - a .ps1 under Windows PowerShell 5.1, a .mjs under node - with standard input
 #      closed and PSModulePath cleared, output to -Out, for at most -RunSeconds, INSIDE A KILL-ON-CLOSE
@@ -179,6 +182,42 @@ function Get-HordeHeavySlotLiveRun {
     return [pscustomobject]@{ pid = $runPid; script = $rec[2].Trim(); process = $p }
 }
 
+function Get-HordeHeavySlotHolderText {
+    # WHO HOLDS THE SLOT, in words, from its holder record (T-0445: on 2026-11-07 a bisect gave up after 900 s and
+    # nothing could name what held the slot). Lines 1 to 3 are the run's id, its start ticks and its script, as every
+    # older reader reads them; a gate since T-0445 adds its worktree and the time it took the slot (UTC). The post-merge
+    # monitor writes the first three only. Never fatal: a waiter must still give up and close with its line.
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "a holder that keeps no record here (or one between its take and its record)" }
+        $rec = @(([System.IO.File]::ReadAllText($Path) -split "`n") | ForEach-Object { $_.Trim() })
+        if ($rec.Count -lt 3 -or $rec[2] -eq "") { return "a holder whose record cannot be read" }
+        $t = $rec[2] + " (process " + $rec[0]
+        if ($rec.Count -gt 3 -and $rec[3] -ne "") { $t += ", worktree " + $rec[3] }
+        if ($rec.Count -gt 4 -and $rec[4] -ne "") { $t += ", since " + $rec[4] }
+        return ($t + ")")
+    } catch { return "a holder whose record cannot be read" }
+}
+
+function Write-HordeHeavySlotLog {
+    # THE SLOT LOG (T-0445): one line per take, release and give-up, beside the holder record, so a wait can be traced to
+    # its holder afterwards. Only the time, the gate's id, the script's name, the worktree, the seconds waited and the exit:
+    # never the run's arguments, which may carry paths or secrets. Over 1 MB it is moved to .1 (one old copy) by a gate
+    # that holds the slot. A write that fails costs one warning and never the run: no retry, so it never adds a wait.
+    param([string]$Event, [string]$Exit = "")
+    try {
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($script:slotLog))
+        if ($Event -ceq "take" -and (Test-Path -LiteralPath $script:slotLog -PathType Leaf) -and (Get-Item -LiteralPath $script:slotLog).Length -gt 1MB) {
+            Move-Item -LiteralPath $script:slotLog -Destination ($script:slotLog + ".1") -Force
+        }
+        $line = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") + " " + $Event + " pid=" + $PID + " script=" + $Script + " worktree=" + $Worktree + " waited=" + $script:waited
+        if ($Exit -ne "") { $line += " exit=" + $Exit }
+        [System.IO.File]::AppendAllText($script:slotLog, $line + "`r`n")
+    } catch {
+        if (-not $script:logWarned) { $script:logWarned = $true; Write-HordeHeavySlotLine ("heavy-slot: WARNING - the slot log " + $script:slotLog + " could not be written (" + $_.Exception.Message + "); the run is not affected") }
+    }
+}
+
 function Test-HordeHeavySlotNetClaim {
     # Does the net's first claim exist? A name we may not open still exists, so it counts; any other error is no claim:
     # refusing on it would block every run for ever.
@@ -224,6 +263,8 @@ foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and $a -match '
 $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
 # The record lives where every agent of this user finds it, whatever TEMP each was given.
 if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }
+# The slot log sits beside the record, so a suite's own -HolderFile gives it its own log too.
+$script:slotLog = [System.IO.Path]::ChangeExtension($HolderFile, ".log")
 $path = Join-Path $Worktree $Script
 if ($Out -eq "") { $Out = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-heavy-slot-" + [System.IO.Path]::GetFileNameWithoutExtension($Script) + ".txt") }
 
@@ -233,6 +274,11 @@ $script:code = 125
 $script:mutex = $null
 $script:held = $false
 $script:job = $null
+$script:everHeld = $false
+$script:waited = 0
+$script:takenAt = ""
+$script:logWarned = $false
+$script:holderSaid = $false
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $left = { [int][math]::Max(0, $WaitSeconds - $clock.Elapsed.TotalSeconds) }
 $slice = 500
@@ -257,6 +303,11 @@ $main = {
             param($ms)
             try { $script:held = $script:mutex.WaitOne($ms) }
             catch [System.Threading.AbandonedMutexException] { $script:held = $true; Write-HordeHeavySlotLine "heavy-slot: the last holder was killed before it released the slot" }
+            # Once, after 10 s on the slot itself: who is ahead, so a long wait names its cause (T-0445).
+            if (-not $script:held -and -not $script:holderSaid -and $clock.Elapsed.TotalSeconds -ge 10) {
+                $script:holderSaid = $true
+                Write-HordeHeavySlotLine ("heavy-slot: the slot is held by " + (Get-HordeHeavySlotHolderText -Path $HolderFile))
+            }
             return $script:held
         } `
         -ReleaseSlot { $script:mutex.ReleaseMutex(); $script:held = $false } `
@@ -268,9 +319,14 @@ $main = {
         if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its suite phase ends, at the latest about 05:45; nothing was run. Try again after that."); return }
         if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
+        Write-HordeHeavySlotLine ("heavy-slot: the slot is held by " + (Get-HordeHeavySlotHolderText -Path $HolderFile))
         Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")
         return
     }
+    $script:everHeld = $true
+    $script:waited = [int]$clock.Elapsed.TotalSeconds
+    $script:takenAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    Write-HordeHeavySlotLog -Event "take"
     # Measured 2026-10-14 on this PC: a holder killed with Stop-Process did NOT leave the mutex abandoned
     # for the next waiter, whose WaitOne simply returned true, so the record, not the mutex, says a holder
     # did not finish: a record still there with its run gone is a holder that never reached its finally.
@@ -303,7 +359,8 @@ $main = {
     # Recorded BEFORE it runs: a holder killed at any moment after this leaves a record of a live run.
     [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($HolderFile))
     $start = (Get-Process -Id $job.pid).StartTime.ToUniversalTime().Ticks
-    [System.IO.File]::WriteAllText($HolderFile, ("" + $job.pid + "`n" + $start + "`n" + $Script + "`n"))
+    # Lines 1 to 3 exactly as every older reader reads them (pid, start ticks, script); new fields only after (T-0445).
+    [System.IO.File]::WriteAllText($HolderFile, ("" + $job.pid + "`n" + $start + "`n" + $Script + "`n" + $Worktree + "`n" + $script:takenAt + "`n"))
     [HordeHeavySlotJobV1]::Resume([long]$made[2])
     $runClock = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not [HordeHeavySlotJobV1]::Wait($job.process, $slice)) {
@@ -331,6 +388,9 @@ finally {
         [HordeHeavySlotJobV1]::Close($job.job)
         try { if (Test-Path -LiteralPath $HolderFile) { $first = ([System.IO.File]::ReadAllText($HolderFile) -split "`n")[0].Trim(); if ($first -eq ("" + $job.pid)) { Remove-Item -LiteralPath $HolderFile -Force } } } catch { }
     }
+    # Logged while still held, so the next take's line always comes after this release's.
+    if ($held) { Write-HordeHeavySlotLog -Event "release" -Exit ("" + $code) }
+    elseif (-not $everHeld -and ($code -eq 125 -or $code -eq 128)) { $script:waited = [int]$clock.Elapsed.TotalSeconds; Write-HordeHeavySlotLog -Event "gave-up" -Exit ("" + $code) }
     if ($held) { $mutex.ReleaseMutex() }
     if ($null -ne $mutex) { $mutex.Dispose() }
     Write-HordeHeavySlotLine ("heavy-slot: released exit=" + $code)
