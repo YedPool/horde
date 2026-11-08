@@ -274,8 +274,8 @@
            Find = 'baseRefName = $BaseRef; pr = $Request.pr;'
            Replace = 'baseRefName = ""; pr = $Request.pr;' }
         @{ Name = "owed-line-repo-case-kept"
-           Find = 'repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant();'
-           Replace = 'repo = ($Request.owner + "/" + $Request.repo);' }
+           Find = '$entry = [ordered]@{ repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant();'
+           Replace = '$entry = [ordered]@{ repo = ($Request.owner + "/" + $Request.repo);' }
         @{ Name = "tell-says-queued-when-it-was-not"
            Find = 'if ($Check.skipped -eq $true -and $NotQueued) { return'
            Replace = 'if ($false) { return' }

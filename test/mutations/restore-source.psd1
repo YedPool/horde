@@ -17,7 +17,7 @@
            Find = 'if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {'
            Replace = 'if ($true) {' }
         @{ Name = "restore-share-ignored"
-           Find = 'if (($best.Count / $lived.Count) -lt $Settings.restoreShare) {'
+           Find = 'if (($best.Count / $denominator) -lt $Settings.restoreShare) {'
            Replace = 'if ($false) {' }
         @{ Name = "spawned-session-counted-as-restored"
            Find = '$_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds }'
@@ -26,8 +26,8 @@
            Find = '$_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds }'
            Replace = '$_.firstSeenAt -is [datetime] }' }
         @{ Name = "share-taken-among-every-session"
-           Find = 'if (($best.Count / $lived.Count) -lt $Settings.restoreShare) {'
-           Replace = 'if (($best.Count / $all.Count) -lt $Settings.restoreShare) {' }
+           Find = '$denominator = $lived.Count + $UncountedDuplicates'
+           Replace = '$denominator = $all.Count + $UncountedDuplicates' }
         @{ Name = "first-seen-not-carried"
            Find = 'status = "$($status.value)"; firstSeenAt = $firstSeenAt })'
            Replace = 'status = "$($status.value)"; firstSeenAt = $null })' }
