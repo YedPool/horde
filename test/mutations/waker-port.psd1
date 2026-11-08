@@ -102,8 +102,8 @@
            Find = 'if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "retired-is-not-carried"
-           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
-           Replace = 'reachable = [string]$reach.value; retired = "no" })' }
+           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value; duplicate = $dupWord })'
+           Replace = 'reachable = [string]$reach.value; retired = "no"; duplicate = $dupWord })' }
         @{ Name = "limited-not-carried"
            Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
            Replace = 'midTurn = $words["midTurn"]; limited = "no"; limitedUntil = $limitedUntil; betweenTurns' }

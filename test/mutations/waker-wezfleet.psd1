@@ -127,8 +127,8 @@
            Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
            Replace = 'if ("$($Row.label)" -ceq "") { return "unknown" }' }
         @{ Name = "the-listing-says-nobody-is-retired"
-           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })'
-           Replace = 'reachable = $row.reachable; retired = "no" })' }
+           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row); duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })'
+           Replace = 'reachable = $row.reachable; retired = "no"; duplicate = (Get-HordeWezfleetWakerDuplicate -Row $row) })' }
         @{ Name = "a-reset-with-no-zone-is-read-as-local"
            Find = '[ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }'
            Replace = '[ref]$parsed)) { $until = $parsed.ToUniversalTime() }' }

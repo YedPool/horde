@@ -24,8 +24,8 @@
            Find = '$(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] })'
            Replace = '$Run.duplicate["$dupId"]' }
         @{ Name = "count-change-says-it-again"
-           Find = 'if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } else'
-           Replace = 'if ($false) { $dupSaid["$id"] = $Run.duplicate["$id"] } else' }
+           Find = 'if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] }'
+           Replace = 'if ($false) { $dupSaid["$id"] = $Run.duplicate["$id"] }' }
         @{ Name = "duplicate-tell-is-made-only-on-the-first-pass"
            Find = 'foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {'
            Replace = 'foreach ($dupId in @($dupNow.entries | ForEach-Object { $_.id })) {' }

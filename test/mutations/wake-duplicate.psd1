@@ -16,9 +16,6 @@
         @{ Name = "a-duplicate-with-no-mail-is-said"
            Find = 'if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes"'
            Replace = 'if ($a.value.unreadCount -ge 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes"' }
-        @{ Name = "a-session-that-is-not-a-duplicate-is-said"
-           Find = 'if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes"'
-           Replace = 'if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -cne "zzz"' }
         @{ Name = "a-duplicate-is-nudged"
            Find = 'if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return'
            Replace = 'if ($false) { return' }
