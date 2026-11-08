@@ -31,12 +31,12 @@
            Find = 'Key "watcher-unread"'
            Replace = 'Key "watcher-unreadx"' }
         @{ Name = "reader-unreadable-state-forgotten"
-           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher reader check:'
-           Replace = 'if ($false) { return [pscustomobject]@{ lines = @("watcher reader check:' }
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check"' }
         # A state file that cannot be read fails closed: said, kept, not written over, not taken for a fresh one (SHOULD 1).
         @{ Name = "beat-unreadable-state-forgotten"
-           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher check:'
-           Replace = 'if ($false) { return [pscustomobject]@{ lines = @("watcher check:' }
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check"' }
         @{ Name = "state-with-an-unknown-tell-accepted"
            Find = 'else { throw "tell is not a known value" }'
            Replace = 'else { }' }
@@ -48,8 +48,8 @@
            Replace = '' }
         # THE PHONE ACCEPTING IS NOT THE EPISODE TOLD (MUST 1): the warchief's mail is looked at until it is taken, held or given up.
         @{ Name = "beat-phone-accept-ends-the-watch"
-           Find = '$over = (($St.tell -ceq "" -and $phoneKnows) -or'
-           Replace = '$over = ($phoneKnows -or' }
+           Find = '$over = (($St.tell -ceq "" -and $phoneKnows -and $words -ceq "off") -or'
+           Replace = '$over = (($St.tell -ceq "" -and $phoneKnows) -or' }
         @{ Name = "beat-stops-at-alerted-though-the-phone-refused"
            Find = 'if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }'
            Replace = 'if ($st.alerted) { return [pscustomobject]@{ lines = @() } }' }
@@ -120,5 +120,18 @@
         @{ Name = "beat-hung-limit-moved"
            Find = 'if ($age -gt $hungMin)'
            Replace = 'if ($age -gt ($hungMin + 1))' }
+        # An unreadable state file: kept, and a person is told once a day on the TAKEN rules (ROUND 4).
+        @{ Name = "unreadable-state-key-changed"
+           Find = '-Key $Key -Noun "UNREADABLE-STATE notice"'
+           Replace = '-Key "x" -Noun "UNREADABLE-STATE notice"' }
+        @{ Name = "unreadable-state-phone-never-told"
+           Find = 'if ($due -and $null -ne $Tools["Notify"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-state-phone-told-every-pass"
+           Find = '$due = (-not [System.IO.File]::Exists($pm)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))'
+           Replace = '$due = $true' }
+        @{ Name = "unreadable-state-logged-every-pass"
+           Find = 'if ($r.fresh) { [void]$lines.Add($Prefix + ": its state file cannot be read'
+           Replace = 'if ($true) { [void]$lines.Add($Prefix + ": its state file cannot be read' }
     )
 }

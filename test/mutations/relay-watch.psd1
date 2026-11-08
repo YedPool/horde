@@ -134,30 +134,6 @@
            Find = '$s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {'
            Replace = '$s.failures -ge 1) {' }
         # An unreadable state file is told, not a silent stop - and counted only when taken, once a day.
-        @{ Name = "unreadable-state-silent"
-           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return @() }'
-           Replace = 'if ($true) { return @() }' }
-        @{ Name = "unreadable-state-told-every-pass"
-           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return @() }'
-           Replace = '' }
-        @{ Name = "stopped-posted-again-while-awaited"
-           Find = 'if ($content -cmatch ''\A(posted|maybe) ([0-9]{1,9})\z'') {'
-           Replace = 'if ($false) {' }
-        @{ Name = "stopped-unknown-never-posted-again"
-           Find = '        $again = $true'
-           Replace = '        $again = $false' }
-        @{ Name = "stopped-unknown-kept-as-posted"
-           Find = '{ & $setMark ($w.state + " " + $day) }'
-           Replace = '{ & $setMark ("posted " + $day) }' }
-        @{ Name = "stopped-taken-not-recorded"
-           Find = 'if ($t -ceq "taken") { & $setMark "told";'
-           Replace = 'if ($t -ceq "taken") {' }
-        @{ Name = "stopped-marked-though-refused"
-           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark'
-           Replace = 'if ($true) { & $setMark' }
-        @{ Name = "stopped-id-ignores-the-day"
-           Find = '-Key "relay-stopped" -Gen $day -Text'
-           Replace = '-Key "relay-stopped" -Gen 0 -Text' }
         # A state an earlier version wrote still reads; a value that is not known is unreadable, not guessed.
         @{ Name = "state-with-an-unknown-tell-value-accepted"
            Find = 'else { throw ($k + " is not a known value") }'

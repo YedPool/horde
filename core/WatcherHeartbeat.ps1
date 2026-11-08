@@ -120,7 +120,7 @@ function Read-HordeWatcherBeatState {
         if ($null -ne $tp) { if (@("", "posted", "maybe", "held", "lost", "taken") -ccontains ("" + $tp.Value)) { $s.tell = "" + $tp.Value } else { throw "tell is not a known value" } }
         if ($null -ne $doc.PSObject.Properties["tellAt"]) { $s.tellAt = ConvertTo-HordeWatcherTime -Value $doc.tellAt }
         $pp = $doc.PSObject.Properties["phoneAbout"]
-        if ($null -ne $pp) { if (@("", "posted", "maybe", "copy", "none", "held", "lost", "taken", "legacy") -ccontains ("" + $pp.Value)) { $s.phoneAbout = "" + $pp.Value } else { throw "phoneAbout is not a known value" } }
+        if ($null -ne $pp) { if (@("", "posted", "maybe", "copy", "none", "off", "held", "lost", "taken", "legacy") -ccontains ("" + $pp.Value)) { $s.phoneAbout = "" + $pp.Value } else { throw "phoneAbout is not a known value" } }
         elseif ($s.alerted) { $s.phoneAbout = "legacy" }
     } catch { $s = New-HordeWatcherBeatState -Gen 0; $s.unreadable = $true }
     return $s
@@ -191,8 +191,9 @@ function Invoke-HordeWatcherEpisode {
     #   2. a notice not posted, or one whose result was unknown, is posted (again, same id); a posted one is not;
     #   3. the founder's phone is told what is known of the warchief's mail - once, and once more when that mail is held or given up - and a phone
     #      that refused is tried again on every later pass until it takes it, even after TAKEN;
-    #   4. the episode counts as told (alerted) only when the warchief's session TOOK his mail, or when no mail of his is in play (none posted,
-    #      telling off) and the phone took the notice, or when his mail was held or given up and the phone was told so.
+    #   4. the episode counts as told (alerted) only when the warchief's session TOOK his mail, or when telling is off (there is no Tell tool: no
+    #      mail of his is ever in play) and the phone took the notice, or when his mail was held or given up and the phone was told so. A mail
+    #      that was REFUSED (a short absence of his seat, say) is posted again, under the same id, on every later pass until it is taken, held or given up.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$St, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$PhoneText, [Parameter(Mandatory = $true)][string]$WarchiefBody, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Label)
     $lines = New-Object System.Collections.ArrayList
     $before = ("" + $St.alerted + "|" + $St.tell + "|" + $St.tellAt + "|" + $St.phoneAbout)
@@ -217,12 +218,35 @@ function Invoke-HordeWatcherEpisode {
     }
     if (-not $St.alerted) {
         $phoneKnows = ($St.phoneAbout -cne "")
-        $over = (($St.tell -ceq "" -and $phoneKnows) -or ($lost -and ($St.phoneAbout -ceq "held" -or $St.phoneAbout -ceq "lost")))
+        # Only TELLING OFF (no Tell tool) ends it on the phone's accept: a refused mail (none, copy) is posted again, same id, on every later pass.
+        $over = (($St.tell -ceq "" -and $phoneKnows -and $words -ceq "off") -or ($lost -and ($St.phoneAbout -ceq "held" -or $St.phoneAbout -ceq "lost")))
         if ($over) { $St.alerted = $true; $St.since = $Now }
     }
     if ($null -ne $phoneLine) { [void]$lines.Add($phoneLine) }
     if ($null -ne $postLine) { [void]$lines.Add($postLine) }
     if ($before -cne ("" + $St.alerted + "|" + $St.tell + "|" + $St.tellAt + "|" + $St.phoneAbout)) { Write-HordeWatcherBeatState -Path $StatePath -State $St }
+    return @($lines.ToArray())
+}
+
+function Send-HordeWatcherUnreadable {
+    # The check's own state file cannot be read: it is NOT overwritten (a live episode in it would be forgotten) and it is NOT silent. A person is
+    # told, at most once a day, on the TAKEN rules (core/WatchTell.ps1, Send-HordeWatchDailyTell, its mark beside the state file in <state>.told: mark
+    # first, the same id on a retry, a post whose result was unknown posted again, the 7-day give-up from the first post): the warchief's mail, and
+    # the founder's phone (<state>.phone holds the day; a phone that refuses is tried again on every pass). The log says it once a day too.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Prefix, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Subject)
+    $lines = New-Object System.Collections.ArrayList
+    $text = $Subject + " cannot read its state file, so it is not alarming about the overseer watcher until the file is mended or removed. It is " + $StatePath + "."
+    $r = Send-HordeWatchDailyTell -Tools $Tools -MarkPath ($StatePath + ".told") -Prefix $Prefix -Key $Key -Noun "UNREADABLE-STATE notice" -Now $Now -Text ("WATCHER CHECK BLIND`n" + $text)
+    if ($r.fresh) { [void]$lines.Add($Prefix + ": its state file cannot be read, so nothing is checked until it is mended or removed (" + $StatePath + ")") }
+    foreach ($l in @($r.lines)) { [void]$lines.Add($l) }
+    $pm = $StatePath + ".phone"
+    $due = (-not [System.IO.File]::Exists($pm)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))
+    if ($due -and $null -ne $Tools["Notify"]) {
+        $words = $(if ($r.state -cne "") { " " + (Get-HordeWatcherPhoneWords -State $r.state) } else { "" })
+        $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text ($text + $words) -Who "the founder's phone"
+        [void]$lines.Add($n.line)
+        if ($n.ok) { try { [System.IO.File]::WriteAllText($pm, "told"); [System.IO.File]::SetLastWriteTimeUtc($pm, $Now) } catch { } }
+    }
     return @($lines.ToArray())
 }
 
@@ -234,7 +258,7 @@ function Invoke-HordeWatcherHeartbeat {
     $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $v = Get-HordeWatcherVerdict -Run (Read-HordeWatcherRun -Path $RunPath) -Now $now -Policy $Policy
     $st = Get-HordeWatcherBeatStateSeeded -Path $StatePath -Now $now
-    if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher check: its state file cannot be read, so nothing is checked or told until it is mended or removed (" + $StatePath + ")") } }
+    if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check" -Key "watcher-unreadable" -Subject "The overseer watcher check") } }
     if ($v.stale) {
         # Done once the episode counts as told AND the phone was told; until then the warchief's mail is looked at and the phone is tried again.
         if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }
@@ -303,7 +327,7 @@ function Invoke-HordeWatcherReaderCheck {
     $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $v = Get-HordeWatcherReaderVerdict -SelfPath $SelfPath -MailRoot $MailRoot -Now $now -Policy $Policy
     $st = Get-HordeWatcherBeatStateSeeded -Path $StatePath -Now $now
-    if ($st.unreadable) { return [pscustomobject]@{ lines = @("watcher reader check: its state file cannot be read, so nothing is told until it is mended or removed (" + $StatePath + ")") } }
+    if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check" -Key "watcher-reader-unreadable" -Subject "The overseer alarm-reader check") } }
     if ($v.stale -and $st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }
     if (-not $v.stale) {
         if ($st.alerted -or $st.tell -cne "" -or $st.phoneAbout -cne "") { Write-HordeWatcherBeatState -Path $StatePath -State (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1)) }

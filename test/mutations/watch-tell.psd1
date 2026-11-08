@@ -67,7 +67,35 @@
            Replace = 'if ($false) { return "" }' }
         # A tool that is off tells nobody.
         @{ Name = "off-tell-says-posted"
-           Find = 'return [pscustomobject]@{ ok = $false; state = "none"; line = ($Prefix + ": would tell "'
+           Find = 'return [pscustomobject]@{ ok = $false; state = "off"; line = ($Prefix + ": would tell "'
            Replace = 'return [pscustomobject]@{ ok = $true; state = "posted"; line = ($Prefix + ": would tell "' }
+        # The daily notice (the STOPPED notice, the watcher check's unreadable state): once a day, on the TAKEN rules, the first post's time kept.
+        @{ Name = "daily-notice-never-posted"
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }'
+           Replace = 'if ($true) { return (& $done $false "") }' }
+        @{ Name = "daily-notice-posted-every-pass"
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }'
+           Replace = '' }
+        @{ Name = "daily-notice-posted-again-while-awaited"
+           Find = 'if ($content -cmatch ''\A(posted|maybe) ([0-9]{1,9})\z'') {'
+           Replace = 'if ($false) {' }
+        @{ Name = "daily-notice-unknown-never-posted-again"
+           Find = '        $again = $true'
+           Replace = '        $again = $false' }
+        @{ Name = "daily-notice-unknown-kept-as-posted"
+           Find = '& $setMark ($w.state + " " + $day) $again }'
+           Replace = '& $setMark ("posted " + $day) $again }' }
+        @{ Name = "daily-notice-taken-not-recorded"
+           Find = '& $setMark "told" $false;'
+           Replace = '' }
+        @{ Name = "daily-notice-marked-though-refused"
+           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark'
+           Replace = 'if ($true) { & $setMark' }
+        @{ Name = "daily-notice-id-ignores-the-day"
+           Find = '-Key $Key -Gen $day -Text $Text'
+           Replace = '-Key $Key -Gen 0 -Text $Text' }
+        @{ Name = "daily-notice-repost-resets-the-first-post-time"
+           Find = '$(if ($KeepTime) { $last } else { $Now })'
+           Replace = '$Now' }
     )
 }

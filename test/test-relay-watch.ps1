@@ -404,10 +404,26 @@ try {
     $sync.mode = "up"
     foreach ($m in @(2110, 2115)) { $null = Pass $w22 $tl22 $sp22 $m }
     Check ((Bodies $w22 "RELAY BACK*") -eq 1 -and (State-Of $sp22).backTell -ceq "posted") "a down notice whose result was unknown (it may be in his mail) is owed its back notice"
+    # ROUND 4: the STOPPED notice's 7-day give-up counts from its FIRST post, however often an unknown result is reposted.
+    $w24 = New-World $t0; $w24.unknown["relay-stopped"] = $true; $tl24 = New-WorldTools $w24
+    $bad24 = Join-Path $work "bad-state24.json"
+    [System.IO.File]::WriteAllText($bad24, "not json", $utf8)
+    foreach ($m in @(0, (3 * 1440), (6 * 1440))) { $null = PassRaw $w24 $tl24 $bad24 $m }
+    Check ($w24.tells.Count -eq 3 -and $w24.posts[2] -ceq $w24.posts[0] -and ([System.IO.File]::ReadAllText($bad24 + ".told")) -clike "maybe *" -and [System.IO.File]::GetLastWriteTimeUtc($bad24 + ".told") -eq $t0) "a STOPPED notice with an unknown result is reposted over days under the same id, and the mark keeps the time of its FIRST post"
+    $w = PassRaw $w24 $tl24 $bad24 (8 * 1440)
+    Check (([System.IO.File]::ReadAllText($bad24 + ".told")) -ceq "lost" -and (@($w.lines) -join " ") -like "*STOPPED notice to the warchief was not taken in time*") "so it is given up 7 days after the first post, however often it was posted again"
+    # NIT 6: no empty brackets when the outage's reason is empty.
+    $w25 = New-World $t0; $tl25 = New-WorldTools $w25; $sp25 = Join-Path $work "empty-why.json"
+    $seed25 = New-HordeRelayWatchState
+    $seed25.episode = 0; $seed25.failures = 2; $seed25.notified = $true; $seed25.downTell = "posted"; $seed25.downAt = $t0; $seed25.downSince = $t0; $seed25.lastCheckAt = $t0.AddMinutes(5); $seed25.lastWhy = ""
+    Write-HordeRelayWatchState -Path $sp25 -State $seed25
+    $w25.held["relay-down|0"] = $true
+    $null = PassRaw $w25 $tl25 $sp25 6
+    Check ($w25.notices.Count -eq 1 -and $w25.notices[0] -cnotlike "*()*" -and $w25.notices[0] -clike "The relay outage told earlier: The warchief's notice could not be delivered*") "a lost DOWN's phone text leaves out the brackets when the reason is empty"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }
-    Check ($w14.notices.Count -eq 1 -and $w14.notices[0] -clike "*A notice to the warchief was not posted.*" -and (State-Of $sp14).downTell -ceq "") "telling off: nothing is posted, nothing is marked, and the phone is told it was not posted"
+    Check ($w14.notices.Count -eq 1 -and $w14.notices[0] -clike "*A notice to the warchief was not posted: telling is off.*" -and (State-Of $sp14).downTell -ceq "") "telling off: nothing is posted, nothing is marked, and the phone is told it was not posted"
     $so = State-Of (Join-Path $work "old.json")
     Check ($so.alerted -and $so.episode -eq 0 -and $so.downTell -ceq "" -and $so.backTell -ceq "") "a state file an earlier version wrote still reads: episode 0, nothing posted"
     [System.IO.File]::WriteAllText((Join-Path $work "oddtell.json"), '{"v":1,"lastCheckAt":null,"failures":2,"healthy":0,"downSince":null,"alerted":false,"notified":true,"lastWhy":"x","downTell":"bogus"}', $utf8)

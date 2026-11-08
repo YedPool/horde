@@ -24,9 +24,9 @@ function Send-HordeWatchTell {
     # Hand one text to the Tell tool under (-Key, -Gen): { ok; state; line }. state: "posted" (accepted and watched), "maybe" (not accepted but
     # the result is unknown and the mark is kept: it may have landed), "copy" (accepted, but only as a repost of a copy the messenger already
     # held: no mark is kept for it, so nothing new was posted and nothing is watched - what that copy became says nothing of THIS notice) or
-    # "none" (not posted). A tool that is $null tells nobody. A tool that answers no "listed" (a stand-in) is taken at its ok.
+    # "none" (a refusal: not posted, to be tried again) or "off" (no Tell tool: nothing is ever posted). A tool that is $null tells nobody. A tool that answers no "listed" (a stand-in) is taken at its ok.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Prefix, [Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Who, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][long]$Gen)
-    if ($null -eq $Tools["Tell"]) { return [pscustomobject]@{ ok = $false; state = "none"; line = ($Prefix + ": would tell " + $Who + ", but telling is off") } }
+    if ($null -eq $Tools["Tell"]) { return [pscustomobject]@{ ok = $false; state = "off"; line = ($Prefix + ": would tell " + $Who + ", but telling is off") } }
     $r = $null
     try { $r = @(& $Tools["Tell"] $Text $Key $Gen) | Select-Object -Last 1 } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
     $ok = ($null -ne $r -and $r.ok -eq $true)
@@ -63,6 +63,7 @@ function Get-HordeWatchTellWords {
     param([Parameter(Mandatory = $true)][string]$State)
     if ($State -ceq "posted") { return "A notice to the warchief was posted and is being watched for its taking." }
     if ($State -ceq "maybe") { return "A notice to the warchief may have been posted; the watch cannot tell." }
+    if ($State -ceq "off") { return "A notice to the warchief was not posted: telling is off." }
     if ($State -ceq "copy") { return "Nothing new was posted to the warchief: the messenger already held a copy of this notice." }
     return "A notice to the warchief was not posted."
 }
@@ -79,4 +80,37 @@ function Get-HordeWatchLostWords {
     param([Parameter(Mandatory = $true)][ValidateSet("held", "lost")][string]$Why)
     if ($Why -ceq "held") { return "The warchief's notice could not be delivered: the messenger holds it, and it was not taken." }
     return "The warchief's notice was not taken in time and is no longer watched; it may still be in his mailbox."
+}
+
+function Send-HordeWatchDailyTell {
+    # One notice to the warchief at most once a day, on the TAKEN rules, with its state in the small file -MarkPath (the caller's, beside a state
+    # file it must not touch): { lines; fresh; state }. The file holds "posted <day>" while the notice awaits TAKEN, "maybe <day>" while a post whose
+    # result was unknown does (it is posted again under the same id), "told" once it was taken and "lost" once it was not taken and is no longer
+    # watched; its time is when the FIRST post of that day's notice was made (a repost leaves it alone, so the 7-day give-up comes), or when it
+    # became told or lost. Nothing is posted while one is awaited. A refused post leaves no mark and is tried again at the next pass, same id.
+    # -Noun names it in a log line ("STOPPED notice"). fresh: a new post was made (or tried) in this pass, and state is what that post was
+    # (Send-HordeWatchTell's), for a caller that also tells a phone.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$MarkPath, [Parameter(Mandatory = $true)][string]$Prefix, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Noun, [Parameter(Mandatory = $true)][datetime]$Now)
+    $lines = New-Object System.Collections.ArrayList
+    $done = { param([bool]$Fresh, [string]$State) return [pscustomobject]@{ lines = @($lines.ToArray()); fresh = $Fresh; state = $State } }
+    $exists = [System.IO.File]::Exists($MarkPath)
+    $last = $(if ($exists) { [System.IO.File]::GetLastWriteTimeUtc($MarkPath) } else { [datetime]::MinValue })
+    $content = ""
+    if ($exists) { try { $content = ("" + [System.IO.File]::ReadAllText($MarkPath)).Trim() } catch { $content = "" } }
+    $setMark = { param([string]$Mark, [bool]$KeepTime) try { [System.IO.File]::WriteAllText($MarkPath, $Mark); [System.IO.File]::SetLastWriteTimeUtc($MarkPath, $(if ($KeepTime) { $last } else { $Now })) } catch { } }
+    $day = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalDays)
+    $again = $false
+    if ($content -cmatch '\A(posted|maybe) ([0-9]{1,9})\z') {
+        $kind = $Matches[1]; $day = [long]$Matches[2]
+        $t = Get-HordeWatchTellTaken -Tools $Tools -Key $Key -Gen $day -PostedAt $last -Now $Now
+        if ($t -ceq "taken") { & $setMark "told" $false; [void]$lines.Add($Prefix + ": the warchief's session took the " + $Noun + ": he is told"); return (& $done $false "taken") }
+        if ($t -ceq "held" -or $t -ceq "lost") { & $setMark "lost" $false; [void]$lines.Add($Prefix + ": the " + $Noun + " to the warchief " + (Get-HordeWatchLostText -Why $t)); return (& $done $false $t) }
+        if ($kind -ceq "posted") { return (& $done $false "posted") }
+        $again = $true
+    }
+    if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }
+    $w = Send-HordeWatchTell -Tools $Tools -Prefix $Prefix -Who "the warchief" -Key $Key -Gen $day -Text $Text
+    [void]$lines.Add($w.line)
+    if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark ($w.state + " " + $day) $again }
+    return (& $done (-not $again) $w.state)
 }

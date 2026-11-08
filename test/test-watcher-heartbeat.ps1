@@ -129,7 +129,22 @@ try {
     $rig.noticeOk = $true
     $null = Look 302
     $null = Look 303
-    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 3) "the phone's notice accepted (the mail still failing): the episode counts as told, no more tries"
+    Check ($rig.notices.Count -eq 3 -and $rig.tells.Count -eq 4 -and $rig.posts[3] -ceq $rig.posts[0] -and -not (Beat-State).alerted) "ROUND 4 (changed from 'the episode counts as told, no more tries', which pinned the bug): the phone accepted but the mail was REFUSED - it is posted again, same id, on every later pass, and the episode is not told"
+    $rig.tellOk = $true
+    $null = Look 304
+    Check ($rig.tells.Count -eq 5 -and (Beat-State).tell -ceq "posted" -and -not (Beat-State).alerted) "the refusal ends: the mail is posted, and awaited"
+    $rig.taken[$rig.posts[4]] = $true
+    $null = Look 305
+    Check ((Beat-State).alerted -and (Beat-State).tell -ceq "taken") "and its TAKEN tells the episode"
+    $rig.tellOk = $false
+    # TELLING OFF (no Tell tool at all): only then does the phone's accept end it.
+    Remove-Item -LiteralPath $statePath
+    $noTell = @{ Now = $tools["Now"]; Tell = $null; Taken = $null; Notify = $tools["Notify"] }
+    $rig.notices.Clear()
+    $rig.now = $t0.AddMinutes(306); $null = Invoke-HordeWatcherHeartbeat -Tools $noTell -Policy $policy -RunPath $runPath -StatePath $statePath
+    $rig.now = $t0.AddMinutes(307); $null = Invoke-HordeWatcherHeartbeat -Tools $noTell -Policy $policy -RunPath $runPath -StatePath $statePath
+    Check ($rig.notices.Count -eq 1 -and (Beat-State).alerted -and $rig.notices[0] -clike "*telling is off.") "telling off: no mail can ever be posted, so the phone's accept counts the episode told, and it is not told twice"
+    $rig.taken.Clear(); $rig.marked.Clear()
     # THE MAIL ACCEPTED IS NOT TOLD: only the warchief's own TAKEN counts it.
     $rig.tellOk = $true; $rig.noticeOk = $false; Remove-Item -LiteralPath $statePath
     $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear()
@@ -262,12 +277,27 @@ try {
     $w = Invoke-HordeWatcherHeartbeat -Tools $none -Policy $policy -RunPath $runPath -StatePath $statePath
     Check ((@($w.lines) -join " ") -like "*telling is off*" -and -not (Beat-State).alerted -and (Beat-State).tell -ceq "") "no tellers: it says so, and the episode is not marked told"
     [System.IO.File]::WriteAllText($statePath, "garbage{", $utf8)
-    $rig.tells.Clear(); $rig.notices.Clear(); $rig.posts.Clear()
+    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tells.Clear(); $rig.notices.Clear(); $rig.posts.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
     $w = Look 400
-    Check ($rig.notices.Count -eq 0 -and $rig.tells.Count -eq 0 -and (@($w.lines) -join " ") -like "*its state file cannot be read*" -and [System.IO.File]::ReadAllText($statePath) -ceq "garbage{") "ROUND 3 (SHOULD 1; changed from 'a fresh one'): a state file that cannot be read fails closed - it is said, nothing is told, and the file is KEPT, not written over"
+    Check ((@($w.lines) -join " ") -like "*its state file cannot be read*" -and [System.IO.File]::ReadAllText($statePath) -ceq "garbage{") "ROUND 3 (SHOULD 1): a state file that cannot be read is said, and the file is KEPT, not written over"
+    Check ($rig.tells.Count -eq 1 -and $rig.posts[0] -clike "watcher-unreadable|*" -and $rig.tells[0] -like "WATCHER CHECK BLIND*" -and $rig.notices.Count -eq 1 -and $rig.notices[0] -clike "*cannot read its state file*A notice to the warchief was posted and is being watched for its taking.") "ROUND 4: and nobody is left in the dark: the warchief's mail is posted (marked first) and the phone is told what is known of it"
+    $w = Look 401
+    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1 -and @($w.lines).Count -eq 0) "once a day: nothing more is posted, told or logged on the next pass"
+    $rig.taken[$rig.posts[0]] = $true
+    $w = Look 402
+    Check ((@($w.lines) -join " ") -like "*took the UNREADABLE-STATE notice*" -and ([System.IO.File]::ReadAllText($statePath + ".told")) -ceq "told") "the warchief's session takes it: counted told"
+    $null = Look (400 + 1440 + 5)
+    Check ($rig.tells.Count -eq 2 -and $rig.posts[1] -cne $rig.posts[0] -and $rig.notices.Count -eq 2) "a day later it is said again, under a new id"
+    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tellOk = $false; $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear()
+    $null = Look 3000; $null = Look 3001
+    Check ($rig.tells.Count -eq 2 -and $rig.posts[1] -ceq $rig.posts[0] -and -not (Test-Path ($statePath + ".told"))) "a refused mail leaves no mark and is tried again at the next pass, same id"
+    $rig.tellOk = $true
     [System.IO.File]::WriteAllText($statePath, '{"v":1,"alerted":true,"since":"2026-11-04T20:00:00.0000000Z","gen":5,"tell":"bogus"}', $utf8)
-    $w = Look 400
+    $w = Look 3002
     Check ((@($w.lines) -join " ") -like "*cannot be read*" -and [System.IO.File]::ReadAllText($statePath) -clike '*"tell":"bogus"*') "and so is a live episode with a value that is not known: it is not forgotten"
+    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     Remove-Item -LiteralPath $statePath
     $boom = @{ Now = { return $t0.AddMinutes(400) }; Tell = { throw "boom" }; Notify = { throw "boom" } }
     $w = Invoke-HordeWatcherHeartbeat -Tools $boom -Policy $policy -RunPath $runPath -StatePath $statePath
@@ -346,9 +376,11 @@ try {
 
     # ROUND 3 (SHOULD 1): the reader check's state fails closed too.
     [System.IO.File]::WriteAllText($rstate, "garbage{", $utf8)
-    $rig.tells.Clear(); $rig.notices.Clear()
+    $rig.tells.Clear(); $rig.notices.Clear(); $rig.posts.Clear()
     $w = ReaderLook
-    Check ($rig.notices.Count -eq 0 -and $rig.tells.Count -eq 0 -and (@($w.lines) -join " ") -like "*its state file cannot be read*" -and [System.IO.File]::ReadAllText($rstate) -ceq "garbage{") "the reader check's unreadable state is said, nothing is told, and the file is kept"
+    Check ((@($w.lines) -join " ") -like "*its state file cannot be read*" -and [System.IO.File]::ReadAllText($rstate) -ceq "garbage{" -and $rig.tells.Count -eq 1 -and $rig.posts[0] -clike "watcher-reader-unreadable|*" -and $rig.notices.Count -eq 1) "the reader check's unreadable state is said, the file is kept, and a person is told (mail and phone), once a day"
+    $w = ReaderLook
+    Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1 -and @($w.lines).Count -eq 0) "and not again on the next pass"
 
     Write-Host ""
     Write-Host "--- the settings and the command ---" -ForegroundColor Cyan

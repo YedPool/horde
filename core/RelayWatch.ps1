@@ -230,33 +230,12 @@ function Resolve-HordeRelayWatchTells {
 }
 
 function Send-HordeRelayWatchStopped {
-    # The state file cannot be read: tell the warchief at most once a day (the small file beside it, read for the day's notice and for how
-    # it stands). The file holds "posted <day>" while the notice awaits TAKEN, "maybe <day>" while a post whose result was unknown does (it is
-    # posted again under the same id), "told" once it was taken and "lost" once it was not taken and is no longer watched; its time is when
-    # that happened. Nothing is posted while one is awaited.
+    # The state file cannot be read: tell the warchief at most once a day (core/WatchTell.ps1, Send-HordeWatchDailyTell, its mark in the small
+    # file beside the state file, which needs no reading of the broken one). Counted as told only when TAKEN; a post whose result was unknown is
+    # posted again, and the 7-day give-up counts from the first post.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][datetime]$Now)
-    $lines = New-Object System.Collections.ArrayList
-    $mark = $StatePath + ".told"
-    $exists = [System.IO.File]::Exists($mark)
-    $last = $(if ($exists) { [System.IO.File]::GetLastWriteTimeUtc($mark) } else { [datetime]::MinValue })
-    $content = ""
-    if ($exists) { try { $content = ("" + [System.IO.File]::ReadAllText($mark)).Trim() } catch { $content = "" } }
-    $setMark = { param([string]$Text) try { [System.IO.File]::WriteAllText($mark, $Text); [System.IO.File]::SetLastWriteTimeUtc($mark, $Now) } catch { } }
-    $day = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalDays)
-    $again = $false
-    if ($content -cmatch '\A(posted|maybe) ([0-9]{1,9})\z') {
-        $kind = $Matches[1]; $day = [long]$Matches[2]
-        $t = Get-HordeWatchTellTaken -Tools $Tools -Key "relay-stopped" -Gen $day -PostedAt $last -Now $Now
-        if ($t -ceq "taken") { & $setMark "told"; [void]$lines.Add("relay watch: the warchief's session took the STOPPED notice: he is told"); return @($lines.ToArray()) }
-        if ($t -ceq "held" -or $t -ceq "lost") { & $setMark "lost"; [void]$lines.Add("relay watch: the STOPPED notice to the warchief " + (Get-HordeWatchLostText -Why $t)); return @($lines.ToArray()) }
-        if ($kind -ceq "posted") { return @() }
-        $again = $true
-    }
-    if (-not $again -and $Now -lt $last.AddHours(24)) { return @() }
-    $w = Send-HordeWatchTell -Tools $Tools -Prefix "relay watch" -Who "the warchief" -Key "relay-stopped" -Gen $day -Text ("RELAY WATCH STOPPED`nThe relay watch's state file cannot be read, so the hosted relay is not being checked. It is " + $StatePath + "; removing it starts the watch afresh.")
-    [void]$lines.Add($w.line)
-    if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark ($w.state + " " + $day) }
-    return @($lines.ToArray())
+    $r = Send-HordeWatchDailyTell -Tools $Tools -MarkPath ($StatePath + ".told") -Prefix "relay watch" -Key "relay-stopped" -Noun "STOPPED notice" -Now $Now -Text ("RELAY WATCH STOPPED`nThe relay watch's state file cannot be read, so the hosted relay is not being checked. It is " + $StatePath + "; removing it starts the watch afresh.")
+    return @($r.lines)
 }
 
 function Get-HordeRelayWatchNoNoticeWords {
@@ -289,7 +268,7 @@ function Invoke-HordeRelayWatch {
     # A DOWN notice that is later held (not delivered) or given up (not taken in time) makes what the phone was told - "posted and watched" -
     # no longer the whole story: the phone is told once more, in those words (tried again on later passes until it takes it).
     if (($st.downTell -ceq "held" -or $st.downTell -ceq "lost") -and $st.notified -and -not $st.downLostTold -and $null -ne $Tools["Notify"]) {
-        $nl = Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay outage told earlier (" + $st.lastWhy + "): " + (Get-HordeWatchLostWords -Why $st.downTell)) -Who "the founder's phone"
+        $nl = Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay outage told earlier" + $(if ("" + $st.lastWhy -ne "") { " (" + $st.lastWhy + ")" } else { "" }) + ": " + (Get-HordeWatchLostWords -Why $st.downTell)) -Who "the founder's phone"
         [void]$lines.Add($nl.line)
         if ($nl.ok) { $st.downLostTold = $true; $res.changed = $true }
     }
