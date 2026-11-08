@@ -199,5 +199,21 @@
         @{ Name = "analyst-tell-pass-unreadable-state-hides-lines"
            Find = 'lines = @($lines.ToArray()) + @("the supervisor''s state cannot be read: '
            Replace = 'lines = @("the supervisor''s state cannot be read: ' }
+        # T-0391 slice 8: the relay watch's and the watcher check's tools (Send-HordeAnalystWatchTell, Get-HordeAnalystWatchTaken).
+        @{ Name = "watch-tell-always-says-the-mark-is-kept"
+           Find = 'return [pscustomobject]@{ ok = $r.ok; detail = $r.detail; lines = $r.lines; listed = $listed }'
+           Replace = 'return [pscustomobject]@{ ok = $r.ok; detail = $r.detail; lines = $r.lines; listed = $true }' }
+        @{ Name = "watch-taken-held-is-lost"
+           Find = 'if ($stage -ceq "held") { return "held" }'
+           Replace = 'if ($stage -ceq "held") { return "lost" }' }
+        @{ Name = "watch-taken-expired-ignored"
+           Find = 'if ($stage -ceq "expired") { return "lost" }'
+           Replace = '' }
+        @{ Name = "watch-taken-handed-over-not-taken"
+           Find = 'if ($stage -ceq "handed-over" -or $stage -ceq "seen") { return "taken" }'
+           Replace = 'if ($stage -ceq "seen") { return "taken" }' }
+        @{ Name = "watch-taken-unmarked-is-pending"
+           Find = 'if (Test-HordeAnalystNoticeListed -HordeHome $HordeHome -NoticeId $id) { return "pending" }'
+           Replace = 'if ($true) { return "pending" }' }
     )
 }

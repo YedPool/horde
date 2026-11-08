@@ -50,8 +50,11 @@
            Find = '        Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)'
            Replace = '        $null = ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1)' }
         @{ Name = "alarm-told-though-nothing-was-accepted"
-           Find = 'elseif ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { Write-HordeWatcherBeatState'
-           Replace = 'elseif ($true) { Write-HordeWatcherBeatState' }
+           Find = 'if ($n.ok) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true'
+           Replace = 'if ($true) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true' }
+        @{ Name = "alarm-unknown-stored-as-posted"
+           Find = '$tellNow = $(if ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { $w.state }'
+           Replace = '$tellNow = $(if ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { "posted" }' }
         @{ Name = "mail-accepted-counts-as-told"
            Find = 'if ($n.ok) { Write-HordeWatcherBeatState'
            Replace = 'if ($n.ok -or ($null -ne $w -and $w.ok)) { Write-HordeWatcherBeatState' }

@@ -189,6 +189,22 @@ try {
     $w = Invoke-HordeWatcherHeartbeat -Tools $tools -Policy $policy -RunPath $runPath -StatePath $statePath
     Check (-not (Beat-State).alerted -and (Beat-State).tell -ceq "posted" -and $rig.tells.Count -eq 1 -and (@($w.lines) -join " ") -cnotlike "*took the notice*") "and an earlier episode's taken notice is not counted as this one's TAKEN"
     $rig.taken.Clear(); $rig.marked.Clear()
+    # Nothing accepted: the retry has the SAME id (the fresh state was written at once with its clock-made number).
+    Remove-Item -LiteralPath $statePath
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $rig.tellListed = $false; $rig.noticeOk = $false
+    $rig.now = $t0.AddMinutes(370); $null = Invoke-HordeWatcherHeartbeat -Tools $tools -Policy $policy -RunPath $runPath -StatePath $statePath
+    $rig.now = $t0.AddMinutes(371); $null = Invoke-HordeWatcherHeartbeat -Tools $tools -Policy $policy -RunPath $runPath -StatePath $statePath
+    Check ($rig.posts.Count -eq 2 -and $rig.posts[0] -ceq $rig.posts[1] -and $rig.posts[0] -cnotlike "*|0") "a post nothing accepted is tried again at the next pass under the same id, though the state had no file (its clock-made number was written at once)"
+    # A post whose result was unknown, that turns out TAKEN, is counted told (the look comes before the repost).
+    Remove-Item -LiteralPath $statePath
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $rig.tellListed = $true
+    $null = Look 380
+    $rig.taken[$rig.posts[0]] = $true
+    $null = Look 381
+    Check ((Beat-State).alerted -and $rig.tells.Count -eq 1) "a post whose result was unknown, that turns out TAKEN, is counted told - and not posted again"
+    $rig.tellOk = $true; $rig.tellListed = $false; $rig.taken.Clear(); $rig.marked.Clear()
     # With no Taken tool nothing is counted; a notice awaited a notice-ttl is given up.
     Remove-Item -LiteralPath $statePath
     $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.lost.Clear()
