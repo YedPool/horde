@@ -396,7 +396,14 @@ its branch can break main when main moved under it").
    guard (first at the first merge's first parent, as the baseline), and names the first merge that
    is red - or says "red before today's first queued merge" and names none. A guard the day's merges
    dropped from the list (listed at the baseline, gone at the tip) is red too, and the merge that dropped
-   it is named. A merge is walked on the branch it went into (`baseRefName`). A guard that did not run
+   it is named. A merge is walked on the branch it went into (`baseRefName`), in the order of that branch's
+   first-parent history (a recovered merge's queue line comes late in the file). A red stays open in
+   `guards-red.json` until a run finds the guard green at the tip: a red guard that is no longer on the tip's
+   list stays RED (not run) and is never read green. A guard removed or renamed on purpose is cleared with
+   `horde merge -ClearRed -Repo OWNER/REPO -Base <branch> -Guard <guard> -Reason <text>`, which refuses a guard
+   that is not in the record or is still on the list, and writes who cleared what and why into the report.
+   A merge `gh` was refused is never settled by the daytime merge: the night asks GitHub and queues it if it
+   was merged. A guard that did not run
    (PowerShell 7 missing, a timeout) is not a red: that branch ends "could not run", its merges stay owed
    and the run ends 2. A damaged queue line, or a merge missing from its branch, is reported in every run
    (the report prints the line to add to `guards-checked.jsonl` to give it up) and the rest is still
