@@ -15,13 +15,20 @@
         @{ Name = "words-none-says-posted"
            Find = 'return "A notice to the warchief was not posted."'
            Replace = 'return "A notice to the warchief was posted and is being watched for its taking."' }
-        # An unknown result may have landed: it is watched, not forgotten.
+        # An unknown result may have landed: it is watched and posted again, not forgotten; a refusal is not posted.
         @{ Name = "unknown-result-taken-for-not-posted"
-           Find = '$state = $(if ($ok) { "posted" } elseif ($listed) { "maybe" } else { "none" })'
-           Replace = '$state = $(if ($ok) { "posted" } else { "none" })' }
+           Find = 'elseif ($ok) { "posted" } elseif ($listed) { "maybe" } else { "none" })'
+           Replace = 'elseif ($ok) { "posted" } else { "none" })' }
         @{ Name = "refused-result-taken-for-posted"
-           Find = '$state = $(if ($ok) { "posted" } elseif ($listed) { "maybe" } else { "none" })'
-           Replace = '$state = "posted"' }
+           Find = 'elseif ($ok) { "posted" } elseif ($listed) { "maybe" } else { "none" })'
+           Replace = 'else { "posted" })' }
+        # ok with no mark kept is a repost of a copy the messenger already held: not posted, not watched, not taken (MUST-FIX 1a).
+        @{ Name = "repost-of-a-held-copy-taken-for-posted"
+           Find = '$state = $(if ($ok -and $hasListed -and -not $listed) { "copy" } elseif ($ok)'
+           Replace = '$state = $(if ($false) { "copy" } elseif ($ok)' }
+        @{ Name = "words-copy-says-posted"
+           Find = 'return "Nothing new was posted to the warchief: the messenger already held a copy of this notice."'
+           Replace = 'return "A notice to the warchief was posted and is being watched for its taking."' }
         # Only TAKEN counts; an answer that cannot be had counts as nothing.
         @{ Name = "no-answer-taken-for-taken"
            Find = 'return "unknown"'
@@ -42,6 +49,22 @@
         @{ Name = "taken-gets-no-key"
            Find = '$a = "" + (@(& $Tools["Taken"] $Key $Gen) | Select-Object -Last 1)'
            Replace = '$a = "" + (@(& $Tools["Taken"]) | Select-Object -Last 1)' }
+        # What became of a notice that is not taken and not watched, in what is known (MUST-FIX 2).
+        @{ Name = "held-ignored-by-the-taken-look"
+           Find = 'if ($a -ceq "held") { return "held" }'
+           Replace = '' }
+        @{ Name = "held-text-says-given-up"
+           Find = 'return "could not be delivered (the messenger holds it for good) and is not taken"'
+           Replace = 'return "was given up unread"' }
+        @{ Name = "lost-text-says-unread"
+           Find = 'return "was not taken in time and is no longer watched (it may still be in his mailbox)"'
+           Replace = 'return "was given up unread"' }
+        @{ Name = "lost-phone-words-say-nothing-reached"
+           Find = 'return "The warchief''s notice was not taken in time and is no longer watched; it may still be in his mailbox."'
+           Replace = 'return "No notice reached the warchief."' }
+        @{ Name = "held-phone-words-say-given-up"
+           Find = 'if ($Why -ceq "held") { return "The warchief''s notice could not be delivered: the messenger holds it, and it was not taken." }'
+           Replace = 'if ($false) { return "" }' }
         # A tool that is off tells nobody.
         @{ Name = "off-tell-says-posted"
            Find = 'return [pscustomobject]@{ ok = $false; state = "none"; line = ($Prefix + ": would tell "'

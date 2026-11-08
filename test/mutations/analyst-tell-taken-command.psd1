@@ -6,9 +6,6 @@
     Suite  = "test\test-analyst-tell-taken.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "analyst-command-tell-unmarked"
-           Find = 'return (Send-HordeAnalystWarchiefTaken -Key $Key'
-           Replace = 'return (Send-HordeAnalystWarchief -Key $Key' }
         @{ Name = "analyst-command-look-tool-missing"
            Find = '$tools["TellTaken"] = {'
            Replace = '$tools["TellTakenOff"] = {' }
@@ -37,9 +34,9 @@
            Find = 'Get-HordeAnalystNoticeWatch -HordeHome $hordeHome -Key $Key -Gen ([long]$Gen)) }'
            Replace = 'Get-HordeAnalystNoticeWatch -HordeHome $hordeHome -Key $Key -Gen 0) }' }
         # T-0391 slice 8: the relay watch's and the watcher check's tools are marked too, and the watcher check has both.
-        @{ Name = "analyst-command-relay-tell-unmarked"
+        @{ Name = "analyst-command-relay-tell-skips-the-watch-teller"
            Find = '$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWatchTell -Key $Key'
-           Replace = '$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWarchief -Key $Key' }
+           Replace = '$relayTools["Tell"] = { param($Body, $Key, $Gen) return (Send-HordeAnalystWarchiefTaken -Key $Key' }
         @{ Name = "analyst-command-relay-tell-drops-the-generation"
            Find = '-Values $policy.values -Gen ([long]$Gen) -HordeHome $hordeHome) }'
            Replace = '-Values $policy.values -HordeHome $hordeHome) }' }

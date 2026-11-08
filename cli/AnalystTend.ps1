@@ -546,16 +546,6 @@ function Send-HordeAnalystMessage {
     return (Send-HordeAnalystPost -SessionId $SessionId -MessageId $MessageId -Body $Body -Values $Values -HordeHome $HordeHome)
 }
 
-function Send-HordeAnalystWarchief {
-    # One fixed notice to the warchief's session; the message id is new each time it is told.
-    param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Body, [Parameter(Mandatory = $true)]$Values, [string]$HordeHome = "")
-    if (Test-HordeAnalystHomeIsATests -HordeHome $HordeHome) { return [pscustomobject]@{ ok = $false; detail = "this Horde home is a test's: nobody is told" } }
-    $seat = Get-HordeRoleSeat -Role $script:HordeAnalystTellRole
-    if ($seat.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("the warchief's session cannot be told: " + $(if ($seat.state -ceq "absent") { $seat.note } else { $seat.reason })) } }
-    $r = Send-HordeAnalystPost -SessionId $seat.value.sessionId -MessageId ([guid]::NewGuid().ToString()) -Body $Body -Values $Values -HordeHome $HordeHome
-    return [pscustomobject]@{ ok = $r.ok; detail = $r.detail }
-}
-
 function Test-HordeAnalystNoticeListed {
     # Is the notice on the awaiting list now? $false too when the list cannot be read (Add then fails and nothing is posted).
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId)
@@ -622,8 +612,8 @@ function Send-HordeAnalystWatchTell {
 
 function Get-HordeAnalystWatchTaken {
     # THE TAKEN TOOL OF THE RELAY WATCH AND THE WATCHER CHECK (core/WatchTell.ps1): did the warchief's own session take the notice of (-Key,
-    # -Gen)? Asked of the messenger by the id it was posted under: "taken" (handed-over or seen), "lost" (the messenger holds it for good or
-    # gave it up), "pending" (not taken, and still on the awaiting list, so the pass keeps asking and one ALARM is said), or "unknown" (no
+    # -Gen)? Asked of the messenger by the id it was posted under: "taken" (handed-over or seen), "held" (the messenger holds it for good: not
+    # delivered), "lost" (the messenger gave it up unread; it may still be in his mailbox), "pending" (not taken, and still on the awaiting list, so the pass keeps asking and one ALARM is said), or "unknown" (no
     # messenger, no answer, or off the list with no word: nothing is guessed). -Messenger is for a suite; the command has loaded the port.
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$Key, [long]$Gen = 0, $Messenger = $null)
     $id = Get-HordeAnalystTellNoticeId -Key $Key -Gen $Gen
@@ -634,7 +624,8 @@ function Get-HordeAnalystWatchTaken {
             if ($status.state -ceq "known") {
                 $stage = "" + $status.value.stage
                 if ($stage -ceq "handed-over" -or $stage -ceq "seen") { return "taken" }
-                if ($stage -ceq "held" -or $stage -ceq "expired") { return "lost" }
+                if ($stage -ceq "held") { return "held" }
+                if ($stage -ceq "expired") { return "lost" }
             }
         }
     } catch { }

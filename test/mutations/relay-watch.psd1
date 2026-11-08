@@ -8,17 +8,39 @@
     Mutations = @(
         # Told only when TAKEN: a down notice the messenger accepted is posted, not told.
         @{ Name = "alerted-when-posted-not-taken"
-           Find = 'if ($w.state -cne "none") { $s.downTell = "posted"; $s.downAt = $utcNow }'
-           Replace = 'if ($w.state -cne "none") { $s.downTell = "posted"; $s.downAt = $utcNow; $s.alerted = $true }' }
+           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $s.downTell = $w.state; if ($null -eq $s.downAt) { $s.downAt = $utcNow } }'
+           Replace = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $s.downTell = $w.state; if ($null -eq $s.downAt) { $s.downAt = $utcNow }; $s.alerted = $true }' }
         @{ Name = "down-taken-not-counted"
            Find = '$State.alerted = $true; $State.downTell = ""; $State.downAt = $null; $changed = $true;'
            Replace = '$State.downTell = ""; $State.downAt = $null; $changed = $true;' }
         @{ Name = "down-given-up-counted-as-told"
-           Find = 'elseif ($t -ceq "lost") { $State.downTell = "lost"; $changed = $true;'
-           Replace = 'elseif ($t -ceq "lost") { $State.downTell = "lost"; $State.alerted = $true; $changed = $true;' }
+           Find = 'elseif ($t -ceq "held" -or $t -ceq "lost") { $State.downTell = $t; $changed = $true;'
+           Replace = 'elseif ($t -ceq "held" -or $t -ceq "lost") { $State.downTell = $t; $State.alerted = $true; $changed = $true;' }
+        @{ Name = "down-held-stored-as-lost"
+           Find = 'elseif ($t -ceq "held" -or $t -ceq "lost") { $State.downTell = $t;'
+           Replace = 'elseif ($t -ceq "held" -or $t -ceq "lost") { $State.downTell = "lost";' }
         @{ Name = "down-posted-again-while-awaited"
-           Find = 'if ($s.downTell -ceq "") {'
+           Find = 'if ($s.downTell -ceq "" -or $s.downTell -ceq "maybe") {'
            Replace = 'if ($true) {' }
+        # An UNKNOWN result may have landed: it is watched, and posted again under the same id (SHOULD-FIX 1).
+        @{ Name = "down-unknown-never-posted-again"
+           Find = 'if ($s.downTell -ceq "" -or $s.downTell -ceq "maybe") {'
+           Replace = 'if ($s.downTell -ceq "") {' }
+        @{ Name = "down-unknown-not-looked-at"
+           Find = 'if ($State.downTell -ceq "posted" -or $State.downTell -ceq "maybe") {'
+           Replace = 'if ($State.downTell -ceq "posted") {' }
+        @{ Name = "down-first-post-time-forgotten-on-repost"
+           Find = 'if ($null -eq $s.downAt) { $s.downAt = $utcNow } }'
+           Replace = '$s.downAt = $utcNow }' }
+        @{ Name = "back-unknown-never-posted-again"
+           Find = '} elseif ($s.backTell -ceq "" -or $s.backTell -ceq "maybe") {'
+           Replace = '} elseif ($s.backTell -ceq "") {' }
+        @{ Name = "back-unknown-not-looked-at"
+           Find = 'if ($State.backTell -ceq "posted" -or $State.backTell -ceq "maybe") {'
+           Replace = 'if ($State.backTell -ceq "posted") {' }
+        @{ Name = "back-told-to-the-phone-on-every-repost"
+           Find = 'if ($first -and $s.notified) {'
+           Replace = 'if ($s.notified) {' }
         @{ Name = "taken-look-not-kept-when-no-look-is-due"
            Find = 'if ($res.changed) { Write-HordeRelayWatchState -Path $StatePath -State $st }'
            Replace = '' }
@@ -31,20 +53,27 @@
            Replace = '' }
         # A recovery the warchief did not take stays owed: the episode closes only on the back notice's TAKEN.
         @{ Name = "recovery-closed-though-only-posted"
-           Find = '$s.backTell = "posted"; $s.backAt = $utcNow'
-           Replace = '$s.backTell = "posted"; $s.backAt = $utcNow; Close-HordeRelayEpisode -State $s' }
+           Find = '$s.backTell = $w.state; if ($null -eq $s.backAt) { $s.backAt = $utcNow }'
+           Replace = '$s.backTell = $w.state; if ($null -eq $s.backAt) { $s.backAt = $utcNow }; Close-HordeRelayEpisode -State $s' }
         @{ Name = "back-taken-does-not-close"
            Find = 'Close-HordeRelayEpisode -State $State; $changed = $true; [void]$lines.Add("relay watch: the warchief''s session took the BACK notice'
            Replace = '$changed = $true; [void]$lines.Add("relay watch: the warchief''s session took the BACK notice' }
         @{ Name = "back-given-up-does-not-close"
-           Find = 'Close-HordeRelayEpisode -State $State; $changed = $true; [void]$lines.Add("relay watch: the BACK notice to the warchief was given up'
-           Replace = '$changed = $true; [void]$lines.Add("relay watch: the BACK notice to the warchief was given up' }
+           Find = 'Close-HordeRelayEpisode -State $State; $changed = $true; [void]$lines.Add("relay watch: the BACK notice to the warchief "'
+           Replace = '$changed = $true; [void]$lines.Add("relay watch: the BACK notice to the warchief "' }
+        # The episode number: raised on close, kept in the file, in every id - and a state with no file takes it from the clock (MUST-FIX 1).
         @{ Name = "episode-not-raised-on-close"
            Find = '$State.episode = [long]$State.episode + 1'
            Replace = '$State.episode = [long]$State.episode' }
         @{ Name = "episode-not-kept-in-the-file"
            Find = 'episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null'
            Replace = 'episode = 0; downTell = "" + $State.downTell; downAt = $null' }
+        @{ Name = "fresh-state-reuses-episode-zero"
+           Find = '$fresh.episode = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)'
+           Replace = '$fresh.episode = [long]0' }
+        @{ Name = "fresh-state-ignores-the-passed-clock"
+           Find = '$fresh.episode = [long][System.Math]::Floor(($Now.ToUniversalTime()'
+           Replace = '$fresh.episode = [long][System.Math]::Floor(([datetime]::UtcNow.ToUniversalTime()' }
         @{ Name = "down-id-ignores-the-episode"
            Find = '-Key "relay-down" -Gen ([long]$s.episode)'
            Replace = '-Key "relay-down" -Gen 0' }
@@ -54,47 +83,65 @@
         @{ Name = "back-look-id-ignores-the-episode"
            Find = '-Key "relay-back" -Gen ([long]$State.episode)'
            Replace = '-Key "relay-back" -Gen 0' }
-        # Each is told "back" only if it was told "down" (or the down notice is posted and awaited).
+        # Each is told "back" only if it was told "down" (or the down notice is posted, or may be, and awaited).
         @{ Name = "warchief-told-back-though-never-told-down"
-           Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted")'
+           Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted" -or $s.downTell -ceq "maybe")'
            Replace = '$owed = $true' }
         @{ Name = "back-not-owed-for-a-posted-down"
-           Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted")'
+           Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted" -or $s.downTell -ceq "maybe")'
            Replace = '$owed = $s.alerted' }
+        @{ Name = "back-not-owed-for-an-unknown-down"
+           Find = '$owed = ($s.alerted -or $s.downTell -ceq "posted" -or $s.downTell -ceq "maybe")'
+           Replace = '$owed = ($s.alerted -or $s.downTell -ceq "posted")' }
         @{ Name = "founder-told-back-though-never-told-down"
-           Find = 'if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". " + (Get-HordeWatchTellWords'
-           Replace = 'if ($true) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ". " + (Get-HordeWatchTellWords' }
+           Find = 'if ($first -and $s.notified) {'
+           Replace = 'if ($first) {' }
         # A founder told "down" whose warchief never took it is still owed "back": no blip reset.
         @{ Name = "founder-told-down-forgotten-as-a-blip"
            Find = 'if (-not $s.alerted -and -not $s.notified -and $s.downTell -ceq "") {'
            Replace = 'if (-not $s.alerted -and $s.downTell -ceq "") {' }
-        # What the phone is told is what is known.
+        # What the phone is told is what is known (MUST-FIX 2): held is not delivered; lost was not taken; none was never posted.
         @{ Name = "phone-down-words-always-posted"
            Find = '". " + (Get-HordeWatchTellWords -State $tellState)'
            Replace = '". " + (Get-HordeWatchTellWords -State "posted")' }
         @{ Name = "phone-back-words-always-posted"
            Find = '". " + (Get-HordeWatchTellWords -State $w.state)'
            Replace = '". " + (Get-HordeWatchTellWords -State "posted")' }
+        @{ Name = "phone-held-says-nothing-reached"
+           Find = 'if ($DownTell -ceq "held") { return "The warchief''s notice about the outage could not be delivered (the messenger holds it), so none about its end is posted." }'
+           Replace = 'if ($false) { return "" }' }
+        @{ Name = "phone-lost-says-nothing-reached"
+           Find = 'return "The warchief''s notice about the outage was not taken in time, so none about its end is posted."'
+           Replace = 'return "No notice about the outage reached the warchief, so none about its end is posted."' }
+        @{ Name = "phone-never-posted-says-lost"
+           Find = 'return "No notice about the outage was posted to the warchief, so none about its end is posted."'
+           Replace = 'return "The warchief''s notice about the outage was not taken in time, so none about its end is posted."' }
         # One blip tells nobody.
         @{ Name = "down-on-first-failure"
            Find = '$s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {'
            Replace = '$s.failures -ge 1) {' }
         # An unreadable state file is told, not a silent stop - and counted only when taken, once a day.
         @{ Name = "unreadable-state-silent"
-           Find = 'if ($Now -lt $last.AddHours(24)) { return @() }'
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return @() }'
            Replace = 'if ($true) { return @() }' }
         @{ Name = "unreadable-state-told-every-pass"
-           Find = 'if ($Now -lt $last.AddHours(24)) { return @() }'
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return @() }'
            Replace = '' }
         @{ Name = "stopped-posted-again-while-awaited"
-           Find = 'if ($content -cmatch ''\Aposted ([0-9]{1,9})\z'') {'
+           Find = 'if ($content -cmatch ''\A(posted|maybe) ([0-9]{1,9})\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "stopped-unknown-never-posted-again"
+           Find = '        $again = $true'
+           Replace = '        $again = $false' }
+        @{ Name = "stopped-unknown-kept-as-posted"
+           Find = '{ & $setMark ($w.state + " " + $day) }'
+           Replace = '{ & $setMark ("posted " + $day) }' }
         @{ Name = "stopped-taken-not-recorded"
            Find = 'if ($t -ceq "taken") { & $setMark "told";'
            Replace = 'if ($t -ceq "taken") {' }
         @{ Name = "stopped-marked-though-refused"
-           Find = 'if ($w.state -cne "none") { & $setMark ("posted " + $day) }'
-           Replace = '& $setMark ("posted " + $day)' }
+           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark'
+           Replace = 'if ($true) { & $setMark' }
         @{ Name = "stopped-id-ignores-the-day"
            Find = '-Key "relay-stopped" -Gen $day -Text'
            Replace = '-Key "relay-stopped" -Gen 0 -Text' }

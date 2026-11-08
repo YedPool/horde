@@ -87,23 +87,28 @@ function Get-HordeWatcherVerdict {
 }
 
 function Read-HordeWatcherBeatState {
-    # { alerted; since; gen; tell; tellAt } at -Path; a fresh one when there is none or it cannot be read (the worst case is one more alarm).
-    # gen is the number of the episode (raised each time one is closed), the generation of the notice ids; tell is "" (the warchief's notice
-    # not posted), "posted" (posted and watched, awaiting TAKEN) or "lost" (given up); tellAt when it was posted. A file that cannot be read
-    # takes its gen from the clock, so a notice id is never one an earlier episode already used.
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $s = [pscustomobject]@{ alerted = $false; since = $null; gen = [long]0; tell = ""; tellAt = $null }
+    # { alerted; since; gen; tell; tellAt; seeded } at -Path; a fresh one when there is none or it cannot be read (the worst case is one more
+    # alarm). gen is the number of the episode (raised each time one is closed), the generation of the notice ids; tell is "" (the warchief's
+    # notice not posted), "posted" (posted and watched, awaiting TAKEN), "maybe" (a post whose result was unknown: it may have landed, is
+    # watched, and is posted again under the same id), "held" (the messenger holds it for good: not delivered) or "lost" (not taken in time, no
+    # longer watched); tellAt when it was first posted. A FRESH state takes its gen from the clock (-Now, seconds since 1970) and says
+    # seeded: a file that was removed, or cannot be read, must never start again at a number whose notice ids the messenger already holds
+    # (it would answer "already posted" for a new episode). The caller writes a seeded state at once, so every retry has the same id.
+    param([Parameter(Mandatory = $true)][string]$Path, [datetime]$Now = [datetime]::UtcNow)
+    $clock = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
+    $s = [pscustomobject]@{ alerted = $false; since = $null; gen = $clock; tell = ""; tellAt = $null; seeded = $true }
     if (-not [System.IO.File]::Exists($Path)) { return $s }
     try {
         $doc = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)
         if ($doc -is [System.Management.Automation.PSCustomObject]) {
+            $s.gen = [long]0; $s.seeded = $false
             if ($doc.alerted -eq $true) { $s.alerted = $true; $s.since = ConvertTo-HordeWatcherTime -Value $doc.since }
             if ($null -ne $doc.PSObject.Properties["gen"]) { $s.gen = [long]$doc.gen }
             $tp = $doc.PSObject.Properties["tell"]
-            if ($null -ne $tp -and @("", "posted", "lost") -ccontains ("" + $tp.Value)) { $s.tell = "" + $tp.Value }
+            if ($null -ne $tp -and @("", "posted", "maybe", "held", "lost") -ccontains ("" + $tp.Value)) { $s.tell = "" + $tp.Value }
             if ($null -ne $doc.PSObject.Properties["tellAt"]) { $s.tellAt = ConvertTo-HordeWatcherTime -Value $doc.tellAt }
         }
-    } catch { $s.gen = [long][System.Math]::Floor(([datetime]::UtcNow - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds) }
+    } catch { $s.gen = $clock; $s.seeded = $true }
     return $s
 }
 
@@ -118,6 +123,15 @@ function Write-HordeWatcherBeatState {
     try { Move-HordeFileAtomic -From $temp -To $Path } catch { try { [System.IO.File]::Delete($temp) } catch { }; throw }
 }
 
+function Get-HordeWatcherBeatStateSeeded {
+    # The state at -Path as Read-HordeWatcherBeatState gives it, and a fresh one is written at once (its clock-made gen kept), so the next pass
+    # reads the same gen and a retried notice has the same id.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][datetime]$Now)
+    $st = Read-HordeWatcherBeatState -Path $Path -Now $Now
+    if ($st.seeded) { Write-HordeWatcherBeatState -Path $Path -State $st; $st.seeded = $false }
+    return $st
+}
+
 function Send-HordeWatcherWord {
     # Hand one text to the tool -Name (Notify): { ok; line }. A tool that is $null tells nobody. The warchief's tell is
     # Send-HordeWatchTell (core/WatchTell.ps1): ok there is not "told".
@@ -130,32 +144,62 @@ function Send-HordeWatcherWord {
 }
 
 function Resolve-HordeWatcherTell {
-    # THE TAKEN LOOK of a stale episode whose warchief notice is posted or given up (core/WatchTell.ps1): lines. Posted and TAKEN counts the
-    # episode as told (alerted); given up leaves it untold and posts nothing more for it; still awaited or unknown changes nothing.
+    # THE TAKEN LOOK of a stale episode whose warchief notice is posted (or may be): lines. TAKEN counts the episode as told (alerted); a
+    # notice the messenger holds, or that was given up unread, is left untold and not posted again (the caller then tries the phone); still
+    # awaited or unknown changes nothing.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Label)
-    if ($State.tell -cne "posted") { return @() }
+    if ($State.tell -cne "posted" -and $State.tell -cne "maybe") { return @() }
     $t = Get-HordeWatchTellTaken -Tools $Tools -Key $Key -Gen ([long]$State.gen) -PostedAt $State.tellAt -Now $Now
     if ($t -ceq "taken") {
         Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true; since = $Now; gen = [long]$State.gen; tell = ""; tellAt = $null })
+        $State.alerted = $true; $State.tell = ""
         return @($Label + ": the warchief's session took the notice: he is told")
     }
-    if ($t -ceq "lost") {
-        Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = [long]$State.gen; tell = "lost"; tellAt = $State.tellAt })
-        return @($Label + ": the notice to the warchief was given up unread; he is not told, and none is posted again for this episode")
+    if ($t -ceq "held" -or $t -ceq "lost") {
+        Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = [long]$State.gen; tell = $t; tellAt = $State.tellAt })
+        $State.tell = $t
+        return @($Label + ": the notice to the warchief " + (Get-HordeWatchLostText -Why $t) + "; he is not told, and none is posted again for this episode")
     }
     return @()
 }
 
 function Send-HordeWatcherAlarm {
     # One stale episode's alarm: the warchief's notice is marked and posted FIRST (Send-HordeWatchTell), then the founder's phone is told what
-    # is known of it. The episode counts as told when the phone's notice was accepted or, later, the warchief's session TAKES his (the next
-    # passes' look). Returns the lines; the state is written here, only when something was posted or told (so a pass that did neither tries again).
-    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$PhoneText, [Parameter(Mandatory = $true)][string]$WarchiefBody, [Parameter(Mandatory = $true)][datetime]$Now)
-    $w = Send-HordeWatchTell -Tools $Tools -Prefix "watcher check" -Who "the warchief" -Key $Key -Gen ([long]$State.gen) -Text $WarchiefBody
-    $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text ($PhoneText + " " + (Get-HordeWatchTellWords -State $w.state)) -Who "the founder's phone"
+    # is known of it. The episode counts as told when the phone's notice was accepted or, later, the warchief's session TAKES his mail (the next
+    # passes' look). Returns the lines; the state is written here, only when something was posted or told (so a pass that did neither tries
+    # again, with the same id). -NoPost posts nothing (the notice was held or given up) and tells the phone what is known of that.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$PhoneText, [Parameter(Mandatory = $true)][string]$WarchiefBody, [Parameter(Mandatory = $true)][datetime]$Now, [switch]$NoPost)
+    $words = $null
+    $w = $null
+    if ($NoPost) { $words = Get-HordeWatchLostWords -Why $State.tell }
+    else {
+        $w = Send-HordeWatchTell -Tools $Tools -Prefix "watcher check" -Who "the warchief" -Key $Key -Gen ([long]$State.gen) -Text $WarchiefBody
+        $words = Get-HordeWatchTellWords -State $w.state
+    }
+    $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text ($PhoneText + " " + $words) -Who "the founder's phone"
+    $tellNow = $(if ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { $w.state } else { "" + $State.tell })
+    $at = $(if ($State.tellAt -is [datetime]) { $State.tellAt } else { $Now })
     if ($n.ok) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $true; since = $Now; gen = [long]$State.gen; tell = ""; tellAt = $null }) }
-    elseif ($w.state -cne "none") { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = [long]$State.gen; tell = "posted"; tellAt = $Now }) }
+    elseif ($null -ne $w -and ($w.state -ceq "posted" -or $w.state -ceq "maybe")) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = [long]$State.gen; tell = $tellNow; tellAt = $at }) }
+    if ($null -eq $w) { return @($n.line) }
     return @($n.line, $w.line)
+}
+
+function Invoke-HordeWatcherEpisode {
+    # What both checks do about one STALE verdict, with the state read at -StatePath: the lines. Nothing more is said once the episode is told.
+    # A notice posted or whose result is unknown is looked at (TAKEN?); one whose result is unknown is posted again, same id; one the
+    # messenger holds or gave up is not posted again, and the phone is tried again with what is known of it, until it takes the episode.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$St, [Parameter(Mandatory = $true)][string]$StatePath, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$PhoneText, [Parameter(Mandatory = $true)][string]$WarchiefBody, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Label)
+    $lines = New-Object System.Collections.ArrayList
+    if ($St.tell -ceq "posted" -or $St.tell -ceq "maybe") {
+        foreach ($l in @(Resolve-HordeWatcherTell -Tools $Tools -State $St -StatePath $StatePath -Key $Key -Now $Now -Label $Label)) { [void]$lines.Add($l) }
+        if ($St.alerted -or $St.tell -ceq "posted") { return @($lines.ToArray()) }
+    }
+    if ($St.tell -ceq "held" -or $St.tell -ceq "lost") {
+        foreach ($l in @(Send-HordeWatcherAlarm -Tools $Tools -State $St -StatePath $StatePath -Key $Key -PhoneText $PhoneText -WarchiefBody $WarchiefBody -Now $Now -NoPost)) { [void]$lines.Add($l) }
+        return @($lines.ToArray())
+    }
+    return @($lines.ToArray()) + @(Send-HordeWatcherAlarm -Tools $Tools -State $St -StatePath $StatePath -Key $Key -PhoneText $PhoneText -WarchiefBody $WarchiefBody -Now $Now)
 }
 
 function Invoke-HordeWatcherHeartbeat {
@@ -165,14 +209,14 @@ function Invoke-HordeWatcherHeartbeat {
     $lines = New-Object System.Collections.ArrayList
     $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $v = Get-HordeWatcherVerdict -Run (Read-HordeWatcherRun -Path $RunPath) -Now $now -Policy $Policy
-    $st = Read-HordeWatcherBeatState -Path $StatePath
+    $st = Get-HordeWatcherBeatStateSeeded -Path $StatePath -Now $now
     if ($v.stale) {
         if ($st.alerted) { return [pscustomobject]@{ lines = @() } }
-        # A notice already posted (awaiting TAKEN) or given up is not posted again: only looked at.
-        if ($st.tell -cne "") { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-stale" -Now $now -Label "watcher check") } }
-        [void]$lines.Add("watcher check: STALE (" + $v.kind + ") - " + $v.why)
+        if ($st.tell -ceq "") {
+            [void]$lines.Add("watcher check: STALE (" + $v.kind + ") - " + $v.why)
+        }
         $text = "Overseer watcher is stale (" + $v.kind + "): " + $v.why + ". Check the Task Scheduler task 'Fleet overseer watch'."
-        foreach ($l in @(Send-HordeWatcherAlarm -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-stale" -PhoneText $text -WarchiefBody ("OVERSEER WATCHER STALE`n" + $text + "`nIts run file is " + $RunPath + ". You are not told again until it has been fresh and goes stale again.") -Now $now)) { [void]$lines.Add($l) }
+        foreach ($l in @(Invoke-HordeWatcherEpisode -Tools $Tools -St $st -StatePath $StatePath -Key "watcher-stale" -PhoneText $text -WarchiefBody ("OVERSEER WATCHER STALE`n" + $text + "`nIts run file is " + $RunPath + ". You are not told again until it has been fresh and goes stale again.") -Now $now -Label "watcher check")) { [void]$lines.Add($l) }
         return [pscustomobject]@{ lines = @($lines.ToArray()) }
     }
     if ($st.alerted -or $st.tell -cne "") {
@@ -234,15 +278,13 @@ function Invoke-HordeWatcherReaderCheck {
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][string]$SelfPath, [Parameter(Mandatory = $true)][string]$MailRoot, [Parameter(Mandatory = $true)][string]$StatePath)
     $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $v = Get-HordeWatcherReaderVerdict -SelfPath $SelfPath -MailRoot $MailRoot -Now $now -Policy $Policy
-    $st = Read-HordeWatcherBeatState -Path $StatePath
+    $st = Get-HordeWatcherBeatStateSeeded -Path $StatePath -Now $now
     if ($v.stale -and $st.alerted) { return [pscustomobject]@{ lines = @() } }
     if (-not $v.stale) {
         if ($st.alerted -or $st.tell -cne "") { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null; gen = ([long]$st.gen + 1); tell = ""; tellAt = $null }) }
         return [pscustomobject]@{ lines = @() }
     }
-    # A notice already posted (awaiting TAKEN) or given up is not posted again: only looked at.
-    if ($st.tell -cne "") { return [pscustomobject]@{ lines = @(Resolve-HordeWatcherTell -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-unread" -Now $now -Label "watcher reader check") } }
     $text = "Overseer alarms are not being read (" + $v.kind + "): " + $v.why + "."
-    $sent = @(Send-HordeWatcherAlarm -Tools $Tools -State $st -StatePath $StatePath -Key "watcher-unread" -PhoneText $text -WarchiefBody ("OVERSEER ALARMS UNREAD`n" + $text + "`nYou are not told again until this has cleared and comes back.") -Now $now)
-    return [pscustomobject]@{ lines = @(("watcher reader check: STALE (" + $v.kind + ") - " + $v.why), $sent[0], $sent[1]) }
+    $sent = @(Invoke-HordeWatcherEpisode -Tools $Tools -St $st -StatePath $StatePath -Key "watcher-unread" -PhoneText $text -WarchiefBody ("OVERSEER ALARMS UNREAD`n" + $text + "`nYou are not told again until this has cleared and comes back.") -Now $now -Label "watcher reader check")
+    return [pscustomobject]@{ lines = @($(if ($st.tell -ceq "") { @("watcher reader check: STALE (" + $v.kind + ") - " + $v.why) } else { @() })) + $sent }
 }

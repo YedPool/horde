@@ -74,11 +74,13 @@ $policy = [pscustomobject]@{ relayEveryMinutes = 5; relayFailuresBeforeAlert = 2
 # A WORLD (T-0391 slice 8): the warchief's mailbox as the suite plays it. Tell marks and posts a notice under (key, generation) like the real
 # marked teller (cli/AnalystTend.ps1); Taken says "taken" only when the suite has the warchief's session take it (taken[], or autoTake), "pending"
 # while it is marked and not taken, "lost" when the suite gives it up, "unknown" for a notice never marked. refuse[key] refuses that many posts
-# (a known refusal: no mark); unknown[key] answers every post with an UNKNOWN result that left its mark.
+# (a known refusal: no mark); unknown[key] answers every post with an UNKNOWN result that left its mark; dup[key] answers that many posts
+# "accepted" for an id the messenger already held (already-posted, and the mark this call wrote is taken off again: ok, not listed); held[id] is
+# a notice the messenger holds for good (Taken says held), lost[id] one it gave up (lost).
 function New-World {
     param([datetime]$Start)
     return [pscustomobject]@{ now = $Start; tells = (New-Object System.Collections.ArrayList); posts = (New-Object System.Collections.ArrayList); notices = (New-Object System.Collections.ArrayList)
-                              marked = @{}; taken = @{}; lost = @{}; refuse = @{}; unknown = @{}; autoTake = $false }
+                              marked = @{}; taken = @{}; lost = @{}; held = @{}; refuse = @{}; unknown = @{}; dup = @{}; autoTake = $false }
 }
 function New-WorldTools {
     param($W, [switch]$NoTaken)
@@ -91,6 +93,7 @@ function New-WorldTools {
             $id = "" + $Key + "|" + $Gen
             [void]$W.tells.Add($Body); [void]$W.posts.Add($id)
             if ($W.refuse.ContainsKey($Key) -and $W.refuse[$Key] -gt 0) { $W.refuse[$Key] = $W.refuse[$Key] - 1; return [pscustomobject]@{ ok = $false; detail = "the fleet mail failed"; listed = $false } }
+            if ($W.dup.ContainsKey($Key) -and $W.dup[$Key] -gt 0) { $W.dup[$Key] = $W.dup[$Key] - 1; return [pscustomobject]@{ ok = $true; detail = ""; listed = $false } }
             $W.marked[$id] = $true
             if ($W.unknown.ContainsKey($Key)) { return [pscustomobject]@{ ok = $false; detail = "no answer"; listed = $true } }
             return [pscustomobject]@{ ok = $true; detail = ""; listed = $true }
@@ -99,6 +102,7 @@ function New-WorldTools {
             param($Key, $Gen)
             $id = "" + $Key + "|" + $Gen
             if ($W.lost.ContainsKey($id)) { return "lost" }
+            if ($W.held.ContainsKey($id)) { return "held" }
             if ($W.marked.ContainsKey($id)) { if ($W.autoTake -or $W.taken.ContainsKey($id)) { return "taken" }; return "pending" }
             return "unknown"
         }.GetNewClosure()
@@ -107,7 +111,9 @@ function New-WorldTools {
     if ($NoTaken) { $t["Taken"] = $null }
     return $t
 }
-function Pass { param($W, $Tools, [string]$Path, [double]$Minutes) $W.now = $t0.AddMinutes($Minutes); return (Invoke-HordeRelayWatch -Tools $Tools -Policy $policy -StatePath $Path -Origin $origin) }
+# Pass starts a world's state at episode 0 when there is no file, so a test can name the ids; PassRaw does not (the clock-made number, below).
+function PassRaw { param($W, $Tools, [string]$Path, [double]$Minutes) $W.now = $t0.AddMinutes($Minutes); return (Invoke-HordeRelayWatch -Tools $Tools -Policy $policy -StatePath $Path -Origin $origin) }
+function Pass { param($W, $Tools, [string]$Path, [double]$Minutes) if (-not [System.IO.File]::Exists($Path)) { Write-HordeRelayWatchState -Path $Path -State (New-HordeRelayWatchState) }; return (PassRaw $W $Tools $Path $Minutes) }
 function State-Of { param([string]$Path) return (Read-HordeRelayWatchState -Path $Path).value }
 function Bodies { param($W, [string]$Like) return @($W.tells | Where-Object { $_ -like $Like }).Count }
 function Health { return (Get-HordeRelayHealth -Origin $origin -Fetch $fetch) }
@@ -223,7 +229,7 @@ try {
     Check ($w3.notices.Count -eq 1 -and $w3.notices[0] -like "The relay check fails*" -and -not (State-Of $sp3b).alerted -and $w3.posts[0] -ceq $w3.posts[1]) "the warchief's mail is refused throughout: the phone was told it is down once, the outage is not told, and each try has the same id"
     $sync.mode = "up"
     foreach ($m in @(315, 320, 325)) { $null = Pass $w3 $tl3 $sp3b $m }
-    Check ($w3.notices.Count -eq 2 -and $w3.notices[1] -like "The relay is back*" -and $w3.notices[1] -clike "*No notice about the outage reached the warchief*") ("two healthy checks: the phone is told it is back, and that nothing reached the warchief (" + $w3.notices.Count + " notices)")
+    Check ($w3.notices.Count -eq 2 -and $w3.notices[1] -like "The relay is back*" -and $w3.notices[1] -clike "*No notice about the outage was posted to the warchief, so none about its end is posted.*") ("two healthy checks: the phone is told it is back, and that nothing reached the warchief (" + $w3.notices.Count + " notices)")
     Check ((Bodies $w3 "RELAY BACK*") -eq 0) "and the warchief, never told it was down, is not told it is back"
     Check (-not (State-Of $sp3b).notified -and (State-Of $sp3b).episode -eq 1) "and the outage is closed"
 
@@ -258,14 +264,25 @@ try {
     $w8 = New-World $t0; $w8.unknown["relay-down"] = $true; $tl8 = New-WorldTools $w8; $sp8 = Join-Path $work "unknown.json"
     $sync.mode = "500"
     foreach ($m in @(600, 605)) { $null = Pass $w8 $tl8 $sp8 $m }
-    Check ($w8.notices[0] -clike "*A notice to the warchief may have been posted; the watch cannot tell.*" -and $w8.notices[0] -cnotlike "*was not posted*" -and (State-Of $sp8).downTell -ceq "posted") "an UNKNOWN result keeps its mark: the phone is told it MAY have been posted - never 'not posted' - and it is watched"
+    Check ($w8.notices[0] -clike "*A notice to the warchief may have been posted; the watch cannot tell.*" -and $w8.notices[0] -cnotlike "*was not posted*" -and (State-Of $sp8).downTell -ceq "maybe" -and -not (State-Of $sp8).alerted) "an UNKNOWN result keeps its mark: the phone is told it MAY have been posted - never 'not posted' - and it is watched, not counted"
     $null = Pass $w8 $tl8 $sp8 610
-    Check ($w8.tells.Count -eq 1) "and it is not posted a second time while it may have landed"
+    Check ($w8.tells.Count -eq 2 -and $w8.posts[1] -ceq $w8.posts[0] -and $w8.notices.Count -eq 1 -and (State-Of $sp8).downTell -ceq "maybe") "and it is posted AGAIN at the next check under the same id (it may not have landed), the phone is not told twice"
+    $w8.unknown.Remove("relay-down")
+    $null = Pass $w8 $tl8 $sp8 615
+    Check ($w8.tells.Count -eq 3 -and $w8.posts[2] -ceq $w8.posts[0] -and (State-Of $sp8).downTell -ceq "posted") "a repost the messenger then accepts makes it posted"
+    $w8.taken[$w8.posts[0]] = $true
+    $null = Pass $w8 $tl8 $sp8 620
+    Check ((State-Of $sp8).alerted) "and its TAKEN counts it"
+    $w8b = New-World $t0; $w8b.unknown["relay-down"] = $true; $tl8b = New-WorldTools $w8b; $sp8b = Join-Path $work "unknown-taken.json"
+    foreach ($m in @(630, 635)) { $null = Pass $w8b $tl8b $sp8b $m }
+    $w8b.taken["relay-down|0"] = $true
+    $null = Pass $w8b $tl8b $sp8b 640
+    Check ((State-Of $sp8b).alerted -and $w8b.tells.Count -eq 1) "a post whose result was unknown, that turns out TAKEN, is counted told (the look comes before the repost)"
     $w9 = New-World $t0; $tl9 = New-WorldTools $w9; $sp9 = Join-Path $work "lost.json"
     foreach ($m in @(700, 705)) { $null = Pass $w9 $tl9 $sp9 $m }
     $w9.lost["relay-down|0"] = $true
     $w = Pass $w9 $tl9 $sp9 710
-    Check ((State-Of $sp9).downTell -ceq "lost" -and -not (State-Of $sp9).alerted -and (@($w.lines) -join " ") -like "*given up unread*") "a down notice the messenger gave up is NOT told: the line says so"
+    Check ((State-Of $sp9).downTell -ceq "lost" -and -not (State-Of $sp9).alerted -and (@($w.lines) -join " ") -like "*DOWN notice to the warchief was not taken in time and is no longer watched (it may still be in his mailbox)*" -and (@($w.lines) -join " ") -cnotlike "*unread*") "a down notice the engine gave up is NOT told: the line says only that it was not taken in time, and that it may still be in his mailbox"
     $null = Pass $w9 $tl9 $sp9 715
     Check ($w9.tells.Count -eq 1) "and none is posted again for that outage"
     $sync.mode = "up"
@@ -292,7 +309,7 @@ try {
     foreach ($m in @(1000, 1005, 1010, 1015, 1020)) { $null = Pass $w12 $tl12 $sp12 $m }
     Check (-not (State-Of $sp12).alerted -and (State-Of $sp12).downTell -ceq "posted" -and $w12.tells.Count -eq 1) "with no Taken tool nothing is ever counted as taken - the messenger's ok is not enough - and nothing is posted twice"
     $w = Pass $w12 $tl12 $sp12 (1005 + 8 * 24 * 60)
-    Check ((State-Of $sp12).downTell -ceq "lost" -and (@($w.lines) -join " ") -like "*given up unread*") "and a notice awaited a notice-ttl (7 days) is given up"
+    Check ((State-Of $sp12).downTell -ceq "lost" -and (@($w.lines) -join " ") -like "*not taken in time*") "and a notice awaited a notice-ttl (7 days) is given up"
     $sync.mode = "up"
     Write-HordeRelayWatchState -Path (Join-Path $work "old.json") -State (New-HordeRelayWatchState)
     $oldDoc = '{"v":1,"lastCheckAt":null,"failures":2,"healthy":0,"downSince":null,"alerted":true,"notified":true,"lastWhy":"x"}'
@@ -311,7 +328,73 @@ try {
     foreach ($m in @(1310, 1315)) { $null = Pass $w15 $tl15 $sp15 $m }
     $w15.lost["relay-back|0"] = $true
     $w = Pass $w15 $tl15 $sp15 1320
-    Check ((State-Of $sp15).episode -eq 1 -and -not (State-Of $sp15).alerted -and (State-Of $sp15).backTell -ceq "" -and (@($w.lines) -join " ") -like "*BACK notice to the warchief was given up unread; the outage is closed*") "a back notice the messenger gave up is not told, but the outage is closed (no notice can come of it), and the line says so"
+    Check ((State-Of $sp15).episode -eq 1 -and -not (State-Of $sp15).alerted -and (State-Of $sp15).backTell -ceq "" -and (@($w.lines) -join " ") -like "*BACK notice to the warchief was not taken in time and is no longer watched*the outage is closed*") "a back notice the engine gave up is not told, but the outage is closed (no notice can come of it), and the line says so"
+    # ROUND 2, MUST-FIX 2: a notice that is not taken and is no longer watched is said in what is known of it - held is not delivered; lost may still be in his mailbox.
+    $w16 = New-World $t0; $tl16 = New-WorldTools $w16; $sp16 = Join-Path $work "held.json"
+    $sync.mode = "500"
+    foreach ($m in @(1400, 1405)) { $null = Pass $w16 $tl16 $sp16 $m }
+    $w16.held["relay-down|0"] = $true
+    $w = Pass $w16 $tl16 $sp16 1410
+    Check ((State-Of $sp16).downTell -ceq "held" -and -not (State-Of $sp16).alerted -and (@($w.lines) -join " ") -clike "*DOWN notice to the warchief could not be delivered (the messenger holds it for good) and is not taken; he is not told*") "a down notice the messenger HOLDS is not told, and the line says it could not be delivered"
+    $sync.mode = "up"
+    foreach ($m in @(1415, 1420)) { $null = Pass $w16 $tl16 $sp16 $m }
+    Check ($w16.notices[-1] -clike "*The warchief's notice about the outage could not be delivered (the messenger holds it), so none about its end is posted.*" -and $w16.notices[-1] -cnotlike "*reached*") "and the phone is told only that: not 'no notice reached the warchief'"
+    Check ((Get-HordeWatchLostWords -Why "held") -ceq "The warchief's notice could not be delivered: the messenger holds it, and it was not taken." -and (Get-HordeWatchLostWords -Why "lost") -ceq "The warchief's notice was not taken in time and is no longer watched; it may still be in his mailbox.") "the words for a phone about a notice that is not taken and not watched: held was not delivered; lost may still be in his mailbox"
+    Check ($w9.notices[-1] -clike "*The warchief's notice about the outage was not taken in time, so none about its end is posted.*" -and $w9.notices[-1] -cnotlike "*reached*") "a notice given up by the engine: the phone is told it was not taken in time - not that nothing reached the warchief"
+    # ROUND 2, MUST-FIX 1: a removed state file never starts again at an episode whose ids the messenger holds.
+    $w17 = New-World $t0; $tl17 = New-WorldTools $w17; $sp17 = Join-Path $work "removed.json"
+    $sync.mode = "500"
+    foreach ($m in @(1500, 1505)) { $null = PassRaw $w17 $tl17 $sp17 $m }
+    $secs17 = [long][System.Math]::Floor(($t0.AddMinutes(1500).ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)
+    $e17 = (State-Of $sp17).episode
+    Check ($e17 -eq $secs17 -and $w17.posts[0] -ceq ("relay-down|" + $e17)) "a state with no file takes its episode number from the clock (seconds since 1970), and the notice ids carry it"
+    $w17.taken["relay-down|" + $e17] = $true
+    $sync.mode = "up"
+    foreach ($m in @(1510, 1515)) { $null = PassRaw $w17 $tl17 $sp17 $m }
+    $w17.taken["relay-back|" + $e17] = $true
+    $null = PassRaw $w17 $tl17 $sp17 1520
+    Check ((State-Of $sp17).episode -eq ($e17 + 1) -and -not (State-Of $sp17).alerted) "CONTROL: the first outage is told and closed"
+    [System.IO.File]::Delete($sp17)
+    $sync.mode = "500"
+    foreach ($m in @(1600, 1605)) { $null = PassRaw $w17 $tl17 $sp17 $m }
+    $nowIds = @($w17.posts | Select-Object -Last 1)
+    Check ($nowIds[0] -cne ("relay-down|" + $e17) -and $nowIds[0] -cne ("relay-down|" + ($e17 + 1)) -and (State-Of $sp17).episode -gt ($e17 + 1)) "STATE FILE REMOVED (the STOPPED notice's own advice): the new outage has a NEW id, not the first outage's"
+    $w = PassRaw $w17 $tl17 $sp17 1610
+    Check (-not (State-Of $sp17).alerted -and (@($w.lines) -join " ") -cnotlike "*took the DOWN notice*") "and the first outage's taken notice is not counted as the new outage's TAKEN"
+    # ROUND 2, MUST-FIX 1(a): a post that is only a repost of a copy the messenger already held is neither posted nor watched, and is said so.
+    $w18 = New-World $t0; $w18.dup["relay-down"] = 99; $tl18 = New-WorldTools $w18; $sp18 = Join-Path $work "copy.json"
+    $sync.mode = "500"
+    foreach ($m in @(1700, 1705)) { $null = Pass $w18 $tl18 $sp18 $m }
+    $w18.taken["relay-down|0"] = $true
+    Check ($w18.notices[0] -clike "*Nothing new was posted to the warchief: the messenger already held a copy of this notice.*" -and $w18.notices[0] -cnotlike "*being watched*" -and (State-Of $sp18).downTell -ceq "") "ok with no mark kept (already posted): the phone is told nothing new was posted - not 'posted and being watched' - and nothing is stored as posted"
+    $w = Pass $w18 $tl18 $sp18 1710
+    Check ($w18.tells.Count -eq 2 -and -not (State-Of $sp18).alerted -and (@($w.lines) -join " ") -like "*nothing new was posted to the warchief: the messenger already held a copy*") "it is tried again at the next check, and an earlier copy's fate is never counted as this notice's TAKEN"
+    # SHOULD-FIX 1 for the STOPPED notice: an unknown result is posted again, same id.
+    $w19 = New-World $t0; $w19.unknown["relay-stopped"] = $true; $tl19 = New-WorldTools $w19
+    $bad19 = Join-Path $work "bad-state19.json"
+    [System.IO.File]::WriteAllText($bad19, "not json", $utf8)
+    $null = PassRaw $w19 $tl19 $bad19 0
+    Check ($w19.tells.Count -eq 1 -and ([System.IO.File]::ReadAllText($bad19 + ".told")) -clike "maybe *") "a STOPPED notice with an unknown result is kept as maybe"
+    $null = PassRaw $w19 $tl19 $bad19 5
+    Check ($w19.tells.Count -eq 2 -and $w19.posts[1] -ceq $w19.posts[0]) "and is posted again at the next pass under the same id"
+    $w19.unknown.Remove("relay-stopped")
+    $null = PassRaw $w19 $tl19 $bad19 10
+    Check ($w19.tells.Count -eq 3 -and ([System.IO.File]::ReadAllText($bad19 + ".told")) -clike "posted *") "then, accepted, it is posted and awaited"
+    # A back notice whose result is unknown is posted again, and the phone is told of it once; its age is that of the first post (7 days).
+    $w20 = New-World $t0; $w20.unknown["relay-back"] = $true; $tl20 = New-WorldTools $w20; $sp20 = Join-Path $work "back-unknown-repost.json"
+    $sync.mode = "500"
+    foreach ($m in @(1800, 1805)) { $null = Pass $w20 $tl20 $sp20 $m }
+    $w20.taken["relay-down|0"] = $true
+    $sync.mode = "up"
+    foreach ($m in @(1810, 1815, 1820, 1825)) { $null = Pass $w20 $tl20 $sp20 $m }
+    Check ((Bodies $w20 "RELAY BACK*") -eq 3 -and $w20.posts[-1] -ceq "relay-back|0" -and (State-Of $sp20).backTell -ceq "maybe" -and $w20.notices.Count -eq 2) "a back notice with an unknown result is posted again at each healthy check, same id, and the phone hears of it once"
+    Check ((State-Of $sp20).backAt -eq $t0.AddMinutes(1815)) "and its age is that of the first post"
+    $w21 = New-World $t0; $w21.unknown["relay-down"] = $true; $tl21 = New-WorldTools $w21; $sp21 = Join-Path $work "unknown-ages.json"
+    $sync.mode = "500"
+    foreach ($m in @(2000, 2005, (2005 + 3 * 1440), (2005 + 6 * 1440))) { $null = Pass $w21 $tl21 $sp21 $m }
+    Check ((State-Of $sp21).downTell -ceq "maybe" -and (State-Of $sp21).downAt -eq $t0.AddMinutes(2005)) "an unknown result posted again for days keeps the time of its FIRST post"
+    $w = Pass $w21 $tl21 $sp21 (2005 + 8 * 1440)
+    Check ((State-Of $sp21).downTell -ceq "lost" -and (@($w.lines) -join " ") -like "*not taken in time*") "so it is given up a notice-ttl (7 days) after the first post, however often it was posted again"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }

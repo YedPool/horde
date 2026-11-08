@@ -72,9 +72,6 @@ function Find-HordeMessenger { param([Parameter(Mandatory = $true)][AllowEmptyCo
 function Get-HordeDeviceId { param([string]$HomeRoot = "") if ($script:noDevice) { throw "the shim has no device id" }; return (& $origDeviceId -HomeRoot $HomeRoot) }
 # A folder that is not above the suite's homes, so they are not taken for a test's (A TEST'S HOME TELLS NOBODY).
 $notTemp = Join-Path $env:TEMP ("horde-analyst-tell-taken-elsewhere-" + [guid]::NewGuid().ToString("N"))
-# The loader child (below) runs with TEMP pointed here; Windows PowerShell 5.1 compiles core/JsonText.ps1's Add-Type into TEMP and died with
-# "Could not find a part of the path" when this folder was not there (measured 2026-11-08: four failures on 5.1, none on 7). It is made, and removed in finally.
-[void][System.IO.Directory]::CreateDirectory($notTemp)
 $t0 = [datetime]::new(2026, 10, 13, 12, 0, 0, [System.DateTimeKind]::Utc)
 $vals = [pscustomobject]@{ fromLabel = "AS"; tellWarchief = $true; takenAlarmSeconds = 90; takenAfterAlarmSeconds = 60 }
 
@@ -748,9 +745,9 @@ try {
     $script:stages[$idR] = "handed-over"
     Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "taken") "handed-over is taken too"
     $script:stages[$idR] = "held"
-    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "lost") "a notice the messenger holds for good is lost"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "held") "a notice the messenger holds for good is held (not delivered)"
     $script:stages[$idR] = "expired"
-    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "lost") "and one it gave up is lost"
+    Check ((@(Run-Block $blkRTaken @("relay-down", 2) "relay Taken"))[0] -ceq "lost") "and one it gave up is lost (not taken; it may still be in his mailbox)"
     $script:stages.Clear()
     Check ((@(Run-Block $blkRTaken @("relay-down", 3) "relay Taken"))[0] -ceq "unknown") "a notice never marked, with no word from the messenger, is unknown - never guessed"
     $script:noMessenger = $true
@@ -773,6 +770,86 @@ try {
 } finally { $env:TEMP = $keepTemp; $env:TMP = $keepTmp }
 
 Write-Host ""
+Write-Host "--- ROUND 2 (PR 476): the REAL relay watch and watcher check with the stand-in messenger: a removed state file reuses no id, and a repost of a held copy is never posted or taken ---" -ForegroundColor Cyan
+. (Join-Path $root "core\RelayWatch.ps1")
+. (Join-Path $root "core\WatcherHeartbeat.ps1")
+$HW = New-Home
+$script:wnow = [datetime]::new(2026, 11, 1, 12, 0, 0, [System.DateTimeKind]::Utc)
+$script:wmode = "down"
+$script:wnotices = New-Object System.Collections.ArrayList
+$wTools = @{
+    Now = { return $script:wnow }
+    Fetch = { param($Url)
+        if ($script:wmode -ceq "down") { return [pscustomobject]@{ status = 500; location = "" } }
+        if ($Url -like "*/auth/google") { return [pscustomobject]@{ status = 303; location = "https://accounts.google.com/o/oauth2/v2/auth?client_id=123456789012-abcdefghijklmnop0123456789abcdef.apps.googleusercontent.com" } }
+        return [pscustomobject]@{ status = 200; location = "" } }
+    Tell = { param($Body, $Key, $Gen) return (Send-HordeAnalystWatchTell -Key $Key -Body $Body -Values $vals -Gen ([long]$Gen) -HordeHome $HW -Now $script:wnow -Seat $seat -TempRoot $notTemp) }
+    Taken = { param($Key, $Gen) return (Get-HordeAnalystWatchTaken -HordeHome $HW -Key $Key -Gen ([long]$Gen)) }
+    Notify = { param($Line) [void]$script:wnotices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }
+}
+$wPolicy = [pscustomobject]@{ relayEveryMinutes = 5; relayFailuresBeforeAlert = 2 }
+$spw = Join-Path $HW "analyst\relay-watch.json"
+function WPass { $script:wnow = $script:wnow.AddMinutes(5); $r = Invoke-HordeRelayWatch -Tools $wTools -Policy $wPolicy -StatePath $spw -Origin "http://127.0.0.1:1"; return (@($r.lines) -join " | ") }
+function WState { return (Read-HordeRelayWatchState -Path $spw).value }
+$script:wmode = "down"
+$null = WPass
+$e0 = (WState).episode
+Check ($e0 -gt 1700000000) ("a watch with no state starts at a clock-made episode number (" + $e0 + "), not 0")
+$l = WPass
+$idD = Id-Of "relay-down" $e0
+Check ($script:held.ContainsKey($idD) -and @(Marks-Of $HW $idD).Count -eq 1 -and (WState).downTell -ceq "posted") "EPISODE 1: the down notice is posted under the id of that number, marked, and kept as posted"
+$script:stages[$idD] = "handed-over"
+$script:wmode = "up"
+$null = WPass; $null = WPass
+$idB = Id-Of "relay-back" $e0
+$script:stages[$idB] = "handed-over"
+$null = WPass
+$null = @(Invoke-HordeAnalystTellTakenTick -HordeHome $HW -Now $script:wnow)
+Check ((WState).episode -eq ($e0 + 1) -and @(Get-Marks $HW).Count -eq 0) "CONTROL: the first outage was told by two TAKENs and closed; the engine took both marks off"
+# THE REVIEWER'S PROBE: the state file is removed (the STOPPED notice's own advice) and a new outage begins.
+[System.IO.File]::Delete($spw)
+$script:wnotices.Clear()
+$script:wmode = "down"
+$script:wnow = $script:wnow.AddHours(1)
+$null = WPass
+$e1 = (WState).episode
+Check ($e1 -gt $e0 + 1) ("the new watch takes a NEW episode number from the clock (" + $e1 + "), not the first outage's " + $e0)
+$l = WPass
+$idD1 = Id-Of "relay-down" $e1
+Check ($l -notlike "*was NOT sent again*" -and @(Marks-Of $HW $idD1).Count -eq 1 -and (WState).downTell -ceq "posted" -and $script:wnotices[-1] -clike "*posted and is being watched for its taking.*") "so its notice is a new message: posted, marked, watched - and the phone's words are TRUE"
+$l = WPass
+Check (-not (WState).alerted -and $l -notlike "*took the DOWN notice*") "and the first outage's handed-over is NOT counted as this outage's TAKEN"
+# EVEN IF AN ID IS REUSED (a crash between the post and the state write): the repost is only a copy - never posted, never watched, never taken.
+[System.IO.File]::Delete($spw)
+$script:wnotices.Clear()
+$script:wmode = "up"
+$null = WPass; $null = WPass
+$script:wnow = $script:wnow.AddHours(1)
+$script:wmode = "down"
+$null = WPass
+$e2 = (WState).episode
+$idD2 = Id-Of "relay-down" $e2
+$script:held[$idD2] = "handed-over"; $script:stages[$idD2] = "handed-over"
+$postsBefore = $script:posts.Count
+$l = WPass
+Check ($l -like "*was NOT sent again*" -and @(Marks-Of $HW $idD2).Count -eq 0 -and (WState).downTell -ceq "" -and $script:wnotices[-1] -clike "*Nothing new was posted to the warchief: the messenger already held a copy of this notice.*" -and $script:wnotices[-1] -cnotlike "*being watched*") "a post that is only a repost of a held copy: not posted, not marked, and the phone is told nothing new was posted"
+$l = WPass
+Check (-not (WState).alerted -and $l -notlike "*took the DOWN notice*") "and the old copy's handed-over is never counted as TAKEN"
+# THE WATCHER CHECK: a removed watcher-beat.json takes a clock-made number too.
+$bp = Join-Path $HW "analyst\watcher-beat.json"
+$run = Join-Path $work "run19.json"
+$wPol = [pscustomobject]@{ watcherStaleMinutes = 10; watcherHungMinutes = 30 }
+$wwTools = @{ Now = $wTools["Now"]; Tell = $wTools["Tell"]; Taken = $wTools["Taken"]; Notify = { param($Line) return [pscustomobject]@{ ok = $false; detail = "capped" } } }
+$idW0 = Id-Of "watcher-stale" 0
+$script:held[$idW0] = "handed-over"; $script:stages[$idW0] = "handed-over"
+$script:wnow = $script:wnow.AddHours(2)
+$r = Invoke-HordeWatcherHeartbeat -Tools $wwTools -Policy $wPol -RunPath $run -StatePath $bp
+$b = Read-HordeWatcherBeatState -Path $bp
+Check ($b.gen -gt 1700000000 -and -not $b.alerted -and $b.tell -ceq "posted" -and @(Marks-Of $HW (Id-Of "watcher-stale" $b.gen)).Count -eq 1) "watcher: a state with no file starts at a clock-made number, so the old episode 0's handed-over is not this episode's"
+$r = Invoke-HordeWatcherHeartbeat -Tools $wwTools -Policy $wPol -RunPath $run -StatePath $bp
+Check (-not (Read-HordeWatcherBeatState -Path $bp).alerted -and (@($r.lines) -join " ") -notlike "*took the notice*") "and it is not counted as taken from the old copy"
+
+Write-Host ""
 Write-Host "--- the load comes from the command itself, and its two tools run in one process in either order (a fresh process each) ---" -ForegroundColor Cyan
 $shell = (Get-Process -Id $PID).Path
 $loader = Join-Path $fx "run-command-blocks.ps1"
@@ -787,6 +864,5 @@ finally {
     $env:HORDE_HOME = $keepHome
     $env:WEZFLEET_ROOT = $keepFleet
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $notTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 Complete-HordeSuite -Success "an analyst supervisor notice is told only while it is watched until the warchief's own TAKEN, alarms once when it is not taken in time, is never dropped, a later event has a new id, and its lines reach the pass"
