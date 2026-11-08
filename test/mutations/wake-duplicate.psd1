@@ -19,6 +19,21 @@
         @{ Name = "a-duplicate-is-nudged"
            Find = 'if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "retired-unknown-for-a-tick-ends-the-episode"
+           Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
+           Replace = '"$($t.retired)" -ceq "no") { $duplicateOn[$t.id] = $true }' }
+        @{ Name = "a-retired-session-keeps-its-episode"
+           Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
+           Replace = '"$($t.retired)" -cne "") { $duplicateOn[$t.id] = $true }' }
+        @{ Name = "the-episode-needs-reachable"
+           Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
+           Replace = '"$($t.retired)" -cne "yes" -and "$($t.reachable)" -ceq "yes") { $duplicateOn[$t.id] = $true }' }
+        @{ Name = "the-line-says-the-two-again"
+           Find = 'processes or panes the copies are.'
+           Replace = 'processes or panes the two are.' }
+        @{ Name = "a-gone-session-is-forgotten-at-once-by-default"
+           Find = 'duplicateGoneSeconds = 300'
+           Replace = 'duplicateGoneSeconds = 0' }
         @{ Name = "a-duplicate-is-not-said-at-all"
            Find = '$duplicate[$t.id] = "the session '
            Replace = '$null = "the session ' }
