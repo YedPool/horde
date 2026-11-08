@@ -20,7 +20,7 @@
            Find = 'if ("$(Get-HordeWakeEntryValue $Target "duplicate")" -ceq "yes") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "a-duplicate-is-not-said-at-all"
-           Find = '$duplicate[$t.id] = "two running copies'
-           Replace = '$null = "two running copies' }
+           Find = '$duplicate[$t.id] = "the session '
+           Replace = '$null = "the session ' }
     )
 }

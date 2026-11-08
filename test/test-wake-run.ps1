@@ -223,7 +223,7 @@ Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 1 -OldestUnread
 $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $quietDup = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
 Check (@($quietDup | Where-Object { $_.id -ceq (Sid 2) }).Count -eq 0) "two running copies and no unread mail: no line and no tell"
-Check (@($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -ge 1 -and @($quietDup | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) ("and a session whose listing has no such word is nudged and said nothing of, as before (" + @($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count + " nudges)")
+Check (@($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count -eq 2 -and @($quietDup | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" }).Count -eq 0) ("and a session whose listing has no such word is nudged and said nothing of, as before (" + @($quietDup | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 3) }).Count + " nudges)")
 # T-0116 round 2: a tell whose first post FAILS is tried again by a later pass, and told once. The condition is made on
 # every pass while the episode lasts, so the tell pass's own retry (after retrySeconds) has something to retry.
 $h = New-Home

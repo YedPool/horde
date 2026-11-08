@@ -18,7 +18,7 @@
            Find = '$dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate'
            Replace = '$dupNow = Update-HordeWakeSaidOnce -Seen @{}' }
         @{ Name = "duplicate-tell-instance-is-not-the-episode"
-           Find = '-Instance $Run.duplicateAt["$($e.id)"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
+           Find = '-Instance $Run.duplicateAt["$dupId"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
            Replace = '-Instance "x"' }
         @{ Name = "duplicate-line-is-not-kept-between-passes"
            Find = '$Run.duplicate = $dupNow.seen'
