@@ -440,8 +440,12 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
             & $make { (New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)) }
         }
-        foreach ($e in @($dupNow.entries)) {
-            & $make { (New-HordeWakeTellCondition -Kind "duplicate-copies" -Subject $e.id -Instance $Run.duplicateAt["$($e.id)"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the session " + $e.id + " has two running copies and unread mail, and is not nudged while that is so; " + $e.reason + ". Close one copy of it.")) }
+        # BUILT ON EVERY PASS WHILE THE EPISODE LASTS, not only on the pass that starts it: the tell pass retries a
+        # post that failed only when its condition is made again, and the same Subject and Instance (the episode's
+        # start) keep it one message, so a tell that was told is not sent twice (T-0116, round 2).
+        foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {
+            if (-not $Run.duplicateAt.ContainsKey("$dupId")) { continue }
+            & $make { (New-HordeWakeTellCondition -Kind "duplicate-copies" -Subject "$dupId" -Instance $Run.duplicateAt["$dupId"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ($Run.duplicate["$dupId"] + " Close one of the two copies.")) }
         }
         foreach ($e in @($bad.entries)) {
             & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }

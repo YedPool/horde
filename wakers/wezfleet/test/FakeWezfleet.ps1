@@ -148,7 +148,7 @@ $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-
 function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds; rule = $(if ($Outcome -ceq "woken" -and "$($row.betweenTurns)" -ceq "yes") { "between-turns-background-work" } else { "" }) }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
 # Two running copies (the row's reason says duplicate-process): the real command refuses, nothing typed (T-0116).
-if (@(@($row.reason) + @($row.reasons)) -ccontains "duplicate-process") { Write-FakeNudge "refused" "target-instance-ambiguous" "the session has two running copies; nothing is typed" }
+if (@(@($row.reason) + @($row.reasons)) -ccontains "duplicate-process") { Write-FakeNudge "unreachable" "target-instance-ambiguous" "the session has two running copies; nothing is typed" }
 if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
 # THE BUDGET, before anything is typed: with too little of it left, typing is not begun.

@@ -7,6 +7,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-line-does-not-name-the-label"
+           Find = '$(if ("$($t.label)" -cne "") {'
+           Replace = '$(if ($false) {' }
         @{ Name = "a-duplicate-with-no-mail-is-said"
            Find = 'if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes"'
            Replace = 'if ($a.value.unreadCount -ge 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes"' }

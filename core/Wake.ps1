@@ -1220,7 +1220,7 @@ function Invoke-HordeWakePass {
                 # TWO RUNNING COPIES, WITH MAIL: said once per episode (T-0116), by its own channel so that the
                 # tick can tell M too. Only a session that would otherwise be waited on for no word: not one
                 # that is never nudged for what it is, and not one with no unread mail.
-                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "two running copies, with " + $a.value.unreadCount + " unread: the session is not nudged while it has two, so this mail waits until one is closed" }
+                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "the session " + $(if ("$($t.label)" -cne "") { "$($t.label) (" + $t.id + ")" } else { "" + $t.id }) + " is running as two copies and has " + $a.value.unreadCount + " unread. It is not nudged while that is so, so this mail waits until one copy is closed. The fleet's row does not say which processes or panes the two are." }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $moving
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {

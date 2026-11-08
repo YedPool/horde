@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "count-change-says-it-again"
+           Find = 'if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } else'
+           Replace = 'if ($false) { $dupSaid["$id"] = $Run.duplicate["$id"] } else' }
+        @{ Name = "duplicate-tell-is-made-only-on-the-first-pass"
+           Find = 'foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {'
+           Replace = 'foreach ($dupId in @($dupNow.entries | ForEach-Object { $_.id })) {' }
         @{ Name = "duplicate-line-is-said-on-every-pass"
            Find = '$dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate'
            Replace = '$dupNow = Update-HordeWakeSaidOnce -Seen @{}' }
