@@ -285,6 +285,7 @@ function Invoke-HordeWatcherReaderCheck {
         return [pscustomobject]@{ lines = @() }
     }
     $text = "Overseer alarms are not being read (" + $v.kind + "): " + $v.why + "."
+    $firstLook = ($st.tell -ceq "")
     $sent = @(Invoke-HordeWatcherEpisode -Tools $Tools -St $st -StatePath $StatePath -Key "watcher-unread" -PhoneText $text -WarchiefBody ("OVERSEER ALARMS UNREAD`n" + $text + "`nYou are not told again until this has cleared and comes back.") -Now $now -Label "watcher reader check")
-    return [pscustomobject]@{ lines = @($(if ($st.tell -ceq "") { @("watcher reader check: STALE (" + $v.kind + ") - " + $v.why) } else { @() })) + $sent }
+    return [pscustomobject]@{ lines = @($(if ($firstLook) { @("watcher reader check: STALE (" + $v.kind + ") - " + $v.why) } else { @() })) + $sent }
 }

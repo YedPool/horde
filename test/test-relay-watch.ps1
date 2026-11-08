@@ -401,7 +401,7 @@ try {
     Check ($w14.notices.Count -eq 1 -and $w14.notices[0] -clike "*A notice to the warchief was not posted.*" -and (State-Of $sp14).downTell -ceq "") "telling off: nothing is posted, nothing is marked, and the phone is told it was not posted"
     $so = State-Of (Join-Path $work "old.json")
     Check ($so.alerted -and $so.episode -eq 0 -and $so.downTell -ceq "" -and $so.backTell -ceq "") "a state file an earlier version wrote still reads: episode 0, nothing posted"
-    [System.IO.File]::WriteAllText((Join-Path $work "oddtell.json"), '{"v":1,"lastCheckAt":null,"failures":2,"healthy":0,"downSince":null,"alerted":false,"notified":true,"lastWhy":"x","downTell":"maybe"}', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $work "oddtell.json"), '{"v":1,"lastCheckAt":null,"failures":2,"healthy":0,"downSince":null,"alerted":false,"notified":true,"lastWhy":"x","downTell":"bogus"}', $utf8)
     Check ((Read-HordeRelayWatchState -Path (Join-Path $work "oddtell.json")).state -cne "known") "a downTell that is not a known value makes the state unreadable: no guess"
 
     Write-Host ""
