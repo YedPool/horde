@@ -405,8 +405,8 @@ function Get-HordeRestoreSessions {
     # beside its value - which stays the plain list Get-HordeRestoreFinding takes - for the caller to
     # journal. The registry must be whole, as before: every session's role and parent come from it.
     # A LISTING THAT IS NOT WHOLE ONLY BECAUSE OF NAMED DUPLICATES COUNTS AS WHOLE HERE (T-0116). One
-    # session with two running copies made the claude listing not whole, and the codex listing is never
-    # whole on a machine with no codex control folder, so no listing was whole and the source was blind
+    # session with two running copies made one agent's listing not whole, and another agent's listing is
+    # never whole on a machine with no control folder of its own, so no listing was whole and the source was blind
     # for the whole fleet while one duplicate lasted (seen 2026-11-06). core/Identity.ps1 keeps complete
     # as it was, for every other reader, and says in wholeButDuplicates which agents are short only by
     # duplicates. A duplicate is in no record, so none is chosen; the answer carries duplicates, each
