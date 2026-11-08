@@ -87,7 +87,7 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -395,18 +395,47 @@ function Invoke-HordeWakeTick {
         # members existed gets them here.
         if ($null -eq $Run.PSObject.Properties["duplicate"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicate" -Value @{} }
         if ($null -eq $Run.PSObject.Properties["duplicateAt"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateAt" -Value @{} }
+        if ($null -eq $Run.PSObject.Properties["duplicateGone"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateGone" -Value @{} }
+        if ($null -eq $Run.PSObject.Properties["duplicateNot"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateNot" -Value @{} }
         if ($null -eq $Run.PSObject.Properties["duplicateMark"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "duplicateMark" -Value "" }
+        $listedHere = $null
         if ($null -ne $result.listing -and "$($result.listing.state)" -ceq "known") {
             $listedHere = @($result.listing.value | ForEach-Object { "$($_.id)" })
-            foreach ($id in @($Run.duplicate.Keys)) { if ($listedHere -cnotcontains "$id") { $Run.duplicate.Remove($id) } }
+            # A SESSION MISSING FROM A GOOD LISTING IS FORGOTTEN ONLY AFTER duplicateGoneSeconds (T-0116 P15): a
+            # one-tick flap of its row ended the episode, and the next tick began a second one. How long it has been
+            # missing is kept in duplicateGone (not saved: a restart counts from the first listing without it).
+            # While it is missing no tell is made for it (below), so none is retried for a session that is gone.
+            foreach ($id in @($Run.duplicate.Keys)) {
+                if ($listedHere -ccontains "$id") { $Run.duplicateGone.Remove("$id"); continue }
+                if (-not $Run.duplicateGone.ContainsKey("$id")) { $Run.duplicateGone["$id"] = $Now }
+                if (($Now - $Run.duplicateGone["$id"]).TotalSeconds -ge [double]$Settings.duplicateGoneSeconds) { $Run.duplicate.Remove("$id"); $Run.duplicateGone.Remove("$id") }
+            }
+            foreach ($id in @($Run.duplicateGone.Keys)) { if (-not $Run.duplicate.ContainsKey("$id")) { $Run.duplicateGone.Remove("$id") } }
+        }
+        # A LISTED SESSION READ AS NO LONGER A DUPLICATE keeps its episode for duplicateGoneSeconds too (T-0116 P15): the word
+        # going yes -> no for one tick (the port also carries an unreadable word as no) ended the episode and the next tick
+        # began a second one. Retired yes ends it at once (core/Wake.ps1); copies that really closed end it when the
+        # time is up, so the session is not held for ever, and a return after that is a new episode. Held on the pass
+        # (duplicateNot, not saved) it is said nothing new of and no tell is retried for it.
+        $dupHeld = @{}
+        if ($null -ne $listedHere) {
+            foreach ($row in @($result.listing.value)) {
+                $id = "$($row.id)"
+                if (-not $Run.duplicate.ContainsKey($id)) { continue }
+                if ("$(Get-HordeWakeEntryValue $row "duplicate")" -ceq "yes" -or "$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot.Remove($id); continue }
+                if (-not $Run.duplicateNot.ContainsKey($id)) { $Run.duplicateNot[$id] = $Now }
+                if (($Now - $Run.duplicateNot[$id]).TotalSeconds -lt [double]$Settings.duplicateGoneSeconds) { $dupHeld[$id] = $true }
+            }
         }
         $dupSaid = @{}
         foreach ($id in @($result.duplicateOn.Keys)) {
             if ($Run.duplicate.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] }
             elseif ($result.duplicate.ContainsKey($id)) { $dupSaid["$id"] = $result.duplicate[$id] }
         }
+        foreach ($id in @($dupHeld.Keys)) { if (-not $dupSaid.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } }
         $dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate -Said $dupSaid -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.duplicate = $dupNow.seen
+        foreach ($id in @($Run.duplicateNot.Keys)) { if (-not $Run.duplicate.ContainsKey("$id")) { $Run.duplicateNot.Remove("$id") } }
         foreach ($e in @($dupNow.entries)) { [void]$entries.Add($e) }
         $dupAt = @{}
         foreach ($id in @($Run.duplicate.Keys)) { if ($Run.duplicateAt.ContainsKey("$id")) { $dupAt["$id"] = $Run.duplicateAt["$id"] } }
@@ -464,7 +493,7 @@ function Invoke-HordeWakeTick {
         # post that failed only when its condition is made again, and the same Subject and Instance (the episode's
         # start) keep it one message, so a tell that was told is not sent twice (T-0116, round 2).
         foreach ($dupId in @($Run.duplicate.Keys | Sort-Object)) {
-            if (-not $Run.duplicateAt.ContainsKey("$dupId")) { continue }
+            if (-not $Run.duplicateAt.ContainsKey("$dupId") -or $Run.duplicateGone.ContainsKey("$dupId") -or $Run.duplicateNot.ContainsKey("$dupId")) { continue }
             & $make { (New-HordeWakeTellCondition -Kind "duplicate-copies" -Subject "$dupId" -Instance $Run.duplicateAt["$dupId"].ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ($(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] }) + " Close all but one of the copies.")) }
         }
         foreach ($e in @($bad.entries)) {

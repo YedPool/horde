@@ -115,6 +115,12 @@ function Get-HordeWakeSettings {
         # from the last probe of the silence, whichever it was, and that time is saved with the
         # silence, so a watcher started again does not probe at once (Get-HordeWakeDecisions).
         silentSlowProbeSeconds = 21600
+        # A SESSION RUNNING AS MORE THAN ONE COPY is forgotten (its episode, so its line and its tell, are over) only
+        # after it has been missing from good listings of the fleet, or read as no longer a duplicate, for this long - five minutes, the same as a
+        # tell's own retry wait (core/WakeTell.ps1, retrySeconds). A listing that leaves its row out for one
+        # tick, a flap, ended the episode and the next tick began a second one: a second line and a second
+        # tell (T-0116 P15). No tell is retried for it while it is missing.
+        duplicateGoneSeconds = 300
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }
@@ -1224,8 +1230,13 @@ function Invoke-HordeWakePass {
                 # TWO RUNNING COPIES, WITH MAIL: said once per episode (T-0116), by its own channel so that the
                 # tick can tell M too. Only a session that would otherwise be waited on for no word: not one
                 # that is never nudged for what it is, and not one with no unread mail.
-                if ("$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no") { $duplicateOn[$t.id] = $true }
-                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "the session " + $(if ("$($t.label)" -cne "") { "$($t.label) (" + $t.id + ")" } else { "" + $t.id }) + " is running as more than one copy and has " + $a.value.unreadCount + " unread. It is not nudged while that is so, so this mail waits until all but one copy is closed. The fleet's row does not say which processes or panes the two are." }
+                # THE EPISODE ENDS ONLY WHEN THE SESSION IS RETIRED, not when retired cannot be read for a tick: the
+                # wezfleet waker says unknown for a row it cannot read, which lasts until a person mends it, and a
+                # tick of it ended the episode so that the next tick began another - a second line, a second tell
+                # (T-0116 P15). The line below still wants retired to read no, and a session whose retired is
+                # unknown is held for that by its own line above, so no new line or tell begins for it.
+                if ("$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }
+                if ($a.value.unreadCount -gt 0 -and "$(Get-HordeWakeEntryValue $t "duplicate")" -ceq "yes" -and "$($t.retired)" -ceq "no" -and -not $never.ContainsKey($t.id) -and -not $held.ContainsKey($t.id)) { $duplicate[$t.id] = "the session " + $(if ("$($t.label)" -cne "") { "$($t.label) (" + $t.id + ")" } else { "" + $t.id }) + " is running as more than one copy and has " + $a.value.unreadCount + " unread. It is not nudged while that is so, so this mail waits until all but one copy is closed. The fleet's row does not say which processes or panes the copies are." }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $moving
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {

@@ -18,8 +18,44 @@
            Find = 'if ($savedDup.state -ceq "known") {'
            Replace = 'if ($false) {' }
         @{ Name = "a-session-gone-from-the-listing-is-not-forgotten"
-           Find = 'if ($listedHere -cnotcontains "$id") { $Run.duplicate.Remove($id) }'
-           Replace = 'if ($false) { $Run.duplicate.Remove($id) }' }
+           Find = '-ge [double]$Settings.duplicateGoneSeconds)'
+           Replace = '-ge [double]::MaxValue)' }
+        @{ Name = "a-session-gone-for-one-tick-is-forgotten"
+           Find = '-ge [double]$Settings.duplicateGoneSeconds)'
+           Replace = '-ge 0.0)' }
+        @{ Name = "a-returned-session-keeps-its-time-away"
+           Find = 'if ($listedHere -ccontains "$id") { $Run.duplicateGone.Remove("$id"); continue }'
+           Replace = 'if ($listedHere -ccontains "$id") { continue }' }
+        @{ Name = "a-tell-is-retried-for-a-missing-session"
+           Find = ' -or $Run.duplicateGone.ContainsKey("$dupId") -or'
+           Replace = ' -or' }
+        @{ Name = "a-closed-duplicate-ends-the-episode-at-once"
+           Find = '-lt [double]$Settings.duplicateGoneSeconds) { $dupHeld'
+           Replace = '-lt 0.0) { $dupHeld' }
+        @{ Name = "a-closed-duplicate-is-held-for-ever"
+           Find = '-lt [double]$Settings.duplicateGoneSeconds) { $dupHeld'
+           Replace = '-lt [double]::MaxValue) { $dupHeld' }
+        @{ Name = "a-returned-duplicate-keeps-its-time-as-no"
+           Find = '-ceq "yes") { $Run.duplicateNot.Remove($id); continue }'
+           Replace = '-ceq "yes") { continue }' }
+        @{ Name = "a-tell-is-retried-once-the-copies-closed"
+           Find = ' -or $Run.duplicateNot.ContainsKey("$dupId")) { continue }'
+           Replace = ') { continue }' }
+        @{ Name = "a-retired-duplicate-waits-for-the-grace"
+           Find = ' -or "$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot'
+           Replace = ') { $Run.duplicateNot' }
+        @{ Name = "shadow-saves-the-episode-in-the-live-file"
+           Find = 'Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode (Get-HordeWakeSendWord -Mode $mode)'
+           Replace = 'Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode "live"' }
+        @{ Name = "the-episode-is-always-read-from-the-live-file"
+           Find = '$savedDup = Read-HordeWakeDuplicate -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run))'
+           Replace = '$savedDup = Read-HordeWakeDuplicate -Mode "live"' }
+        @{ Name = "a-failed-listing-ends-the-episodes"
+           Find = 'if ($null -ne $result.listing -and "$($result.listing.state)" -ceq "known") {'
+           Replace = 'if ($true) {' }
+        @{ Name = "a-failed-save-of-the-episode-counts-as-saved"
+           Find = 'catch { [void]$failed.Add([pscustomobject]@{ id = "duplicate"'
+           Replace = 'catch { $Run.duplicateMark = $dupMark; [void]$failed.Add([pscustomobject]@{ id = "duplicate"' }
         @{ Name = "a-retried-tell-carries-the-start-text"
            Find = '$(if ($result.duplicate.ContainsKey("$dupId")) { $result.duplicate["$dupId"] } else { $Run.duplicate["$dupId"] })'
            Replace = '$Run.duplicate["$dupId"]' }
