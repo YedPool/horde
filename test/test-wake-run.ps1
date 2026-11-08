@@ -237,6 +237,10 @@ $run2 = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $again = New-Object System.Collections.ArrayList
 foreach ($n in 0..3) { foreach ($e in @(Invoke-HordeWakeTick -Run $run2 -Now (At ($clock + $n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$again.Add($e) } }
 Check (@($again | Where-Object { $_.kind -ceq "held" -or $_.kind -ceq "would-tell" -or $_.kind -ceq "tell" }).Count -eq 0) ("a watcher started again in the middle of the episode says nothing again: no second line, no second tell (" + @($again | ForEach-Object { $_.kind }) + ")")
+# ...and a file of episodes that cannot be read is unknown, never a throw: the run starts with no episode and says so.
+[System.IO.File]::WriteAllText((Get-HordeWakeStateFile -Name "duplicate" -Mode "live" -HordeHome $h), "{ not json", (New-Object System.Text.UTF8Encoding($false)))
+$broken = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($broken.duplicate.Count -eq 0 -and @($broken.said | Where-Object { "$_".StartsWith("starting with no duplicated session known - ") }).Count -eq 1) "an unreadable file of duplicated sessions starts the run with none, and says so"
 # T-0116 round 3: A SESSION THAT IS GONE FROM THE LISTING ends its episode (and nothing is retried about it).
 Reset-HordeMemoryWaker
 Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0

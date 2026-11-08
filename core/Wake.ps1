@@ -37,6 +37,7 @@
 
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "WakeFiles.ps1")
 . (Join-Path $PSScriptRoot "ReservedLabels.ps1")
 # The port the pass reads and rings through (the header says why it is loaded from here).
@@ -1401,7 +1402,7 @@ function Read-HordeWakeDuplicate {
     param([string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $path = Get-HordeWakeStateFile -Name "duplicate" -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no episode of a duplicated session was saved in this home") }
-    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
+    try { $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path) }
     catch { return (New-HordeUnknown -Reason "what was saved of duplicated sessions could not be read" -ErrorRecord $_) }
     if ($null -eq $j -or $null -eq $j.PSObject.Properties["episodes"] -or $null -eq $j.episodes) { return (New-HordeUnknown -Reason "what was saved of duplicated sessions has no episodes") }
     $text = @{}; $at = @{}
