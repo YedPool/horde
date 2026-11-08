@@ -395,6 +395,12 @@ try {
     Check ((State-Of $sp21).downTell -ceq "maybe" -and (State-Of $sp21).downAt -eq $t0.AddMinutes(2005)) "an unknown result posted again for days keeps the time of its FIRST post"
     $w = Pass $w21 $tl21 $sp21 (2005 + 8 * 1440)
     Check ((State-Of $sp21).downTell -ceq "lost" -and (@($w.lines) -join " ") -like "*not taken in time*") "so it is given up a notice-ttl (7 days) after the first post, however often it was posted again"
+    $w22 = New-World $t0; $w22.unknown["relay-down"] = $true; $tl22 = New-WorldTools $w22; $sp22 = Join-Path $work "unknown-owes-back.json"
+    $sync.mode = "500"
+    foreach ($m in @(2100, 2105)) { $null = Pass $w22 $tl22 $sp22 $m }
+    $sync.mode = "up"
+    foreach ($m in @(2110, 2115)) { $null = Pass $w22 $tl22 $sp22 $m }
+    Check ((Bodies $w22 "RELAY BACK*") -eq 1 -and (State-Of $sp22).backTell -ceq "posted") "a down notice whose result was unknown (it may be in his mail) is owed its back notice"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }
