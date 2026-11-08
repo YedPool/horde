@@ -5,4 +5,4 @@ test/test-projection.ps1 | 0 -> 37 | 2026-09-30 | core/projection reads this har
 test/fixtures/projection/fleet/wezfleet/codex-sessions/codex-thread-1.json | 0 -> 5 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 test/mutations/projection.psd1 | 0 -> 4 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 test/test-link-contracts.ps1 | 0 -> 1 | 2026-10-02 | lifecycle step 5 declares the rollout file-name prefix as a path, and this suite already accepts a session id shaped like one
-test/test-identity.ps1 | 91 -> 102 | 2026-11-08 | the duplicate and all-stale checks of PR 472 show the second agent's listing, never whole without its control folder, is short only by duplicates or not (T-0116)
+test/test-identity.ps1 | 91 -> 102 | 2026-11-08 | the duplicate checks of PR 472 show a codex listing with no duplicate is not whole-but-for-duplicates, and the case of no codex control folder (T-0116)
