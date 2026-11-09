@@ -3,7 +3,7 @@
 # (The rules the relay watch's suite holds are in test\mutations\watch-tell.psd1.)
 @{
     Target = "core\WatchTell.ps1"
-    Suite  = "test	est-watcher-heartbeat.ps1"
+    Suite  = "test\test-watcher-heartbeat.ps1"
     Mutations = @(
         @{ Name = "daily-notice-taken-forgotten-while-throttled"
            Find = '$(if ($content -ceq "told") { "taken" }'
