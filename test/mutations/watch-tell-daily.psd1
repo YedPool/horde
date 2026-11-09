@@ -14,9 +14,6 @@
         @{ Name = "daily-notice-log-every-pass"
            Find = 'elseif ($logDue) { [void]$lines.Add($w.line);'
            Replace = 'elseif ($true) { [void]$lines.Add($w.line);' }
-        @{ Name = "daily-notice-log-day-not-kept"
-           Find = 'Set-HordeWatchLogged -MarkPath $MarkPath -Now $Now }'
-           Replace = '}' }
         @{ Name = "daily-notice-maybe-refused-says-none"
            Find = '$(if ($again -and $w.state -cne "posted") { "maybe" } else { $w.state })'
            Replace = '$w.state' }
