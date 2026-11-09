@@ -94,7 +94,7 @@ Write-Host ""
 Write-Host "--- mark before post; a refusal removes it; an unknown result keeps it ---" -ForegroundColor Cyan
 $h = New-Home
 $script:markAtPost = $null
-$spy = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:markAtPost = (Ids $script:rk $script:spyHome); New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = $script:spySays; at = [datetime]::UtcNow; reason = "stand-in" }) } -Status { param($id) New-HordeAbsent -Note "the stand-in keeps no status" }
+$spy = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) if ($null -eq $script:markAtPost) { $script:markAtPost = (Ids $script:rk $script:spyHome) }; New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = $script:spySays; at = [datetime]::UtcNow; reason = "stand-in" }) } -Status { param($id) New-HordeAbsent -Note "the stand-in keeps no status" }
 $script:rk = $rk; $script:spyHome = $h; $script:spySays = "accepted"
 $mk = Mail 10
 $null = Send-HordeRestoreMail -Mail $mk -Settings $settings -Messenger $spy -HordeHome $h -Now (At 0)

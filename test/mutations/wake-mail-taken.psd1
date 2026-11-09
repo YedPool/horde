@@ -12,14 +12,11 @@
         @{ Name = "wake-mail-accepted-read-as-taken"
            Find = 'return (New-HordeWakeMailAwaiting -MessageId "$($Mail.messageId)" -Stage "$($posted.value.stage)" -Messenger "$($through.name)")'
            Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Mail.messageId)"; stage = "$($posted.value.stage)"; messenger = "$($through.name)" }) -ObservedAt ([datetime]::UtcNow))' }
-        # The mark is written after the post instead of before it.
+        # The mark is written after the post instead of before it (the post is made first, then the mark; the original post line posts again, and
+        # the messenger keeps one message per id).
         @{ Name = "wake-mail-mark-after-post"
-           Find = '    $awaited = Add-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId $message.sessionId -Now $Now
-    if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
-    $posted = Send-HordeMessengerMessage -Messenger $through -Message $message'
-           Replace = '    $posted = Send-HordeMessengerMessage -Messenger $through -Message $message
-    $awaited = Add-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId $message.sessionId -Now $Now
-    if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }' }
+           Find = '$awaited = & $mark'
+           Replace = '$posted = Send-HordeMessengerMessage -Messenger $through -Message $message; $awaited = & $mark' }
         # A list that cannot be written no longer holds the post back.
         @{ Name = "wake-mail-unlisted-mail-still-posted"
            Find = 'if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited'

@@ -99,7 +99,8 @@ function Send-HordeWakeMail {
     $findings = @(Test-HordeMessengerMessage -Message $message)
     if ($findings.Count -gt 0) { return (New-HordeUnknown -Reason ("the message was not handed to messenger '" + $through.name + "': " + ($findings -join "; "))) }
     # MARK FIRST, THEN POST. A crash between them costs one alarm; the next pass posts the same id, which the messenger keeps as one.
-    $awaited = Add-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId $message.sessionId -Now $Now
+    $mark = { Add-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId $message.sessionId -Now $Now }
+    $awaited = & $mark
     if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
     $posted = Send-HordeMessengerMessage -Messenger $through -Message $message
     # UNKNOWN KEEPS THE MARK: the post may have landed.
