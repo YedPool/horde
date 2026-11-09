@@ -115,6 +115,8 @@ function New-WorldTools {
 function PassRaw { param($W, $Tools, [string]$Path, [double]$Minutes) $W.now = $t0.AddMinutes($Minutes); return (Invoke-HordeRelayWatch -Tools $Tools -Policy $policy -StatePath $Path -Origin $origin) }
 function Pass { param($W, $Tools, [string]$Path, [double]$Minutes) if (-not [System.IO.File]::Exists($Path)) { Write-HordeRelayWatchState -Path $Path -State (New-HordeRelayWatchState) }; return (PassRaw $W $Tools $Path $Minutes) }
 function State-Of { param([string]$Path) return (Read-HordeRelayWatchState -Path $Path).value }
+# A mark that is not there reads as a text no check wants, so a mutant that writes it elsewhere is a failed check, not a broken suite.
+function Read-Mark { param([string]$Path) if ([System.IO.File]::Exists($Path)) { return [System.IO.File]::ReadAllText($Path) }; return "<no such file>" }
 function Bodies { param($W, [string]$Like) return @($W.tells | Where-Object { $_ -like $Like }).Count }
 function Health { return (Get-HordeRelayHealth -Origin $origin -Fetch $fetch) }
 
@@ -377,12 +379,12 @@ try {
     $bad19 = Join-Path $work "bad-state19.json"
     [System.IO.File]::WriteAllText($bad19, "not json", $utf8)
     $null = PassRaw $w19 $tl19 $bad19 0
-    Check ($w19.tells.Count -eq 1 -and ([System.IO.File]::ReadAllText($bad19 + ".told")) -clike "maybe *") "a STOPPED notice with an unknown result is kept as maybe"
+    Check ($w19.tells.Count -eq 1 -and ((Read-Mark ($bad19 + ".told"))) -clike "maybe *") "a STOPPED notice with an unknown result is kept as maybe"
     $null = PassRaw $w19 $tl19 $bad19 5
     Check ($w19.tells.Count -eq 2 -and $w19.posts[1] -ceq $w19.posts[0]) "and is posted again at the next pass under the same id"
     $w19.unknown.Remove("relay-stopped")
     $null = PassRaw $w19 $tl19 $bad19 10
-    Check ($w19.tells.Count -eq 3 -and ([System.IO.File]::ReadAllText($bad19 + ".told")) -clike "posted *") "then, accepted, it is posted and awaited"
+    Check ($w19.tells.Count -eq 3 -and ((Read-Mark ($bad19 + ".told"))) -clike "posted *") "then, accepted, it is posted and awaited"
     # A back notice whose result is unknown is posted again, and the phone is told of it once; its age is that of the first post (7 days).
     $w20 = New-World $t0; $w20.unknown["relay-back"] = $true; $tl20 = New-WorldTools $w20; $sp20 = Join-Path $work "back-unknown-repost.json"
     $sync.mode = "500"
@@ -409,9 +411,9 @@ try {
     $bad24 = Join-Path $work "bad-state24.json"
     [System.IO.File]::WriteAllText($bad24, "not json", $utf8)
     foreach ($m in @(0, (3 * 1440), (6 * 1440))) { $null = PassRaw $w24 $tl24 $bad24 $m }
-    Check ($w24.tells.Count -eq 3 -and $w24.posts[2] -ceq $w24.posts[0] -and ([System.IO.File]::ReadAllText($bad24 + ".told")) -clike "maybe *" -and [System.IO.File]::GetLastWriteTimeUtc($bad24 + ".told") -eq $t0) "a STOPPED notice with an unknown result is reposted over days under the same id, and the mark keeps the time of its FIRST post"
+    Check ($w24.tells.Count -eq 3 -and $w24.posts[2] -ceq $w24.posts[0] -and ((Read-Mark ($bad24 + ".told"))) -clike "maybe *" -and [System.IO.File]::GetLastWriteTimeUtc($bad24 + ".told") -eq $t0) "a STOPPED notice with an unknown result is reposted over days under the same id, and the mark keeps the time of its FIRST post"
     $w = PassRaw $w24 $tl24 $bad24 (8 * 1440)
-    Check (([System.IO.File]::ReadAllText($bad24 + ".told")) -ceq "lost" -and (@($w.lines) -join " ") -like "*STOPPED notice to the warchief was not taken in time*") "so it is given up 7 days after the first post, however often it was posted again"
+    Check (((Read-Mark ($bad24 + ".told"))) -ceq "lost" -and (@($w.lines) -join " ") -like "*STOPPED notice to the warchief was not taken in time*") "so it is given up 7 days after the first post, however often it was posted again"
     # NIT 6: no empty brackets when the outage's reason is empty.
     $w25 = New-World $t0; $tl25 = New-WorldTools $w25; $sp25 = Join-Path $work "empty-why.json"
     $seed25 = New-HordeRelayWatchState
@@ -449,14 +451,14 @@ try {
     [System.IO.File]::WriteAllText($bad, "not json", $utf8)
     $wb = Pass $w6 $tl6 $bad 300
     Check ($w6.tells.Count -eq 1 -and $w6.tells[0] -like "RELAY WATCH STOPPED*" -and (@($wb.lines) -join " ") -like "*cannot be read*" -and $w6.posts[0] -clike "relay-stopped|*") "the warchief's notice that the watch has stopped is posted under the key relay-stopped"
-    Check (([System.IO.File]::ReadAllText($bad + ".told")) -clike "posted *") "and is kept as posted, not told"
+    Check (((Read-Mark ($bad + ".told"))) -clike "posted *") "and is kept as posted, not told"
     $null = Pass $w6 $tl6 $bad 310
     Check ($w6.tells.Count -eq 1) "and not again while it awaits"
     $null = Pass $w6 $tl6 $bad (300 + 24 * 60)
     Check ($w6.tells.Count -eq 1) "nor a day later while it is still not taken"
     $w6.taken[$w6.posts[0]] = $true
     $w = Pass $w6 $tl6 $bad (300 + 24 * 60 + 5)
-    Check ([System.IO.File]::ReadAllText($bad + ".told") -ceq "told" -and (@($w.lines) -join " ") -like "*took the STOPPED notice*" -and $w6.tells.Count -eq 1) "the warchief's session takes it: the file says told, from then"
+    Check ((Read-Mark ($bad + ".told")) -ceq "told" -and (@($w.lines) -join " ") -like "*took the STOPPED notice*" -and $w6.tells.Count -eq 1) "the warchief's session takes it: the file says told, from then"
     $null = Pass $w6 $tl6 $bad (300 + 24 * 60 + 60)
     Check ($w6.tells.Count -eq 1) "and not again within the day of its being taken"
     $null = Pass $w6 $tl6 $bad (300 + 2 * 24 * 60 + 10)

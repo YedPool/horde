@@ -314,10 +314,22 @@ try {
     $rig.tellOk = $true; $null = Look 3021
     Check ($rig.tells.Count -eq 2 -and $rig.notices.Count -eq 1) "the mail is then posted: that is not a change the phone is told of"
     $rig.taken[$rig.posts[-1]] = $true
+    $rig.noticeOk = $false
     $null = Look 3022
-    Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*A notice to the warchief was taken by his session." -and ([System.IO.File]::ReadAllText($statePath + ".phone")) -ceq "taken") "and TAKEN: the phone gets exactly one update"
-    $null = Look 3023; $null = Look 3024
-    Check ($rig.notices.Count -eq 2) "and none when nothing changed"
+    Check ($rig.notices.Count -eq 2 -and ([System.IO.File]::ReadAllText($statePath + ".phone")) -ceq "none") "TAKEN, but the phone refuses: it is not marked corrected"
+    $rig.noticeOk = $true
+    $null = Look 3023
+    Check ($rig.notices.Count -eq 3 -and $rig.notices[-1] -clike "*A notice to the warchief was taken by his session." -and ([System.IO.File]::ReadAllText($statePath + ".phone")) -ceq "taken") "and on the next pass - the notice only remembered as taken - the phone gets its one update"
+    $null = Look 3024; $null = Look 3025
+    Check ($rig.notices.Count -eq 3) "and none when nothing changed"
+    # HELD: the phone is told 'posted and watched', then that it could not be delivered; the daily mark says held, not lost.
+    foreach ($m in @(".told", ".phone", ".told.logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $null = Look 3030
+    $rig.held[$rig.posts[-1]] = $true
+    $null = Look 3031; $null = Look 3032
+    Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*The warchief's notice could not be delivered: the messenger holds it, and it was not taken." -and ([System.IO.File]::ReadAllText($statePath + ".told")) -ceq "held") "HELD: the mark says held, and the phone gets exactly one update in the held words"
+    $rig.held.Clear()
     foreach ($m in @(".told", ".phone", ".told.logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     $rig.tellOk = $true
     [System.IO.File]::WriteAllText($statePath, '{"v":1,"alerted":true,"since":"2026-11-04T20:00:00.0000000Z","gen":5,"tell":"bogus"}', $utf8)
