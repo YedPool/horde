@@ -44,6 +44,10 @@
 # WHO A RESUME MAIL IS FROM: this module, by a name of its own in place of a session id - it is not a
 # session - as the decisions doorbell names itself.
 $script:HordeRestoreSourceFrom = "horde-restore-source"
+# ITS AWAITING LIST (T-0391 slice 9): a resume mail the messenger accepted is POSTED, NOT DELIVERED, and is not counted as a restore
+# done until the receiving session's own TAKEN (wake\restore-taken.json, core/WakeMail.ps1). Until then the pass journals it as
+# awaiting and does not post it again.
+$script:HordeRestoreTakenKind = New-HordeWakeMailKind -Stem "restore" -Label "restore source" -Notice "resume mail" -From "the restore source"
 
 function Get-HordeRestoreSettings {
     # The restore source's settings, with -Overrides laid over the defaults. A name that is not a
@@ -319,14 +323,15 @@ function Invoke-HordeRestoreSourcePass {
     #   -Sessions  the running sessions (Get-HordeRestoreSessions' value)
     #   -Shadow    JOURNAL WHAT IT WOULD POST, AND POST NONE OF IT. A would-post is marked so the journal
     #              says it once, not every pass.
-    #   -Post      param($Mail) -> a tristate answer, known when the mail was taken; $Mail is
-    #              { kind; to; messageId; body }. Never called in shadow.
+    #   -Post      param($Mail) -> a tristate answer, known ONLY when the session took the mail (its TAKEN); an accepted post is
+    #              unknown with .awaiting (core/WakeMail.ps1). $Mail is { kind; to; messageId; body }. Never called in shadow.
+    #   -Awaiting  the ids on the restore source's awaiting list: posted, not yet taken, so not planned again (T-0391 slice 9)
     #   -Posted    messageId -> when it was posted, for the mails already posted, from the last pass
     #   -Known     the restores already found, each { restoreId; windowStart; windowEnd; members }, from the last
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @())
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @(), [string[]]$Awaiting = @())
     $entries = New-Object System.Collections.ArrayList
     # WHAT IS OLDER THAN A RESTORE CAN BE IS DROPPED, from both tables: a restore older than
     # restoreMaxAgeSeconds is history and plans nothing, so neither its mails' ids nor its window can
@@ -344,6 +349,8 @@ function Invoke-HordeRestoreSourcePass {
     if ($finding.state -ceq "known") { $nextKnown = @(@($nextKnown | Where-Object { "$($_.restoreId)" -cne $finding.value.anchor.restoreId }) + $finding.value.anchor) }
     foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
         if ($nextPosted.ContainsKey($mail.messageId)) { continue }
+        # ON THE AWAITING LIST: posted, and waiting for the session's own TAKEN. Not posted again, not journaled again.
+        if (@($Awaiting) -ccontains $mail.messageId) { continue }
         # A STALL HELD BACK BY A DUPLICATE is journaled once per restore and posts nothing, shadow or not.
         if ($mail.kind -ceq "stall-held") {
             $nextPosted[$mail.messageId] = $Now
@@ -359,8 +366,14 @@ function Invoke-HordeRestoreSourcePass {
         $took = $null
         try { $took = & $Post $mail } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
+            # KNOWN IS THE POSTER'S WORD THAT THE SESSION TOOK THE MAIL (its TAKEN). Send-HordeRestoreMail never says it.
             $nextPosted[$mail.messageId] = $Now
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "posted" -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId))
+        } elseif (Test-HordeWakeMailAwaiting $took) {
+            # POSTED, NOT DELIVERED. The restore is NOT counted done here: the mail is not in the posted table, so the pass would plan it
+            # again, but the awaiting list holds it (-Awaiting), so it is not posted again either. It is counted done on its TAKEN, by the
+            # tick (core/WakeRun.ps1), which journals that.
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "awaiting" -Reason ("restore " + $finding.value.restoreId + ": the messenger accepted it (" + $took.awaiting.stage + "); it is not counted as delivered until the session's own TAKEN") -MessageId $mail.messageId))
         } else {
             $why = "the post answered with something that is not an answer"
             if (Test-HordeAnswer $took) { $why = "$($took.reason)" }
@@ -379,8 +392,10 @@ function Send-HordeRestoreMail {
     # HAPPEN: only known is marked posted, and what is not is planned and tried again by the next pass.
     # -Messenger is for a caller that holds one - a test hands in the in-process one - and is found
     # through the port when it is not given.
-    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeRestoreSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome))
-    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)" -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome)
+    # T-0391 slice 9: the answer is NEVER known. A post the messenger accepted is unknown with .awaiting (Test-HordeWakeMailAwaiting): it
+    # is marked on the awaiting list first and is delivered only on the session's own TAKEN.
+    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeRestoreSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome), [datetime]$Now = [datetime]::UtcNow)
+    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)" -Kind $script:HordeRestoreTakenKind -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome -Now $Now)
 }
 
 function Get-HordeRestoreSessions {

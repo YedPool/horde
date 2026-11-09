@@ -134,7 +134,7 @@ try {
         $through = { param($m) Send-HordeWakeTell -Mail $m -Settings $settings -Messenger $inProcess -HordeHome $pinned.home }
         $sent = Invoke-HordeWakeTellPass -Conditions @((Cond 1)) -Warchief $chief -Now (At 0) -Settings $settings -Post $through
         $seen = & $watch.Observe $box $idA
-        Check ((Kinds $sent) -ceq "tell:posted" -and $seen.records -eq 1 -and "$(@($seen.bodies)[0])" -ceq "AUTOMATED, from the wake watcher: session 1 needs a look" -and @($seen.typed).Count -eq 0) "a tell is one record in the messenger's store, holding its text, and nothing was typed"
+        Check ((Kinds $sent) -ceq "tell:awaiting" -and $seen.records -eq 1 -and "$(@($seen.bodies)[0])" -ceq "AUTOMATED, from the wake watcher: session 1 needs a look" -and @($seen.typed).Count -eq 0) "an accepted tell is awaiting its TAKEN, not posted, and is one record in the messenger's store, holding its text, and nothing was typed"
         $null = Invoke-HordeWakeTellPass -Conditions @((Cond 1)) -Warchief $chief -Now (At 0) -Settings $settings -Post $through
         Check ((& $watch.Observe $box $idA).records -eq 1) "a pass that lost what it had told posts the same id, and the messenger keeps it as the one message it has"
         $alone = Send-HordeWakeTell -Mail ([pscustomobject]@{ to = $chief; messageId = "0d000000-0000-4000-8000-0000000000ba"; body = "x" }) -Settings $settings -HordeHome $pinned.home
@@ -142,7 +142,7 @@ try {
         $script:got = $null
         $catcher = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:got = $m; New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "accepted"; at = [datetime]::UtcNow }) } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
         $worn = Send-HordeWakeTell -Mail ([pscustomobject]@{ to = $chief; messageId = "0d000000-0000-4000-8000-0000000000bb"; body = "x" }) -Settings $settings -Messenger $catcher -HordeHome $pinned.home
-        Check ($worn.state -ceq "known" -and $null -ne $script:got -and "$($script:got.from.sessionId)" -ceq "horde-wake-watcher" -and "$($script:got.from.label)" -ceq "WW" -and "$($script:got.sessionId)" -ceq $chief) "the mail is from horde-wake-watcher, wearing WW, to the warchief"
+        Check ($worn.state -ceq "unknown" -and (Test-HordeWakeMailAwaiting $worn) -and $null -ne $script:got -and "$($script:got.from.sessionId)" -ceq "horde-wake-watcher" -and "$($script:got.from.label)" -ceq "WW" -and "$($script:got.sessionId)" -ceq $chief) "the mail is from horde-wake-watcher, wearing WW, to the warchief"
     } finally { & $watch.Remove $box }
 
     Write-Host ""

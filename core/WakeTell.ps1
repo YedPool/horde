@@ -48,6 +48,9 @@
 
 # WHO A TELL IS FROM: this module, by a name of its own in place of a session id.
 $script:HordeWakeTellFrom = "horde-wake-watcher"
+# ITS AWAITING LIST (T-0391 slice 9): a tell the messenger accepted is POSTED, NOT TOLD, until the warchief's own session took it
+# (wake\tells-taken.json, core/WakeMail.ps1). Until then its state is "awaiting".
+$script:HordeWakeTellTakenKind = New-HordeWakeMailKind -Stem "tells" -Label "wake tells" -Notice "wake tell" -From "the wake watcher"
 $script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended", "duplicate-copies")
 
 function Get-HordeWakeTellSettings {
@@ -137,7 +140,7 @@ function Invoke-HordeWakeTellPass {
             if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }
         }
         $body = "$($Settings.prefix)" + $c.text
-        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count
+        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "awaiting" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count
         if ($sentLately -ge [int]$Settings.maxTellsPerHour) {
             $next[$id] = [pscustomobject]@{ at = $Now; state = "suppressed"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell-suppressed" -Id $c.subject -Outcome "suppressed" -Reason ($c.kind + ": over " + $Settings.maxTellsPerHour + " tells in an hour, so this one is only here: " + $c.text) -MessageId $id))
@@ -152,6 +155,11 @@ function Invoke-HordeWakeTellPass {
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
             $next[$id] = [pscustomobject]@{ at = $Now; state = "told"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "posted" -Reason ($c.kind + ": " + $c.text) -MessageId $id))
+        } elseif (Test-HordeWakeMailAwaiting $took) {
+            # POSTED, NOT TOLD: the warchief's session has not taken it. The state is "awaiting" (handled, never posted again, and it counts
+            # against the hour's budget as a tell sent); the tick makes it "told" on the session's TAKEN (core/WakeRun.ps1).
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "awaiting"; class = $class }
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "awaiting" -Reason ($c.kind + ": the messenger accepted it (" + $took.awaiting.stage + "); the warchief is not counted as told until its session's own TAKEN: " + $c.text) -MessageId $id))
         } else {
             $why = "the post answered with something that is not an answer"
             if (Test-HordeAnswer $took) { $why = "$($took.reason)" }
@@ -165,8 +173,10 @@ function Invoke-HordeWakeTellPass {
 function Send-HordeWakeTell {
     # Post one tell ({ to; messageId; body }, as Invoke-HordeWakeTellPass's -Post is handed) through the
     # messenger port (core/WakeMail.ps1), as this sender. A tristate answer.
-    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeWakeTellSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome))
-    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeWakeTellFrom -Label "$($Settings.fromLabel)" -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome)
+    # T-0391 slice 9: the answer is NEVER known. A post the messenger accepted is unknown with .awaiting (Test-HordeWakeMailAwaiting): it
+    # is marked on the awaiting list first and the warchief is told only on its session's own TAKEN.
+    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeWakeTellSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome), [datetime]$Now = [datetime]::UtcNow)
+    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeWakeTellFrom -Label "$($Settings.fromLabel)" -Kind $script:HordeWakeTellTakenKind -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome -Now $Now)
 }
 
 # ---- the file: <home>\wake\tells-<mode>.json ----
