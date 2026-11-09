@@ -71,11 +71,11 @@
            Replace = 'return [pscustomobject]@{ ok = $true; state = "posted"; line = ($Prefix + ": would tell "' }
         # The daily notice (the STOPPED notice, the watcher check's unreadable state): once a day, on the TAKEN rules, the first post's time kept.
         @{ Name = "daily-notice-never-posted"
-           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }'
-           Replace = 'if ($true) { return (& $done $false "") }' }
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) {'
+           Replace = 'if ($true) {' }
         @{ Name = "daily-notice-posted-every-pass"
-           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }'
-           Replace = '' }
+           Find = 'if (-not $again -and $Now -lt $last.AddHours(24)) {'
+           Replace = 'if ($false) {' }
         @{ Name = "daily-notice-posted-again-while-awaited"
            Find = 'if ($content -cmatch ''\A(posted|maybe) ([0-9]{1,9})\z'') {'
            Replace = 'if ($false) {' }
@@ -97,5 +97,11 @@
         @{ Name = "daily-notice-repost-resets-the-first-post-time"
            Find = '$(if ($KeepTime) { $last } else { $Now })'
            Replace = '$Now' }
+        @{ Name = "daily-notice-repeat-lines-logged-every-pass"
+           Find = 'if ($w.state -ceq "posted" -or $logDue) { [void]$lines.Add($w.line) }'
+           Replace = '[void]$lines.Add($w.line)' }
+        @{ Name = "daily-notice-log-day-not-kept"
+           Find = 'if ($logDue) { try { [System.IO.File]::WriteAllText($logPath'
+           Replace = 'if ($false) { try { [System.IO.File]::WriteAllText($logPath' }
     )
 }

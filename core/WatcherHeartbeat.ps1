@@ -237,15 +237,23 @@ function Send-HordeWatcherUnreadable {
     $lines = New-Object System.Collections.ArrayList
     $text = $Subject + " cannot read its state file, so it is not alarming about the overseer watcher until the file is mended or removed. It is " + $StatePath + "."
     $r = Send-HordeWatchDailyTell -Tools $Tools -MarkPath ($StatePath + ".told") -Prefix $Prefix -Key $Key -Noun "UNREADABLE-STATE notice" -Now $Now -Text ("WATCHER CHECK BLIND`n" + $text)
-    if ($r.fresh) { [void]$lines.Add($Prefix + ": its state file cannot be read, so nothing is checked until it is mended or removed (" + $StatePath + ")") }
+    if ($r.logDue) { [void]$lines.Add($Prefix + ": its state file cannot be read, so nothing is checked until it is mended or removed (" + $StatePath + ")") }
     foreach ($l in @($r.lines)) { [void]$lines.Add($l) }
+    # THE PHONE (<state>.phone holds the state word it was told, its time the day): told once a day, and told AGAIN, once, when the warchief's mail
+    # turns out to have been taken, held or given up and the phone was told something else (a refusal: "not posted") - never on every pass. A phone
+    # that refuses is tried again on every pass, its log line kept to once a day.
     $pm = $StatePath + ".phone"
-    $due = (-not [System.IO.File]::Exists($pm)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))
-    if ($due -and $null -ne $Tools["Notify"]) {
+    $pmExists = [System.IO.File]::Exists($pm)
+    $told = ""
+    if ($pmExists) { try { $told = ("" + [System.IO.File]::ReadAllText($pm)).Trim() } catch { $told = "" } }
+    $dailyDue = (-not $pmExists) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))
+    $terminal = ($r.state -ceq "taken" -or $r.state -ceq "held" -or $r.state -ceq "lost")
+    $update = ($pmExists -and $terminal -and $told -cne $r.state)
+    if (($dailyDue -or $update) -and $null -ne $Tools["Notify"]) {
         $words = $(if ($r.state -cne "") { " " + (Get-HordeWatcherPhoneWords -State $r.state) } else { "" })
         $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text ($text + $words) -Who "the founder's phone"
-        [void]$lines.Add($n.line)
-        if ($n.ok) { try { [System.IO.File]::WriteAllText($pm, "told"); [System.IO.File]::SetLastWriteTimeUtc($pm, $Now) } catch { } }
+        if ($n.ok -or $r.logDue) { [void]$lines.Add($n.line) }
+        if ($n.ok) { try { [System.IO.File]::WriteAllText($pm, $(if ($r.state -cne "") { $r.state } else { "none" })); [System.IO.File]::SetLastWriteTimeUtc($pm, $Now) } catch { } }
     }
     return @($lines.ToArray())
 }

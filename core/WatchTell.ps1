@@ -84,15 +84,23 @@ function Get-HordeWatchLostWords {
 
 function Send-HordeWatchDailyTell {
     # One notice to the warchief at most once a day, on the TAKEN rules, with its state in the small file -MarkPath (the caller's, beside a state
-    # file it must not touch): { lines; fresh; state }. The file holds "posted <day>" while the notice awaits TAKEN, "maybe <day>" while a post whose
-    # result was unknown does (it is posted again under the same id), "told" once it was taken and "lost" once it was not taken and is no longer
-    # watched; its time is when the FIRST post of that day's notice was made (a repost leaves it alone, so the 7-day give-up comes), or when it
-    # became told or lost. Nothing is posted while one is awaited. A refused post leaves no mark and is tried again at the next pass, same id.
-    # -Noun names it in a log line ("STOPPED notice"). fresh: a new post was made (or tried) in this pass, and state is what that post was
-    # (Send-HordeWatchTell's), for a caller that also tells a phone.
+    # file it must not touch): { lines; fresh; logDue; state }. The file holds "posted <day>" while the notice awaits TAKEN, "maybe <day>" while a post
+    # whose result was unknown does (it is posted again under the same id), "told" once it was taken, and "held" or "lost" once it was not taken and
+    # is no longer watched; its time is when the FIRST post of that day's notice was made (a repost leaves it alone, so the 7-day give-up comes), or
+    # when it became told, held or lost. Nothing is posted while one is awaited. A refused post (or no Tell tool at all) leaves no mark and is tried
+    # again at the next pass, same id - so the pass's LOG is kept to once a day in a mark of its own, <MarkPath>.logged: logDue says it is time, and
+    # a post line that is a repeat (a refusal, an off tool, an unknown result again) is added to lines only then. Lines that tell of a change (posted,
+    # taken, held, lost) are always added. -Noun names it in a log line ("STOPPED notice"). fresh: a new post was made (or tried) in this pass.
+    # state: what became of the notice - the post's own (Send-HordeWatchTell's) when one was made, else posted, taken, held or lost from the mark,
+    # or "" when there is none - for a caller that tells a phone.
+    # ("copy", a repost of a copy the messenger already held, is neither posted nor watched and is retried like a refusal: what that earlier copy
+    # became is not this notice's, so it is never resolved here.)
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$MarkPath, [Parameter(Mandatory = $true)][string]$Prefix, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Noun, [Parameter(Mandatory = $true)][datetime]$Now)
     $lines = New-Object System.Collections.ArrayList
-    $done = { param([bool]$Fresh, [string]$State) return [pscustomobject]@{ lines = @($lines.ToArray()); fresh = $Fresh; state = $State } }
+    $logPath = $MarkPath + ".logged"
+    $logDue = (-not [System.IO.File]::Exists($logPath)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($logPath).AddHours(24))
+    if ($logDue) { try { [System.IO.File]::WriteAllText($logPath, "logged"); [System.IO.File]::SetLastWriteTimeUtc($logPath, $Now) } catch { } }
+    $done = { param([bool]$Fresh, [string]$State) return [pscustomobject]@{ lines = @($lines.ToArray()); fresh = $Fresh; logDue = $logDue; state = $State } }
     $exists = [System.IO.File]::Exists($MarkPath)
     $last = $(if ($exists) { [System.IO.File]::GetLastWriteTimeUtc($MarkPath) } else { [datetime]::MinValue })
     $content = ""
@@ -104,13 +112,15 @@ function Send-HordeWatchDailyTell {
         $kind = $Matches[1]; $day = [long]$Matches[2]
         $t = Get-HordeWatchTellTaken -Tools $Tools -Key $Key -Gen $day -PostedAt $last -Now $Now
         if ($t -ceq "taken") { & $setMark "told" $false; [void]$lines.Add($Prefix + ": the warchief's session took the " + $Noun + ": he is told"); return (& $done $false "taken") }
-        if ($t -ceq "held" -or $t -ceq "lost") { & $setMark "lost" $false; [void]$lines.Add($Prefix + ": the " + $Noun + " to the warchief " + (Get-HordeWatchLostText -Why $t)); return (& $done $false $t) }
+        if ($t -ceq "held" -or $t -ceq "lost") { & $setMark $t $false; [void]$lines.Add($Prefix + ": the " + $Noun + " to the warchief " + (Get-HordeWatchLostText -Why $t)); return (& $done $false $t) }
         if ($kind -ceq "posted") { return (& $done $false "posted") }
         $again = $true
     }
-    if (-not $again -and $Now -lt $last.AddHours(24)) { return (& $done $false "") }
+    if (-not $again -and $Now -lt $last.AddHours(24)) {
+        return (& $done $false $(if ($content -ceq "told") { "taken" } elseif ($content -ceq "held" -or $content -ceq "lost") { $content } else { "" }))
+    }
     $w = Send-HordeWatchTell -Tools $Tools -Prefix $Prefix -Who "the warchief" -Key $Key -Gen $day -Text $Text
-    [void]$lines.Add($w.line)
+    if ($w.state -ceq "posted" -or $logDue) { [void]$lines.Add($w.line) }
     if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark ($w.state + " " + $day) $again }
     return (& $done (-not $again) $w.state)
 }

@@ -277,7 +277,7 @@ try {
     $w = Invoke-HordeWatcherHeartbeat -Tools $none -Policy $policy -RunPath $runPath -StatePath $statePath
     Check ((@($w.lines) -join " ") -like "*telling is off*" -and -not (Beat-State).alerted -and (Beat-State).tell -ceq "") "no tellers: it says so, and the episode is not marked told"
     [System.IO.File]::WriteAllText($statePath, "garbage{", $utf8)
-    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     $rig.tells.Clear(); $rig.notices.Clear(); $rig.posts.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
     $w = Look 400
     Check ((@($w.lines) -join " ") -like "*its state file cannot be read*" -and [System.IO.File]::ReadAllText($statePath) -ceq "garbage{") "ROUND 3 (SHOULD 1): a state file that cannot be read is said, and the file is KEPT, not written over"
@@ -287,17 +287,43 @@ try {
     $rig.taken[$rig.posts[0]] = $true
     $w = Look 402
     Check ((@($w.lines) -join " ") -like "*took the UNREADABLE-STATE notice*" -and ([System.IO.File]::ReadAllText($statePath + ".told")) -ceq "told") "the warchief's session takes it: counted told"
+    Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*A notice to the warchief was taken by his session.") "ROUND 5: and the phone, told 'posted and watched', is told ONCE that it was taken"
+    $null = Look 403; $null = Look 404
+    Check ($rig.notices.Count -eq 2) "and not again on later passes"
     $null = Look (400 + 1440 + 5)
-    Check ($rig.tells.Count -eq 2 -and $rig.posts[1] -cne $rig.posts[0] -and $rig.notices.Count -eq 2) "a day later it is said again, under a new id"
-    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    Check ($rig.tells.Count -eq 2 -and $rig.posts[1] -cne $rig.posts[0] -and $rig.notices.Count -eq 3) "a day later it is said again, under a new id"
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    # ROUND 5, SHOULD 1: a refused mail is tried again on every pass, but the LOG says it once a day (its own mark, so it holds across a restart).
     $rig.tellOk = $false; $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear()
-    $null = Look 3000; $null = Look 3001
-    Check ($rig.tells.Count -eq 2 -and $rig.posts[1] -ceq $rig.posts[0] -and -not (Test-Path ($statePath + ".told"))) "a refused mail leaves no mark and is tried again at the next pass, same id"
+    $ll = @()
+    foreach ($m in @(3000, 3001, 3002)) { $ll += @((Look $m).lines) }
+    Check ($rig.tells.Count -eq 3 -and $rig.posts[1] -ceq $rig.posts[0] -and $rig.posts[2] -ceq $rig.posts[0] -and -not (Test-Path ($statePath + ".told"))) "a refused mail leaves no mark and is tried again at EVERY pass, same id"
+    Check (@($ll | Where-Object { $_ -like "*its state file cannot be read*" }).Count -eq 1 -and @($ll | Where-Object { $_ -like "*could not tell the warchief*" }).Count -le 1) "REFUSED: three passes give exactly one 'cannot be read' line and the refusal is logged once"
+    Check (Test-Path ($statePath + ".logged")) "the day's log is kept in a mark of its own"
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear()
+    $noTell2 = @{ Now = $tools["Now"]; Tell = $null; Taken = $null; Notify = $tools["Notify"] }
+    $ll = @()
+    foreach ($m in @(3010, 3011, 3012)) { $rig.now = $t0.AddMinutes($m); $ll += @((Invoke-HordeWatcherHeartbeat -Tools $noTell2 -Policy $policy -RunPath $runPath -StatePath $statePath).lines) }
+    Check (@($ll | Where-Object { $_ -like "*its state file cannot be read*" }).Count -eq 1 -and @($ll | Where-Object { $_ -like "*telling is off*" -and $_ -like "*the warchief*" }).Count -eq 1) "TELLING OFF: three passes give exactly one 'cannot be read' line and one 'telling is off' line"
+    # ROUND 5, SHOULD 2: the phone was told 'not posted'; when the mail is later posted and TAKEN it is told once - not on every pass, and not for 'posted'.
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $null = Look 3020
+    Check ($rig.notices.Count -eq 1 -and $rig.notices[0] -clike "*A notice to the warchief was not posted." -and ([System.IO.File]::ReadAllText($statePath + ".phone")) -ceq "none") "the mail was refused: the phone is told 'not posted', and keeps what it was told"
+    $rig.tellOk = $true; $null = Look 3021
+    Check ($rig.tells.Count -eq 2 -and $rig.notices.Count -eq 1) "the mail is then posted: that is not a change the phone is told of"
+    $rig.taken[$rig.posts[-1]] = $true
+    $null = Look 3022
+    Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*A notice to the warchief was taken by his session." -and ([System.IO.File]::ReadAllText($statePath + ".phone")) -ceq "taken") "and TAKEN: the phone gets exactly one update"
+    $null = Look 3023; $null = Look 3024
+    Check ($rig.notices.Count -eq 2) "and none when nothing changed"
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     $rig.tellOk = $true
     [System.IO.File]::WriteAllText($statePath, '{"v":1,"alerted":true,"since":"2026-11-04T20:00:00.0000000Z","gen":5,"tell":"bogus"}', $utf8)
     $w = Look 3002
     Check ((@($w.lines) -join " ") -like "*cannot be read*" -and [System.IO.File]::ReadAllText($statePath) -clike '*"tell":"bogus"*') "and so is a live episode with a value that is not known: it is not forgotten"
-    foreach ($m in @(".told", ".phone")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    foreach ($m in @(".told", ".phone", ".logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     Remove-Item -LiteralPath $statePath
     $boom = @{ Now = { return $t0.AddMinutes(400) }; Tell = { throw "boom" }; Notify = { throw "boom" } }
     $w = Invoke-HordeWatcherHeartbeat -Tools $boom -Policy $policy -RunPath $runPath -StatePath $statePath

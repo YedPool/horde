@@ -125,13 +125,25 @@
            Find = '-Key $Key -Noun "UNREADABLE-STATE notice"'
            Replace = '-Key "x" -Noun "UNREADABLE-STATE notice"' }
         @{ Name = "unreadable-state-phone-never-told"
-           Find = 'if ($due -and $null -ne $Tools["Notify"]) {'
+           Find = 'if (($dailyDue -or $update) -and $null -ne $Tools["Notify"]) {'
            Replace = 'if ($false) {' }
         @{ Name = "unreadable-state-phone-told-every-pass"
-           Find = '$due = (-not [System.IO.File]::Exists($pm)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))'
-           Replace = '$due = $true' }
+           Find = '$dailyDue = (-not $pmExists) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))'
+           Replace = '$dailyDue = $true' }
         @{ Name = "unreadable-state-logged-every-pass"
-           Find = 'if ($r.fresh) { [void]$lines.Add($Prefix + ": its state file cannot be read'
+           Find = 'if ($r.logDue) { [void]$lines.Add($Prefix + ": its state file cannot be read'
            Replace = 'if ($true) { [void]$lines.Add($Prefix + ": its state file cannot be read' }
+        @{ Name = "unreadable-phone-never-corrected"
+           Find = '$update = ($pmExists -and $terminal -and $told -cne $r.state)'
+           Replace = '$update = $false' }
+        @{ Name = "unreadable-phone-corrected-every-pass"
+           Find = '$update = ($pmExists -and $terminal -and $told -cne $r.state)'
+           Replace = '$update = ($pmExists -and $terminal)' }
+        @{ Name = "unreadable-phone-told-of-every-posted"
+           Find = '$terminal = ($r.state -ceq "taken" -or $r.state -ceq "held" -or $r.state -ceq "lost")'
+           Replace = '$terminal = ($r.state -cne "")' }
+        @{ Name = "unreadable-phone-answer-not-kept"
+           Find = '[System.IO.File]::WriteAllText($pm, $(if ($r.state -cne "") { $r.state } else { "none" }))'
+           Replace = '[System.IO.File]::WriteAllText($pm, "told")' }
     )
 }

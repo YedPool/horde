@@ -420,6 +420,19 @@ try {
     $w25.held["relay-down|0"] = $true
     $null = PassRaw $w25 $tl25 $sp25 6
     Check ($w25.notices.Count -eq 1 -and $w25.notices[0] -cnotlike "*()*" -and $w25.notices[0] -clike "The relay outage told earlier: The warchief's notice could not be delivered*") "a lost DOWN's phone text leaves out the brackets when the reason is empty"
+    # ROUND 5: a STOPPED notice that is refused (or telling is off) is tried at every pass, but its log line is kept to once a day.
+    $w26 = New-World $t0; $w26.refuse["relay-stopped"] = 99; $tl26 = New-WorldTools $w26
+    $bad26 = Join-Path $work "bad-state26.json"
+    [System.IO.File]::WriteAllText($bad26, "not json", $utf8)
+    $ll = @()
+    foreach ($m in @(0, 5, 10)) { $ll += @((PassRaw $w26 $tl26 $bad26 $m).lines) }
+    Check ($w26.tells.Count -eq 3 -and $w26.posts[2] -ceq $w26.posts[0] -and @($ll | Where-Object { $_ -like "*could not tell the warchief*" }).Count -eq 1) "REFUSED STOPPED notice: posted again at every pass, same id, and its refusal is logged once a day"
+    $w27 = New-World $t0; $tl27 = New-WorldTools $w27; $tl27["Tell"] = $null
+    $bad27 = Join-Path $work "bad-state27.json"
+    [System.IO.File]::WriteAllText($bad27, "not json", $utf8)
+    $ll = @()
+    foreach ($m in @(0, 5, 10)) { $ll += @((PassRaw $w27 $tl27 $bad27 $m).lines) }
+    Check (@($ll | Where-Object { $_ -like "*telling is off*" }).Count -eq 1) "STOPPED notice with telling off: 'telling is off' is logged once a day, not on every pass"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }

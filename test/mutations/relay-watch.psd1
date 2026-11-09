@@ -142,5 +142,15 @@
         @{ Name = "client-id-bom-accepted"
            Find = 'if ($Value.Contains([string][char]0xFEFF)) { return "the client_id carries a byte order mark (U+FEFF)" }'
            Replace = '' }
+        # The STOPPED notice is still told from here (NIT 3 of the round-4 review): the call, and its mark and key.
+        @{ Name = "stopped-notice-never-called"
+           Find = 'foreach ($l in @(Send-HordeRelayWatchStopped -Tools $Tools -StatePath $StatePath -Now $utcNow)) { [void]$lines.Add($l) }'
+           Replace = '' }
+        @{ Name = "stopped-notice-key-changed"
+           Find = '-Prefix "relay watch" -Key "relay-stopped" -Noun "STOPPED notice"'
+           Replace = '-Prefix "relay watch" -Key "relay-stoppedx" -Noun "STOPPED notice"' }
+        @{ Name = "stopped-notice-mark-path-changed"
+           Find = '-MarkPath ($StatePath + ".told")'
+           Replace = '-MarkPath ($StatePath + ".toldx")' }
     )
 }
