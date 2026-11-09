@@ -127,6 +127,8 @@ $seen = @(Read-Lines $state.home | Where-Object { $_.kind -ceq "pane-seen" })
 Check ($seen.Count -eq 1 -and $seen[0].id -ceq (Sid 1) -and $seen[0].outcome -ceq "seen") "a look that reads ends the spell with one pane-seen line"
 Check ($seen.Count -eq 1 -and "$($seen[0].reason)".Contains("after 1 blind look")) "saying how many looks it lasted (the restarted run's own spell: 1)"
 Check (@(Read-Lines $state.home | Where-Object { $_.kind -ceq "would-nudge" }).Count -eq 1) "and the session, now seen, is decided on as any other (shadow: one would-nudge)"
+$st = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "status") -Env @{ HORDE_HOME = $state.home; WEZFLEET_ROOT = $fleetPin.path }
+Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 6, blind 5 (5 passes), of 12 passes since ")) ("and wake status, after the restart, counts on from the first run: 'looks 6, blind 5 (5 passes), of 12 passes' (exit " + $st.code + ")")
 & $fx.Remove $state
 $state = $null
 
