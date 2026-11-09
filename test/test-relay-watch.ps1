@@ -221,7 +221,7 @@ try {
     $null = Pass $w2 $tl2 $sp2 210
     Check ($w2.tells.Count -eq 2 -and $w2.posts[1] -ceq $w2.posts[0] -and (State-Of $sp2).downTell -ceq "posted" -and -not (State-Of $sp2).alerted) "the next check tries again under the SAME id, and it is posted - still not told"
     $null = Pass $w2 $tl2 $sp2 215
-    Check ($w2.tells.Count -eq 2 -and (State-Of $sp2).alerted -and $w2.notices.Count -eq 1) "the next pass sees it taken: told; then quiet; and the phone's notice was tried once for the outage"
+    Check ($w2.tells.Count -eq 2 -and (State-Of $sp2).alerted -and $w2.notices.Count -eq 2 -and $w2.notices[-1] -clike "*A notice to the warchief was taken by his session.*") "the next pass sees it taken: told; then quiet; and the phone, which was told 'not posted', is told once that it was taken (changed in round 6 from 'tried once')"
 
     Write-Host ""
     Write-Host "--- review of PR 307: a founder told 'down' is told 'back', even if the warchief never was ---" -ForegroundColor Cyan
