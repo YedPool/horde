@@ -112,7 +112,7 @@ function New-HordeRelayWatchState {
     # have landed, is watched, and is posted again under the same id), "held" (the messenger holds it for good, not delivered) or "lost" (not
     # taken in time, no longer watched); downAt and backAt: when they were first posted.
     return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; healthy = 0; downSince = $null; alerted = $false; notified = $false; lastWhy = ""
-                              episode = [long]0; downTell = ""; downAt = $null; backTell = ""; backAt = $null; downLostTold = $false }
+                              episode = [long]0; downTell = ""; downAt = $null; backTell = ""; backAt = $null; downLostTold = $false; downPhone = "" }
 }
 
 function Get-HordeRelayWatchDecision {
@@ -123,7 +123,7 @@ function Get-HordeRelayWatchDecision {
     $utcNow = $Now.ToUniversalTime()
     $s = [pscustomobject]@{ v = 1; lastCheckAt = $utcNow; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $State.downSince
                             alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
-                            episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $State.downAt; backTell = "" + $State.backTell; backAt = $State.backAt; downLostTold = [bool]$State.downLostTold }
+                            episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $State.downAt; backTell = "" + $State.backTell; backAt = $State.backAt; downLostTold = [bool]$State.downLostTold; downPhone = "" + $State.downPhone }
     if ($Health.ok) {
         $s.healthy = $s.healthy + 1
         if (-not $s.alerted -and -not $s.notified -and $s.downTell -ceq "") {
@@ -162,6 +162,9 @@ function Read-HordeRelayWatchState {
         # The fields of T-0391 slice 8 are absent from a file an earlier version wrote: absent reads as none posted, episode 0.
         if ($null -ne $doc.PSObject.Properties["episode"]) { $s.episode = [long]$doc.episode }
         if ($null -ne $doc.PSObject.Properties["downLostTold"]) { $s.downLostTold = ($doc.downLostTold -eq $true) }
+        # downPhone: the state word the phone was last told of the DOWN notice (a Get-HordeWatchTellWords state, or taken).
+        $dp = $doc.PSObject.Properties["downPhone"]
+        if ($null -ne $dp) { if (@("", "posted", "maybe", "copy", "none", "off", "taken") -ccontains ("" + $dp.Value)) { $s.downPhone = "" + $dp.Value } else { throw "downPhone is not a known value" } }
         foreach ($k in @("downTell", "backTell")) {
             $p = $doc.PSObject.Properties[$k]
             if ($null -ne $p) { if (@("", "posted", "maybe", "held", "lost") -ccontains ("" + $p.Value)) { $s.$k = "" + $p.Value } else { throw ($k + " is not a known value") } }
@@ -178,7 +181,7 @@ function Read-HordeRelayWatchState {
 function Write-HordeRelayWatchState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$State)
     $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $null; alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy
-                 episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null; backTell = "" + $State.backTell; backAt = $null; downLostTold = [bool]$State.downLostTold }
+                 episode = [long]$State.episode; downTell = "" + $State.downTell; downAt = $null; backTell = "" + $State.backTell; backAt = $null; downLostTold = [bool]$State.downLostTold; downPhone = "" + $State.downPhone }
     foreach ($k in @("lastCheckAt", "downSince", "downAt", "backAt")) {
         if ($State.$k -is [datetime]) { $o[$k] = $State.$k.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
     }
@@ -205,7 +208,7 @@ function Close-HordeRelayEpisode {
     param([Parameter(Mandatory = $true)]$State)
     $State.episode = [long]$State.episode + 1
     $State.alerted = $false; $State.notified = $false
-    $State.downTell = ""; $State.downAt = $null; $State.backTell = ""; $State.backAt = $null; $State.downLostTold = $false
+    $State.downTell = ""; $State.downAt = $null; $State.backTell = ""; $State.backAt = $null; $State.downLostTold = $false; $State.downPhone = ""
     if ([int]$State.healthy -ge 1) { $State.failures = 0; $State.healthy = 0; $State.downSince = $null; $State.lastWhy = "" }
 }
 
@@ -272,6 +275,12 @@ function Invoke-HordeRelayWatch {
         [void]$lines.Add($nl.line)
         if ($nl.ok) { $st.downLostTold = $true; $res.changed = $true }
     }
+    # A DOWN notice the phone was told was "not posted" (or "may have been"), that the warchief's session then TOOK: the phone is told once more.
+    if ($st.notified -and $st.alerted -and $st.downTell -ceq "" -and @("none", "off", "copy", "maybe") -ccontains $st.downPhone -and $null -ne $Tools["Notify"]) {
+        $nt = Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay outage told earlier" + $(if ("" + $st.lastWhy -ne "") { " (" + $st.lastWhy + ")" } else { "" }) + ": " + (Get-HordeWatchTellWords -State "taken")) -Who "the founder's phone"
+        [void]$lines.Add($nt.line)
+        if ($nt.ok) { $st.downPhone = "taken"; $res.changed = $true }
+    }
     if ($res.changed) { Write-HordeRelayWatchState -Path $StatePath -State $st }
     if ($st.lastCheckAt -is [datetime] -and $utcNow -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @($lines.ToArray()) } }
     $health = Get-HordeRelayHealth -Origin $Origin -Fetch $Tools["Fetch"]
@@ -292,7 +301,9 @@ function Invoke-HordeRelayWatch {
         }
         if (-not $s.notified) {
             $s.notified = $true
-            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay check fails: " + $d.why + ". " + (Get-HordeWatchTellWords -State $tellState)) -Who "the founder's phone").line)
+            $nd = Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay check fails: " + $d.why + ". " + (Get-HordeWatchTellWords -State $tellState)) -Who "the founder's phone"
+            [void]$lines.Add($nd.line)
+            $s.downPhone = $tellState
         }
     } elseif ($d.alert -ceq "recovered") {
         [void]$lines.Add("relay watch: recovered - " + $d.why)

@@ -177,6 +177,25 @@ try {
     $null = Look 320
     Check ($rig.notices.Count -eq 2 -and $rig.tells.Count -eq 1) "and nothing more is said"
     $rig.held.Clear(); $rig.noticeOk = $false
+    # ROUND 6, SHOULD-FIX: the stale-episode path corrects the phone once, too: told 'not posted', the mail is later posted and TAKEN.
+    Remove-Item -LiteralPath $statePath
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $rig.noticeOk = $true
+    $null = Look 600
+    Check ($rig.notices.Count -eq 1 -and $rig.notices[0] -clike "*A notice to the warchief was not posted." -and (Beat-State).phoneAbout -ceq "none") "the first post is refused: the phone is told 'not posted'"
+    $rig.tellOk = $true
+    $null = Look 601
+    Check ($rig.tells.Count -eq 2 -and $rig.notices.Count -eq 1 -and (Beat-State).tell -ceq "posted") "the mail is then posted: not a change the phone is told of"
+    $rig.taken[$rig.posts[-1]] = $true
+    $rig.noticeOk = $false
+    $null = Look 602
+    Check ((Beat-State).alerted -and (Beat-State).tell -ceq "taken" -and $rig.notices.Count -eq 2 -and (Beat-State).phoneAbout -ceq "none") "TAKEN, but the phone refuses the update: the episode is told, the phone not yet corrected"
+    $rig.noticeOk = $true
+    $null = Look 603
+    Check ($rig.notices.Count -eq 3 -and $rig.notices[-1] -clike "*A notice to the warchief was taken by his session." -and (Beat-State).phoneAbout -ceq "taken") "and it is tried again on the next pass until it takes it: exactly one update"
+    $null = Look 604; $null = Look 605
+    Check ($rig.notices.Count -eq 3) "and none when nothing changed"
+    $rig.noticeOk = $false
     # An UNKNOWN result may have landed: its mark is kept, the phone says may, and it is posted again, same id (it may not have).
     Remove-Item -LiteralPath $statePath
     $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
@@ -330,6 +349,18 @@ try {
     $null = Look 3031; $null = Look 3032
     Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*The warchief's notice could not be delivered: the messenger holds it, and it was not taken." -and ([System.IO.File]::ReadAllText($statePath + ".told")) -ceq "held") "HELD: the mark says held, and the phone gets exactly one update in the held words"
     $rig.held.Clear()
+    # ROUND 6, MUST-FIX: a notice whose first post had an UNKNOWN result, reposted and REFUSED: the first copy may have landed - never "not posted".
+    foreach ($m in @(".told", ".phone", ".told.logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tells.Clear(); $rig.posts.Clear(); $rig.notices.Clear(); $rig.marked.Clear(); $rig.taken.Clear()
+    $rig.tellOk = $false; $rig.tellListed = $true; $rig.noticeOk = $false
+    $null = Look 3040
+    Check ((Test-Path ($statePath + ".told")) -and ([System.IO.File]::ReadAllText($statePath + ".told")) -clike "maybe *") "CONTROL: the unreadable-state notice has an unknown result, kept as maybe (the phone refused)"
+    $rig.tellListed = $false; $rig.noticeOk = $true
+    $null = Look 3041
+    Check ($rig.notices.Count -eq 2 -and $rig.notices[-1] -clike "*A notice to the warchief may have been posted; the watch cannot tell." -and $rig.notices[-1] -cnotlike "*was not posted*") "the repost is refused: the phone is told it MAY have been posted - never 'not posted'"
+    $rig.tellOk = $true; $rig.tellListed = $false
+    foreach ($m in @(".told", ".phone", ".told.logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
+    $rig.tellOk = $true
     foreach ($m in @(".told", ".phone", ".told.logged")) { if (Test-Path ($statePath + $m)) { Remove-Item -LiteralPath ($statePath + $m) } }
     $rig.tellOk = $true
     [System.IO.File]::WriteAllText($statePath, '{"v":1,"alerted":true,"since":"2026-11-04T20:00:00.0000000Z","gen":5,"tell":"bogus"}', $utf8)

@@ -435,6 +435,30 @@ try {
     $ll = @()
     foreach ($m in @(0, 5, 10)) { $ll += @((PassRaw $w27 $tl27 $bad27 $m).lines) }
     Check (@($ll | Where-Object { $_ -like "*telling is off*" }).Count -eq 1) "STOPPED notice with telling off: 'telling is off' is logged once a day, not on every pass"
+    # ROUND 6, SHOULD-FIX: the first DOWN post is refused (the phone is told 'not posted'); it is posted and then TAKEN: the phone is told once more.
+    $w28 = New-World $t0; $w28.refuse["relay-down"] = 1; $tl28 = New-WorldTools $w28; $sp28 = Join-Path $work "down-corrected.json"
+    $sync.mode = "500"
+    foreach ($m in @(1900, 1905)) { $null = Pass $w28 $tl28 $sp28 $m }
+    Check ($w28.notices.Count -eq 1 -and $w28.notices[0] -clike "*A notice to the warchief was not posted.*" -and (State-Of $sp28).downPhone -ceq "none") "the first DOWN post is refused: the phone is told 'not posted'"
+    $null = Pass $w28 $tl28 $sp28 1910
+    Check ($w28.tells.Count -eq 2 -and $w28.notices.Count -eq 1 -and (State-Of $sp28).downTell -ceq "posted") "it is then posted: not a change the phone is told of"
+    $w28.taken["relay-down|0"] = $true
+    $null = Pass $w28 $tl28 $sp28 1915
+    Check ($w28.notices.Count -eq 2 -and $w28.notices[-1] -clike "*A notice to the warchief was taken by his session." -and (State-Of $sp28).downPhone -ceq "taken" -and (State-Of $sp28).alerted) "and TAKEN: the phone is told once more"
+    $null = Pass $w28 $tl28 $sp28 1920
+    Check ($w28.notices.Count -eq 2) "and not again on a later pass"
+    # ROUND 6, NIT 1: a pass that logs nothing does not use up the day's log slot.
+    $w29 = New-World $t0; $tl29 = New-WorldTools $w29
+    $bad29 = Join-Path $work "bad-state29.json"
+    [System.IO.File]::WriteAllText($bad29, "not json", $utf8)
+    $null = PassRaw $w29 $tl29 $bad29 0
+    $w29.taken[$w29.posts[0]] = $true
+    $null = PassRaw $w29 $tl29 $bad29 5
+    $null = PassRaw $w29 $tl29 $bad29 10
+    Check (-not (Test-Path ($bad29 + ".told.logged"))) "a posted, then taken, then throttled STOPPED notice logs no repeat line, so it does not use up the day's log slot"
+    $w29.refuse["relay-stopped"] = 1
+    $ll = @((PassRaw $w29 $tl29 $bad29 1500).lines)
+    Check (@($ll | Where-Object { $_ -like "*could not tell the warchief*" }).Count -eq 1 -and (Test-Path ($bad29 + ".told.logged"))) "so a refusal on the next day is logged, and only then is the slot used"
     $w14 = New-World $t0; $tl14 = New-WorldTools $w14; $tl14["Tell"] = $null; $sp14 = Join-Path $work "telling-off.json"
     $sync.mode = "500"
     foreach ($m in @(1200, 1205)) { $null = Pass $w14 $tl14 $sp14 $m }

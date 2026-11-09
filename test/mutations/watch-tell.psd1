@@ -98,10 +98,13 @@
            Find = '$(if ($KeepTime) { $last } else { $Now })'
            Replace = '$Now' }
         @{ Name = "daily-notice-repeat-lines-logged-every-pass"
-           Find = 'if ($w.state -ceq "posted" -or $logDue) { [void]$lines.Add($w.line) }'
-           Replace = '[void]$lines.Add($w.line)' }
+           Find = 'elseif ($logDue) { [void]$lines.Add($w.line);'
+           Replace = 'elseif ($true) { [void]$lines.Add($w.line);' }
         @{ Name = "daily-notice-log-day-not-kept"
-           Find = 'if ($logDue) { try { [System.IO.File]::WriteAllText($logPath'
-           Replace = 'if ($false) { try { [System.IO.File]::WriteAllText($logPath' }
+           Find = 'Set-HordeWatchLogged -MarkPath $MarkPath -Now $Now }'
+           Replace = '}' }
+        @{ Name = "daily-notice-silent-pass-uses-the-log-slot"
+           Find = '$logDue = (-not [System.IO.File]::Exists($logPath)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($logPath).AddHours(24))'
+           Replace = '$logDue = (-not [System.IO.File]::Exists($logPath)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($logPath).AddHours(24)); Set-HordeWatchLogged -MarkPath $MarkPath -Now $Now' }
     )
 }

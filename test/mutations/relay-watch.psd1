@@ -127,8 +127,8 @@
            Find = '(Get-HordeWatchLostWords -Why $st.downTell)) -Who "the founder''s phone"'
            Replace = '(Get-HordeWatchTellWords -State "posted")) -Who "the founder''s phone"' }
         @{ Name = "down-lost-phone-answer-not-kept-in-the-file"
-           Find = 'backAt = $null; downLostTold = [bool]$State.downLostTold }'
-           Replace = 'backAt = $null; downLostTold = $false }' }
+           Find = 'backAt = $null; downLostTold = [bool]$State.downLostTold; downPhone'
+           Replace = 'backAt = $null; downLostTold = $false; downPhone' }
         # One blip tells nobody.
         @{ Name = "down-on-first-failure"
            Find = '$s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {'
@@ -152,5 +152,18 @@
         @{ Name = "stopped-notice-mark-path-changed"
            Find = '-MarkPath ($StatePath + ".told")'
            Replace = '-MarkPath ($StatePath + ".toldx")' }
+        # The phone told 'not posted' (or 'may have') for a DOWN notice that is later TAKEN: told once more (ROUND 6).
+        @{ Name = "down-phone-never-corrected"
+           Find = 'if ($st.notified -and $st.alerted -and $st.downTell -ceq "" -and @("none", "off", "copy", "maybe") -ccontains $st.downPhone -and $null -ne $Tools["Notify"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "down-phone-corrected-every-pass"
+           Find = 'if ($nt.ok) { $st.downPhone = "taken"; $res.changed = $true }'
+           Replace = 'if ($nt.ok) { $res.changed = $true }' }
+        @{ Name = "down-phone-word-not-kept"
+           Find = '$s.downPhone = $tellState'
+           Replace = '$s.downPhone = "posted"' }
+        @{ Name = "down-phone-word-not-kept-in-the-file"
+           Find = 'backAt = $null; downLostTold = [bool]$State.downLostTold; downPhone = "" + $State.downPhone }'
+           Replace = 'backAt = $null; downLostTold = [bool]$State.downLostTold; downPhone = "" }' }
     )
 }

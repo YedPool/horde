@@ -12,13 +12,19 @@
            Find = '& $setMark $t $false; [void]$lines.Add($Prefix + ": the " + $Noun'
            Replace = '& $setMark "lost" $false; [void]$lines.Add($Prefix + ": the " + $Noun' }
         @{ Name = "daily-notice-log-every-pass"
-           Find = 'if ($w.state -ceq "posted" -or $logDue) { [void]$lines.Add($w.line) }'
-           Replace = '[void]$lines.Add($w.line)' }
+           Find = 'elseif ($logDue) { [void]$lines.Add($w.line);'
+           Replace = 'elseif ($true) { [void]$lines.Add($w.line);' }
         @{ Name = "daily-notice-log-day-not-kept"
-           Find = 'if ($logDue) { try { [System.IO.File]::WriteAllText($logPath'
-           Replace = 'if ($false) { try { [System.IO.File]::WriteAllText($logPath' }
+           Find = 'Set-HordeWatchLogged -MarkPath $MarkPath -Now $Now }'
+           Replace = '}' }
+        @{ Name = "daily-notice-maybe-refused-says-none"
+           Find = '$(if ($again -and $w.state -cne "posted") { "maybe" } else { $w.state })'
+           Replace = '$w.state' }
         @{ Name = "daily-notice-taken-not-recorded"
            Find = '& $setMark "told" $false;'
            Replace = '' }
+        @{ Name = "taken-words-say-posted"
+           Find = 'if ($State -ceq "taken") { return "A notice to the warchief was taken by his session." }'
+           Replace = 'if ($State -ceq "taken") { return "A notice to the warchief was posted and is being watched for its taking." }' }
     )
 }

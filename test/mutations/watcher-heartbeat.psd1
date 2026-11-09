@@ -50,12 +50,6 @@
         @{ Name = "beat-phone-accept-ends-the-watch"
            Find = '$over = (($St.tell -ceq "" -and $phoneKnows -and $words -ceq "off") -or'
            Replace = '$over = (($St.tell -ceq "" -and $phoneKnows) -or' }
-        @{ Name = "beat-stops-at-alerted-though-the-phone-refused"
-           Find = 'if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }'
-           Replace = 'if ($st.alerted) { return [pscustomobject]@{ lines = @() } }' }
-        @{ Name = "beat-phone-not-told-again-when-the-mail-is-held"
-           Find = '$needPhone = ($St.phoneAbout -ceq "" -or ($lost -and $St.phoneAbout -cne "held" -and $St.phoneAbout -cne "lost"))'
-           Replace = '$needPhone = ($St.phoneAbout -ceq "")' }
         @{ Name = "beat-phone-answer-not-kept"
            Find = 'if ($n.ok) { $St.phoneAbout = $words }'
            Replace = 'if ($n.ok) { }' }
@@ -65,9 +59,6 @@
         @{ Name = "beat-held-words-say-nothing"
            Find = 'if ($State -ceq "held" -or $State -ceq "lost") { return (Get-HordeWatchLostWords -Why $State) }'
            Replace = 'if ($false) { return "" }' }
-        @{ Name = "beat-taken-words-say-posted"
-           Find = 'return "A notice to the warchief was taken by his session."'
-           Replace = 'return "A notice to the warchief was posted and is being watched for its taking."' }
         @{ Name = "beat-back-notice-needs-alerted"
            Find = 'if ($st.alerted -or $st.phoneAbout -cne "") {'
            Replace = 'if ($st.alerted) {' }
@@ -145,5 +136,18 @@
         @{ Name = "unreadable-phone-answer-not-kept"
            Find = '[System.IO.File]::WriteAllText($pm, $(if ($r.state -cne "") { $r.state } else { "none" }))'
            Replace = '[System.IO.File]::WriteAllText($pm, "told")' }
+        # The stale-episode path corrects the phone once, like the unreadable path (ROUND 6).
+        @{ Name = "episode-phone-never-corrected"
+           Find = '$needPhone = ($St.phoneAbout -ceq "" -or (Test-HordeWatcherPhoneStale -St $St))'
+           Replace = '$needPhone = ($St.phoneAbout -ceq "")' }
+        @{ Name = "episode-phone-corrected-every-pass"
+           Find = '-and $St.phoneAbout -cne "legacy" -and $St.phoneAbout -cne $St.tell)'
+           Replace = '-and $St.phoneAbout -cne "legacy")' }
+        @{ Name = "heartbeat-stops-before-the-phone-is-corrected"
+           Find = 'if ($st.alerted -and $st.phoneAbout -cne "" -and -not (Test-HordeWatcherPhoneStale -St $st)) { return [pscustomobject]@{ lines = @() } }'
+           Replace = 'if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }' }
+        @{ Name = "unreadable-log-slot-not-used-by-the-line"
+           Find = 'Set-HordeWatchLogged -MarkPath ($StatePath + ".told") -Now $Now }'
+           Replace = '}' }
     )
 }

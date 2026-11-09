@@ -63,6 +63,7 @@ function Get-HordeWatchTellWords {
     param([Parameter(Mandatory = $true)][string]$State)
     if ($State -ceq "posted") { return "A notice to the warchief was posted and is being watched for its taking." }
     if ($State -ceq "maybe") { return "A notice to the warchief may have been posted; the watch cannot tell." }
+    if ($State -ceq "taken") { return "A notice to the warchief was taken by his session." }
     if ($State -ceq "off") { return "A notice to the warchief was not posted: telling is off." }
     if ($State -ceq "copy") { return "Nothing new was posted to the warchief: the messenger already held a copy of this notice." }
     return "A notice to the warchief was not posted."
@@ -82,6 +83,13 @@ function Get-HordeWatchLostWords {
     return "The warchief's notice was not taken in time and is no longer watched; it may still be in his mailbox."
 }
 
+function Set-HordeWatchLogged {
+    # The day's log slot of a daily notice (<MarkPath>.logged) is used: a line was logged at -Now.
+    param([Parameter(Mandatory = $true)][string]$MarkPath, [Parameter(Mandatory = $true)][datetime]$Now)
+    $logPath = $MarkPath + ".logged"
+    try { [System.IO.File]::WriteAllText($logPath, "logged"); [System.IO.File]::SetLastWriteTimeUtc($logPath, $Now) } catch { }
+}
+
 function Send-HordeWatchDailyTell {
     # One notice to the warchief at most once a day, on the TAKEN rules, with its state in the small file -MarkPath (the caller's, beside a state
     # file it must not touch): { lines; fresh; logDue; state }. The file holds "posted <day>" while the notice awaits TAKEN, "maybe <day>" while a post
@@ -99,7 +107,8 @@ function Send-HordeWatchDailyTell {
     $lines = New-Object System.Collections.ArrayList
     $logPath = $MarkPath + ".logged"
     $logDue = (-not [System.IO.File]::Exists($logPath)) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($logPath).AddHours(24))
-    if ($logDue) { try { [System.IO.File]::WriteAllText($logPath, "logged"); [System.IO.File]::SetLastWriteTimeUtc($logPath, $Now) } catch { } }
+    # (The day's log slot is used up only by a line that is logged: here a repeated post line, below; by the caller, its own line, with
+    # Set-HordeWatchLogged. A pass that says nothing leaves the slot for the next thing worth saying.)
     $done = { param([bool]$Fresh, [string]$State) return [pscustomobject]@{ lines = @($lines.ToArray()); fresh = $Fresh; logDue = $logDue; state = $State } }
     $exists = [System.IO.File]::Exists($MarkPath)
     $last = $(if ($exists) { [System.IO.File]::GetLastWriteTimeUtc($MarkPath) } else { [datetime]::MinValue })
@@ -120,7 +129,10 @@ function Send-HordeWatchDailyTell {
         return (& $done $false $(if ($content -ceq "told") { "taken" } elseif ($content -ceq "held" -or $content -ceq "lost") { $content } else { "" }))
     }
     $w = Send-HordeWatchTell -Tools $Tools -Prefix $Prefix -Who "the warchief" -Key $Key -Gen $day -Text $Text
-    if ($w.state -ceq "posted" -or $logDue) { [void]$lines.Add($w.line) }
+    if ($w.state -ceq "posted") { [void]$lines.Add($w.line) }
+    elseif ($logDue) { [void]$lines.Add($w.line); Set-HordeWatchLogged -MarkPath $MarkPath -Now $Now }
     if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { & $setMark ($w.state + " " + $day) $again }
-    return (& $done (-not $again) $w.state)
+    # A repost of a notice whose first post had an unknown result: if the repost is refused, the first copy MAY have landed - what is known is
+    # still "maybe", never "not posted" (the stale-episode path says the same).
+    return (& $done (-not $again) $(if ($again -and $w.state -cne "posted") { "maybe" } else { $w.state }))
 }

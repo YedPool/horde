@@ -161,7 +161,6 @@ function Get-HordeWatcherPhoneWords {
     # PURE. What the founder's phone is told of the warchief's mail, in what is known: -State is a Send-HordeWatchTell state, or held, lost, taken.
     param([Parameter(Mandatory = $true)][string]$State)
     if ($State -ceq "held" -or $State -ceq "lost") { return (Get-HordeWatchLostWords -Why $State) }
-    if ($State -ceq "taken") { return "A notice to the warchief was taken by his session." }
     return (Get-HordeWatchTellWords -State $State)
 }
 
@@ -181,6 +180,13 @@ function Resolve-HordeWatcherTell {
         return @($Label + ": the notice to the warchief " + (Get-HordeWatchLostText -Why $t) + "; he is not told, and none is posted again for this episode")
     }
     return @()
+}
+
+function Test-HordeWatcherPhoneStale {
+    # Is the phone's last word about the warchief's mail out of date: the outcome is taken, held or lost, and the phone was told something
+    # else (a file made before this field, "legacy", is taken as told).
+    param([Parameter(Mandatory = $true)]$St)
+    return (($St.tell -ceq "taken" -or $St.tell -ceq "held" -or $St.tell -ceq "lost") -and $St.phoneAbout -cne "" -and $St.phoneAbout -cne "legacy" -and $St.phoneAbout -cne $St.tell)
 }
 
 function Invoke-HordeWatcherEpisode {
@@ -209,7 +215,9 @@ function Invoke-HordeWatcherEpisode {
     }
     if ($words -ceq "") { $words = "none" }
     $lost = ($St.tell -ceq "held" -or $St.tell -ceq "lost")
-    $needPhone = ($St.phoneAbout -ceq "" -or ($lost -and $St.phoneAbout -cne "held" -and $St.phoneAbout -cne "lost"))
+    # The phone is told once, and ONCE MORE when the outcome becomes taken, held or lost and is not what it was told (a refusal said "not
+    # posted", a post said "posted and watched"): never on every pass.
+    $needPhone = ($St.phoneAbout -ceq "" -or (Test-HordeWatcherPhoneStale -St $St))
     $phoneLine = $null
     if ($needPhone) {
         $n = Send-HordeWatcherWord -Tools $Tools -Name "Notify" -Text ($PhoneText + " " + (Get-HordeWatcherPhoneWords -State $words)) -Who "the founder's phone"
@@ -237,7 +245,7 @@ function Send-HordeWatcherUnreadable {
     $lines = New-Object System.Collections.ArrayList
     $text = $Subject + " cannot read its state file, so it is not alarming about the overseer watcher until the file is mended or removed. It is " + $StatePath + "."
     $r = Send-HordeWatchDailyTell -Tools $Tools -MarkPath ($StatePath + ".told") -Prefix $Prefix -Key $Key -Noun "UNREADABLE-STATE notice" -Now $Now -Text ("WATCHER CHECK BLIND`n" + $text)
-    if ($r.logDue) { [void]$lines.Add($Prefix + ": its state file cannot be read, so nothing is checked until it is mended or removed (" + $StatePath + ")") }
+    if ($r.logDue) { [void]$lines.Add($Prefix + ": its state file cannot be read, so nothing is checked until it is mended or removed (" + $StatePath + ")"); Set-HordeWatchLogged -MarkPath ($StatePath + ".told") -Now $Now }
     foreach ($l in @($r.lines)) { [void]$lines.Add($l) }
     # THE PHONE (<state>.phone holds the state word it was told, its time the day): told once a day, and told AGAIN, once, when the warchief's mail
     # turns out to have been taken, held or given up and the phone was told something else (a refusal: "not posted") - never on every pass. A phone
@@ -269,7 +277,7 @@ function Invoke-HordeWatcherHeartbeat {
     if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check" -Key "watcher-unreadable" -Subject "The overseer watcher check") } }
     if ($v.stale) {
         # Done once the episode counts as told AND the phone was told; until then the warchief's mail is looked at and the phone is tried again.
-        if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }
+        if ($st.alerted -and $st.phoneAbout -cne "" -and -not (Test-HordeWatcherPhoneStale -St $st)) { return [pscustomobject]@{ lines = @() } }
         if ($st.tell -ceq "" -and -not $st.alerted) { [void]$lines.Add("watcher check: STALE (" + $v.kind + ") - " + $v.why) }
         $text = "Overseer watcher is stale (" + $v.kind + "): " + $v.why + ". Check the Task Scheduler task 'Fleet overseer watch'."
         foreach ($l in @(Invoke-HordeWatcherEpisode -Tools $Tools -St $st -StatePath $StatePath -Key "watcher-stale" -PhoneText $text -WarchiefBody ("OVERSEER WATCHER STALE`n" + $text + "`nIts run file is " + $RunPath + ". You are not told again until it has been fresh and goes stale again.") -Now $now -Label "watcher check")) { [void]$lines.Add($l) }
@@ -336,7 +344,7 @@ function Invoke-HordeWatcherReaderCheck {
     $v = Get-HordeWatcherReaderVerdict -SelfPath $SelfPath -MailRoot $MailRoot -Now $now -Policy $Policy
     $st = Get-HordeWatcherBeatStateSeeded -Path $StatePath -Now $now
     if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check" -Key "watcher-reader-unreadable" -Subject "The overseer alarm-reader check") } }
-    if ($v.stale -and $st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }
+    if ($v.stale -and $st.alerted -and $st.phoneAbout -cne "" -and -not (Test-HordeWatcherPhoneStale -St $st)) { return [pscustomobject]@{ lines = @() } }
     if (-not $v.stale) {
         if ($st.alerted -or $st.tell -cne "" -or $st.phoneAbout -cne "") { Write-HordeWatcherBeatState -Path $StatePath -State (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1)) }
         return [pscustomobject]@{ lines = @() }
