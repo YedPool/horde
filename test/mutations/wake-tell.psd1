@@ -38,7 +38,7 @@
            Find = '-and ($Now - $_.at).TotalSeconds -lt 3600 -and'
            Replace = '-and' }
         @{ Name = "suppressed-tells-count-against-the-limit"
-           Find = '$next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and'
+           Find = '$next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "awaiting" -or $_.state -ceq "would-tell") -and'
            Replace = '$next.Values | Where-Object { $true -and' }
         @{ Name = "shadow-tells"
            Find = 'if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell"; class = $class };'
