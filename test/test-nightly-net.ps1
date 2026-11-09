@@ -703,14 +703,61 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     $claimCalls = @(Get-Content -LiteralPath (Join-Path $cn "calls.txt"))
     Check ($claimCalls.Count -ge 2 -and @($claimCalls | Where-Object { $_ -cne "claim=True netrun=True" }).Count -eq 0) ("every gate of the suite phase saw the claim standing and passed -NetRun (" + ($claimCalls -join " | ") + ")")
     $claimLog = [System.IO.File]::ReadAllText((Join-Path $cwr "nightly.log"))
-    $iTaken = $claimLog.IndexOf("first claim on the heavy slot taken"); $iOrder = $claimLog.IndexOf(" order: "); $iGone = $claimLog.IndexOf("suite phase over: first claim on the heavy slot released")
+    $iTaken = $claimLog.IndexOf("first claim on the heavy slot taken"); $iOrder = $claimLog.IndexOf(" order: ")
+    $iReport = $claimLog.IndexOf("report written: "); $iGone = $claimLog.IndexOf("first claim on the heavy slot released")
     Check ($iTaken -ge 0 -and $iOrder -gt $iTaken) "the claim is taken before the night's first git work"
-    Check ($iGone -gt $iOrder) "and released when the suite phase is over"
+    Check ($iReport -ge 0 -and $iGone -gt $iReport) "and released only once the report is written (T-0447)"
     $probe = $null
     Check (-not [System.Threading.Mutex]::TryOpenExisting($claimName, [ref]$probe)) "and no claim is left once the net has ended"
     $netSource = [System.IO.File]::ReadAllText((Join-Path $root "tools\NightlyNet.ps1"))
-    $iPhase = $netSource.IndexOf('Invoke-NightlyPhaseOne -Ctx $c'); $iRelease = $netSource.IndexOf('$claim.Dispose()'); $iBisect = $netSource.IndexOf('Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff')
-    Check ($iPhase -ge 0 -and $iRelease -gt $iPhase -and $iBisect -gt $iRelease) "the release stands between the suite phase and the bisects: the claim covers the suite phase only"
+    $iBisect = $netSource.IndexOf('Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff'); $iWritten = $netSource.IndexOf('Write-NightlyNetLine ("report written: " + $file)'); $iRelease = $netSource.IndexOf('$claim.Dispose()')
+    Check ($iBisect -ge 0 -and $iWritten -gt $iBisect -and $iRelease -gt $iWritten) "the release stands after the bisects and the report line: the claim covers the bisects (T-0447)"
+
+    # T-0447: THE CLAIM STANDS THROUGH THE BISECTS. The night of 2026-11-08 released it at 04:39:29, two lanes' retry
+    # loops took the slot within a second (t0347mu-time, then t0391s9-suites), and the night's only bisect gave up after
+    # 900 s. Two nights here: the first green, then two commits, and the second red at the tip, so the second bisects
+    # and must run one step at the first commit. Every gate records whether the claim stood when it was called.
+    $bn = Join-Path $work "claim-bisect"; [void][System.IO.Directory]::CreateDirectory($bn)
+    $bStub = Join-Path $bn "gate.ps1"
+    $bClaim = "Local\horde-nightly-claim-" + [guid]::NewGuid().ToString("N")
+    [System.IO.File]::WriteAllText((Join-Path $bn "exit.txt"), "0")
+    $bStubLines = @(
+        'param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)',
+        '$c = $null',
+        ('$seen = [System.Threading.Mutex]::TryOpenExisting("' + $bClaim + '", [ref]$c); if ($seen) { $c.Dispose() }'),
+        'Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ("claim=" + $seen + " bisect=" + ($Out -like "*-bisect-*"))',
+        '[System.IO.File]::WriteAllText($Out, "")',
+        '$code = [int]([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "exit.txt")).Trim()); if ($Script -ceq "guards-wrap.ps1") { $code = 0 }',
+        'Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out)',
+        'Write-Output ("heavy-slot: released exit=" + $code)',
+        'exit $code')
+    [System.IO.File]::WriteAllText($bStub, ($bStubLines -join "`r`n"))
+    $borigin = Join-Path $bn "origin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $borigin "test\lib"))
+    [void](Git $borigin @("init", "-q", "-b", "main"))
+    [System.IO.File]::WriteAllText((Join-Path $borigin "test\lib\SuiteFiles.ps1"), "function Get-HordeSuiteFiles { param([string]`$Root) return @(Get-ChildItem -LiteralPath (Join-Path `$Root 'test') -Filter 'test-*.ps1' | Sort-Object Name) }`r`nfunction Get-HordeMachineBoundSuites { return @() }`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $borigin "test\test-a.ps1"), "exit 0`r`n")
+    [void](Git $borigin @("add", "-A")); [void](Git $borigin @("commit", "-q", "-m", "base"))
+    $bwr = Join-Path $bn "wr"
+    & git.exe clone -q $borigin (Join-Path $bwr "Fix__Bis\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $bArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $root "tools\NightlyNet.ps1"), "-AtTime", (Get-Date).Date.AddHours(23).ToString("s"), "-NoTell", "-BisectReserveMinutes", "30", "-CoverageFloorPercent", "0",
+        "-NetClaimName", $bClaim, "-WorkRoot", $bwr, "-HeavySlotScript", $bStub, "-RunSeconds", "60", "-LongRunSeconds", "60", "-Repos", "Fix/Bis:horde:main")
+    $o = @(& $exe @($bArgs + @("-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+    Check ($LASTEXITCODE -eq 0) ("T-0447: the first night is green (" + $LASTEXITCODE + ")")
+    foreach ($n in @("one", "two")) { [System.IO.File]::WriteAllText((Join-Path $borigin ($n + ".txt")), $n); [void](Git $borigin @("add", "-A")); [void](Git $borigin @("commit", "-q", "-m", $n)) }
+    [System.IO.File]::WriteAllText((Join-Path $bn "exit.txt"), "1")
+    Remove-Item -LiteralPath (Join-Path $bn "calls.txt") -Force
+    $o = @(& $exe @($bArgs + @("-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+    $bCalls = @(Get-Content -LiteralPath (Join-Path $bn "calls.txt"))
+    $bBisect = @($bCalls | Where-Object { $_ -like "*bisect=True" })
+    Check ($bBisect.Count -ge 1) ("T-0447: the second night bisects (" + ($bCalls -join " | ") + ")")
+    Check ($bBisect.Count -ge 1 -and @($bBisect | Where-Object { $_ -cne "claim=True bisect=True" }).Count -eq 0) ("T-0447: every bisect gate saw the claim standing, so no lane's retry loop can take the slot between them (" + ($bBisect -join " | ") + ")")
+    $bLog = [System.IO.File]::ReadAllText((Join-Path $bwr "nightly.log"))
+    $bLast = $bLog.LastIndexOf("first claim on the heavy slot taken")
+    $bTail = $bLog.Substring([Math]::Max(0, $bLast))
+    $jBisect = $bTail.IndexOf(" bisect test/test-a.ps1|ps51 -> "); $jReport = $bTail.IndexOf("report written: "); $jGone = $bTail.IndexOf("first claim on the heavy slot released")
+    Check ($jBisect -gt 0 -and $jReport -gt $jBisect -and $jGone -gt $jReport) ("T-0447: the log says bisect, then report written, then released (" + $jBisect + " " + $jReport + " " + $jGone + ")")
+    $probe = $null
+    Check (-not [System.Threading.Mutex]::TryOpenExisting($bClaim, [ref]$probe)) "T-0447: and no claim is left once the net has ended"
     # A plan, and a suite run that names no claim, take none of the machine's.
     $machineClaim = "Global\HordeHeavySlot-NetClaim"; $probe = $null
     if (-not [System.Threading.Mutex]::TryOpenExisting($machineClaim, [ref]$probe)) {
