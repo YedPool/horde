@@ -60,7 +60,8 @@
 #     again by the NEXT pass under the same id (the generation has not moved), until it is posted and watched or its condition is declared over
 #     (Clear-HordeAnalystTold takes the row with the key). The other keys are decided by the session decision on every pass and need no row.
 # The founder's notice (Notify) goes to the notices store (notices/Decide.ps1), not through a messenger, and is left as it was. The relay
-# watch's and the watcher check's tells (Send-HordeAnalystWarchief) keep their own states and are left as they were.
+# watch's and the watcher check's tells are marked and counted the same way (T-0391 slice 8): they tell through Send-HordeAnalystWatchTell
+# and ask Get-HordeAnalystWatchTaken (core/WatchTell.ps1), and count a notice as told only when the warchief's session took it.
 #
 # THE PORT IS LOADED ONCE, BY THE COMMAND (cli/commands/analyst.ps1), at its own scope, for every tool that needs it - the teller and the look
 # at the awaiting list share that one load, so there is no second load to throw "already registered" (PR 430's round 1). A suite cuts the real
@@ -545,16 +546,6 @@ function Send-HordeAnalystMessage {
     return (Send-HordeAnalystPost -SessionId $SessionId -MessageId $MessageId -Body $Body -Values $Values -HordeHome $HordeHome)
 }
 
-function Send-HordeAnalystWarchief {
-    # One fixed notice to the warchief's session; the message id is new each time it is told.
-    param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Body, [Parameter(Mandatory = $true)]$Values, [string]$HordeHome = "")
-    if (Test-HordeAnalystHomeIsATests -HordeHome $HordeHome) { return [pscustomobject]@{ ok = $false; detail = "this Horde home is a test's: nobody is told" } }
-    $seat = Get-HordeRoleSeat -Role $script:HordeAnalystTellRole
-    if ($seat.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = ("the warchief's session cannot be told: " + $(if ($seat.state -ceq "absent") { $seat.note } else { $seat.reason })) } }
-    $r = Send-HordeAnalystPost -SessionId $seat.value.sessionId -MessageId ([guid]::NewGuid().ToString()) -Body $Body -Values $Values -HordeHome $HordeHome
-    return [pscustomobject]@{ ok = $r.ok; detail = $r.detail }
-}
-
 function Test-HordeAnalystNoticeListed {
     # Is the notice on the awaiting list now? $false too when the list cannot be read (Add then fails and nothing is posted).
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$NoticeId)
@@ -605,6 +596,41 @@ function Send-HordeAnalystWarchiefTaken {
         if (-not $removed.ok) { $detail = $detail + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
     }
     return (& $done $false $detail)
+}
+
+function Send-HordeAnalystWatchTell {
+    # THE TELL TOOL OF THE RELAY WATCH AND THE WATCHER CHECK (T-0391 slice 8; core/WatchTell.ps1): the marked teller (Send-HordeAnalystWarchiefTaken,
+    # under the id of -Key and -Gen) with one more fact: listed, whether the notice's mark is on the awaiting list after the call. A not-ok
+    # answer with listed set is an UNKNOWN result that may have landed, and the watch says "may have been posted", never "not posted".
+    # { ok; detail; lines; listed }. -Seat, -TempRoot and -Now are for a suite.
+    param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Body, [Parameter(Mandatory = $true)]$Values, [long]$Gen = 0, [string]$HordeHome = "", $Now = $null, [scriptblock]$Seat = $null, [string]$TempRoot = "")
+    $r = Send-HordeAnalystWarchiefTaken -Key $Key -Body $Body -Values $Values -Gen $Gen -HordeHome $HordeHome -Now $Now -Seat $Seat -TempRoot $TempRoot
+    $listed = $false
+    if (-not (Test-HordeAnalystHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot)) { $listed = (Test-HordeAnalystNoticeListed -HordeHome $HordeHome -NoticeId (Get-HordeAnalystTellNoticeId -Key $Key -Gen $Gen)) }
+    return [pscustomobject]@{ ok = $r.ok; detail = $r.detail; lines = $r.lines; listed = $listed }
+}
+
+function Get-HordeAnalystWatchTaken {
+    # THE TAKEN TOOL OF THE RELAY WATCH AND THE WATCHER CHECK (core/WatchTell.ps1): did the warchief's own session take the notice of (-Key,
+    # -Gen)? Asked of the messenger by the id it was posted under: "taken" (handed-over or seen), "held" (the messenger holds it for good: not
+    # delivered), "lost" (the messenger gave it up unread; it may still be in his mailbox), "pending" (not taken, and still on the awaiting list, so the pass keeps asking and one ALARM is said), or "unknown" (no
+    # messenger, no answer, or off the list with no word: nothing is guessed). -Messenger is for a suite; the command has loaded the port.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$Key, [long]$Gen = 0, $Messenger = $null)
+    $id = Get-HordeAnalystTellNoticeId -Key $Key -Gen $Gen
+    try {
+        if ($null -eq $Messenger) { $found = Find-HordeMessenger -Require $script:HordeAnalystTellNeeds; if ($found.state -ceq "known") { $Messenger = $found.value } }
+        if ($null -ne $Messenger) {
+            $status = Get-HordeMessengerStatus -Messenger $Messenger -MessageId $id
+            if ($status.state -ceq "known") {
+                $stage = "" + $status.value.stage
+                if ($stage -ceq "handed-over" -or $stage -ceq "seen") { return "taken" }
+                if ($stage -ceq "held") { return "held" }
+                if ($stage -ceq "expired") { return "lost" }
+            }
+        }
+    } catch { }
+    if (Test-HordeAnalystNoticeListed -HordeHome $HordeHome -NoticeId $id) { return "pending" }
+    return "unknown"
 }
 
 function Test-HordeAnalystTellAwaiting {

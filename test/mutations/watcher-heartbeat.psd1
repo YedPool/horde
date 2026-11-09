@@ -23,25 +23,131 @@
         @{ Name = "reader-boundary-moved"
            Find = 'if ($age -le $limit)'
            Replace = 'if ($age -lt $limit)' }
-        # One notice per episode, told only when taken, and the next backlog is a new episode.
-        @{ Name = "reader-told-every-pass"
-           Find = 'if ($v.stale -and $st.alerted)'
-           Replace = 'if ($false)' }
-        @{ Name = "reader-told-though-nothing-was-taken"
-           Find = '$told = ($n.ok -or $w.ok)'
-           Replace = '$told = $true' }
+        # One alarm per episode; the phone's accept does NOT end the watch on the warchief's mail; the next backlog is a new episode.
         @{ Name = "reader-episode-never-closes"
-           Find = 'if ($st.alerted) { Write-HordeWatcherBeatState -Path $StatePath -State ([pscustomobject]@{ alerted = $false; since = $null }) }'
+           Find = 'if ($st.alerted -or $st.tell -cne "" -or $st.phoneAbout -cne "") { Write-HordeWatcherBeatState'
+           Replace = 'if ($false) { Write-HordeWatcherBeatState' }
+        @{ Name = "reader-notice-key-changed"
+           Find = 'Key "watcher-unread"'
+           Replace = 'Key "watcher-unreadx"' }
+        @{ Name = "reader-unreadable-state-forgotten"
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher reader check"' }
+        # A state file that cannot be read fails closed: said, kept, not written over, not taken for a fresh one (SHOULD 1).
+        @{ Name = "beat-unreadable-state-forgotten"
+           Find = 'if ($st.unreadable) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check"'
+           Replace = 'if ($false) { return [pscustomobject]@{ lines = @(Send-HordeWatcherUnreadable -Tools $Tools -StatePath $StatePath -Now $now -Prefix "watcher check"' }
+        @{ Name = "state-with-an-unknown-tell-accepted"
+           Find = 'else { throw "tell is not a known value" }'
+           Replace = 'else { }' }
+        @{ Name = "state-with-an-unknown-phone-value-accepted"
+           Find = 'else { throw "phoneAbout is not a known value" }'
+           Replace = 'else { }' }
+        @{ Name = "state-from-before-the-phone-field-told-again"
+           Find = 'elseif ($s.alerted) { $s.phoneAbout = "legacy" }'
            Replace = '' }
-        # The watcher's own heartbeat: told only when taken, and its limits.
-        @{ Name = "beat-told-though-nothing-was-taken"
-           Find = 'if ($n.ok -or $w.ok) {'
-           Replace = 'if ($true) {' }
+        # THE PHONE ACCEPTING IS NOT THE EPISODE TOLD (MUST 1): the warchief's mail is looked at until it is taken, held or given up.
+        @{ Name = "beat-phone-accept-ends-the-watch"
+           Find = '$over = (($St.tell -ceq "" -and $phoneKnows -and $words -ceq "off") -or'
+           Replace = '$over = (($St.tell -ceq "" -and $phoneKnows) -or' }
+        @{ Name = "beat-phone-answer-not-kept"
+           Find = 'if ($n.ok) { $St.phoneAbout = $words }'
+           Replace = 'if ($n.ok) { }' }
+        @{ Name = "beat-phone-words-always-posted"
+           Find = '(Get-HordeWatcherPhoneWords -State $words)'
+           Replace = '(Get-HordeWatcherPhoneWords -State "posted")' }
+        @{ Name = "beat-held-words-say-nothing"
+           Find = 'if ($State -ceq "held" -or $State -ceq "lost") { return (Get-HordeWatchLostWords -Why $State) }'
+           Replace = 'if ($false) { return "" }' }
+        @{ Name = "beat-back-notice-needs-alerted"
+           Find = 'if ($st.alerted -or $st.phoneAbout -cne "") {'
+           Replace = 'if ($st.alerted) {' }
+        # The warchief's mail: counted only on TAKEN, looked at while awaited, posted again when unknown, aged from its first post.
+        @{ Name = "beat-taken-not-counted"
+           Find = '$State.alerted = $true; $State.since = $Now; $State.tell = "taken"'
+           Replace = '$State.since = $Now; $State.tell = "taken"' }
+        @{ Name = "beat-unknown-not-looked-at"
+           Find = 'if ($State.tell -cne "posted" -and $State.tell -cne "maybe") { return @() }'
+           Replace = 'if ($State.tell -cne "posted") { return @() }' }
+        @{ Name = "beat-held-stored-as-lost"
+           Find = '        $State.tell = $t'
+           Replace = '        $State.tell = "lost"' }
+        @{ Name = "beat-posted-notice-posted-again"
+           Find = 'if (-not $St.alerted -and ($St.tell -ceq "" -or $St.tell -ceq "maybe")) {'
+           Replace = 'if (-not $St.alerted) {' }
+        @{ Name = "beat-unknown-never-posted-again"
+           Find = 'if (-not $St.alerted -and ($St.tell -ceq "" -or $St.tell -ceq "maybe")) {'
+           Replace = 'if (-not $St.alerted -and $St.tell -ceq "") {' }
+        @{ Name = "beat-first-post-time-forgotten-on-repost"
+           Find = 'if ($null -eq $St.tellAt) { $St.tellAt = $Now }'
+           Replace = '$St.tellAt = $Now' }
+        @{ Name = "beat-mail-accepted-counts-as-told"
+           Find = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $St.tell = $w.state;'
+           Replace = 'if ($w.state -ceq "posted" -or $w.state -ceq "maybe") { $St.alerted = $true; $St.tell = $w.state;' }
+        @{ Name = "beat-state-change-not-written"
+           Find = 'if ($before -cne ("" + $St.alerted'
+           Replace = 'if ($false -and $before -cne ("" + $St.alerted' }
+        @{ Name = "beat-episode-never-closes"
+           Find = '        Write-HordeWatcherBeatState -Path $StatePath -State (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1))'
+           Replace = '        $null = (New-HordeWatcherBeatState -Gen ([long]$st.gen + 1))' }
+        @{ Name = "alarm-id-ignores-the-episode"
+           Find = '-Gen ([long]$St.gen) -Text $WarchiefBody'
+           Replace = '-Gen 0 -Text $WarchiefBody' }
+        @{ Name = "episode-number-not-kept-in-the-file"
+           Find = 'since = $null; gen = [long]$State.gen; tell = "" + $State.tell'
+           Replace = 'since = $null; gen = 0; tell = "" + $State.tell' }
+        @{ Name = "phone-answer-not-kept-in-the-file"
+           Find = 'tellAt = $null; phoneAbout = "" + $State.phoneAbout }'
+           Replace = 'tellAt = $null; phoneAbout = "" }' }
+        @{ Name = "fresh-state-reuses-episode-zero"
+           Find = '$clock = [long][System.Math]::Floor(($Now.ToUniversalTime() - ([datetime]"1970-01-01T00:00:00Z").ToUniversalTime()).TotalSeconds)'
+           Replace = '$clock = [long]0' }
+        @{ Name = "fresh-state-not-written-at-once"
+           Find = 'if ($st.seeded) { Write-HordeWatcherBeatState -Path $Path -State $st; $st.seeded = $false }'
+           Replace = '$st.seeded = $false' }
         @{ Name = "beat-stale-limit-moved"
            Find = 'if ($fage -gt $staleMin)'
            Replace = 'if ($fage -gt ($staleMin + 1))' }
         @{ Name = "beat-hung-limit-moved"
            Find = 'if ($age -gt $hungMin)'
            Replace = 'if ($age -gt ($hungMin + 1))' }
+        # An unreadable state file: kept, and a person is told once a day on the TAKEN rules (ROUND 4).
+        @{ Name = "unreadable-state-key-changed"
+           Find = '-Key $Key -Noun "UNREADABLE-STATE notice"'
+           Replace = '-Key "x" -Noun "UNREADABLE-STATE notice"' }
+        @{ Name = "unreadable-state-phone-never-told"
+           Find = 'if (($dailyDue -or $update) -and $null -ne $Tools["Notify"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-state-phone-told-every-pass"
+           Find = '$dailyDue = (-not $pmExists) -or ($Now -ge [System.IO.File]::GetLastWriteTimeUtc($pm).AddHours(24))'
+           Replace = '$dailyDue = $true' }
+        @{ Name = "unreadable-state-logged-every-pass"
+           Find = 'if ($r.logDue) { [void]$lines.Add($Prefix + ": its state file cannot be read'
+           Replace = 'if ($true) { [void]$lines.Add($Prefix + ": its state file cannot be read' }
+        @{ Name = "unreadable-phone-never-corrected"
+           Find = '$update = ($pmExists -and $terminal -and $told -cne $r.state)'
+           Replace = '$update = $false' }
+        @{ Name = "unreadable-phone-corrected-every-pass"
+           Find = '$update = ($pmExists -and $terminal -and $told -cne $r.state)'
+           Replace = '$update = ($pmExists -and $terminal)' }
+        @{ Name = "unreadable-phone-told-of-every-posted"
+           Find = '$terminal = ($r.state -ceq "taken" -or $r.state -ceq "held" -or $r.state -ceq "lost")'
+           Replace = '$terminal = ($r.state -cne "")' }
+        @{ Name = "unreadable-phone-answer-not-kept"
+           Find = '[System.IO.File]::WriteAllText($pm, $(if ($r.state -cne "") { $r.state } else { "none" }))'
+           Replace = '[System.IO.File]::WriteAllText($pm, "told")' }
+        # The stale-episode path corrects the phone once, like the unreadable path (ROUND 6).
+        @{ Name = "episode-phone-never-corrected"
+           Find = '$needPhone = ($St.phoneAbout -ceq "" -or (Test-HordeWatcherPhoneStale -St $St))'
+           Replace = '$needPhone = ($St.phoneAbout -ceq "")' }
+        @{ Name = "episode-phone-corrected-every-pass"
+           Find = '-and $St.phoneAbout -cne "legacy" -and $St.phoneAbout -cne $St.tell)'
+           Replace = '-and $St.phoneAbout -cne "legacy")' }
+        @{ Name = "heartbeat-stops-before-the-phone-is-corrected"
+           Find = 'if ($st.alerted -and $st.phoneAbout -cne "" -and -not (Test-HordeWatcherPhoneStale -St $st)) { return [pscustomobject]@{ lines = @() } }'
+           Replace = 'if ($st.alerted -and $st.phoneAbout -cne "") { return [pscustomobject]@{ lines = @() } }' }
+        @{ Name = "unreadable-log-slot-not-used-by-the-line"
+           Find = 'Set-HordeWatchLogged -MarkPath ($StatePath + ".told") -Now $Now }'
+           Replace = '}' }
     )
 }
