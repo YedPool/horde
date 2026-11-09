@@ -422,6 +422,21 @@ foreach ($bad in @($true, "maybe", 1)) {
     $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ betweenTurns = $script:limitWord }) }
     Check ((Get-HordeWakeState -Waker $scripted -Id $sid).state -ceq "unknown") ("state: a betweenTurns of '" + $bad + "' is unknown")
 }
+# blindReason (T-0116): optional; the waker's one-word reason that a look was blind. Absent is "", a word is carried, anything else is unknown.
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.blindReason -ceq "") "state: a waker that says nothing of blindReason says no look was blind"
+foreach ($word in @("", "terminal-timeout", "pane-unverified", "box-unreadable")) {
+    $script:limitWord = $word
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ blindReason = $script:limitWord }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.blindReason -ceq $word) ("state: blindReason '" + $word + "' is carried")
+}
+foreach ($bad in @($true, 1, "Terminal Timeout", "two`nlines", "-x", ("a" * 61))) {
+    $script:limitWord = $bad
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ blindReason = $script:limitWord }) }
+    Check ((Get-HordeWakeState -Waker $scripted -Id $sid).state -ceq "unknown") ("state: a blindReason of '" + ("$bad" -replace "`n", " ") + "' is unknown, not carried")
+}
 # acked and lastAckedAt; handedOverCount and oldestHandedOverAt.
 $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ acked = "known"; lastAckedAt = $t0.AddMinutes(-5); handedOverCount = 2; oldestHandedOverAt = $t0.AddMinutes(-1) }) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid

@@ -87,7 +87,14 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @(); blind = @{}; counts = $null }
+    # THE RUN-LONG COUNTS (T-0116) go on from the mode's counts file, so a restart does not forget how many passes and
+    # looks there were: since is when the counting began, startedAt when this process did.
+    $startedAt = [datetime]::UtcNow
+    $run.counts = [pscustomobject]@{ since = $startedAt; startedAt = $startedAt; passes = [long]0; looks = [long]0; blindLooks = [long]0; blindPasses = [long]0 }
+    $savedCounts = Read-HordeWakeCounts -Mode $word -HordeHome $HordeHome
+    if ($savedCounts.state -ceq "known") { $run.counts = [pscustomobject]@{ since = $savedCounts.value.since; startedAt = $startedAt; passes = $savedCounts.value.passes; looks = $savedCounts.value.looks; blindLooks = $savedCounts.value.blindLooks; blindPasses = $savedCounts.value.blindPasses } }
+    elseif ($savedCounts.state -ceq "unknown") { $run.said = @($run.said) + ("counting passes and looks from nothing - " + $savedCounts.reason) }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -282,6 +289,10 @@ function Invoke-HordeWakeTick {
     $mode = Get-HordeWakeRunMode -Run $Run
     $shadow = ($mode -ceq "shadow")
     $Run.pass = [long]$Run.pass + 1
+    # A run made before the blind-look members existed gets them here (T-0116).
+    if ($null -eq $Run.PSObject.Properties["blind"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "blind" -Value @{} }
+    if ($null -eq $Run.PSObject.Properties["counts"] -or $null -eq $Run.counts) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "counts" -Value ([pscustomobject]@{ since = $Now; startedAt = $Now; passes = [long]0; looks = [long]0; blindLooks = [long]0; blindPasses = [long]0 }) -Force }
+    $Run.counts.passes = [long]$Run.counts.passes + 1
     $entries = New-Object System.Collections.ArrayList
     $failed = New-Object System.Collections.ArrayList
     # THE RESTORE SOURCE, every restoreEverySeconds, and SHADOW IN BOTH MODES (the header). What it could
@@ -350,7 +361,17 @@ function Invoke-HordeWakeTick {
             elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }
             else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
         } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown -Blind $Run.blind
+        # BLIND LOOKS (T-0116): counted, and kept as spells that are journaled once and backed off from. A look
+        # the terminal did not answer says nothing of the session (core/Wake.ps1, Update-HordeWakeBlind).
+        $Run.counts.looks = [long]$Run.counts.looks + [long]$result.looks
+        $Run.counts.blindLooks = [long]$Run.counts.blindLooks + [long]$result.blindLooks.Count
+        if ($result.blindLooks.Count -gt 0) { $Run.counts.blindPasses = [long]$Run.counts.blindPasses + 1 }
+        $listedForBlind = $null
+        if ($null -ne $result.listing -and "$($result.listing.state)" -cmatch '\Aknown\z') { $listedForBlind = @($result.listing.value | ForEach-Object { "$($_.id)" }) }
+        $blindNow = Update-HordeWakeBlind -Seen $Run.blind -BlindLooks $result.blindLooks -SeenLooks $result.seenLooks -Listed $listedForBlind -Now $Now -Settings $Settings
+        $Run.blind = $blindNow.seen
+        foreach ($e in @($blindNow.entries)) { [void]$entries.Add($e) }
         if ($asleepUnknown -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("nobody is knocked while which sessions are asleep in a hibernation cannot be told: " + $asleepUnknown))) }
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
@@ -517,7 +538,7 @@ function Invoke-HordeWakeTick {
         }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" }
+    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown

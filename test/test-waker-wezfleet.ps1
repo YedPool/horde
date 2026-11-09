@@ -742,6 +742,30 @@ foreach ($d in @($state.dir, $state.home)) { if (Test-Path -LiteralPath $d) { Re
 $state = $null
 
 Write-Host ""
+Write-Host "--- a blind look (T-0116): the terminal did not answer, so the box and the turn are unknown, and the state says why ---" -ForegroundColor Cyan
+$state = & $fx.New
+foreach ($case in @(
+        @{ n = 1; box = "unknown"; turn = "unknown"; reasons = @("terminal-timeout"); want = "terminal-timeout"; what = "a terminal that did not answer in time" },
+        @{ n = 2; box = "unknown"; turn = "unknown"; reasons = @("pane-unverified"); want = "pane-unverified"; what = "a pane that could not be verified" },
+        @{ n = 3; box = "yes"; turn = "unknown"; reasons = @("box-unreadable"); want = "box-unreadable"; what = "a box read and a turn that could not be (box-unreadable)" },
+        @{ n = 4; box = "unknown"; turn = "unknown"; reasons = @("duplicate-process", "pane-unverified"); want = "pane-unverified"; what = "the word found among several" },
+        @{ n = 5; box = "unknown"; turn = "unknown"; reasons = @("no-live-process"); want = ""; what = "a session with no live process: a fact about the session, not about the look" },
+        @{ n = 6; box = "unknown"; turn = "unknown"; reasons = @("duplicate-process"); want = ""; what = "two running copies: a fact about the session" },
+        @{ n = 7; box = "unknown"; turn = "unknown"; reasons = @(); want = ""; what = "unknown with no reason at all" },
+        @{ n = 8; box = "yes"; turn = "no"; reasons = @("box-unreadable"); want = ""; what = "a box and a turn that both read, whatever a reason says" })) {
+    & $fx.SetRow $state (New-Row $case.n @{ boxEmpty = $case.box; midTurn = $case.turn; reasons = $case.reasons; reason = $(if (@($case.reasons).Count -gt 0) { @($case.reasons)[0] } else { "" }) })
+    $a = Get-HordeWakeState -Waker $w -Id (Sid $case.n) -Full
+    Check ($a.state -ceq "known" -and $a.value.blindReason -ceq $case.want) ("a look at " + $case.what + " has blindReason '" + $case.want + "'")
+}
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.blindReason -ceq "") "CONTROL: the fleet's cheap reading, which looks at no pane, is never blind"
+& $fx.SetRow $state (New-Row 9 @{ boxEmpty = "unknown"; midTurn = "unknown"; reasons = "terminal-timeout"; reason = "terminal-timeout" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 9) -Full
+Check ($a.state -ceq "known" -and $a.value.blindReason -ceq "terminal-timeout" -and $a.value.unreadCount -eq 1) "a reason sent as one word and not a list is read the same, and the row is a state like any other (rule 1)"
+& $fx.Remove $state
+$state = $null
+
+Write-Host ""
 Write-Host "--- the exit (hibernation): box slash /exit through the one start site, read by its exit code ---" -ForegroundColor Cyan
 $state = & $fx.New
 $why = "hibernation 20261016-120000"

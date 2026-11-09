@@ -192,7 +192,7 @@ function Write-HordeWakeHeartbeat {
     # The mode's heartbeat (heartbeat-live.json, or heartbeat-shadow.json with -Shadow), replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
     # anything else tells a watcher that is running from one that is not; tickSeconds is how often this
     # watcher beats, so a reader knows how long a silence is too long (Get-HordeWakeStaleSeconds).
-    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$Mode = "", [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome), [string]$Self)
+    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$Mode = "", [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome), [string]$Self, $Counts = $null)
     # mode says which run beat it - shadow, proof or live - and shadow, kept for readers that know only
     # that member, is true for the shadow run alone.
     $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow
@@ -202,6 +202,17 @@ function Write-HordeWakeHeartbeat {
     # running watcher will never nudge. It was held silently, and a watcher started from the wrong
     # session leaves that session unwoken with nothing anywhere saying why (review of PR 230).
     if ($PSBoundParameters.ContainsKey("Self")) { $beat["self"] = "$Self" }
+    # THE RUN-LONG COUNTS (T-0116): { since; startedAt; passes; looks; blindLooks; blindPasses } - how many passes
+    # the run made, how many looks at a session's box and turn, how many of those the terminal did not answer
+    # (blind), and in how many passes at least one was. They go in the heartbeat for `wake status` AND in a counts
+    # file beside it (counts-<mode>.json) that the next run of the mode reads at its start, so a restart goes on
+    # counting: since is when the counting began, startedAt when this process did. The file goes first, so the
+    # heartbeat never shows more than the file holds.
+    if ($null -ne $Counts) {
+        $row = [ordered]@{ since = (ConvertTo-HordeWakeTimeText $Counts.since); startedAt = (ConvertTo-HordeWakeTimeText $Counts.startedAt); passes = [long]$Counts.passes; looks = [long]$Counts.looks; blindLooks = [long]$Counts.blindLooks; blindPasses = [long]$Counts.blindPasses }
+        Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "counts" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $row -Compress)
+        $beat["counts"] = $row
+    }
     Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $beat -Compress)
 }
 
@@ -217,8 +228,8 @@ function Read-HordeWakeHeartbeat {
     if ($null -ne $j -and $null -ne $j.PSObject.Properties["at"]) { $at = ConvertFrom-HordeWakeTimeText $j.at }
     if ($null -eq $at) { return (New-HordeUnknown -Reason "the heartbeat holds no time") }
     # self is $null for a heartbeat that does not say - one written before it was said.
-    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false; mode = ""; tickSeconds = 0; self = $null }
-    foreach ($n in @("pid", "pass", "shadow", "mode", "tickSeconds", "self")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
+    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false; mode = ""; tickSeconds = 0; self = $null; counts = $null }
+    foreach ($n in @("pid", "pass", "shadow", "mode", "tickSeconds", "self", "counts")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
     return (New-HordeKnown -Value ([pscustomobject]$beat) -ObservedAt $at)
 }
 

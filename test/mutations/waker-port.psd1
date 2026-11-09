@@ -72,8 +72,8 @@
            Find = 'acked = $acked; lastAckedAt = $lastAcked;'
            Replace = 'acked = $acked; lastAckedAt = $null;' }
         @{ Name = "what-was-handed-over-is-not-carried"
-           Find = 'handedOverCount = $handed; oldestHandedOverAt = $handedAt })'
-           Replace = 'handedOverCount = $null; oldestHandedOverAt = $handedAt })' }
+           Find = 'handedOverCount = $handed; oldestHandedOverAt = $handedAt;'
+           Replace = 'handedOverCount = $null; oldestHandedOverAt = $handedAt;' }
         @{ Name = "a-source-that-does-not-say-fixed-is-accepted"
            Find = 'if (-not $fixed.has -or $fixed.value -isnot [bool]) { return'
            Replace = 'if ($false) { return' }

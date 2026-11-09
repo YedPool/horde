@@ -9,8 +9,8 @@
            Find = 'if ($PSBoundParameters.ContainsKey("Self")) { $beat["self"] = "$Self" }'
            Replace = '' }
         @{ Name = "a-heartbeat-that-does-not-say-reads-as-none"
-           Find = 'tickSeconds = 0; self = $null }'
-           Replace = 'tickSeconds = 0; self = "" }' }
+           Find = 'tickSeconds = 0; self = $null; counts = $null }'
+           Replace = 'tickSeconds = 0; self = ""; counts = $null }' }
         @{ Name = "a-proof-run-has-a-lock-and-a-ledger-of-its-own"
            Find = 'if ((Get-HordeWakeModeWord -Mode $Mode) -ceq "shadow") { return "shadow" }'
            Replace = 'if ((Get-HordeWakeModeWord -Mode $Mode) -cne "live") { return (Get-HordeWakeModeWord -Mode $Mode) }' }
