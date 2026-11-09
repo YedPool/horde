@@ -326,12 +326,15 @@ function Invoke-HordeRestoreSourcePass {
     #   -Post      param($Mail) -> a tristate answer, known ONLY when the session took the mail (its TAKEN); an accepted post is
     #              unknown with .awaiting (core/WakeMail.ps1). $Mail is { kind; to; messageId; body }. Never called in shadow.
     #   -Awaiting  the ids on the restore source's awaiting list: posted, not yet taken, so not planned again (T-0391 slice 9)
+    #   -Retry     the awaiting ids whose alarm was said and which are posted ONCE MORE, under the same id (the messenger keeps one copy):
+    #              a post that came back unknown, or a crash between the mark and the post, leaves a mail that may be in no mailbox. They
+    #              are never counted done by this: only the session's own TAKEN does that.
     #   -Posted    messageId -> when it was posted, for the mails already posted, from the last pass
     #   -Known     the restores already found, each { restoreId; windowStart; windowEnd; members }, from the last
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @(), [string[]]$Awaiting = @())
+    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @(), [int]$UncountedDuplicates = 0, [string[]]$DuplicateNames = @(), [string[]]$Awaiting = @(), [string[]]$Retry = @())
     $entries = New-Object System.Collections.ArrayList
     # WHAT IS OLDER THAN A RESTORE CAN BE IS DROPPED, from both tables: a restore older than
     # restoreMaxAgeSeconds is history and plans nothing, so neither its mails' ids nor its window can
@@ -350,7 +353,7 @@ function Invoke-HordeRestoreSourcePass {
     foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
         if ($nextPosted.ContainsKey($mail.messageId)) { continue }
         # ON THE AWAITING LIST: posted, and waiting for the session's own TAKEN. Not posted again, not journaled again.
-        if (@($Awaiting) -ccontains $mail.messageId) { continue }
+        if (@($Awaiting) -ccontains $mail.messageId -and @($Retry) -cnotcontains $mail.messageId) { continue }
         # A STALL HELD BACK BY A DUPLICATE is journaled once per restore and posts nothing, shadow or not.
         if ($mail.kind -ceq "stall-held") {
             $nextPosted[$mail.messageId] = $Now
@@ -369,6 +372,10 @@ function Invoke-HordeRestoreSourcePass {
             # KNOWN IS THE POSTER'S WORD THAT THE SESSION TOOK THE MAIL (its TAKEN). Send-HordeRestoreMail never says it.
             $nextPosted[$mail.messageId] = $Now
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "posted" -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId))
+        } elseif (Test-HordeWakeMailAlready $took) {
+            # The messenger already held a copy from an earlier post and woke nobody: handled (not planned again), NOT delivered.
+            $nextPosted[$mail.messageId] = $Now
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "already-posted" -Reason ("restore " + $finding.value.restoreId + ": the messenger already held a copy of it from an earlier post; it is not counted as delivered") -MessageId $mail.messageId))
         } elseif (Test-HordeWakeMailAwaiting $took) {
             # POSTED, NOT DELIVERED. The restore is NOT counted done here: the mail is not in the posted table, so the pass would plan it
             # again, but the awaiting list holds it (-Awaiting), so it is not posted again either. It is counted done on its TAKEN, by the

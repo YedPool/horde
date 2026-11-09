@@ -98,7 +98,9 @@ function Send-HordeWakeMail {
     # A MESSAGE THE PORT WOULD REFUSE IS NEVER MARKED: nothing is posted, so a mark would alarm "not taken" for something never sent.
     $findings = @(Test-HordeMessengerMessage -Message $message)
     if ($findings.Count -gt 0) { return (New-HordeUnknown -Reason ("the message was not handed to messenger '" + $through.name + "': " + ($findings -join "; "))) }
-    # MARK FIRST, THEN POST. A crash between them costs one alarm; the next pass posts the same id, which the messenger keeps as one.
+    # MARK FIRST, THEN POST. A crash between them, or a post that came back unknown, leaves a mark with no confirmed post. It is alarmed at
+    # the alarm time and the restore source then posts the SAME id once more (core/WakeRun.ps1, -Retry), which the messenger keeps as one.
+    $wasListed = (@(Get-HordeWakeMailAwaitingIds -Kind $Kind -HordeHome $HordeHome) -ccontains $message.messageId)
     $mark = { Add-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId -Answer 0 -SessionId $message.sessionId -Now $Now }
     $awaited = & $mark
     if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
@@ -114,7 +116,26 @@ function Send-HordeWakeMail {
         if (-not $removed.ok) { $why = $why + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
         return (New-HordeUnknown -Reason ("the messenger answered " + $posted.value.stage + $why))
     }
+    # ALREADY POSTED, AND THIS CALL WROTE A BRAND-NEW MARK: the messenger answered with the first copy's stage and woke nobody, so that stage
+    # says nothing of THIS post (slices 5 to 7 do the same: cli/RelayRunTell.ps1, cli/AnalystTend.ps1). The mark comes off, or the next look
+    # would journal a TAKEN for a mail never sent again, and the answer is neither awaiting nor delivered.
+    $heldReason = ""
+    $hp = $posted.value.PSObject.Properties["reason"]
+    if ($null -ne $hp) { $heldReason = "$($hp.Value)" }
+    if ($heldReason -clike "already-posted*" -and -not $wasListed) {
+        $null = Remove-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId
+        $a = New-HordeUnknown -Reason ("the messenger " + $through.name + " already held a copy of this mail from an earlier post and woke nobody, so it is not counted as delivered")
+        Add-Member -InputObject $a -NotePropertyName alreadyPosted -NotePropertyValue ([pscustomobject]@{ messageId = "$($Mail.messageId)"; stage = "$($posted.value.stage)"; messenger = "$($through.name)" })
+        return $a
+    }
     return (New-HordeWakeMailAwaiting -MessageId "$($Mail.messageId)" -Stage "$($posted.value.stage)" -Messenger "$($through.name)")
+}
+
+function Test-HordeWakeMailAlready {
+    # Is this the answer of a post the messenger already held a copy of (no new mark, not awaiting, not delivered)?
+    param($Answer)
+    if (-not (Test-HordeAnswer $Answer)) { return $false }
+    return ("$($Answer.state)" -ceq "unknown" -and $null -ne $Answer.PSObject.Properties["alreadyPosted"])
 }
 
 function Get-HordeWakeMailAwaitingIds {
@@ -126,11 +147,24 @@ function Get-HordeWakeMailAwaitingIds {
     return @(@($r.value.awaiting) | ForEach-Object { $e = ConvertFrom-HordeChatTakenMark -Mark $_; if ($null -ne $e) { "$($e.messengerId)" } })
 }
 
+function Get-HordeWakeMailAlarmed {
+    # The marks on one kind's list that have been ALARMED (not taken in time): { id; session }, id in the messenger's form. Empty for no
+    # file or a list that cannot be read.
+    param([Parameter(Mandatory = $true)]$Kind, [Parameter(Mandatory = $true)][string]$HordeHome)
+    $r = Read-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome
+    if ($r.state -cne "known") { return @() }
+    return @(foreach ($m in @($r.value.awaiting)) { $e = ConvertFrom-HordeChatTakenMark -Mark $m; if ($null -ne $e -and $e.alarmed) { [pscustomobject]@{ id = "$($e.messengerId)"; session = "$($e.session)" } } })
+}
+
 function Invoke-HordeWakeMailTakenTick {
     # Ask about every awaiting mail of one kind (Invoke-HordeDecisionNoticeTakenTick, as it is) and say what left the list:
     # { lines; left } where left is { id; delivered } for each mail that is off the list now - TAKEN (delivered) or given up (not).
     # -Messenger $null finds one through the port; none found leaves the clock alone to speak.
     param([Parameter(Mandatory = $true)]$Kind, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][datetime]$Now, $Messenger = $null, [hashtable]$Memory = $null)
+    # A LIST THAT CANNOT BE READ IS SAID, not skipped: the mails on it would otherwise go unwatched with nobody told. The caller journals
+    # the line once for as long as it lasts.
+    $readable = Read-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome
+    if ($readable.state -cne "known") { return [pscustomobject]@{ lines = @($Kind.label + ": " + $Kind.list + " cannot be read: " + $readable.reason + "; the mails on it are not watched until it can be"); left = @() } }
     $before = @(Get-HordeWakeMailAwaitingIds -Kind $Kind -HordeHome $HordeHome)
     if ($before.Count -eq 0) { return [pscustomobject]@{ lines = @(); left = @() } }
     if ($null -eq $Memory) { $Memory = @{} }

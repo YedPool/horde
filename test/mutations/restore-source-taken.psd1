@@ -23,5 +23,13 @@
         @{ Name = "restore-poster-without-its-list"
            Find = '-Kind $script:HordeRestoreTakenKind -TtlSeconds'
            Replace = '-Kind $script:HordeWakeTellTakenKind -TtlSeconds' }
+        # A mail named for a retry is not posted again.
+        @{ Name = "restore-retry-ignored"
+           Find = 'if (@($Awaiting) -ccontains $mail.messageId -and @($Retry) -cnotcontains $mail.messageId) { continue }'
+           Replace = 'if (@($Awaiting) -ccontains $mail.messageId) { continue }' }
+        # An already-posted answer is journaled as a failure.
+        @{ Name = "restore-already-posted-journaled-unknown"
+           Find = '} elseif (Test-HordeWakeMailAlready $took) {'
+           Replace = '} elseif ($false) {' }
     )
 }

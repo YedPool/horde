@@ -87,7 +87,7 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; takenAt = [datetime]::MinValue; takenAsked = @{}; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; takenAt = [datetime]::MinValue; takenAsked = @{}; takenTrouble = @{}; retried = @{}; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -259,11 +259,20 @@ function Update-HordeWakeTaken {
     $entries = New-Object System.Collections.ArrayList
     $lineEntries = {
         param($Lines, [string]$Stem)
+        $trouble = ""
         foreach ($l in @($Lines)) {
-            $outcome = "alarm"
-            if ("$l".StartsWith("TAKEN:")) { $outcome = "taken" } elseif ("$l".Contains("NOT DELIVERED")) { $outcome = "undelivered" }
-            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome $outcome -Reason "$l"))
+            # TAKEN, the one ALARM, the give-up (NOT DELIVERED): each is said once by the engine. Anything else is TROUBLE with the list (it
+            # cannot be read or written) and repeats on every look while it lasts, so it is journaled when it starts or changes, not every
+            # 15 s, and is not an alarm (nobody was not-taken).
+            if ("$l".StartsWith("TAKEN:")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "taken" -Reason "$l")) }
+            elseif ("$l".StartsWith("ALARM:") -and "$l".Contains("NOT DELIVERED")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "undelivered" -Reason "$l")) }
+            elseif ("$l".StartsWith("ALARM:")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "alarm" -Reason "$l")) }
+            else {
+                $trouble = "$l"
+                if (-not $Run.takenTrouble.ContainsKey($Stem) -or "$($Run.takenTrouble[$Stem])" -cne $trouble) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "list-trouble" -Reason $trouble)) }
+            }
         }
+        if ($trouble -ceq "") { [void]$Run.takenTrouble.Remove($Stem) } else { $Run.takenTrouble[$Stem] = $trouble }
     }
     $restored = Invoke-HordeWakeMailTakenTick -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome -Now $Now -Messenger $Messenger -Memory $Run.takenAsked
     & $lineEntries $restored.lines "restore"
@@ -332,12 +341,20 @@ function Invoke-HordeWakeTick {
                 if (-not $sourceShadow) { $sourcePoster = { param($m) Send-HordeRestoreMail -Mail $m -Settings $RestoreSettings -Messenger $Messenger -HordeHome $HordeHome -Now $Now }.GetNewClosure() }
                 # T-0391 slice 9: what is on the awaiting list is posted and waiting for its TAKEN. Shadow has no list and reads none.
                 $awaitingIds = @()
-                if (-not $sourceShadow) { $awaitingIds = @(Get-HordeWakeMailAwaitingIds -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome) }
+                $retryIds = @()
+                if (-not $sourceShadow) {
+                    $awaitingIds = @(Get-HordeWakeMailAwaitingIds -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)
+                    # A MAIL ALARMED AS NOT TAKEN IS POSTED ONCE MORE under its own id (the messenger keeps one copy, so a post that did land is
+                    # a no-op): an unknown post result, or a crash between the mark and the post, otherwise leaves a mail that is in no mailbox
+                    # and is never posted. Once, not every pass: the alarm and the tell to the warchief are what follow. It is never counted done.
+                    $retryIds = @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome | ForEach-Object { $_.id } | Where-Object { -not $Run.retried.ContainsKey("$_") })
+                }
                 $dupList = @()
                 $dp = $read.PSObject.Properties["duplicates"]
                 if ($null -ne $dp) { $dupList = @($dp.Value) }
                 $dupCount = $dupList.Count
-                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" }) -Awaiting $awaitingIds
+                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" }) -Awaiting $awaitingIds -Retry $retryIds
+                foreach ($rid in $retryIds) { $Run.retried["$rid"] = $Now }
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted
@@ -536,6 +553,14 @@ function Invoke-HordeWakeTick {
         }
         foreach ($e in @($bad.entries)) {
             & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }
+        }
+        # A RESUME MAIL ALARMED AS NOT TAKEN reaches the warchief (T-0391 slice 9): the alarm is a journal line, and a journal line is read by
+        # nobody. Made on every pass while the mark is alarmed, like the duplicate-copies tell, so a tell that could not be posted is retried and
+        # one lost to a restart is made again; the same id keeps it one mail. Live senders only: shadow has no list.
+        if (-not (Test-HordeWakeSendersShadow -Run $Run)) {
+            foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {
+                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source's mail " + $al.id + " to the session " + $al.session + " was posted and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It stays in its mailbox and is asked about until it is taken. Look at that session.")) }
+            }
         }
         if ($null -ne $silence.condition) { & $make { (New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text) } }
         if ($null -ne $fleetRead.condition) { & $make { (New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text) } }

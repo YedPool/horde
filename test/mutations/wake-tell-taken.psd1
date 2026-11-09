@@ -23,5 +23,13 @@
         @{ Name = "tell-poster-without-its-list"
            Find = '-Kind $script:HordeWakeTellTakenKind -TtlSeconds'
            Replace = '-Kind $script:HordeRestoreTakenKind -TtlSeconds' }
+        # The tell about an untaken resume mail is not a kind the tell sender knows.
+        @{ Name = "tell-resume-untaken-not-a-kind"
+           Find = '"duplicate-copies", "resume-untaken")'
+           Replace = '"duplicate-copies")' }
+        # An already-posted answer is a failed post.
+        @{ Name = "tell-already-posted-treated-as-failed"
+           Find = '} elseif (Test-HordeWakeMailAlready $took) {'
+           Replace = '} elseif ($false) {' }
     )
 }

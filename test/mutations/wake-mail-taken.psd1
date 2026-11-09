@@ -45,5 +45,21 @@
         @{ Name = "wake-mail-tick-asks-nothing"
            Find = 'if ($before.Count -eq 0) { return'
            Replace = 'if ($true) { return' }
+        # An already-posted answer keeps the fresh mark (the mail would be journaled as taken though it was never sent again).
+        @{ Name = "wake-mail-already-posted-keeps-mark"
+           Find = 'if ($heldReason -clike "already-posted*" -and -not $wasListed) {'
+           Replace = 'if ($false) {' }
+        # A mark that was already listed (a restart) is taken for a fresh one and removed.
+        @{ Name = "wake-mail-already-posted-removes-listed-mark"
+           Find = '$wasListed = (@(Get-HordeWakeMailAwaitingIds -Kind $Kind -HordeHome $HordeHome) -ccontains $message.messageId)'
+           Replace = '$wasListed = $false' }
+        # A list that cannot be read is not said.
+        @{ Name = "wake-mail-unreadable-list-silent"
+           Find = 'if ($readable.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        # No mark is ever reported as alarmed (the warchief is never told).
+        @{ Name = "wake-mail-alarmed-marks-never-listed"
+           Find = 'if ($null -ne $e -and $e.alarmed) {'
+           Replace = 'if ($false) {' }
     )
 }

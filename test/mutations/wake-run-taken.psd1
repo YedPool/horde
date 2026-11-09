@@ -31,5 +31,25 @@
         @{ Name = "run-taken-lines-not-journaled"
            Find = 'foreach ($e in @(Update-HordeWakeTaken -Run $Run -Now $Now -Messenger $Messenger -HordeHome $HordeHome)) { [void]$entries.Add($e) }'
            Replace = '$null = Update-HordeWakeTaken -Run $Run -Now $Now -Messenger $Messenger -HordeHome $HordeHome' }
+        # The restore pass is not told which mails to post once more.
+        @{ Name = "run-taken-retry-not-handed-to-the-pass"
+           Find = '-Awaiting $awaitingIds -Retry $retryIds'
+           Replace = '-Awaiting $awaitingIds' }
+        # A mail is posted once more on every pass after its alarm.
+        @{ Name = "run-taken-retry-every-pass"
+           Find = 'foreach ($rid in $retryIds) { $Run.retried["$rid"] = $Now }'
+           Replace = '' }
+        # The warchief is not told of an alarmed resume mail.
+        @{ Name = "run-taken-no-resume-untaken-tell"
+           Find = 'foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {'
+           Replace = 'foreach ($al in @()) {' }
+        # A list that cannot be read is journaled on every look.
+        @{ Name = "run-taken-trouble-every-look"
+           Find = 'if (-not $Run.takenTrouble.ContainsKey($Stem) -or "$($Run.takenTrouble[$Stem])" -cne $trouble) {'
+           Replace = 'if ($true) {' }
+        # A list that cannot be read is journaled as an alarm.
+        @{ Name = "run-taken-trouble-as-alarm"
+           Find = '-Outcome "list-trouble"'
+           Replace = '-Outcome "alarm"' }
     )
 }
