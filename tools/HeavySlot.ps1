@@ -63,7 +63,7 @@
 # output so a stopped pipeline cannot swallow it.
 #
 # THE NET'S FIRST CLAIM (2026-11-06): the nightly net holds the named mutex <SlotName>-NetClaim open from its start until
-# its suite phase ends. While that name exists, a gate without -NetRun waits, holding nothing, and gives up with 125 in
+# its bisects are over and its report is written (T-0447). While that name exists, a gate without -NetRun waits, holding nothing, and gives up with 125 in
 # its own words, never taking the slot. Only the net passes -NetRun. A mutex name lasts only while a process holds it, so a
 # killed net or a restart leaves no claim behind. Derived from -SlotName, so a suite with a slot of its own is not held up.
 #
@@ -316,7 +316,7 @@ $main = {
         -Say { param($line) Write-HordeHeavySlotLine $line }
     if ($got.state -cne "held") {
         if ($got.blocker -ceq "idle") { $script:code = 128; Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the PC to be idle or for night; nothing was run"); return }
-        if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its suite phase ends, at the latest about 05:45; nothing was run. Try again after that."); return }
+        if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its report is written, at the latest about 06:30; nothing was run. Try again after that."); return }
         if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         Write-HordeHeavySlotLine ("heavy-slot: the slot is held by " + (Get-HordeHeavySlotHolderText -Path $HolderFile))

@@ -77,7 +77,7 @@ function Invoke-HordeHeavySlotAcquire {
             $pause = $true
             if (-not $saidClaim) {
                 $saidClaim = $true
-                & $Say "heavy-slot: not taking the slot yet: the nightly net has first claim on it until its suite phase ends"
+                & $Say "heavy-slot: not taking the slot yet: the nightly net has first claim on it until its report is written"
             }
         } else {
             $free = [double](& $GetFreeGB)

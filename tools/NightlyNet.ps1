@@ -624,7 +624,7 @@ try {
     }
     }
     # THE NET'S FIRST CLAIM ON THE HEAVY SLOT (tools/HeavySlot.ps1): on the night of 2026-11-05 another lane's rerun took
-    # the slot between units and 10 of 476 Horde units ran. Held open by this process until the suite phase ends, so it
+    # the slot between units and 10 of 476 Horde units ran. Held open by this process until its bisects are over and its report is written (T-0447), so it
     # cannot outlive a killed net. Before the first git call, so the claim stands from the night's first seconds. A suite
     # run (-AtTime or -HeavySlotScript) takes the machine's claim never; it may name one of its own.
     $claim = $null
@@ -669,7 +669,6 @@ try {
     }
     $suiteCutoff = $cutoff.AddMinutes(-$reserve)
     foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff; Complete-NightlyCompare $c }
-    if ($null -ne $claim) { $claim.Dispose(); $claim = $null; Write-NightlyNetLine "suite phase over: first claim on the heavy slot released" }
     foreach ($c in $ctxs) { Invoke-NightlyBisect -Ctx $c -Cutoff $cutoff }
 
     $repoRows = @()
@@ -686,6 +685,10 @@ try {
     $file = Join-Path $ReportDir ($Date + ".txt")
     [System.IO.File]::WriteAllText($file, $body + "`n")
     Write-NightlyNetLine ("report written: " + $file)
+    # Released here, after the bisects and the report (T-0447): the night of 2026-11-08 released it before its bisects, two
+    # lanes' retry loops took the slot within a second, and the night's only bisect gave up after 900 s. A bisect step may
+    # start only if it ends by the run cutoff (06:15), and its gate ends it at its run limit, so the claim is gone by then.
+    if ($null -ne $claim) { $claim.Dispose(); $claim = $null; Write-NightlyNetLine "bisects and report done: first claim on the heavy slot released" }
     # The state is ALWAYS saved (review of PR 380, finding 2): tonight's verdicts and tip are test facts whether or not M
     # heard them. What M did not hear is kept apart, pending, and re-listed in every report until a tell succeeds. Each
     # repo's save is its own try: one that throws after the tell must not turn a delivered report into a FAILED night.
