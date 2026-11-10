@@ -1353,6 +1353,106 @@ $sum = ConvertFrom-HordeJson -Text $run.json
 Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*")) -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "a later merge that did not touch the red: the old record stands"
 Check ($sum.repos[0].reds[0].merge.mergeSha -ceq $m1 -and $sum.repos[0].reds[0].note -cnotlike "*no merge is named*") ("  and the JSON's note does not say no merge is named beside the merge it names: " + $sum.repos[0].reds[0].note)
 
+Write-Host "== T-0347 follow-up: a red that returns after an out-of-queue fix names the merge where the NEW red began"
+# P1: a green baseline, and the tip is red after the last queued merge (a push broke it again): no merge is named, and it is not the old red.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "K" -Number 300
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 350 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: green at every queued merge and red at the tip*an earlier red of this guard, since " + $st1 + ", had ended*")) -and -not (Said "*STILL RED*") -and -not (Said "*horde#100*")) ("P1 fixed by a push, broken again by a push after the last queued merge: the report does not blame #100 (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and @($rec[0].guards).Count -eq 1 -and $null -eq $rec[0].guards[0].merge -and $rec[0].guards[0].since -ceq $st2 -and $sum.repos[0].reds[0].open -eq $false -and $null -eq $sum.repos[0].reds[0].merge) ("  and the record and the JSON date it from night 2 with no merge: " + (ConvertTo-Json -InputObject $rec[0].guards[0] -Compress))
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st2 + "*")) -and -not (Said "*horde#100*") -and $rec[0].guards[0].since -ceq $st2) ("  night 3 is still red since night 2, never #100 (exit " + $run.exit + ")")
+
+# P2: the baseline is red (the first merge of the day did not fix it), a push fixes it between two queued merges, and the second breaks it again.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and -not (Said "*STILL RED*") -and -not (Said "*horde#100*")) ("P2 red behind #100, #200 does not fix it, a push does, #300 breaks it again: night 2 names #300 (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and $rec[0].guards[0].merge.mergeSha -ceq $m3 -and $rec[0].guards[0].since -ceq $st2) ("  and the record names #300 and night 2: " + (ConvertTo-Json -InputObject $rec[0].guards[0] -Compress))
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st2 + ": first red at the merge of YedPool/horde#300*")) -and -not (Said "*horde#100*")) ("  night 3 blames #300's owner (exit " + $run.exit + ")")
+# P2 control: the red never ended between the merges, so it is the same red and the old merge stays named.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+$null = Add-HandMerge -Case $h.c -Files @{ "two.txt" = "2" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*")) -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "P2 CONTROL: red the whole day, never green: the old merge is still named"
+
+# P3: night by night. Red at #100, fixed outside the queue, a quiet night clears it, then #300 breaks it: night 3 names #300.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 0 -and (Said "GREEN AGAIN: main was red since *") -and @(Get-RedRecord $h.c).Count -eq 0) ("P3 night 2: fixed outside the queue, the red is cleared (exit " + $run.exit + ")")
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and -not (Said "*horde#100*") -and $rec[0].guards[0].merge.mergeSha -ceq $m3 -and $rec[0].guards[0].since -ceq ($n3.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))) ("  night 3: #300 turns it red again and is the only merge named (exit " + $run.exit + ")")
+
+# P4: a guard red, fixed outside the queue, then DROPPED from the list by a queued merge: the drop is a new red behind that merge.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m2 = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " dropped from test\guards.txt: dropped from the list by the merge of YedPool/horde#200 (task T-0247, by K, mergeSha " + $m2 + ")*NOT RUN*")) -and -not (Said "*the red has been open since*") -and -not (Said "*horde#100*")) ("P4 red, fixed by a push, dropped by #200: the report names #200 and no old red (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and $rec[0].guards[0].merge.mergeSha -ceq $m2 -and $rec[0].guards[0].since -ceq $st2) ("  and the record names #200 and night 2: " + (ConvertTo-Json -InputObject $rec[0].guards[0] -Compress))
+# P4 control: still red when it is dropped (the red goes on), so the old merge and date stand.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said "*the red has been open since *") -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "P4 CONTROL: red when dropped: the red goes on, its first merge stays in the record"
+
+# P5: dropped, cleared on purpose, put back and red again behind a queued merge: the new merge is named, the cleared red is not.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200 -Unqueued
+$null = Invoke-OwedRun -Case $h.c -Now $n2
+$tools5 = New-SuiteTools -Case $h.c
+$cl = Invoke-HordeMergeClearRed -Tools $tools5 -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "retired" -Who "tester@box" -Now $n2
+Check ($cl.ok -eq $true -and @(Get-RedRecord $h.c).Count -eq 0) "P5 a dropped red is cleared on purpose"
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $guardsText; "guard.txt" = "green" } -By "K" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n3
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and -not (Said "*horde#100*") -and $rec[0].guards[0].since -ceq ($n3.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))) ("  put back, fixed and broken by #300: night 3 names #300 only (exit " + $run.exit + ")")
+
+# -ClearRed with no usable guard list at the tip clears nothing (exit 2), and writes no report line.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $null } -By "K" -Number 200 -Unqueued
+$tools6 = New-SuiteTools -Case $h.c
+$cl = Invoke-HordeMergeClearRed -Tools $tools6 -WorkFolder $h.c.work -Folder $h.c.owed -Repo "YedPool/horde" -Base "main" -Guard $g1 -Reason "retired" -Who "tester@box" -Now $n2
+Check ($cl.ok -eq $false -and $cl.exit -eq 2 -and $cl.why -clike "*has no usable guard list (*nothing is cleared*" -and @(Get-RedRecord $h.c).Count -eq 1 -and -not [System.IO.File]::Exists((Join-Path $h.c.owed "nightly\2026-10-24-yedpool-horde.txt"))) ("-ClearRed with no usable guard list at the tip: refused with exit 2, the record and the report untouched (" + $cl.why + ")")
+
+# A guard red in the open record AND dropped by a queued merge is one red, not two (the open-record pass skips what the walk already found).
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "test\guards.txt" = $onlyHost } -By "K" -Number 200
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$sum = ConvertFrom-HordeJson -Text $run.json
+Check ($run.exit -eq 1 -and @($script:said | Where-Object { $_ -clike ("RED " + $g1 + " *") }).Count -eq 1 -and @($sum.repos[0].reds).Count -eq 1) ("a guard both open and dropped by the walk is reported once (" + @($script:said | Where-Object { $_ -clike ("RED " + $g1 + " *") }).Count + " lines, " + @($sum.repos[0].reds).Count + " in the JSON)")
+
+# The intent line keeps the queue's lower-cased repo whatever the case of the request.
+$caseReq = Test-HordeMergeRequest -Pr "YedPool/Horde#7" -Task "T-0247" -State "done" -By "F" -Guards "later"
+$caseLine = ConvertFrom-HordeJson -Text (Format-HordeMergeIntentLine -Request $caseReq -HeadSha ("d" * 40) -BaseRef "main" -Now $nightly)
+Check ($caseReq.ok -eq $true -and $caseLine.repo -ceq "yedpool/horde" -and $caseLine.name -ceq "Horde" -and $caseLine.pr -ceq "YedPool/Horde#7") ("an intent line lower-cases the repo for the queue and keeps the PR as written: " + $caseLine.repo)
+
 Write-Host "== T-0347 round 3: when the whole repo fails, every open red is still named"
 $h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
 $null = Invoke-OwedRun -Case $h.c -Now $n1
