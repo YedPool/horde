@@ -12,7 +12,7 @@
 #   - A RESTART neither posts a second message (same notice id) nor alarms twice (the alarm is in the mark); a LATER EVENT of the same key
 #     has a new id (the key's generation), so it wakes someone.
 #   - Every line the list has reaches the pass's lines (the supervisor's log).
-# Its mutation spec: test\mutations\analyst-tell-taken.psd1 (and decisions-route-taken.psd1 for the shared engine).
+# Its mutation spec: test\mutations\analyst-tell-taken.psd1 (and analyst-tell-taken-gaps.psd1 for the phone words, the ack clear and the unreadable list) (and decisions-route-taken.psd1 for the shared engine).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -580,6 +580,53 @@ $stW.told = [string[]]@("no-answer")
 Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools $onTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted; whether it is still being watched is not known.") "told and the list cannot be read: posted, the watch not known"
 Check ((Get-HordeAnalystWarchiefWords -State $stW -Tools @{ Tell = { }; Watching = { throw "x" } } -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted; whether it is still being watched is not known.") "and a tool that throws is the same: no guess"
 
+
+Write-Host ""
+Write-Host "--- GAPS PR 455's REVIEW FOUND (T-0391): the phone's words for a second episode, an ack's reach, an unreadable list ---" -ForegroundColor Cyan
+# 1. A SECOND EPISODE OF A KEY: the phone's watch question names the key's CURRENT generation. The first episode (generation 0) was taken and is
+# off the list; the second (generation 1) is posted and on it. Asking for generation 0 would say "not being watched now" of a notice that is.
+$HG = New-Home
+$stG = New-HordeAnalystState
+Clear-HordeAnalystTold -State $stG -Keys @("no-answer")
+$null = Send-One $HG "no-answer" 1 0
+$stG.told = [string[]]@("no-answer")
+$script:passHome = $HG
+$watchTools = @{ Tell = { }; Watching = { param($Key, $Gen) return (Get-HordeAnalystNoticeWatch -HordeHome $script:passHome -Key $Key -Gen ([long]$Gen)) } }
+Check ((Get-HordeAnalystTellGen -State $stG -Key "no-answer") -eq 1 -and @(Marks-Of $HG (Id-Of "no-answer" 1)).Count -eq 1 -and @(Marks-Of $HG (Id-Of "no-answer" 0)).Count -eq 0) "CONTROL: the second episode's notice is on the list under generation 1, the first one's is not"
+Check ((Get-HordeAnalystWarchiefWords -State $stG -Tools $watchTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted and is being watched for its taking.") "GUARDS the phone sentence of a second episode: a notice posted again after the first was taken is said to be watched, not 'taken already' (the watch asks for the key's current generation)"
+
+# 2. AN ACK ENDS THE FOUNDER'S REMINDER TOO: after an ack, the next late round tells the founder again. Left in the told list, the founder's
+# key would silence every later no-answer reminder for good.
+$script:notices.Clear()
+$HF = New-HomeR "none" @($lateRound)
+$null = Pass-R $HF 0
+Check (@((State-Of $HF).told) -ccontains "no-answer-founder" -and @((State-Of $HF).told) -ccontains "no-answer" -and (Phone).Contains("round 20261013T110000Z-r")) ("CONTROL: the first late round tells the warchief and the founder (" + (Phone) + ")")
+$pathsF = Get-HordeAnalystPaths -Folder (Get-HordeAnalystFolder -Values (Get-HordeAnalystPolicy -HordeHome $HF).values -HordeHome $HF)
+[System.IO.File]::AppendAllText($pathsF.acks, "round 20261013T110000Z-r done`n")
+$null = Pass-R $HF 60
+Check (@((State-Of $HF).told) -cnotcontains "no-answer-founder" -and @((State-Of $HF).told) -cnotcontains "no-answer") "GUARDS the founder's reminder: an ack takes BOTH no-answer and no-answer-founder off the told list"
+$script:notices.Clear()
+$stF = State-Of $HF
+$stF.rounds = @(@($stF.rounds) + (Late-Round "20261013T113000Z-r" -30))
+Write-HordeAnalystState -Path (Join-Path (Get-HordeAnalystFolder -Values (Get-HordeAnalystPolicy -HordeHome $HF).values -HordeHome $HF) "supervisor.json") -State $stF
+$null = Pass-R $HF 120
+Check ($script:notices.Count -eq 1 -and (Phone).Contains("round 20261013T113000Z-r")) ("GUARDS the founder's phone: a no-answer after an ack reaches him again (" + (Phone) + ")")
+
+# 3. AN UNREADABLE LIST IS NOT 'TAKEN': when the awaiting list cannot be read nothing is known, and the phone must not say the notice 'may
+# already have been taken'.
+$HU = New-Home
+$idU = Id-Of "no-answer" 0
+$null = Send-One $HU "no-answer" 0 0
+Check ((Get-HordeAnalystNoticeWatch -HordeHome $HU -Key "no-answer" -Gen 0) -ceq "listed") "CONTROL: a notice on a readable list is listed"
+Check ((Get-HordeAnalystNoticeWatch -HordeHome $HU -Key "no-answer" -Gen 1) -ceq "gone") "CONTROL: a notice not on a readable list is gone"
+[System.IO.File]::WriteAllText((Join-Path $HU "analyst\tell-taken.json"), "not json")
+Check ((Get-HordeAnalystNoticeWatch -HordeHome $HU -Key "no-answer" -Gen 0) -ceq "unread") "GUARDS the watch: a list that cannot be read answers 'unread', not 'gone' (no guess either way)"
+$script:passHome = $HU
+$stU = New-HordeAnalystState
+$stU.told = [string[]]@("no-answer")
+Check ((Get-HordeAnalystWarchiefWords -State $stU -Tools $watchTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was posted; whether it is still being watched is not known.") "GUARDS the phone sentence for an unreadable list: the watch is 'not known', never 'may already have been taken'"
+$stU.told = [string[]]@()
+Check ((Get-HordeAnalystWarchiefWords -State $stU -Tools $watchTools -Values $onVals -Key "no-answer") -ceq "a notice to the warchief was not confirmed as posted.") "and an untold key with an unreadable list is 'not confirmed', never 'was not posted'"
 Write-Host ""
 Write-Host "--- THE RETRY ROWS: who keeps one and who drops it (T-0391 round 3, item 4) ---" -ForegroundColor Cyan
 # A start skips the retry of the keys it declares over: a row for start-silent is dropped, not told, when a fresh session is started.
