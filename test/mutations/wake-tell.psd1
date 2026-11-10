@@ -71,8 +71,8 @@
            Find = 'if ($script:HordeWakeTellKinds -cnotcontains $Kind) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "the-end-of-the-silent-probes-is-no-kind-the-warchief-is-told-of"
-           Find = '"fleet-silent", "silent-probes-ended", "duplicate-copies")'
-           Replace = '"fleet-silent", "duplicate-copies")' }
+           Find = '"fleet-silent", "silent-probes-ended", "duplicate-copies", "resume-untaken")'
+           Replace = '"fleet-silent", "duplicate-copies", "resume-untaken")' }
         @{ Name = "tell-state-saved-under-another-mode"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }

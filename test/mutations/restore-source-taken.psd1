@@ -17,7 +17,7 @@
            Replace = '} elseif ($false) {' }
         # A mail on the awaiting list is planned and posted again.
         @{ Name = "restore-awaiting-posted-again"
-           Find = 'if (@($Awaiting) -ccontains $mail.messageId) { continue }'
+           Find = 'if (@($Awaiting) -ccontains $mail.messageId -and @($Retry) -cnotcontains $mail.messageId) { continue }'
            Replace = '' }
         # The poster marks another sender's list.
         @{ Name = "restore-poster-without-its-list"
