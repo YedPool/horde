@@ -417,6 +417,16 @@ $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $null = Tick-Dup $run 500 $h
 $null = Tick-Dup $run (500 + $goneFor + 1) $h
 Check (-not $run.duplicate.ContainsKey((Sid 2))) "a wait saved at 1000 s and read when the clock says 500 s starts from 500 and ends one wait later, not 500 s after that"
+# ... and the same for the wait of a session missing from the listing.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+$null = Tick-Dup $run 1000 $h
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$null = Tick-Dup $run 500 $h
+$null = Tick-Dup $run (500 + $goneFor + 1) $h
+Check (-not $run.duplicate.ContainsKey((Sid 2))) "a missing-from-the-listing wait saved at 1000 s and read when the clock says 500 s starts from 500 as well"
 # T-0116 (PR 481 follow-up): WHEN A SESSION'S MAIL CANNOT BE READ its episode still ends on the listing and the clock alone.
 $h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
 $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
