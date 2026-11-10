@@ -696,6 +696,23 @@ try {
     $script:reads = 0
     $posts = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h | Where-Object { $_.kind -ceq "post" -or $_.kind -ceq "would-post" })
     Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "posted" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted, and marked in the live file"
+    # T-0116 (PR 472 follow-up): THE DUPLICATE'S NAME REACHES THE BODY OF THE BOUND STALL NOTICE. The restore source's
+    # own suite hands the names to the pass itself; this is the wiring in the tick (-DuplicateNames), which nothing else
+    # checked: without it a real run sends the notice with "unnamed" where the sessions belong.
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    $restoredChief = @($restored) + [pscustomobject]@{ id = (Sid 7); role = "warchief"; parent = ""; startedAt = (At -385); lastChangeAt = (At -383); status = "idle"; firstSeenAt = (At -90000) }
+    $readDupChief = { $a = New-HordeKnown -Value $restoredChief; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-a"); sources = @("c\501.json", "c\502.json") }); $a }
+    $run = New-HordeWakeRun -Live -HordeHome $h
+    $boundLines = New-Object System.Collections.ArrayList
+    foreach ($s in @(0, 2000)) { Set-HordeMemoryWakerClock (At $s); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $readDupChief -Messenger $inProcess -HordeHome $h)) { [void]$boundLines.Add($e) } }
+    $boundStall = @($boundLines | Where-Object { $_.kind -ceq "stall" -and $_.outcome -ceq "posted" })
+    Check ($boundStall.Count -eq 1) ("past the bound a live run posts the bound stall notice, once (" + @($boundStall).Count + ")")
+    if ($boundStall.Count -eq 1) {
+        $boundGot = & $watch.Observe $box $boundStall[0].messageId
+        $boundBody = "$(@($boundGot.bodies)[0])"
+        Check ($boundGot.records -eq 1 -and $boundBody.Contains((Sid 9)) -and -not $boundBody.Contains("unnamed")) "and the body names the duplicated session, not 'unnamed': the tick hands the duplicates' names to the restore pass"
+    }
     # A SHADOW RUN IS SHADOW WHATEVER THE SWITCH SAYS.
     $h = New-Home
     Reset-HordeMemoryWaker

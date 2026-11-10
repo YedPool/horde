@@ -362,5 +362,8 @@
         @{ Name = "duplicates-not-handed-to-the-restore-pass"
            Find = '-UncountedDuplicates $dupCount'
            Replace = '-UncountedDuplicates 0' }
+        @{ Name = "duplicate-names-not-handed-to-the-bound-notice"
+           Find = '-DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })'
+           Replace = '-DuplicateNames @()' }
     )
 }
