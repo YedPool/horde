@@ -379,6 +379,71 @@ $c = 0; foreach ($n in 0..2) { $null = Tick-Dup $run $c $h; $c += 3 }
 Seat-Dup "yes" "yes" 2 "no"
 $null = Tick-Dup $run $c $h
 Check (-not $run.duplicate.ContainsKey((Sid 2))) "a retired session whose duplicate word reads no ends its episode at once, not after the wait"
+# T-0116 (PR 481 follow-up): THE TWO WAITS SURVIVE A RESTART. A watcher started again neither starts the wait over (the
+# episode would be held up to duplicateGoneSeconds longer, each restart) nor says or tells the episode a second time.
+# Copies read as closed (duplicateNot) ...
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Seat-Dup "no" "yes" 2 "no"
+$t0Not = 100.0
+foreach ($sec in @($t0Not, ($t0Not + 250))) { foreach ($e in (Tick-Dup $run $sec $h)) { [void]$all.Add($e) } }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($run.duplicate.ContainsKey((Sid 2)) -and $run.duplicateNot.ContainsKey((Sid 2))) "a restart keeps the episode and how long its copies have read as closed"
+foreach ($e in (Tick-Dup $run ($t0Not + 260) $h)) { [void]$all.Add($e) }
+Check ($run.duplicate.ContainsKey((Sid 2))) "and 260 s into the wait it is still held"
+foreach ($e in (Tick-Dup $run ($t0Not + $goneFor + 1) $h)) { [void]$all.Add($e) }
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("the episode ends when the ORIGINAL wait is up, not a full wait after the restart, and nothing was said or told twice (" + (Said-Dup $all) + ")")
+# ... and a session missing from a good listing (duplicateGone).
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+foreach ($sec in @($t0Not, ($t0Not + 250))) { foreach ($e in (Tick-Dup $run $sec $h)) { [void]$all.Add($e) } }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($run.duplicate.ContainsKey((Sid 2)) -and $run.duplicateGone.ContainsKey((Sid 2))) "a restart keeps the episode and how long the session has been missing from the listing"
+foreach ($e in (Tick-Dup $run ($t0Not + $goneFor + 1) $h)) { [void]$all.Add($e) }
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("a session missing for the original wait is forgotten at that time, not a full wait after the restart (" + (Said-Dup $all) + ")")
+# A saved wait that began AFTER the clock now says (the clock went back) is not trusted: it starts again from now, so the
+# episode cannot be held for longer than one wait.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+Seat-Dup "no" "yes" 2 "no"
+$null = Tick-Dup $run 1000 $h
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$null = Tick-Dup $run 500 $h
+$null = Tick-Dup $run (500 + $goneFor + 1) $h
+Check (-not $run.duplicate.ContainsKey((Sid 2))) "a wait saved at 1000 s and read when the clock says 500 s starts from 500 and ends one wait later, not 500 s after that"
+# T-0116 (PR 481 follow-up): WHEN A SESSION'S MAIL CANNOT BE READ its episode still ends on the listing and the clock alone.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+try {
+    Set-HordeMemoryWakerFault -Call state -Kind throw
+    Seat-Dup "no" "yes" 2 "no"
+    $null = Tick-Dup $run 100 $h
+    Check ($run.duplicate.ContainsKey((Sid 2))) "CONTROL: copies read as closed, mail unreadable: the episode is held for the wait"
+    $null = Tick-Dup $run (100 + $goneFor + 1) $h
+    Check (-not $run.duplicate.ContainsKey((Sid 2)) -and -not $run.duplicateAt.ContainsKey((Sid 2)) -and $run.duplicateNot.Count -eq 0) "and then it ends, though the mail still cannot be read: it is not held for ever"
+} finally { Set-HordeMemoryWakerFault -Call state -Kind "" }
+# ... and a RETIRED session whose mail cannot be read: the episode ends at once, and a tell not yet taken is not retried for it.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $script:retiredFlaps = 0
+    $flakyR = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:retiredFlaps++; return (New-HordeUnknown -Reason "the messenger is away") } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    foreach ($sec in @(0, 3)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flakyR -HordeHome $h }
+    Set-HordeMemoryWakerFault -Call state -Kind throw
+    Seat-Dup "yes" "yes" 2 "yes"
+    foreach ($sec in @(10, 301, 330)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flakyR -HordeHome $h }
+    Check (-not $run.duplicate.ContainsKey((Sid 2))) "a retired session ends its episode though its mail cannot be read"
+    Check ($script:retiredFlaps -eq 1) ("and no tell is retried for it, in its wait or after (" + $script:retiredFlaps + " posts)")
+} finally { Set-HordeMemoryWakerFault -Call state -Kind ""; $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
 # no tell is retried for a session whose copies have closed, within the wait.
 $h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
 $postWas = $script:HordeWakeSendersPost
