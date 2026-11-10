@@ -174,7 +174,7 @@
            Find = 'try { $null = & $Waker.begin } catch { }'
            Replace = '$null = & $Waker.begin' }
         @{ Name = "look-alike-waker-called"
-           Find = 'return [object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)'
+           Find = 'if ([object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)) { return $true }'
            Replace = 'return $true' }
         @{ Name = "bad-id-reaches-the-state"
            Find = 'if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("''" + $Id + "'' is not a session id, so waker ''" + $Waker.name + "'' was not asked"))'

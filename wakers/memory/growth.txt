@@ -10,3 +10,4 @@ test/test-wake.ps1 | 95 -> 99 | 2026-10-15 | the watcher's suite seats sessions 
 test/test-wake-run.ps1 | 191 -> 197 | 2026-11-08 | the tick's suite seats sessions in the memory waker for the duplicate-listing and bounded-stall checks of PR 472 (T-0116)
 test/test-wake-run.ps1 | 197 -> 223 | 2026-11-08 | the tick's suite seats sessions in the memory waker for the duplicated-session episode checks (T-0116, round 3)
 test/test-wake-run.ps1 | 223 -> 248 | 2026-11-08 | the tick's suite seats sessions in the memory waker for the episode flap and test-gap checks (T-0116 P15)
+test/test-wake-shadow-nudge.ps1 | 0 -> 14 | 2026-11-08 | a new suite seats sessions in the memory waker to show a shadow tick reaches no nudge (T-0116)

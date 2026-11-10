@@ -281,6 +281,10 @@ function Invoke-HordeWakeTick {
     # ONLY A RUN MADE LIVE IS LIVE: anything else in that member - nothing, a word, a number - is shadow.
     $mode = Get-HordeWakeRunMode -Run $Run
     $shadow = ($mode -ceq "shadow")
+    # A SHADOW TICK IS HANDED A WAKER WITH NO NUDGE (T-0116, wakers/Port.ps1 Get-HordeWakerReadOnly): its
+    # state reads are the real waker's, and nudging through it is refused by the port. The would-nudge
+    # branch in core/Wake.ps1 is then the second guard, not the only one. Proof and live get the real waker.
+    if ($shadow) { $Waker = Get-HordeWakerReadOnly -Waker $Waker }
     $Run.pass = [long]$Run.pass + 1
     $entries = New-Object System.Collections.ArrayList
     $failed = New-Object System.Collections.ArrayList

@@ -535,5 +535,65 @@ $script:nudgeAnswer = { param($id) New-HordeUnknown -Reason "the terminal did no
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)" -ceq "the terminal did not answer") "nudge: an adapter's own unknown is passed on with its reason"
 
+Write-Host ""
+Write-Host "--- a read-only view of a waker reads as it does and cannot nudge (T-0116) ---" -ForegroundColor Cyan
+
+$script:calls = 0
+$view = Get-HordeWakerReadOnly -Waker $good
+Check ($null -ne $view -and $view.name -ceq "fixture-good" -and $null -eq $view.nudge) "the view of a registered waker has its name and no nudge"
+Check ($null -ne $good.nudge) "and the registered waker keeps its own"
+Check ([object]::ReferenceEquals($view, (Get-HordeWakerReadOnly -Waker $good))) "asked twice, it is the same view"
+Check ([object]::ReferenceEquals($view, (Get-HordeWakerReadOnly -Waker $view))) "the view of a view is the view"
+Check ((Get-HordeWakeTargets -Waker $view).state -ceq "known" -and $script:calls -eq 1) "the view's targets are read by the real waker's block"
+$null = Get-HordeWakeState -Waker $view -Id $sid
+Check ($script:calls -eq 2) "and so is its state"
+$a = Send-HordeWakeNudge -Waker $view -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without a nudge") -and $script:calls -eq 2) "a nudge through the view is refused with the reason, and no block ran"
+$null = Send-HordeWakeNudge -Waker $good -Id $sid
+Check ($script:calls -eq 3) "CONTROL: the same nudge through the registered waker does run"
+$copy = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; folder = $good.folder; capabilities = $good.capabilities; targets = { $script:calls++ }; state = { $script:calls++ }; nudge = { $script:calls++ } }
+$a = Send-HordeWakeNudge -Waker $copy -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not registered") -and $script:calls -eq 3) "a look-alike carrying a nudge is still refused: the view is the port's own object, not a shape"
+Check ([object]::ReferenceEquals($copy, (Get-HordeWakerReadOnly -Waker $copy))) "the view of a look-alike is the look-alike, which the port refuses for every call"
+Check ($null -eq (Get-HordeWakerReadOnly -Waker $null)) "and of nothing is nothing"
+
+Write-Host ""
+Write-Host "--- the view leads to no nudge and no exit, and goes stale with its waker (T-0116 round 2) ---" -ForegroundColor Cyan
+
+# The fixture waker is given an exit for these checks (it registers none); the cached view is dropped so a fresh one is made from it.
+$good.exit = { param($id, $why) $script:calls++; New-HordeUnknown -Reason "the fixture ends nobody" }
+$script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
+$script:calls = 0
+$view = Get-HordeWakerReadOnly -Waker $good
+$leads = New-Object System.Collections.ArrayList
+foreach ($p in @($view.PSObject.Properties)) {
+    $v = $p.Value
+    if ($null -ne $v -and $v -is [System.Management.Automation.PSCustomObject] -and @($v.PSObject.TypeNames) -contains "Horde.Waker") { [void]$leads.Add($p.Name) }
+    if ([object]::ReferenceEquals($v, $good)) { [void]$leads.Add($p.Name) }
+}
+Check ($leads.Count -eq 0) ("no member of the view is a waker, or the registered one (" + ($leads -join ",") + ")")
+Check ($null -eq $view.PSObject.Properties["of"]) "and the view has no 'of' member naming where it came from"
+Check ((Test-HordeWakerExits $good) -and $null -ne $good.exit) "CONTROL: the registered waker can end a session"
+Check (-not (Test-HordeWakerExits $view) -and $null -eq $view.exit) "the view cannot"
+$a = Send-HordeWakeExit -Waker $view -Id $sid -Reason "hibernation"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("cannot end a session") -and $script:calls -eq 0) "and an exit asked of the view is refused, and no block ran"
+$null = Send-HordeWakeExit -Waker $good -Id $sid -Reason "hibernation"
+Check ($script:calls -eq 1) "CONTROL: the same exit through the registered waker does run"
+
+# A view of an entry that has since been replaced is stale.
+$stale = Get-HordeWakerReadOnly -Waker $good
+Check (Test-HordeWakerRegistered $stale) "CONTROL: before the registry entry is replaced, the view is accepted"
+$swap = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; folder = $good.folder; capabilities = $good.capabilities; targets = { $script:calls++ }; state = { $script:calls++ }; nudge = { $script:calls++ }; begin = $null; confirm = $null; source = $null; reserved = $null; exit = $null }
+$script:HordeWakers["fixture-good"] = $swap
+$script:calls = 0
+Check (-not (Test-HordeWakerRegistered $stale)) "after the entry is replaced, the old view is no longer the registered waker's own"
+$a = Send-HordeWakeNudge -Waker $stale -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not registered") -and $script:calls -eq 0) "and it is refused, for a nudge as for anything"
+$fresh = Get-HordeWakerReadOnly -Waker $swap
+Check (-not [object]::ReferenceEquals($fresh, $stale) -and (Test-HordeWakerRegistered $fresh) -and $null -eq $fresh.nudge) "while the replacement gets a view of its own"
+$script:HordeWakers["fixture-good"] = $good
+$good.exit = $null
+$script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
+
 Reset-HordeMemoryWaker
 Complete-HordeSuite -Success "a waker is registered only with valid capabilities, only yes counts, and no answer of an adapter is passed on unchecked"
