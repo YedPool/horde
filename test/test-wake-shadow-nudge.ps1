@@ -52,17 +52,22 @@ $plan = Get-HordeWakeRunPlan -Mode "shadow" -Picked (New-HordeKnown -Value $memo
 Check ($plan.ok -eq $true -and $plan.mode -ceq "shadow" -and $plan.live -eq $false) "CONTROL: the plan for a shadow run through the installed waker is ok, shadow, and not live"
 $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target -Self "" -HordeHome $h
 $script:handed.Clear()
-$decided = 0
 for ($i = 0; $i -lt 10; $i++) {
     Set-HordeMemoryWakerClock (At ($i * 3))
-    foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($i * 3)) -Waker $plan.waker -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $h)) { if ($e.kind -ceq "would-nudge" -or $e.kind -ceq "nudge") { $decided++ } }
+    $null = Invoke-HordeWakeTick -Run $run -Now (At ($i * 3)) -Waker $plan.waker -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $h
 }
 Check ($script:handed.Count -eq 10) ("CONTROL: the pass was watched on every one of ten ticks (" + $script:handed.Count + ")")
 Check (@($script:handed | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["nudge"] -and $null -eq $_.nudge }).Count -eq $script:handed.Count) "every shadow tick handed the pass a waker whose nudge is absent"
+Check (@($script:handed | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["exit"] -and $null -eq $_.exit }).Count -eq $script:handed.Count) "and a waker whose exit is absent too: a shadow run ends no session"
 Check (@($script:handed | Where-Object { $_.name -ceq "memory" }).Count -eq $script:handed.Count) "and it is still the installed waker, by name, not another"
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) ("the waker's nudge was asked for nothing in ten ticks over three sessions with mail (" + @(Get-HordeMemoryWakerAsks).Count + ")")
-# Either journal line: with the would-nudge branch gone, the port's refusal is journaled as a nudge line, and the decision from state read through the view still shows.
-Check ($decided -ge 3) ("and the state was still read through the view: the pass decided to nudge each session (" + $decided + ")")
+# Not a count of journal lines, which the would-nudge branch shapes: the waker's own record of what it was asked to READ.
+$reads = @(Get-HordeMemoryWakerReads)
+$short = @(1..3 | Where-Object { $n = $_; @($reads | Where-Object { $_ -ceq (Sid $n) }).Count -lt 10 })
+Check ($short.Count -eq 0) ("and the state was still read through the view: every session was read on every one of ten ticks (" + $reads.Count + " reads)")
+# The port itself refuses the very waker the pass was handed, so a branch removed from the pass changes nothing.
+$a = Send-HordeWakeNudge -Waker $script:handed[0] -Id (Sid 1)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without a nudge") -and @(Get-HordeMemoryWakerAsks).Count -eq 0) "and a nudge asked of that very waker through the port is refused, with the reason, and rings nobody"
 Check ($null -ne $memory.nudge) "and the installed waker itself still has its nudge: the view is a copy, not an edit"
 
 Write-Host ""
