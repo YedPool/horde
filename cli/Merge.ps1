@@ -1043,6 +1043,13 @@ function Invoke-HordeMergeRunOwedBase {
                 if (-not $li.ok) { return (& $err $li.why) }
                 if ($null -eq $li.guards -or $li.guards -cnotcontains $g) { $item.entry = $e; break }
             }
+            # A GUARD DROPPED WHILE ITS OLD RED WAS OPEN (follow-up of T-0347): if it was green at the baseline the old red had ended
+            # (fixed outside the queue), and the drop is a new red behind the merge named above, not the old one continuing.
+            if ($null -ne $item.entry -and (@($OpenGuards) -ccontains $g)) {
+                $dbl = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $baseline -Guard $g
+                if (-not $dbl.ok) { return (& $err $dbl.why) }
+                if (-not $dbl.red) { $item.fresh = $true }
+            }
             & $say ($g + " was dropped from " + (Get-HordeGuardListPath) + ": RED")
             [void]$reds.Add($item)
         }
@@ -1085,8 +1092,32 @@ function Invoke-HordeMergeRunOwedBase {
                     if ($step.absent -and $present) { $item.entry = $e; $item.shells = @("the tree"); $item.lines = @("the guard script is not in the tree of this merge"); $item.fresh = $true; $found = $true; break }
                     $present = (-not $step.absent)
                 }
+                # A GREEN BASELINE ENDS AN OPEN RED WHETHER OR NOT A QUEUED MERGE IS NAMED (follow-up of T-0347): a red that came after the last
+                # queued merge is new, and the record must not blame the old merge for it.
+                if (-not $found) { $item.fresh = $true }
                 if (-not $found -and $at.absent) { $item.note = "the guard script is in no queued merge's tree; it was never added, or was removed outside the queued merges; no merge is named" }
                 elseif (-not $found) { $item.note = "green at every queued merge and red at the tip " + $tip.Substring(0, 8) + ": it broke after the last queued merge (a push or a merge not made by horde merge); no merge is named" }
+            }
+            # A RED THAT ENDED BETWEEN THE QUEUED MERGES AND BEGAN AGAIN (follow-up of T-0347): the baseline is red, so the open red may
+            # simply go on, unless the guard is green at some point after it (fixed by a push outside the queue: the commit each merge
+            # was made on is looked at too, as that push is not a queued merge) and red again later. Only a guard with an open red is
+            # walked here: that is the one whose blame can be wrong.
+            if ($bl.red -and (@($OpenGuards) -ccontains $g)) {
+                $ended = $false
+                $prevSha = $baseline
+                foreach ($e in $walk) {
+                    if ($e.firstParent -ne "" -and $e.firstParent -cne $prevSha) {
+                        $pre = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.firstParent -Guard $g -ShellKeys $tipKeys
+                        if (-not $pre.ok) { return (& $err $pre.why) }
+                        if (-not $pre.red) { $ended = $true }
+                    }
+                    $later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys
+                    if (-not $later.ok) { return (& $err $later.why) }
+                    $prevSha = $e.mergeSha
+                    if (-not $later.red) { $ended = $true; continue }
+                    if ($ended) { $item.entry = $e; $item.shells = @($later.shells); $item.lines = @($later.lines); $item.note = ""; $item.fresh = $true; break }
+                }
+                if ($ended -and $null -eq $item.entry) { $item.fresh = $true; $item.note = "red before today's first queued merge, green after it, and red again at the tip " + $tip.Substring(0, 8) + ": it broke after the last queued merge it was green at (a push or a merge not made by horde merge); no merge is named" }
             }
             [void]$reds.Add($item)
         }
@@ -1306,7 +1337,11 @@ function Invoke-HordeMergeRunOwed {
             }
             # A dropped guard is never run: every line about it says so (round 3).
             if ($d.kind -ceq "dropped" -and $who -cnotlike "*NOT RUN*") { $who += " (NOT RUN: the guard is not on the guard list at the tip)" }
-            if ($null -ne $replaced) { $who += " (an earlier red of this guard, since " + $replaced.since + ", had ended: green at the baseline; the record now names this merge)" }
+            if ($null -ne $replaced) {
+                $dated = "the record now dates this red from this run and names no merge"
+                if ($null -ne $d.entry) { $dated = "the record now names this merge" }
+                $who += " (an earlier red of this guard, since " + $replaced.since + ", had ended: it was green after that; " + $dated + ")"
+            }
             if ($d.kind -ceq "dropped") { [void]$text.Add("RED " + $d.guard + " dropped from " + (Get-HordeGuardListPath) + ": " + $who) }
             else { [void]$text.Add("RED " + $d.guard + " in " + ($d.shells -join " and ") + ": " + $who) }
             foreach ($l in @($d.lines | Select-Object -First 10)) { [void]$text.Add("    " + $l) }

@@ -483,5 +483,26 @@
         @{ Name = "json-note-contradicts-the-merge-it-names"
            Find = 'note = $(if ($null -ne $mj -and $null -eq $d.entry) {'
            Replace = 'note = $(if ($false) {' }
+        @{ Name = "clearred-no-usable-list-clears"
+           Find = '    if ($null -eq $list.guards) { return (& $cannot ($Base + " " + $t.out.Substring(0, 8) + " has no usable guard list ('
+           Replace = '    if ($false) { return (& $cannot ($Base + " " + $t.out.Substring(0, 8) + " has no usable guard list (' }
+        @{ Name = "open-guard-dup-red"
+           Find = 'if (@($reds | Where-Object { $_.guard -ceq $og }).Count -gt 0) { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "intent-line-repo-case-kept"
+           Find = 'repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant(); owner = $Request.owner;'
+           Replace = 'repo = ($Request.owner + "/" + $Request.repo); owner = $Request.owner;' }
+        @{ Name = "red-after-last-merge-keeps-old-blame"
+           Find = 'if (-not $found) { $item.fresh = $true }'
+           Replace = '' }
+        @{ Name = "red-between-merges-keeps-old-blame"
+           Find = 'if ($ended) { $item.entry = $e;'
+           Replace = 'if ($false) { $item.entry = $e;' }
+        @{ Name = "red-between-merges-ignores-the-fixing-push"
+           Find = 'if (-not $pre.red) { $ended = $true }'
+           Replace = '' }
+        @{ Name = "dropped-after-fix-keeps-old-blame"
+           Find = 'if (-not $dbl.red) { $item.fresh = $true }'
+           Replace = '' }
     )
 }
