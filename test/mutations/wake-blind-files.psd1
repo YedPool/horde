@@ -14,5 +14,11 @@
         @{ Name = "the-heartbeat-reader-drops-the-counts"
            Find = '"tickSeconds", "self", "counts")) {'
            Replace = '"tickSeconds", "self")) {' }
+        @{ Name = "a-counts-write-failure-kills-the-heartbeat"
+           Find = 'catch { $countsError = '
+           Replace = 'catch { throw $_; $countsError = ' }
+        @{ Name = "a-counts-write-failure-is-not-returned"
+           Find = 'if ($null -ne $countsError) { return $countsError }'
+           Replace = '' }
     )
 }

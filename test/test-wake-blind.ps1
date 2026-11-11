@@ -98,7 +98,7 @@ Check (@($journal | Where-Object { $_.kind -ceq "pane-seen" }).Count -eq 0) "CON
 Check (@($journal | Where-Object { @("pane-blind", "pane-seen", "would-nudge") -cnotcontains $_.kind }).Count -eq 0) ("and the blind spell is the only thing journaled: no skip-unknown, held, never-nudged or gave-up (" + (@($journal | ForEach-Object { $_.kind } | Sort-Object -Unique) -join ",") + ")")
 Check ($run.ledger.Count -eq 0) "no attempt is counted for a session nobody could see: the ledger is empty"
 $c = Get-Counts $state.home
-Check ((Num $c "passes") -eq 10 -and (Num $c "looks") -eq 4 -and (Num $c "blindLooks") -eq 4 -and (Num $c "blindPasses") -eq 4) ("the heartbeat counts 10 passes, 4 looks, 4 blind looks in 4 passes (" + $(if ($null -eq $c) { "no counts" } else { ($c | ConvertTo-Json -Compress) }) + ")")
+Check ((Num $c "passes") -eq 10 -and (Num $c "looks") -eq 4 -and (Num $c "blindLooks") -eq 4 -and (Num $c "blindPasses") -eq 10) ("the heartbeat counts 10 passes, 4 looks, 4 blind looks, and 10 passes that ended with a spell open (" + $(if ($null -eq $c) { "no counts" } else { ($c | ConvertTo-Json -Compress) }) + ")")
 Check ($null -ne $c -and $null -ne (ConvertFrom-HordeWakeTimeText (Get-HordeTestMember $c "since")) -and $null -ne (ConvertFrom-HordeWakeTimeText (Get-HordeTestMember $c "startedAt"))) "and the time the counting began and the time this run started"
 $countsFile = Join-Path (Join-Path $state.home "wake") "counts-shadow.json"
 Check (Test-Path -LiteralPath $countsFile -PathType Leaf) "the counts are also in counts-shadow.json beside the heartbeat, the shadow run's own"
@@ -107,7 +107,7 @@ Check (-not (Test-Path -LiteralPath (Join-Path (Join-Path $state.home "wake") "c
 Write-Host ""
 Write-Host "--- `wake status` says it ---" -ForegroundColor Cyan
 $st = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "status") -Env @{ HORDE_HOME = $state.home; WEZFLEET_ROOT = $fleetPin.path }
-Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 4, blind 4 (4 passes)")) ("wake status shows 'looks 4, blind 4 (4 passes)' for the shadow run (exit " + $st.code + ")")
+Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 4, blind 4 (10 passes)")) ("wake status shows 'looks 4, blind 4 (10 passes)' for the shadow run (exit " + $st.code + ")")
 Check ($st.out.Contains("LIVE: it has never run")) "CONTROL: the live run, which never ran, has no counts to show"
 
 Write-Host ""
@@ -121,14 +121,14 @@ foreach ($e in @(Step $state $run2 100)) { [void]$late.Add($e) }
 & $fx.SetRow $state (New-Row 1)
 foreach ($e in @(Step $state $run2 201)) { [void]$late.Add($e) }
 $c = Get-Counts $state.home
-Check ((Num $c "passes") -eq 12 -and (Num $c "looks") -eq 6 -and (Num $c "blindLooks") -eq 5 -and (Num $c "blindPasses") -eq 5) ("after the restart two more passes, one blind look and one that read: 12 passes, 6 looks, 5 blind, 5 blind passes (" + $(if ($null -eq $c) { "no counts" } else { ($c | ConvertTo-Json -Compress) }) + ")")
+Check ((Num $c "passes") -eq 12 -and (Num $c "looks") -eq 6 -and (Num $c "blindLooks") -eq 5 -and (Num $c "blindPasses") -eq 11) ("after the restart two more passes, one blind look and one that read: 12 passes, 6 looks, 5 blind, 11 passes with a spell open (" + $(if ($null -eq $c) { "no counts" } else { ($c | ConvertTo-Json -Compress) }) + ")")
 Check ((Get-Panes $state) -eq 6) "the restarted run, which forgot the old run's back-off, looked at once (100 s) and again when its own back-off had passed (201 s)"
 $seen = @(Read-Lines $state.home | Where-Object { $_.kind -ceq "pane-seen" })
 Check ($seen.Count -eq 1 -and $seen[0].id -ceq (Sid 1) -and $seen[0].outcome -ceq "seen") "a look that reads ends the spell with one pane-seen line"
 Check ($seen.Count -eq 1 -and "$($seen[0].reason)".Contains("after 1 blind look")) "saying how many looks it lasted (the restarted run's own spell: 1)"
 Check (@(Read-Lines $state.home | Where-Object { $_.kind -ceq "would-nudge" }).Count -eq 1) "and the session, now seen, is decided on as any other (shadow: one would-nudge)"
 $st = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "status") -Env @{ HORDE_HOME = $state.home; WEZFLEET_ROOT = $fleetPin.path }
-Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 6, blind 5 (5 passes), of 12 passes since ")) ("and wake status, after the restart, counts on from the first run: 'looks 6, blind 5 (5 passes), of 12 passes' (exit " + $st.code + ")")
+Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 6, blind 5 (11 passes), of 12 passes since ")) ("and wake status, after the restart, counts on from the first run: 'looks 6, blind 5 (11 passes), of 12 passes' (exit " + $st.code + ")")
 & $fx.Remove $state
 $state = $null
 
@@ -184,6 +184,117 @@ $withText = @(Get-Restored $state (New-Row 1 @{ boxEmpty = "no" }))
 $state = $null
 Check ($withText.Count -gt 0 -and @($withText | Where-Object { $_ -clike "would-post:*" }).Count -gt 0) "CONTROL: the restore source plans mail for the restored orcs in the control run"
 Check (($withBlind -join "|") -ceq ($withText -join "|")) "a blind session queues no restore and cancels none: the journal, but for the blind lines, is the control run's"
+
+Write-Host ""
+Write-Host "--- a counts file that cannot be written costs the heartbeat nothing, and is said once ---" -ForegroundColor Cyan
+$state = & $fx.New
+& $fx.SetRow $state (New-Blind 1 "terminal-timeout")
+$wakeDir = Join-Path $state.home "wake"
+[void](New-Item -ItemType Directory -Force -Path (Join-Path $wakeDir "counts-shadow.json"))
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+foreach ($sec in @(0, 3, 6, 9)) { foreach ($e in @(Step $state $run $sec)) { [void]$all.Add($e) } }
+$beat = Read-HordeWakeHeartbeat -Shadow -HordeHome $state.home
+Check ($beat.state -ceq "known" -and $beat.value.pass -eq 4 -and $beat.value.at -eq (At 9)) "the heartbeat is written on every tick although the counts file cannot be: the watcher is alive, and status will not call it stale"
+Check ($beat.state -ceq "known" -and (Num (Get-HordeTestMember $beat.value "counts") "passes") -eq 4) "and it still carries the counts it has"
+$bad = @($all | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "counts" })
+Check ($bad.Count -eq 1 -and "$($bad[0].reason)".Contains("could not be saved")) ("the failure is journaled once while it lasts, as a failure of the counts and not of the watcher (" + $bad.Count + " line(s))")
+Check (@($all | Where-Object { $_.id -ceq "heartbeat" }).Count -eq 0) "and the heartbeat itself is not said to have failed"
+& $fx.Remove $state
+$state = $null
+
+Write-Host ""
+Write-Host "--- a look that could not be made is blind too, and a spell ends when the session is no candidate for a look ---" -ForegroundColor Cyan
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+& $fx.SetMode $state @{ pane = @{ exit = 1; stdout = ""; stderr = "the command fell over" } }
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+foreach ($sec in @(0, 3, 6)) { foreach ($e in @(Step $state $run $sec)) { [void]$all.Add($e) } }
+$pb = @($all | Where-Object { $_.kind -ceq "pane-blind" })
+Check ($pb.Count -eq 1 -and $pb[0].reason -ceq "pane-read-failed" -and $pb[0].outcome -ceq "unseen") "a pane read whose command fails is a blind look: one pane-blind line, with the word pane-read-failed"
+Check (@($all | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq (Sid 1) }).Count -eq 0) "and not a skip-unknown on every pass"
+$c = Get-Counts $state.home
+Check ((Num $c "blindLooks") -eq 2 -and (Num $c "blindPasses") -eq 3 -and (Num $c "passes") -eq 3) ("it is counted: 2 blind looks (0 s and 6 s), and all 3 passes ended with the spell open (" + $(if ($null -eq $c) { "no counts" } else { ($c | ConvertTo-Json -Compress) }) + ")")
+& $fx.SetMode $state @{ pane = @{ hangSeconds = 60 } }
+& $fx.Deadlines $state 10 1
+& $fx.Forget $state
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+foreach ($e in @(Step $state $run 100)) { [void]$all.Add($e) }
+& $fx.Deadlines $state
+$pb = @($all | Where-Object { $_.kind -ceq "pane-blind" })
+Check ($pb.Count -eq 1 -and $pb[0].reason -ceq "pane-read-timed-out") "a pane read that hangs past its deadline is blind with the word pane-read-timed-out"
+& $fx.SetMode $state $null
+& $fx.Remove $state
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Blind 1 "terminal-timeout")
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+foreach ($sec in @(0, 3)) { foreach ($e in @(Step $state $run $sec)) { [void]$all.Add($e) } }
+Check ($run.blind.ContainsKey((Sid 1)) -and (Num (Get-Counts $state.home) "blindPasses") -eq 2) "CONTROL: a blind session has a spell open, and both passes are blind passes"
+& $fx.SetRow $state (New-Blind 1 "terminal-timeout" @{ unreadCount = 0; oldestUnreadAt = $null })
+foreach ($sec in @(6, 9, 12)) { foreach ($e in @(Step $state $run $sec)) { [void]$all.Add($e) } }
+Check ($run.blind.Count -eq 0) "a session whose mail was taken is no candidate for a look: its spell ends"
+Check (@($all | Where-Object { $_.kind -ceq "pane-seen" }).Count -eq 0) "with no pane-seen line: nobody saw it"
+Check ((Num (Get-Counts $state.home) "blindPasses") -eq 2 -and (Num (Get-Counts $state.home) "passes") -eq 5) "and the passes since are not counted as blind: 5 passes, 2 of them blind"
+& $fx.Remove $state
+$state = $null
+
+Write-Host ""
+Write-Host "--- a listing that cannot be read forgets no spell ---" -ForegroundColor Cyan
+$state = & $fx.New
+& $fx.SetRow $state (New-Blind 1 "terminal-timeout")
+& $fx.Clock $state (At 0)
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+foreach ($e in @(Step $state $run 0)) { [void]$all.Add($e) }
+Remove-Item -LiteralPath (Join-Path $state.dir "fleet.json") -Force
+& $fx.Clock $state (At 3)
+foreach ($e in @(Step $state $run 3)) { [void]$all.Add($e) }
+Check ($run.blind.ContainsKey((Sid 1))) "while the fleet cannot be listed the spell stays open"
+[System.IO.File]::WriteAllText((Join-Path $state.dir "fleet.json"), "[]", [System.Text.Encoding]::ASCII)
+& $fx.SetRow $state (New-Blind 1 "terminal-timeout")
+& $fx.Clock $state (At 20)
+foreach ($e in @(Step $state $run 6)) { [void]$all.Add($e) }
+Check ($run.blind.ContainsKey((Sid 1)) -and $run.blind[(Sid 1)].looks -eq 2) "and when it can, the spell goes on from where it was: 2 looks, not a new spell"
+Check (@($all | Where-Object { $_.kind -ceq "pane-blind" }).Count -eq 1 -and @($all | Where-Object { $_.kind -ceq "pane-seen" }).Count -eq 0) "with one pane-blind line and no pane-seen"
+& $fx.Remove $state
+$state = $null
+
+Write-Host ""
+Write-Host "--- the counts file: what is there and cannot be used is said, never taken for none ---" -ForegroundColor Cyan
+$have2 = ($null -ne (Get-Command Read-HordeWakeCounts -ErrorAction SilentlyContinue))
+Check $have2 "the counts reader exists (Read-HordeWakeCounts)"
+if ($have2) {
+    $ch = Join-Path $pinned.home "counts-home"
+    [void](New-Item -ItemType Directory -Force -Path (Join-Path $ch "wake"))
+    $cf = Join-Path (Join-Path $ch "wake") "counts-shadow.json"
+    function Put-Counts { param([string]$Text) [System.IO.File]::WriteAllText($cf, $Text, [System.Text.Encoding]::ASCII) }
+    $good = '{"since":"2026-10-12T08:00:00.0000000Z","startedAt":"2026-10-12T09:00:00.0000000Z","passes":5,"looks":3,"blindLooks":2,"blindPasses":1}'
+    Check ((Read-HordeWakeCounts -Mode "shadow" -HordeHome $ch).state -ceq "absent") "no file is absent"
+    Put-Counts $good
+    $r = Read-HordeWakeCounts -Mode "shadow" -HordeHome $ch
+    Check ($r.state -ceq "known" -and $r.value.passes -eq 5 -and $r.value.blindPasses -eq 1 -and $r.value.since -eq (At 0)) "a good file is known, with the time the counting began"
+    foreach ($case in @(
+            @{ what = "a count below none"; text = $good.Replace('"passes":5', '"passes":-1') },
+            @{ what = "a count that is text"; text = $good.Replace('"passes":5', '"passes":"5"') },
+            @{ what = "a count that is missing"; text = $good.Replace('"blindLooks":2,', '') },
+            @{ what = "no time the counting began"; text = $good.Replace('"since":"2026-10-12T08:00:00.0000000Z",', '') },
+            @{ what = "a time with no zone"; text = $good.Replace('2026-10-12T08:00:00.0000000Z', '2026-10-12T08:00:00') },
+            @{ what = "something that is not JSON"; text = "{ not json" },
+            @{ what = "JSON that is not an object"; text = "[1,2]" })) {
+        Put-Counts $case.text
+        $r = Read-HordeWakeCounts -Mode "shadow" -HordeHome $ch
+        Check ($r.state -ceq "unknown") ("a file with " + $case.what + " is unknown, not absent and not taken")
+        $rn = New-HordeWakeRun -HordeHome $ch
+        Check ((Num (Get-HordeTestMember $rn "counts") "passes") -eq 0 -and @($rn.said | Where-Object { "$_".Contains("counting passes and looks from nothing") }).Count -eq 1) ("and a run that starts over it counts from nothing and SAYS so (" + $case.what + ")")
+    }
+    Put-Counts $good
+    $rn = New-HordeWakeRun -HordeHome $ch
+    Check ((Num (Get-HordeTestMember $rn "counts") "passes") -eq 5 -and @($rn.said | Where-Object { "$_".Contains("counting passes") }).Count -eq 0) "CONTROL: a good file is gone on from and says nothing"
+}
 
 Write-Host ""
 Write-Host "--- the spells, on their own: the back-off schedule, once a spell, and the reset ---" -ForegroundColor Cyan

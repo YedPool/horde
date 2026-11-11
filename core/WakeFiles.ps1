@@ -204,16 +204,22 @@ function Write-HordeWakeHeartbeat {
     if ($PSBoundParameters.ContainsKey("Self")) { $beat["self"] = "$Self" }
     # THE RUN-LONG COUNTS (T-0116): { since; startedAt; passes; looks; blindLooks; blindPasses } - how many passes
     # the run made, how many looks at a session's box and turn, how many of those the terminal did not answer
-    # (blind), and in how many passes at least one was. They go in the heartbeat for `wake status` AND in a counts
+    # (blind), and in how many passes a blind spell was open. They go in the heartbeat for `wake status` AND in a counts
     # file beside it (counts-<mode>.json) that the next run of the mode reads at its start, so a restart goes on
     # counting: since is when the counting began, startedAt when this process did. The file goes first, so the
-    # heartbeat never shows more than the file holds.
+    # heartbeat never shows more than the file holds. A FILE THAT CANNOT BE WRITTEN (locked, a full disk) COSTS THE
+    # HEARTBEAT NOTHING (T-0116, round 2): a watcher whose counts could not be kept is alive, and `wake status` must
+    # not read it as stale. The failure is the return value - the text, for the tick to say once - and the heartbeat
+    # still carries the counts it has.
+    $countsError = $null
     if ($null -ne $Counts) {
         $row = [ordered]@{ since = (ConvertTo-HordeWakeTimeText $Counts.since); startedAt = (ConvertTo-HordeWakeTimeText $Counts.startedAt); passes = [long]$Counts.passes; looks = [long]$Counts.looks; blindLooks = [long]$Counts.blindLooks; blindPasses = [long]$Counts.blindPasses }
-        Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "counts" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $row -Compress)
+        try { Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "counts" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $row -Compress) }
+        catch { $countsError = "the counts of passes and looks could not be saved, so a restart will not go on from them: " + $_.Exception.Message }
         $beat["counts"] = $row
     }
     Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $beat -Compress)
+    if ($null -ne $countsError) { return $countsError }
 }
 
 function Read-HordeWakeHeartbeat {

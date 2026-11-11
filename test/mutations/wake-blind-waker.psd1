@@ -17,6 +17,12 @@
         @{ Name = "a-session-fact-is-blind"
            Find = '@("pane-unverified", "terminal-timeout", "box-unreadable")'
            Replace = '@("pane-unverified", "terminal-timeout", "box-unreadable", "duplicate-process")' }
+        @{ Name = "a-failed-look-is-not-timed-out"
+           Find = '$word = $(if ("$($pane.reason)" -clike "timed-out*") { "pane-read-timed-out" } else { "pane-read-failed" })'
+           Replace = '$word = "pane-read-failed"' }
+        @{ Name = "a-failed-look-carries-no-word"
+           Find = 'Add-Member -InputObject $failed -MemberType NoteProperty -Name "blindReason" -Value $word'
+           Replace = '' }
         @{ Name = "the-cheap-reading-is-blind"
            Find = 'oldestHandedOverAt = $later.oldestHandedOverAt; blindReason = "" } }'
            Replace = 'oldestHandedOverAt = $later.oldestHandedOverAt; blindReason = "terminal-timeout" } }' }

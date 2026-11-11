@@ -470,6 +470,7 @@ Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("timed-out: ") -an
 $clock.Restart()
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
 Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("timed-out: ") -and "$($a.reason)".Contains("within 3 s") -and $clock.Elapsed.TotalSeconds -lt 30) "a pane read that hangs is stopped at three times the seconds it gave the fleet's command, and answered unknown, timed-out"
+Check ((Get-HordeTestMember $a "blindReason") -ceq "pane-read-timed-out") "and the unknown carries the word pane-read-timed-out, so the watcher counts it as a blind look (T-0116)"
 Check ((Get-Count $state ("mail state -To " + (Sid 1) + " -TimeoutSeconds 1 -Json")) -eq 1) "having given the fleet's command a third of its own deadline"
 & $fx.SetMode $state @{ nudge = @{ hangSeconds = 60 } }
 & $fx.Deadlines $state 2 1 10
@@ -514,6 +515,7 @@ foreach ($case in @(
     $a = $null
     try { $a = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full } catch { $a = $null }
     Check ($null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like)) ("a pane read answering " + $case.what + " is an unknown state, saying so")
+    Check ($null -ne $a -and (Get-HordeTestMember $a "blindReason") -ceq "pane-read-failed") ("and it carries the word pane-read-failed, a blind look, for " + $case.what)
 }
 foreach ($case in @(
         @{ what = "text"; exit = 1; out = ""; err = "wezfleet.ps1 : A parameter cannot be found that matches parameter name 'To'."; like = "not one line of JSON" },

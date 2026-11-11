@@ -853,14 +853,17 @@ function Update-HordeWakeBlind {
     #   -SeenLooks   the ids whose look this pass READ (not blind): their spell, if any, ends
     #   -Listed      the ids the listing named, or $null when it could not be read: a session no longer listed is
     #                forgotten with no line (nobody looked), and with $null nothing is forgotten
+    #   -Candidates  the ids still waiting for a look (the pass's candidates), or $null when the pass could not say: a
+    #                spell of a session that is not one any more (its mail was taken) ends with no line, and with $null
+    #                none ends. A spell that is open is a pass in which the session could not be seen (the run counts it)
     # THE JOURNAL SAYS IT ONCE A SPELL, like the other standing facts: one pane-blind line (outcome unseen) when a
     # spell starts or its reason changes, and one pane-seen line when it ends, with how many looks it lasted. The
     # back-off after the n-th blind look in a row is the n-th of the settings' backoffSeconds (5, 15, 45, 135, 300 s,
     # the same steps the waker takes), the last for every look past the end; a look that reads ends it.
-    param($Seen = @{}, $BlindLooks = @{}, $SeenLooks = @(), $Listed = $null, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
+    param($Seen = @{}, $BlindLooks = @{}, $SeenLooks = @(), $Listed = $null, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Candidates = $null)
     $next = @{}
     $entries = New-Object System.Collections.ArrayList
-    if ($null -ne $Seen) { foreach ($id in @($Seen.Keys)) { if ($null -eq $Listed -or @($Listed) -ccontains "$id") { $next["$id"] = $Seen[$id] } } }
+    if ($null -ne $Seen) { foreach ($id in @($Seen.Keys)) { if (($null -eq $Listed -or @($Listed) -ccontains "$id") -and ($null -eq $Candidates -or @($Candidates) -ccontains "$id")) { $next["$id"] = $Seen[$id] } } }
     foreach ($id in @($SeenLooks | Sort-Object)) {
         if (-not $next.ContainsKey("$id") -or $BlindLooks.ContainsKey("$id")) { continue }
         [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "pane-seen" -Id "$id" -Outcome "seen" -Reason ("its box and its turn were read again, after " + $next["$id"].looks + " blind look(s) since " + (ConvertTo-HordeWakeTimeText $next["$id"].since))))
@@ -1184,6 +1187,7 @@ function Invoke-HordeWakePass {
     # queues no restore - it is only unseen. -Blind is the last pass's table of blind spells (Update-HordeWakeBlind),
     # and a session in one is not looked at again until its back-off has passed.
     $looks = 0
+    $candidates = $null
     $blindLooks = @{}
     $seenLooks = New-Object System.Collections.ArrayList
     # never is session id -> why a session with unread mail is NEVER nudged, for what it is: retired, a
@@ -1263,7 +1267,6 @@ function Invoke-HordeWakePass {
             $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $moving -NoProbe:($Only -cne "") -Self $Self -SilentProbeAt $SilentProbeAt -Asleep $Asleep -AsleepUnknown $AsleepUnknown -BlindWait $blindWait)
             # THE LOOKS ARE COUNTED AS THEY ARE MADE, not by how many sessions have been looked at: the
             # bound must hold even if one session were looked at twice.
-            $looks = 0
             while ($looks -lt [int]$Settings.maxConfirmsPerPass) {
                 $toLook = @($decisions | Where-Object { $_.action -ceq "look" })
                 if ($toLook.Count -eq 0) { break }
@@ -1271,7 +1274,12 @@ function Invoke-HordeWakePass {
                     if ($looks -ge [int]$Settings.maxConfirmsPerPass) { break }
                     $looks++
                     $confirmed[$d.id] = Get-HordeWakeState -Waker $Waker -Id $d.id -Full
-                    if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
+                    if ($confirmed[$d.id].state -cne "known") {
+                        # A look that could not be made (the waker's unknown carries the word) is blind too.
+                        $why = "$(Get-HordeWakeEntryValue $confirmed[$d.id] "blindReason")"
+                        if ($why -cne "") { $blindLooks["$($d.id)"] = $why }
+                        else { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
+                    }
                     else {
                         $states[$d.id] = $confirmed[$d.id]
                         $why = "$(Get-HordeWakeEntryValue $confirmed[$d.id].value "blindReason")"
@@ -1280,7 +1288,15 @@ function Invoke-HordeWakePass {
                 }
                 $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $moving -NoProbe:($Only -cne "") -Self $Self -SilentProbeAt $SilentProbeAt -Asleep $Asleep -AsleepUnknown $AsleepUnknown -BlindWait $blindWait)
             }
-            foreach ($d in $decisions) { if ($d.action -ceq "look") { $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" } }
+            # WHO IS STILL A CANDIDATE FOR A LOOK (T-0116, round 2): looked at this pass, wanting one but out of looks, or held
+            # back by a spell's back-off. A session that is none of those - its mail was taken, it is held for another reason -
+            # is no longer waiting for a look, and its blind spell ends (Update-HordeWakeBlind, -Candidates).
+            $candidates = New-Object System.Collections.ArrayList
+            foreach ($id in @($blindLooks.Keys) + @($seenLooks)) { [void]$candidates.Add("$id") }
+            foreach ($d in $decisions) {
+                if ($d.action -ceq "look") { [void]$candidates.Add("$($d.id)"); $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" }
+                elseif ($d.action -ceq "wait" -and "$($d.reason)".StartsWith("its last look was blind (")) { [void]$candidates.Add("$($d.id)") }
+            }
             foreach ($t in $targets) {
                 $a = $states[$t.id]
                 if ($a.state -cne "known") { continue }
@@ -1368,7 +1384,7 @@ function Invoke-HordeWakePass {
             }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; duplicate = $duplicate; duplicateOn = $duplicateOn; acks = $Acks; looks = $looks; blindLooks = $blindLooks; seenLooks = $seenLooks.ToArray() }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; duplicate = $duplicate; duplicateOn = $duplicateOn; acks = $Acks; looks = $looks; blindLooks = $blindLooks; seenLooks = $seenLooks.ToArray(); candidates = $candidates }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----

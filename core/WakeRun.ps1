@@ -362,16 +362,6 @@ function Invoke-HordeWakeTick {
             else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
         } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }
         $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown -Blind $Run.blind
-        # BLIND LOOKS (T-0116): counted, and kept as spells that are journaled once and backed off from. A look
-        # the terminal did not answer says nothing of the session (core/Wake.ps1, Update-HordeWakeBlind).
-        $Run.counts.looks = [long]$Run.counts.looks + [long]$result.looks
-        $Run.counts.blindLooks = [long]$Run.counts.blindLooks + [long]$result.blindLooks.Count
-        if ($result.blindLooks.Count -gt 0) { $Run.counts.blindPasses = [long]$Run.counts.blindPasses + 1 }
-        $listedForBlind = $null
-        if ($null -ne $result.listing -and "$($result.listing.state)" -cmatch '\Aknown\z') { $listedForBlind = @($result.listing.value | ForEach-Object { "$($_.id)" }) }
-        $blindNow = Update-HordeWakeBlind -Seen $Run.blind -BlindLooks $result.blindLooks -SeenLooks $result.seenLooks -Listed $listedForBlind -Now $Now -Settings $Settings
-        $Run.blind = $blindNow.seen
-        foreach ($e in @($blindNow.entries)) { [void]$entries.Add($e) }
         if ($asleepUnknown -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("nobody is knocked while which sessions are asleep in a hibernation cannot be told: " + $asleepUnknown))) }
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
@@ -387,6 +377,21 @@ function Invoke-HordeWakeTick {
             try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }
+        # BLIND LOOKS (T-0116): counted, and kept as spells that are journaled once and backed off from. A look the terminal did
+        # not answer says nothing of the session (core/Wake.ps1, Update-HordeWakeBlind). AFTER THE LEDGER IS KEPT AND SAVED, and
+        # in a try of its own: this is new code beside the one thing that must not be lost, and what it cannot do is said once.
+        # THE COUNTS: looks and blindLooks are looks of this pass; blindPasses is every pass that ENDS with a blind spell open -
+        # a session blind for hours, looked at once in five minutes by its back-off, is a blind pass on all hundred of them.
+        try {
+            $Run.counts.looks = [long]$Run.counts.looks + [long]$result.looks
+            $Run.counts.blindLooks = [long]$Run.counts.blindLooks + [long]$result.blindLooks.Count
+            $listedForBlind = $null
+            if ($null -ne $result.listing -and "$($result.listing.state)" -cmatch '\Aknown\z') { $listedForBlind = @($result.listing.value | ForEach-Object { "$($_.id)" }) }
+            $blindNow = Update-HordeWakeBlind -Seen $Run.blind -BlindLooks $result.blindLooks -SeenLooks $result.seenLooks -Listed $listedForBlind -Candidates $result.candidates -Now $Now -Settings $Settings
+            $Run.blind = $blindNow.seen
+            foreach ($e in @($blindNow.entries)) { [void]$entries.Add($e) }
+            if ($Run.blind.Count -gt 0) { $Run.counts.blindPasses = [long]$Run.counts.blindPasses + 1 }
+        } catch { [void]$failed.Add([pscustomobject]@{ id = "blind"; reason = ("the blind looks could not be kept: " + $_.Exception.Message) }) }
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).
@@ -538,7 +543,11 @@ function Invoke-HordeWakeTick {
         }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts }
+    try {
+        # The counts file failing is its own line (id counts), said once while it lasts, and the heartbeat was written all the same.
+        $countsFailed = Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts
+        if ($countsFailed -is [string]) { [void]$failed.Add([pscustomobject]@{ id = "counts"; reason = $countsFailed }) }
+    }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown

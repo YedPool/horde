@@ -36,16 +36,37 @@
            Find = '$next["$id"].looks + " blind look(s) since "'
            Replace = '"0" + " blind look(s) since "' }
         @{ Name = "a-session-gone-from-the-listing-is-kept"
-           Find = 'if ($null -eq $Listed -or @($Listed) -ccontains "$id") {'
-           Replace = 'if ($true) {' }
+           Find = 'if (($null -eq $Listed -or @($Listed) -ccontains "$id") -and'
+           Replace = 'if ($true -and' }
         @{ Name = "an-unreadable-listing-forgets-every-spell"
-           Find = 'if ($null -eq $Listed -or @($Listed) -ccontains "$id") {'
-           Replace = 'if (@($Listed) -ccontains "$id") {' }
+           Find = 'if (($null -eq $Listed -or @($Listed) -ccontains "$id") -and'
+           Replace = 'if ((@($Listed) -ccontains "$id") -and' }
+        @{ Name = "a-spell-outlives-its-candidate"
+           Find = ' -and ($null -eq $Candidates -or @($Candidates) -ccontains "$id")) {'
+           Replace = ') {' }
+        @{ Name = "a-held-back-session-is-no-candidate"
+           Find = 'elseif ($d.action -ceq "wait" -and "$($d.reason)".StartsWith("its last look was blind (")) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "a-session-out-of-looks-is-no-candidate"
+           Find = 'if ($d.action -ceq "look") { [void]$candidates.Add("$($d.id)");'
+           Replace = 'if ($d.action -ceq "look") {' }
+        @{ Name = "a-failed-look-is-not-counted-as-blind"
+           Find = 'if ($confirmed[$d.id].state -cne "known") {'
+           Replace = 'if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "x")); continue }' }
+        @{ Name = "counts-negative-accepted"
+           Find = '-or $p.Value -lt 0) { return (New-HordeUnknown -Reason ("what was saved of the counts has a "'
+           Replace = '-or $false) { return (New-HordeUnknown -Reason ("what was saved of the counts has a "' }
+        @{ Name = "counts-unreadable-is-absent"
+           Find = 'return (New-HordeUnknown -Reason "what was saved of the counts of passes and looks could not be read" -ErrorRecord $_)'
+           Replace = 'return (New-HordeAbsent -Note "none")' }
+        @{ Name = "counts-without-since-accepted"
+           Find = 'if ($null -eq $since) { return (New-HordeUnknown -Reason "what was saved of the counts holds no time they began") }'
+           Replace = 'if ($null -eq $since) { $since = [datetime]::UtcNow }' }
         @{ Name = "the-passs-looks-are-not-counted"
            Find = 'acks = $Acks; looks = $looks;'
            Replace = 'acks = $Acks; looks = 0;' }
         @{ Name = "a-blind-reason-is-lost"
-           Find = '$blindLooks["$($d.id)"] = $why'
-           Replace = '$blindLooks["$($d.id)"] = "unknown"' }
+           Find = '$blindLooks["$($d.id)"] = $why } else {'
+           Replace = '$blindLooks["$($d.id)"] = "unknown" } else {' }
     )
 }

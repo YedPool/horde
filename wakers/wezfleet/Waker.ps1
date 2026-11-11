@@ -805,7 +805,16 @@ function Get-HordeWezfleetWakerState {
     if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
     if ($Full) {
         $pane = Read-HordeWezfleetWakerPane -Id $Id
-        if (-not $pane.ok) { return (New-HordeUnknown -Reason $pane.reason) }
+        if (-not $pane.ok) {
+            # A LOOK THAT COULD NOT BE MADE AT ALL IS BLIND TOO (T-0116, round 2): the fleet's command timed out, exited
+            # non-zero or printed what this waker cannot read, so the terminal was not heard from. The answer stays
+            # unknown with its reason, as it always was; it also carries the word, so the watcher counts it as a blind
+            # look and backs off, instead of saying it as a failure on every pass.
+            $failed = New-HordeUnknown -Reason $pane.reason
+            $word = $(if ("$($pane.reason)" -clike "timed-out*") { "pane-read-timed-out" } else { "pane-read-failed" })
+            Add-Member -InputObject $failed -MemberType NoteProperty -Name "blindReason" -Value $word
+            return $failed
+        }
         $state = Read-HordeWezfleetWakerState -Row $pane.row
         if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
         # A BLIND LOOK says so (T-0116): only the pane read can be one, so only here is it set.

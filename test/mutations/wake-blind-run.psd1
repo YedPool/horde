@@ -21,8 +21,20 @@
            Find = '$Run.counts.blindLooks = [long]$Run.counts.blindLooks + [long]$result.blindLooks.Count'
            Replace = '$Run.counts.blindLooks = [long]$Run.counts.blindLooks + 0' }
         @{ Name = "every-pass-is-a-blind-pass"
-           Find = 'if ($result.blindLooks.Count -gt 0) { $Run.counts.blindPasses'
+           Find = 'if ($Run.blind.Count -gt 0) { $Run.counts.blindPasses'
            Replace = 'if ($true) { $Run.counts.blindPasses' }
+        @{ Name = "only-a-pass-with-a-blind-look-is-a-blind-pass"
+           Find = 'if ($Run.blind.Count -gt 0) { $Run.counts.blindPasses'
+           Replace = 'if ($result.blindLooks.Count -gt 0) { $Run.counts.blindPasses' }
+        @{ Name = "unreadable-counts-not-said"
+           Find = 'elseif ($savedCounts.state -ceq "unknown") {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "unreadable-listing-forgets-spells-at-tick"
+           Find = '$listedForBlind = $null'
+           Replace = '$listedForBlind = @()' }
+        @{ Name = "a-failed-counts-write-is-not-said"
+           Find = 'if ($countsFailed -is [string]) {'
+           Replace = 'if ($false) {' }
         @{ Name = "passes-are-not-counted"
            Find = '$Run.counts.passes = [long]$Run.counts.passes + 1'
            Replace = '$Run.counts.passes = [long]$Run.counts.passes + 0' }
@@ -33,8 +45,8 @@
            Find = 'since = $savedCounts.value.since;'
            Replace = 'since = $startedAt;' }
         @{ Name = "the-counts-are-not-written-with-the-heartbeat"
-           Find = '-Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts }'
-           Replace = '-Self "$(Get-HordeWakeEntryValue $Run "self")" }' }
+           Find = ' -Counts $Run.counts'
+           Replace = '' }
         @{ Name = "the-counts-are-always-read-from-the-live-files"
            Find = 'Read-HordeWakeCounts -Mode $word'
            Replace = 'Read-HordeWakeCounts -Mode "live"' }
