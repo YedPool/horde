@@ -22,6 +22,12 @@
 // state file is written (atomically) BEFORE the block is printed: if the write fails the hook does not block,
 // since a block it cannot remember would come back every turn.
 //
+// ONE EXCEPTION TO FAIL OPEN: AN INSTALLED HORDE OLDER THAN ITS DATABASE. When horde refuses with "... newer than this
+// code ... update Horde" (fleet.db moved to a newer schema than the installed code; 2026-10-21, PR 359), no list
+// can be read, so nobody would ever hear of it. That error alone blocks, ONCE, with a plain message (outdatedReason).
+// It rides the same throttle as every block (30 minutes), and a given message is said once per SNAPSHOT_QUIET_MS
+// (state: lastOutdatedAt, lastOutdatedMessage); a different message is said at once. Every other error still fails open.
+//
 // FAIL OPEN. A check that cannot tell (horde not found, fleet.db missing - "run horde db init" - a timeout, bad
 // JSON, anything thrown) logs one line and counts as done; the check is recorded as made, so it is not retried
 // every turn. Bad stdin, a state directory that cannot be written: log, exit 0. The hook must never stop a session
@@ -82,6 +88,8 @@ const CONFIRMED_FIELDS = ["confirmedAt", "checkedAt", "lastConfirmedAt"];
 // does not change would be blocked every 30 minutes whatever it did. Four hours: long enough that one ask per list is
 // not a nag, short enough that an Orc that ignored the ask hears it again within the working day.
 const SNAPSHOT_QUIET_MS = 4 * 60 * 60 * 1000;
+// The stable part of horde's refusal when fleet.db is newer than the installed code.
+const OUTDATED_HORDE = /newer than this code/;
 const SESSION_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const ORC_LETTER = /^[A-Z][A-Z0-9]{0,3}$/;
 
@@ -122,6 +130,12 @@ function decisionsReason(letter, home) {
   ].join("\n");
 }
 
+// The installed Horde is a git checkout under <profile>/bin/horde; the one fix is to fast-forward it.
+function outdatedReason(message) {
+  const install = join(homedir(), "bin", "horde");
+  return "Horde is older than its database (" + message + "): update Horde (git -C " + install + " merge --ff-only origin/main), or tell M";
+}
+
 const DECISIONS_SHAPE =
   'list.json shape: {"items":[{"questionNumber":12,"text":"one line","recommendation":"optional","importance":"high|normal|low","blocks":"all|part|none"}]} (questionNumber, recommendation, importance, blocks may be left out)';
 
@@ -159,8 +173,8 @@ function readState(sid) {
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
   const snap = (v) => (typeof v === "string" ? v : "");
   return s && typeof s === "object"
-    ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt), lastDecisionsBlockedAt: num(s.lastDecisionsBlockedAt), lastBlockedSnapshot: snap(s.lastBlockedSnapshot) }
-    : { lastCheckedAt: 0, lastBlockedAt: 0, lastDecisionsBlockedAt: 0, lastBlockedSnapshot: "" };
+    ? { lastCheckedAt: num(s.lastCheckedAt), lastBlockedAt: num(s.lastBlockedAt), lastDecisionsBlockedAt: num(s.lastDecisionsBlockedAt), lastBlockedSnapshot: snap(s.lastBlockedSnapshot), lastOutdatedAt: num(s.lastOutdatedAt), lastOutdatedMessage: snap(s.lastOutdatedMessage) }
+    : { lastCheckedAt: 0, lastBlockedAt: 0, lastDecisionsBlockedAt: 0, lastBlockedSnapshot: "", lastOutdatedAt: 0, lastOutdatedMessage: "" };
 }
 
 function writeState(sid, state) {
@@ -270,11 +284,15 @@ function freshestTime(entry, now) {
   return confirmed === null ? published : Math.max(published, confirmed);
 }
 
-// Resolves { state: "ok" | "due" | "error", why, snapshot } (snapshot: the list's id, "" when it has none).
+// Resolves { state: "ok" | "due" | "error" | "outdated", why, snapshot } (snapshot: the list's id, "" when it has none).
 // No usable time at all is stale ("due"), never fresh.
 async function listAgeCheck(args, letter, now, home) {
   const r = await runHorde(args, home);
-  if (!r.ok) return { state: "error", why: r.why };
+  if (!r.ok) {
+    // r.why is "horde exited N: <first line of stderr>"; the message is that first line, minus its closing "update Horde".
+    if (OUTDATED_HORDE.test(r.why)) return { state: "outdated", why: r.why, message: r.why.replace(/^horde exited \d+: /, "").replace(/[:\s]*update Horde\s*$/i, "") };
+    return { state: "error", why: r.why };
+  }
   const jsonLine = r.out.split(/\r?\n/).filter((l) => l.trimStart().startsWith("{")).pop();
   let parsed;
   try { parsed = JSON.parse(jsonLine); } catch { return { state: "error", why: "output was not JSON" }; }
@@ -334,10 +352,21 @@ async function main() {
   const reasons = [];
   let blockedSnapshot = state.lastBlockedSnapshot;
   let decisionsBlockedAt = state.lastDecisionsBlockedAt;
+  let outdatedAt = state.lastOutdatedAt;
+  let outdatedMessage = state.lastOutdatedMessage;
   results.forEach((r, i) => {
     if (r.state === "ok" && active[i].snapshotQuiet) blockedSnapshot = ""; // fresh: a later return of an old id is judged on its own
     else if (r.state === "error") logLine("check " + active[i].name + " for " + letter + " could not tell (" + r.why + "); passing");
-    else if (r.state === "due") {
+    else if (r.state === "outdated") {
+      const saidBefore = r.message === state.lastOutdatedMessage && now >= state.lastOutdatedAt && now - state.lastOutdatedAt < SNAPSHOT_QUIET_MS;
+      if (saidBefore) logLine("check " + active[i].name + " for " + letter + ": Horde is older than its database (" + r.message + "); already said; passing");
+      else {
+        const text = outdatedReason(r.message);
+        if (!reasons.includes(text)) reasons.push(text); // two checks hit the same refusal: one line
+        outdatedAt = now;
+        outdatedMessage = r.message;
+      }
+    } else if (r.state === "due") {
       // Already asked about exactly this list, recently: the Orc either republished (confirmed it) or ignored the ask.
       const askedBefore = active[i].snapshotQuiet && r.snapshot !== "" && r.snapshot === state.lastBlockedSnapshot && now >= state.lastDecisionsBlockedAt && now - state.lastDecisionsBlockedAt < SNAPSHOT_QUIET_MS;
       if (askedBefore) logLine("check " + active[i].name + " for " + letter + ": list " + r.snapshot + " already asked about; passing");
@@ -348,7 +377,7 @@ async function main() {
     }
   });
 
-  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt, lastDecisionsBlockedAt: decisionsBlockedAt, lastBlockedSnapshot: blockedSnapshot };
+  const next = { lastCheckedAt: now, lastBlockedAt: reasons.length > 0 ? now : state.lastBlockedAt, lastDecisionsBlockedAt: decisionsBlockedAt, lastBlockedSnapshot: blockedSnapshot, lastOutdatedAt: outdatedAt, lastOutdatedMessage: outdatedMessage };
   const saved = writeState(sid, next); // BEFORE the block is printed
   if (reasons.length === 0 || !saved) return 0;
   // ASCII ON THE WIRE: a home may hold a non-ASCII character, and a reader that decodes stdout with another code
