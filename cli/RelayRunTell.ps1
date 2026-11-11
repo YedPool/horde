@@ -213,7 +213,7 @@ function Send-HordeRelayFullNotice {
         # ALREADY POSTED, AND THIS PASS WROTE A BRAND-NEW MARK: the messenger answered with the first copy's stage and woke nobody, so
         # that stage says nothing of THIS post. It is never counted as fresh: the mark is taken off (or the next look would log a TAKEN for
         # a notice never sent again), and the log says so plainly. The notice is not posted again (told), whatever the first copy became.
-        if ("$($posted.value.reason)" -clike "already-posted*" -and -not $wasListed) {
+        if ("$((Get-HordeMessengerMember $posted.value 'reason').value)" -clike "already-posted*" -and -not $wasListed) {
             $null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId
             [void]$lines.Add("relay run: the notice " + $message.messageId + " for " + $Mailbox + " was NOT sent again: the messenger already held a copy of it from an earlier post and woke nobody, so it is not counted as delivered")
             return (& $done $true "" $true)
