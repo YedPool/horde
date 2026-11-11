@@ -11,5 +11,9 @@
         @{ Name = "close-not-seen-by-far-end"
            Find = '$Channel.state.outbound.writerClosed = $true'
            Replace = '$null = 0' }
+        # T-0421: one wait, not until the time is up - an unspent wake-up from a dial taken at once ends it early.
+        @{ Name = "accept-waits-only-once"
+           Find = 'while (-not $ListenerState.pending.TryDequeue([ref]$ch)) {'
+           Replace = 'if (-not $ListenerState.pending.TryDequeue([ref]$ch)) {' }
     )
 }

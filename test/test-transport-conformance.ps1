@@ -317,6 +317,16 @@ foreach ($n in $names) {
             Close-HordeLink -Link $link
         }
         Check-Peer $peer "a dial in"
+        # AN ACCEPT WITH NOBODY DIALLING WAITS OUT ITS TIME (T-0421). The dial above was waiting before the
+        # accept began (the peer sets Ready only after it dialled), so the accept took it at once. The memory
+        # transport then left that dial's wake-up signal unspent, and its next accept woke on it, found
+        # nothing and gave up at once; the node's loop read the quick failure as a broken listener and
+        # replaced it, and a hub dial landing on the old one was never answered (test-hub-serve under 5.1,
+        # red 6 of 9 on 2026-11-06: "no frame within 30000 ms; the link is still open").
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $none = Receive-HordeTransportLink -Listener $listener -TimeoutMs 1500
+        $sw.Stop()
+        Check ($none.state -cne "known" -and $sw.ElapsedMilliseconds -ge 1200) ("[$n] an accept with nobody dialling waits out its time, even after an accept that found a dial already waiting (" + $sw.ElapsedMilliseconds + " ms of 1500)")
         Stop-HordeTransportListener -Listener $listener
         $pr = Test-HordeTransportReachable -Transport $t -Endpoint $ep
         Check ($pr.state -ceq "known" -and $pr.value -eq $false) "[$n] after the listener stops, a probe finds it unreachable"
