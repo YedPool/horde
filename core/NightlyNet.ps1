@@ -737,6 +737,26 @@ function Get-HordeNightlyWatchTaskFindings {
     return @($found | ForEach-Object { ConvertTo-HordeNightlyText $_ })
 }
 
+function New-HordeNightlyWatchTriggers {
+    # The watcher task's triggers (T-0460), built here so the suite can read the real trigger objects without registering
+    # anything. 1: daily at -Hour:-Minute, StartBoundary wall-clock with no offset (Get-HordeNightlyTaskBoundary). 2: at
+    # the logon of -UserId, after -LogonDelayMinutes. WHY THE SECOND: on 2026-11-10 Windows Update restarted the PC at
+    # 20:29 and nobody logged on until 11:12 on 11-11. The task runs only while its user is logged on, so the 07:15 run was
+    # skipped and StartWhenAvailable did NOT catch it up at the logon: the scheduler's cache shows no launch at all (last
+    # run still 11-10 07:15, last error 0, one missed run). StartWhenAvailable covers a PC that was off or a scheduler that
+    # was down, not a PC that was on with nobody logged on. A run at logon judges the last finished night (before 06:30
+    # that is the night before the running one), and the watch state makes a second run of the same morning a duplicate.
+    # The delay leaves the network and the fleet's terminal time to come back after a boot, so the tell can land.
+    param([datetime]$First, [int]$Hour = 7, [int]$Minute = 15, [string]$UserId = "", [ValidateRange(0, 60)][int]$LogonDelayMinutes = 5)
+    if ("" + $UserId -eq "") { throw "-UserId is required: the logon trigger is for one user, never every logon" }
+    $daily = New-ScheduledTaskTrigger -Daily -At $First.Date.AddHours($Hour).AddMinutes($Minute)
+    # Set the string itself: whatever the cmdlet wrote, the stored boundary is exactly the offset-free one.
+    $daily.StartBoundary = Get-HordeNightlyTaskBoundary -Date $First.Date -Hour $Hour -Minute $Minute
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+    $logon.Delay = "PT" + $LogonDelayMinutes + "M"
+    return @($daily, $logon)
+}
+
 function Get-HordeNightlyWatchVerdict {
     # What happened to the night -Date, from the evidence only. -LogText is nightly.log, -ReportNames the file names in the
     # reports folder, -ReportText the night's report (for the headline), -PendingCount the findings M was not told
