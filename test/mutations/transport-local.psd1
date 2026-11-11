@@ -97,5 +97,19 @@
         @{ Name = "hub-timeout-says-node"
            Find = '{ "hub" } else { "node" }'
            Replace = '{ "node" } else { "node" }' }
+        # T-0450: the owner read and its fail-closed refusal, shown without an elevated token by a
+        # pipe of the suite's own checked against another expected owner, and by a disposed pipe.
+        @{ Name = "owner-of-another-accepted"
+           Find = 'if (-not (Test-HordeLocalPipeOwner -Owner $owner -Expected $Expected)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-owner-accepted"
+           Find = 'return ("refused: the owner of " + $Name + " could not be read (" + $e.Message + "); a pipe whose owner cannot be read is not dialled")'
+           Replace = 'return ""' }
+        @{ Name = "unreadable-owner-called-a-squatter"
+           Find = 'return ("refused: the owner of " + $Name + " could not be read (" + $e.Message + "); a pipe whose owner cannot be read is not dialled")'
+           Replace = 'return ("refused: " + $Name + " is owned by '''', not by this user; it may be a squatter")' }
+        # Not here: a mutant that drops the PipesAclExtensions branch. It changes only pwsh 7, and
+        # Mutate runs its suite under 5.1 alone (T-0422), so it would survive for that reason; the
+        # check "a dialled pipe's owner is read in this shell" catches it when test-local runs under 7.
     )
 }
