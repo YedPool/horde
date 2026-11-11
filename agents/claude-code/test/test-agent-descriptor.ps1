@@ -33,6 +33,8 @@ Check ((Test-HordeAgentCapability -Descriptor $d -Name "session.remoteName") -eq
 Check ((Test-HordeAgentCapability -Descriptor $d -Name "name-at-spawn") -eq $true) "a session is named at spawn"
 Check ((Test-HordeAgentCapability -Descriptor $d -Name "session-id-preset") -eq $true) "a session id can be chosen before the session starts"
 Check ((Test-HordeAgentCapability -Descriptor $d -Name "provider-select") -eq $false) "another provider stays unverified until engines P3 measures one"
+Check ((Test-HordeAgentCapability -Descriptor $d -Name "idle.turnState") -eq $true -and (Test-HordeAgentCapability -Descriptor $d -Name "idle.lastEvent") -eq $true) "the idle reader's turn state and event times are measured: yes (planning/idle-session-reaper.md, slice RA)"
+Check ((Test-HordeAgentCapability -Descriptor $d -Name "input.box") -eq $false -and (Test-HordeAgentCapability -Descriptor $d -Name "close.keys") -eq $false) "the input box and the exit keys stay unverified until slices RD and RF measure them, so no reaper act relies on them"
 Check ($d.events."turn-ended".hook -ceq "Stop" -and $d.events."turn-ended".support -ceq "yes") "a turn's end is its Stop hook, which the fleet runs on today"
 Check ([regex]::IsMatch("2b0f2c5e-6a1d-4c3b-9e8f-0a1b2c3d4e5f", $d.sessionIdPattern)) "CONTROL: a session id of the shape it gives matches its pattern"
 Check (-not [regex]::IsMatch("x2b0f2c5e-6a1d-4c3b-9e8f-0a1b2c3d4e5f", $d.sessionIdPattern)) "an id with anything before the UUID does not"

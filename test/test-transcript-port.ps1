@@ -59,6 +59,12 @@ try {
     $arr = Join-Path $work "array.jsonl"
     [System.IO.File]::WriteAllText($arr, "[1,2]`n""text""`n")
     Check ((Read-HordeJsonLines -Path $arr).parseSkipped -eq 2) "a line that parses but is not an object is skipped, not read"
+    # Review of #93, F3: .NET's Trim() removes NUL, so a NUL-filled line (a crash's torn write) read as
+    # blank and vanished from every count. It is a line that does not parse.
+    $nul = Join-Path $work "nul.jsonl"
+    [System.IO.File]::WriteAllText($nul, "{`"a`":1}`n" + ("`0" * 64) + "`n{`"b`":2}`n   `n")
+    $rn = Read-HordeJsonLines -Path $nul
+    Check ($rn.parseSkipped -eq 1 -and @($rn.lines).Count -eq 2) "a NUL-filled line is counted as skipped, not passed over as blank; a line of spaces is still blank"
 
     # READ-ONLY AND SHARED: a writer holding the file open for appending, sharing only read and write,
     # is what a harness does while its session runs. The read must succeed, and must not change the file.

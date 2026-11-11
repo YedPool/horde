@@ -157,10 +157,10 @@ the lifecycle classifier uses (lifecycle 4.3: "unverified never satisfies a requ
 4. **Nothing is waiting in its input box.** The box was read and found empty (not unreadable). Text
    in the box lives only in the process's memory, so ending the process loses it just as the exit
    keys would.
-6. **It has no Remote Control link** (S8, P11), unless the founder decides otherwise (section 11,
+5. **It has no Remote Control link** (S8, P11), unless the founder decides otherwise (section 11,
    decision b).
-7. **Its harness version has passed the automatic survey** (1.6).
-5. **Its last event is older than the idle threshold** for the current memory-pressure level (5.2).
+6. **Its harness version has passed the automatic survey** (1.6).
+7. **Its last event is older than the idle threshold** for the current memory-pressure level (5.2).
    The age is measured from the newest timestamped transcript line, **never** from the file's
    modification time (I-04).
 
@@ -279,6 +279,11 @@ flag.
 The allowlist only decides the boundary. The age is still taken from the newest timestamped line of
 any kind (S5), which makes a session look younger, never older.
 
+A **known false keep**: a local slash command after a turn end writes a `user` meta line, which is
+not allowlisted, so the session is held until its next turn. That is safe, and RC's report lists such
+sessions as held by `user` after the turn end. Measured on the same transcripts: 4 of 5,835 turn ends left a
+tool call unanswered; the turn end closes it, because the harness has ended the turn.
+
 ## 1.6 The harness version, checked automatically per session
 
 The gate is the version **each session runs**, read from its control file's `version` (I-20: the
@@ -315,7 +320,7 @@ session is classified, and again just before each action (section 4.3).
 | P5 | **sessions Horde did not start** | there is no Horde **claim** (section 3) whose pid and procStart equal the live process. Never decided by name, title, label or pane | "a session with no claim is never eligible"; "a claim whose procStart differs from the live process is void"; "a session whose name matches a claimed one is not thereby claimed" |
 | P6 | **conflicting ownership** | two stores give different owners for one session (I-15: pane-sessions says unowned, the registry says M) | "conflicting owners are unknown and kept" |
 | P7 | **waiting on a human** | S3 `waiting` | "a waiting session is reported, never closed" |
-| P8 | **a pending wake or a live recurring cron** | S4 finds either of these since procStart:<br>- a `ScheduleWakeup` or one-shot `CronCreate` whose time, plus one tick, has not passed;<br>- a `CronCreate` with `recurring: true` and no matching `CronDelete`.<br>A recurring cron has no single due time. A daily one leaves the session idle for 23 h between fires (I-18), so the age rule cannot protect it, and closing the process silently cancels the loop | "a session with a due wake is kept"; "a session with a recurring cron and no CronDelete is kept"; "a CronDelete releases its cron"; "a cron from before this process started does not hold it" |
+| P8 | **a pending wake or a live recurring cron** | S4 finds either of these since procStart:<br>- a `ScheduleWakeup` or one-shot `CronCreate` whose time, plus one tick, has not passed;<br>- a `CronCreate` with `recurring: true`, no matching `CronDelete`, and less than 7 days old: the harness expires a recurring job after 7 days (review of #84), so an older one no longer holds the session.<br>A recurring cron has no single due time. A daily one leaves the session idle for 23 h between fires (I-18), so the age rule cannot protect it, and closing the process silently cancels the loop | "a session with a due wake is kept"; "a session with a recurring cron and no CronDelete is kept"; "a CronDelete releases its cron"; "a cron from before this process started does not hold it"; "a recurring cron older than its 7-day expiry no longer holds the session" |
 | P9 | **not resumable** | the harness's `resume` capability is not `yes`, or the resume check of 4.1 fails | "a session that cannot be resumed is kept" |
 | P10 | **an engine or host flag not `yes`**, or a version not surveyed | 1.4, 1.6, and section 6's host flags | "an unverified flag keeps the session and names the flag"; "an unsurveyed version keeps the session and names the version" |
 | P11 | **a Remote Control link** | S8: the control file has a `bridgeSessionId`. Closing ends the founder's phone and web entry to the session. Resume does not restore the link: `--resume` and `--remote-control` are separate flags, whether they combine is unmeasured (engines E9), and each `/remote-control` issues a new URL (I-16). A draft on the phone is invisible to S6. **Never closed automatically** (founder, 2026-10-13, section 11 (b)). It is closed only on his answer to a close offer (section 12). The closure record then stores the bridge id and the remote name | "a session with a bridgeSessionId is kept"; "a session without one is not held by this rule" (the control is D1) |

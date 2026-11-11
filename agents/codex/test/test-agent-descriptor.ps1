@@ -23,6 +23,7 @@ Write-Host "--- what the plan's other steps read ---" -ForegroundColor Cyan
 Check ((Test-HordeAgentCapability -Descriptor $d -Name "name-at-spawn") -eq $false) "no session is named at spawn: the old system measured no name flag (engines E0's lesson), and 0.159.2 still has none"
 $a = Get-HordeAgentCapability -Descriptor $d -Name "session.remoteName"
 Check ($a.state -eq "unknown") "session.remoteName is unverified, so a web session name is answered unknown, never ok (engines group I)"
+foreach ($c in @("idle.turnState", "idle.lastEvent", "input.box", "close.keys")) { Check ((Get-HordeAgentCapability -Descriptor $d -Name $c).state -eq "unknown") ($c + " is unverified: no live session was measured, so the reaper only reports this harness's sessions") }
 # Measured 2026-10-02 on 0.159.2 (planning/drafts/codex-delivery-measurement-2026-10-02.md): a message
 # queued from outside reached a running session, and the rollout recorded each submitted message.
 Check ((Test-HordeAgentCapability -Descriptor $d -Name "message-inject") -eq $true -and $d.capabilities."message-inject".evidence -like "*queue*running*") "a message can be delivered into a running session, by its own queue command - measured, not read off the help"
