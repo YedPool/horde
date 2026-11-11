@@ -66,6 +66,12 @@
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
+# A SCHEMA FILE IS READ BY core/JsonText.ps1's ONE PARSER, the same in both shells (T-0436). Read bare, pwsh 7
+# gave a minimum of 1.00000000000000000001 as the Double 1, so the schema loaded there, where 5.1 read the
+# Decimal and refused it as no whole number (measured 2026-11-07, 7.6.7 and 5.1.26100). JsonText loads nothing
+# of this file's, so nothing here loads in a circle.
+. (Join-Path $PSScriptRoot "JsonText.ps1")
+
 $script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern", "minimum",
                                  '$schema', '$id', "title", "description", "definitions", '$ref')
 $script:HordeSchemaTypes = @("object", "array", "string", "integer", "number", "boolean", "null")
@@ -538,7 +544,7 @@ function Read-HordeSchemaFile {
     # loads it, not the first value checked against it. The check is remembered for this object, so the
     # first Test-HordeSchema on it does not repeat it.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $schemaRead = ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+    $schemaRead = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))
     [void](Assert-HordeSchema -Schema $schemaRead)
     return $schemaRead
 }
