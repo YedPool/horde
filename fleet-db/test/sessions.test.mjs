@@ -466,6 +466,22 @@ test('liveness: a record file time is never read - lastSeen is the record\'s own
 // ---------------------------------------------------------------------------------------------------------
 // the rows
 
+test('seats over ticks (T-0410): a fresher session takes the seat, and a later retirement reaches the row made earlier', () => {
+  const w = fresh();
+  w.db.prepare("INSERT INTO orc (id, letter, lane_dir, name, rank, created_at) VALUES ('01HZZZZZZZZZZZZZZZZZZZZZZC', 'C', 'form-fill', 'Form fill', 'orc', 1)").run();
+  const seatRec = (n, extra) => rec(w, n, { kind: 'orc', owner: 'M', label: 'C', ...extra });
+  const a = seatRec(1, { lastSeen: ago(30 * MIN) });
+  runSessionsStep(w.db, snapshot([a], { sockets: listed(1) }), { now: T0 });
+  assert.equal(sess(w.db, 1).rank, 'orc');
+  const b = seatRec(2, { lastSeen: ago(MIN) });
+  runSessionsStep(w.db, snapshot([a, b], { sockets: listed(1, 2) }), { now: T0 + MIN });
+  assert.deepEqual([sess(w.db, 1).rank, sess(w.db, 2).rank], ['unknown', 'orc'], 'the fresher one holds the seat');
+  assert.equal(sess(w.db, 1).retired_at, null, 'losing the seat is not a retirement');
+  runSessionsStep(w.db, snapshot([{ ...a, retired: true, retiredAt: ago(10 * MIN) }, b], { sockets: listed(2) }), { now: T0 + 2 * MIN });
+  assert.equal(sess(w.db, 1).retired_at, T0 - 10 * MIN);
+  assert.deepEqual([sess(w.db, 2).rank, sess(w.db, 2).retired_at], ['orc', null]);
+});
+
 test('a session the registry has and fleet.db lacks is added, by the importer\'s own rule', () => {
   const w = fresh();
   const missing = '8deca873-0000-4000-8000-000000000001';
