@@ -97,6 +97,12 @@
         @{ Name = "a-default-name-keeps-the-old-letter"
            Find = '-and -not $o.named) { New-HordeOrcDefaultName -Letter $letter -Id $o.id }'
            Replace = '-and $false) { New-HordeOrcDefaultName -Letter $letter -Id $o.id }' }
+        @{ Name = "two-folders-share-a-letter"
+           Find = 'if ($claimed.ContainsKey($letter)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-name-equal-to-the-default-is-not-written"
+           Find = 'if ($row.named -and $row.name -ceq $text) { return $same }'
+           Replace = 'if ($row.name -ceq $text) { return $same }' }
         @{ Name = "a-damaged-record-stops-the-fold"
            Find = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); continue }'
            Replace = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); break }' }
