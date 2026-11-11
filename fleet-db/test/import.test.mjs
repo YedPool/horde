@@ -793,7 +793,7 @@ test('seats: the freshest session holds the seat even when an older one is its p
   assert.deepEqual(findProblems(db), []);
 });
 
-test('seats: a stub parent never claims a seat, and a session cannot take a seat the database already gave', () => {
+test('seats: a stub parent never claims a seat, and a fresher session takes a seat the database already gave (T-0410)', () => {
   const { db } = fresh();
   const dir = tempDir();
   const put = (id, extra) => fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({ origin: 'fleet', owner: 'M', label: 'C', role: 'orchestrator', firstSeen: '2026-10-06T10:00:00Z', ...extra }));
@@ -803,9 +803,141 @@ test('seats: a stub parent never claims a seat, and a session cannot take a seat
   assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(98)).rank, 'unknown');
   put(U(33), { lastSeen: '2026-10-20T10:00:00Z' });
   const r = importFleet(db, { cards, registry: dir });
-  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(33)).rank, 'unknown', 'the seat was given already');
-  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(32)).rank, 'orc');
-  assert.ok(unlinked(r, 'registry', 'a second live seat'));
+  assert.equal(one(db, 'SELECT rank FROM session WHERE id = ?', U(33)).rank, 'orc', 'the fresher session holds the seat');
+  assert.deepEqual({ ...one(db, 'SELECT rank, retired_at FROM session WHERE id = ?', U(32)) }, { rank: 'unknown', retired_at: null }, 'the old holder is not retired');
+  assert.equal(unlinked(r, 'registry', 'the seat moved').examples[0], U(32));
+  assert.equal(unlinked(r, 'registry', 'a second live seat'), undefined);
+  assert.deepEqual(findProblems(db), []);
+});
+
+// T-0410: the sync step files every record on every tick, so what a record says later must reach a row made earlier.
+function seatWorld() {
+  const { db } = fresh();
+  const dir = tempDir();
+  const cards = makeCards(tempDir()).cards;
+  const put = (id, extra) => fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({ origin: 'fleet', owner: 'M', label: 'C', role: 'orchestrator', firstSeen: '2026-10-06T10:00:00Z', ...extra }));
+  const again = () => importFleet(db, { cards, registry: dir });
+  const row = (id) => ({ ...one(db, 'SELECT rank, retired_at FROM session WHERE id = ?', id) });
+  return { db, dir, put, again, row };
+}
+
+test('seats: a retirement the registry records after the row was made reaches the row, and is never undone', () => {
+  const w = seatWorld();
+  w.put(U(50), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.again();
+  assert.deepEqual(w.row(U(50)), { rank: 'orc', retired_at: null });
+  w.put(U(50), { lastSeen: '2026-10-07T11:00:00Z', retired: true, retiredAt: '2026-10-07T11:30:00Z' });
+  w.again();
+  assert.deepEqual(w.row(U(50)), { rank: 'orc', retired_at: ms('2026-10-07T11:30:00Z') });
+  w.put(U(50), { lastSeen: '2026-10-07T12:00:00Z', retired: false });
+  w.again();
+  assert.equal(w.row(U(50)).retired_at, ms('2026-10-07T11:30:00Z'), 'a record saying live does not un-retire');
+  w.put(U(50), { lastSeen: '2026-10-07T12:00:00Z', retired: true, retiredAt: '2026-10-09T00:00:00Z' });
+  w.again();
+  assert.equal(w.row(U(50)).retired_at, ms('2026-10-07T11:30:00Z'), 'the first retirement stands');
+});
+
+test('seats: a retirement with no readable time takes lastSeen and is said once', () => {
+  const w = seatWorld();
+  w.put(U(51), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.again();
+  w.put(U(51), { lastSeen: '2026-10-08T10:00:00Z', retired: true, retiredAt: 'junk' });
+  const r = w.again();
+  assert.equal(w.row(U(51)).retired_at, ms('2026-10-08T10:00:00Z'));
+  assert.equal(unlinked(r, 'registry', 'retiredAt is not a time').count, 1);
+  assert.equal(unlinked(w.again(), 'registry', 'retiredAt is not a time'), undefined, 'not said again once the row is retired');
+});
+
+test('seats: when the holder retires, a session that lost the seat earlier takes it', () => {
+  const w = seatWorld();
+  w.put(U(52), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.put(U(53), { lastSeen: '2026-10-08T10:00:00Z' });
+  w.again();
+  assert.equal(w.row(U(53)).rank, 'orc');
+  assert.equal(w.row(U(52)).rank, 'unknown');
+  w.put(U(53), { lastSeen: '2026-10-08T10:00:00Z', retired: true, retiredAt: '2026-10-08T11:00:00Z' });
+  w.again();
+  assert.deepEqual(w.row(U(53)), { rank: 'orc', retired_at: ms('2026-10-08T11:00:00Z') }, 'a retired row keeps its rank');
+  assert.deepEqual(w.row(U(52)), { rank: 'orc', retired_at: null }, 'the live one holds the seat now');
+  assert.deepEqual(findProblems(w.db), []);
+});
+
+test('seats: the seat follows the freshest live session both ways, and a retired one never takes it back', () => {
+  const w = seatWorld();
+  w.put(U(54), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.again();
+  w.put(U(55), { lastSeen: '2026-10-08T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(54)).rank, w.row(U(55)).rank], ['unknown', 'orc']);
+  w.put(U(54), { lastSeen: '2026-10-09T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(54)).rank, w.row(U(55)).rank], ['orc', 'unknown'], 'the old one is the freshest again');
+  w.put(U(54), { lastSeen: '2026-10-09T10:00:00Z', retired: true, retiredAt: '2026-10-09T11:00:00Z' });
+  w.put(U(55), { lastSeen: '2026-10-08T10:00:00Z' });
+  w.again();
+  assert.equal(w.row(U(55)).rank, 'orc');
+  w.put(U(54), { lastSeen: '2026-10-12T10:00:00Z', retired: true, retiredAt: '2026-10-09T11:00:00Z' });
+  w.again();
+  assert.equal(w.row(U(55)).rank, 'orc', 'a retired session is fresher but takes nothing');
+  assert.equal(one(w.db, "SELECT count(*) AS n FROM session WHERE rank = 'orc' AND retired_at IS NULL").n, 1);
+});
+
+test('seats: a holder the registry leaves out is compared by its stored last_seen, and keeps the seat on a tie', () => {
+  const w = seatWorld();
+  w.put(U(56), { lastSeen: '2026-10-10T10:00:00Z' });
+  w.again();
+  fs.rmSync(path.join(w.dir, U(56) + '.json'));
+  w.put(U(57), { lastSeen: '2026-10-09T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(56)).rank, w.row(U(57)).rank], ['orc', 'unknown'], 'the stored holder is fresher');
+  w.put(U(57), { lastSeen: '2026-10-10T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(56)).rank, w.row(U(57)).rank], ['orc', 'unknown'], 'a tie keeps the holder');
+  w.put(U(57), { lastSeen: '2026-10-10T10:00:01Z' });
+  w.again();
+  assert.deepEqual([w.row(U(56)).rank, w.row(U(57)).rank], ['unknown', 'orc']);
+});
+
+test('seats: a second import with nothing new writes nothing and says no seat moved', () => {
+  const w = seatWorld();
+  w.put(U(58), { lastSeen: '2026-10-07T10:00:00Z', kind: 'orc' });
+  w.put(U(59), { lastSeen: '2026-10-08T10:00:00Z', retired: true, retiredAt: '2026-10-08T11:00:00Z' });
+  w.put(U(60), { lastSeen: '2026-10-09T10:00:00Z' });
+  w.again();
+  const before = w.db.prepare('SELECT * FROM session ORDER BY id').all().map((r) => ({ ...r }));
+  const r = w.again();
+  assert.deepEqual(w.db.prepare('SELECT * FROM session ORDER BY id').all().map((r2) => ({ ...r2 })), before);
+  assert.equal(unlinked(r, 'registry', 'the seat moved'), undefined);
+  assert.equal(unlinked(r, 'registry', 'disagrees'), undefined, 'a seat loser is not a disagreement');
+});
+
+test('seats: a row of another rank or another Orc is left as it is, and a disagreeing kind is still only said', () => {
+  const w = seatWorld();
+  w.put(U(61), { lastSeen: '2026-10-07T10:00:00Z', kind: 'warg', owner: 'C' });
+  w.again();
+  assert.equal(w.row(U(61)).rank, 'warg');
+  w.put(U(61), { lastSeen: '2026-10-09T10:00:00Z', kind: 'orc', owner: 'M', label: 'C' });
+  const r = w.again();
+  assert.equal(w.row(U(61)).rank, 'warg', 'rank kept');
+  assert.ok(unlinked(r, 'registry', 'disagrees with the stored rank warg'));
+  w.put(U(62), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.put(U(63), { lastSeen: '2026-10-08T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(62)).rank, w.row(U(63)).rank], ['unknown', 'orc']);
+  w.put(U(62), { lastSeen: '2026-10-12T10:00:00Z', label: 'F' });
+  w.again();
+  assert.deepEqual([w.row(U(62)).rank, w.row(U(63)).rank], ['unknown', 'orc'], 'a record that now names another Orc takes no seat');
+  assert.equal(one(w.db, 'SELECT o.letter FROM session s JOIN orc o ON o.id = s.orc_id WHERE s.id = ?', U(62)).letter, 'C');
+});
+
+test('seats: on a tie in the registry the holder keeps the seat, even when its id sorts after the other', () => {
+  const w = seatWorld();
+  w.put(U(65), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.again();
+  w.put(U(64), { lastSeen: '2026-10-07T10:00:00Z' });
+  w.again();
+  assert.deepEqual([w.row(U(64)).rank, w.row(U(65)).rank], ['unknown', 'orc']);
+  assert.equal(one(w.db, "SELECT count(*) AS n FROM session WHERE rank = 'orc' AND retired_at IS NULL").n, 1, 'never no seat');
 });
 
 test('sub-session labels: C1, C13 and M2 resolve to their lead letter, the label stays in the text, other writers stay by_text', () => {
