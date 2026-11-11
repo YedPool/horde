@@ -29,7 +29,7 @@
 #
 # NO REAL MESSENGER IS EVER ASKED HERE, and no real session told: the channels load every messenger
 # folder, and this suite removes every one of them before anything is sent, then registers a stand-in
-# that keeps its posts in this process (the fixture of test/test-decisions-notify.ps1).
+# that keeps its posts in this process (the fixture of test/test-relay-run-tell-taken.ps1: a stand-in that GIVES receipts, which the relay run requires since T-0336).
 #
 # EVERY HORDE HOME IS A FOLDER OF THE SUITE'S OWN under %TEMP% (CONTRIBUTING 9); the fleet is pinned to an
 # empty one of the suite's own (test/lib/FleetPin.ps1); every key is made with the software provider and
@@ -428,7 +428,7 @@ try {
     Reset-HordeCountingRelay
     $F = New-World -Connection $conn
     $null = Send-Snapshot $F
-    $fx = Join-Path $here "fixtures\decisions-notify"
+    $fx = Join-Path $here "fixtures\relay-run-tell"
     $script:posts = New-Object System.Collections.ArrayList
     $stubPost = {
         param($Message)
@@ -459,17 +459,22 @@ try {
     $loud = @($said | Where-Object { $_ -clike "MAILBOX FULL: *work/phone*NOTHING NEW REACHES THE FOUNDER'S PHONE*" })
     Check ($loud.Count -eq 1 -and $loud[0].Contains("507")) ("the run says it plainly, with what the relay answered (" + ($said -join " | ") + ")")
     Check ($script:posts.Count -eq 0 -and @($said | Where-Object { $_ -clike "the warchief was NOT told*no messenger*" }).Count -eq 1) "with no messenger loaded nobody is told, and the run says why"
-    $bell = Register-HordeMessenger -Folder (Join-Path $fx "doorbell") -Post $stubPost -Status $stubStatus
-    Check ((@(Get-HordeMessengerNames) -join ",") -ceq "doorbell") "CONTROL: the stand-in messenger is the only one loaded"
+    $bell = Register-HordeMessenger -Folder (Join-Path $fx "relayrun") -Post $stubPost -Status $stubStatus
+    Check ((@(Get-HordeMessengerNames) -join ",") -ceq "relayrun") "CONTROL: the stand-in messenger is the only one loaded"
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(10)
     Check ($script:posts.Count -eq 0) "within a minute of a notice that could not be posted, it is not tried again"
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $noSeat -TempRoot $notTemp -Now $now.AddSeconds(70)
     Check ($script:posts.Count -eq 0 -and @($said | Where-Object { $_ -clike "the warchief was NOT told*no session holds the role of warchief*" }).Count -eq 1) "a minute later, with a messenger and no warchief's session: still nobody told, and the new reason said"
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $noSeat -TempRoot $notTemp -Now $now.AddSeconds(135)
     Check ($script:posts.Count -eq 0 -and @($said | Where-Object { $_ -clike "the warchief was NOT told*" }).Count -eq 2) ("another minute on, for the same reason: tried again, and that reason is not said a second time (" + @($said | Where-Object { $_ -clike "the warchief was NOT told*" }).Count + " lines in all)")
-    Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(200)
+    try { Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(200) }
+    catch { Check $false ("posting the notice must not throw, whatever the messenger's answer holds (" + $_.Exception.Message + ")") }
     Check ($script:posts.Count -eq 1 -and @($said | Where-Object { $_ -ceq "the notice that work/phone is full was posted to the warchief's session; it is delivered only when that session takes it" }).Count -eq 1) ("once there is a session to tell, the notice is posted (T-0391 slice 5: delivered only on the session's own TAKEN, test-relay-run-tell-taken.ps1) (" + $script:posts.Count + " post)")
+    Check ($script:posts.Count -ge 1) ("the notice was posted, so there is a post to read (" + $script:posts.Count + " posts; the messages below read the first)")
+    if ($script:posts.Count -lt 1) { throw "no notice was posted to the warchief; the checks below read it and cannot run" }
     $notice = $script:posts[0]
+    $listed = Test-HordeRelayRunNoticeListed -HordeHome $F.home -NoticeId $notice.messageId
+    Check ($listed -and @($said | Where-Object { $_ -clike "*delivered*" -and $_ -cnotlike "*delivered only when*" }).Count -eq 0) "an ACCEPTED post is not delivery: the notice sits on the awaiting list until the session takes it, and nothing says it was delivered"
     Check ($notice.sessionId -ceq "warchief-session-1" -and $notice.from.label -ceq "SV" -and $notice.from.sessionId -ceq "horde-relay-run" -and $notice.messageId -ceq (Get-HordeRelayFullNoticeId -HordeHome $F.home -Mailbox "work/phone" -Fill (Get-HordeDecisionNoticeTakenNowMs -Now $now))) "the notice goes to the warchief's session, from the run, under an id made of the home, the mailbox and the day"
     Check ($notice.body.Contains("work/phone") -and $notice.body.Contains("nothing new reaches the founder's phone") -and -not $notice.body.Contains("507") -and -not $notice.body.Contains("counting relay")) ("its words are fixed: the mailbox's name, and nothing the relay said (" + ($notice.body -replace "`n", " / ") + ")")
     foreach ($i in 1..5) {
@@ -530,7 +535,7 @@ try {
     $landedAtLast = Send-Snapshot $O
     Invoke-HordeRelayRunPutNotes -Context $O.ctx -Watching $orderWatching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(900)
     Check (-not $landedAtLast.failed -and $O.ctx.full.Count -eq 0 -and @($orderSaid | Where-Object { $_ -clike "the relay takes mail for work/phone again*" }).Count -eq 1) "and when decisions' own put is taken, the mailbox is no longer full, and the run says so once"
-    [void]$script:HordeMessengers.Remove("doorbell")
+    [void]$script:HordeMessengers.Remove("relayrun")
 
     Write-Host ""
     Write-Host "--- through the run itself: an idle turn costs what it did; a full mailbox is loud and still backs off ---" -ForegroundColor Cyan
@@ -570,7 +575,7 @@ try {
 } finally {
     foreach ($c in @($script:contexts)) { Close-HordeRelayRunContext -Context $c }
     Reset-HordeCountingRelay
-    if ($script:HordeMessengers.ContainsKey("doorbell")) { [void]$script:HordeMessengers.Remove("doorbell") }
+    if ($script:HordeMessengers.ContainsKey("relayrun")) { [void]$script:HordeMessengers.Remove("relayrun") }
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
     $made = New-Object System.Collections.ArrayList

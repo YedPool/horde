@@ -42,7 +42,7 @@
            Replace = '' }
         # An already-posted answer for a brand-new mark is counted as fresh (a false TAKEN follows).
         @{ Name = "run-tell-already-posted-counted-fresh"
-           Find = 'if ("$($posted.value.reason)" -clike "already-posted*" -and -not $wasListed) {'
+           Find = 'if ("$((Get-HordeMessengerMember $posted.value ''reason'').value)" -clike "already-posted*" -and -not $wasListed) {'
            Replace = 'if ($false) {' }
         @{ Name = "run-tell-already-posted-keeps-mark"
            Find = '            $null = Remove-HordeDecisionNoticeTaken -Kind $script:HordeRelayRunTellTakenKind -HordeHome $HordeHome -NoticeId $message.messageId'
