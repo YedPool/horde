@@ -136,6 +136,12 @@ $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
 $script:HordeWezfleetWakerFleetLifeSeconds = 2
 $script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "warg" }
 $script:HordeWezfleetWakerWords = @("yes", "no", "unknown")
+# THE FLEET'S WORDS FOR "THE TERMINAL DID NOT ANSWER" (T-0116): the reason codes a pane read gives when the
+# box or the turn is unknown BECAUSE the look failed (the terminal's session could not be verified, it did
+# not answer in time, or its screen could not be read). They are the only words read as a blind look
+# (Get-HordeWezfleetWakerBlind); every other reason (no live process, two copies) is a fact about the
+# session, not about the look.
+$script:HordeWezfleetWakerBlindWords = @("pane-unverified", "terminal-timeout", "box-unreadable")
 $script:HordeWezfleetWakerOutcomes = @{ "woken" = "woken"; "busy" = "busy"; "unreachable" = "unreachable"; "refused" = "nothing" }
 $script:HordeWezfleetWakerCodePattern = '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z'
 $script:HordeWezfleetWakerRowMembers = @("id", "label", "role", "parent", "retired", "reachable", "mail", "unreadCount", "unreadableCount", "oldestUnreadAt", "idle", "boxEmpty", "midTurn")
@@ -698,7 +704,7 @@ function Read-HordeWezfleetWakerState {
     }
     $limit = Get-HordeWezfleetWakerLimit -Row $Row
     $later = Get-HordeWezfleetWakerLater -Row $Row
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil; betweenTurns = $later.betweenTurns; acked = $later.acked; lastAckedAt = $later.lastAckedAt; handedOverCount = $later.handedOverCount; oldestHandedOverAt = $later.oldestHandedOverAt } }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil; betweenTurns = $later.betweenTurns; acked = $later.acked; lastAckedAt = $later.lastAckedAt; handedOverCount = $later.handedOverCount; oldestHandedOverAt = $later.oldestHandedOverAt; blindReason = "" } }
 }
 
 function Get-HordeWezfleetWakerRetired {
@@ -747,6 +753,21 @@ function Get-HordeWezfleetWakerDuplicate {
     return "no"
 }
 
+function Get-HordeWezfleetWakerBlind {
+    # Was this PANE row a blind look (T-0116): the box or the turn is unknown AND the fleet says it is because
+    # the terminal did not answer? The reason word (pane-unverified, terminal-timeout or box-unreadable) or "".
+    # Like the duplicate word it is read out of reason / reasons for this ONE purpose and is never a reason to
+    # distrust the row (rule 1); and a row whose box and turn are both known is never blind, whatever it says.
+    param([Parameter(Mandatory = $true)]$Row)
+    if ($Row.boxEmpty -cne "unknown" -and $Row.midTurn -cne "unknown") { return "" }
+    foreach ($n in @("reason", "reasons")) {
+        $p = $Row.PSObject.Properties[$n]
+        if ($null -eq $p) { continue }
+        foreach ($v in @($p.Value)) { if ($v -is [string] -and $script:HordeWezfleetWakerBlindWords -ccontains $v) { return $v } }
+    }
+    return ""
+}
+
 function Get-HordeWezfleetWakerTargets {
     # The port's Targets: form A's rows that are not retired, or that have unread mail (the header). A
     # retired one with mail is LISTED, saying retired, so the watcher can say once that its mail waits
@@ -784,9 +805,20 @@ function Get-HordeWezfleetWakerState {
     if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
     if ($Full) {
         $pane = Read-HordeWezfleetWakerPane -Id $Id
-        if (-not $pane.ok) { return (New-HordeUnknown -Reason $pane.reason) }
+        if (-not $pane.ok) {
+            # A LOOK THAT COULD NOT BE MADE AT ALL IS BLIND TOO (T-0116, round 2): the fleet's command timed out, exited
+            # non-zero or printed what this waker cannot read, so the terminal was not heard from. The answer stays
+            # unknown with its reason, as it always was; it also carries the word, so the watcher counts it as a blind
+            # look and backs off, instead of saying it as a failure on every pass.
+            $failed = New-HordeUnknown -Reason $pane.reason
+            $word = $(if ("$($pane.reason)" -clike "timed-out*") { "pane-read-timed-out" } else { "pane-read-failed" })
+            Add-Member -InputObject $failed -MemberType NoteProperty -Name "blindReason" -Value $word
+            return $failed
+        }
         $state = Read-HordeWezfleetWakerState -Row $pane.row
         if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
+        # A BLIND LOOK says so (T-0116): only the pane read can be one, so only here is it set.
+        $state.value.blindReason = (Get-HordeWezfleetWakerBlind -Row $pane.row)
     }
     return (New-HordeKnown -Value $state.value -ObservedAt (Get-HordeWezfleetWakerTime))
 }
