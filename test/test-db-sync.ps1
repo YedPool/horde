@@ -37,7 +37,11 @@ $work = Join-Path $env:TEMP ("horde-db-sync-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $fakeProfile = Join-Path $work "profile"
-New-Item -ItemType Directory -Path $hordeHome, $fakeProfile | Out-Null
+# The fake profile has its own AppData\Local (T-0411). Without it, Windows PowerShell 5.1 finds no local
+# application data folder under USERPROFILE and gets "" for it, so a child that lives long enough (about 20 s;
+# a sleeper that a mutant leaves unkilled) saves its module analysis cache as a relative path - into its
+# working folder, the repo root, as Microsoft\Windows\PowerShell\ModuleAnalysisCache.
+New-Item -ItemType Directory -Path $hordeHome, $fakeProfile, (Join-Path $fakeProfile "AppData\Local"), (Join-Path $fakeProfile "AppData\Roaming") | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 # The fake snapshot the sessions step reads: one session in pane 3 of a terminal that lists pane 3, its transcript idle. The fixture
 # script stands in for fleet-db\SessionSnapshotRun.ps1 (HORDE_DB_SYNC_TEST_SNAPSHOT); its mode says fail, hang or write.
@@ -68,6 +72,20 @@ try {
     [System.IO.File]::WriteAllText($ledger, ('{"ts":"2026-11-01T10:00:00Z","task":"T-0001","event":"opened","title":"First","source":"founder","lane":"C","prio":2,"parent":null,"by":"C"}' + "`n" + '{"ts":"2026-11-01T11:00:00Z","task":"T-0001","event":"started","by":"C"}' + "`n"), $utf8)
     $changelog = Join-Path $work "changelog.jsonl"
     [System.IO.File]::WriteAllText($changelog, ('{"v":1,"id":"20261101T120000Z-01","ts":"2026-11-01T12:00:00Z","kind":"note","area":"Lane C","title":"one","text":"Happened: a","lane":"C","task":"T-0001"}' + "`n"), $utf8)
+
+    Write-Host ""
+    Write-Host "--- the fake profile keeps PowerShell's own files inside it (T-0411) ---" -ForegroundColor Cyan
+    # What a 5.1 child under this suite's environment takes for local application data: it must be the fake
+    # profile's own folder, never "" (which puts PowerShell's cache in the child's working folder).
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -NonInteractive -Command `"[Console]::Out.Write([Environment]::GetFolderPath('LocalApplicationData'))`""
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $work
+    foreach ($k in $cliEnv.Keys) { $psi.EnvironmentVariables[$k] = $cliEnv[$k] }
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try { $e = $p.StandardError.ReadToEndAsync(); $local = $p.StandardOutput.ReadToEnd().Trim(); $p.WaitForExit(); $null = $e.Result } finally { $p.Dispose() }
+    Check ([string]::Equals($local, (Join-Path $fakeProfile "AppData\Local"), [System.StringComparison]::OrdinalIgnoreCase)) ("a 5.1 child under the fake profile has its local application data inside it (" + $local + ")")
 
     Write-Host ""
     Write-Host "--- nothing saved: refused, in one line, and logged ---" -ForegroundColor Cyan
