@@ -146,6 +146,13 @@ Check ($pass.never.Count -eq 0 -and $pass.held.Count -eq 0) "it is not read as r
 Check ($pass.duplicate.Count -eq 0 -and $pass.duplicateOn.Count -eq 0 -and $pass.gaveUp.Count -eq 0 -and $pass.ledger.Count -eq 0) "and no duplicate, no give-up and no attempt come of it"
 Check ($pass.mail.ContainsKey((Sid 1)) -and $pass.listing.state -ceq "known" -and @($pass.listing.value).Count -eq 1) "the session is still listed and its mail is still read"
 Check (@($pass.entries | Where-Object { $_.kind -ceq "skip-unknown" }).Count -eq 0) "and it is not a skip-unknown: the look was not a failure of the read"
+# A session that wants a look but finds the pass's looks used up is still a candidate for one: its spell is not ended.
+$spells = @{}
+$spells[(Sid 1)] = [pscustomobject]@{ reason = "pane-unverified"; looks = 1; since = (At -10); nextAt = (At -5) }
+$noLooks = Get-HordeWakeSettings -Overrides @{ maxConfirmsPerPass = 0 }
+$p2 = Invoke-HordeWakePass -Waker $w -Now (At 100) -Settings $noLooks -Ledger @{} -Blind $spells
+$cand = Get-HordeTestMember $p2 "candidates"
+Check ($null -ne $cand -and @($cand) -ccontains (Sid 1) -and (Num $p2 "looks") -eq 0) "a session whose look the pass had no room for is still a candidate for one (its spell goes on)"
 & $fx.Remove $state
 $state = $null
 

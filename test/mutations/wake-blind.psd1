@@ -52,7 +52,7 @@
            Replace = 'if ($d.action -ceq "look") {' }
         @{ Name = "a-failed-look-is-not-counted-as-blind"
            Find = 'if ($confirmed[$d.id].state -cne "known") {'
-           Replace = 'if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "x")); continue }' }
+           Replace = 'if ($confirmed[$d.id].state -cne "known") { continue }; if ($false) {' }
         @{ Name = "counts-negative-accepted"
            Find = '-or $p.Value -lt 0) { return (New-HordeUnknown -Reason ("what was saved of the counts has a "'
            Replace = '-or $false) { return (New-HordeUnknown -Reason ("what was saved of the counts has a "' }
