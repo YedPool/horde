@@ -50,6 +50,21 @@
 # "mutations:" line, so no gate can read it as a result).
 #
 #   powershell -File tools\Mutate.ps1 -Changed origin/main
+#
+# A SPEC MAY NAME THE SHELLS ITS SUITE RUNS IN: Shells = @("powershell", "pwsh"). Left out, it is
+# @("powershell") - Windows PowerShell 5.1 alone, as every run was before (T-0422). A mutant that
+# matters only under PowerShell 7 (a branch taken where a .NET method became an extension method) can
+# be caught only by a suite run under 7: the local transport's owner read had no mutant for that
+# branch for this reason (PR #496). So, for a spec that names both:
+#   - "pwsh" is ONE file, the MSI install's (cli/SetupStore.ps1, Get-HordeSetupMsiPwshPath) - never
+#     the search path, a preview or the Store copy (CONTRIBUTING 16). If it is not there the run is
+#     NOT RUN, exit 2: a spec that asks for 7 is never quietly run under 5.1 alone.
+#   - Both baselines, before and after, run in every shell named; one that fails in any shell fails
+#     the run, since a mutant's catch there would mean nothing.
+#   - Each mutant runs in every shell, and each shell's outcome is printed. It is CAUGHT when any
+#     shell's run failed a check - a mutant only 7 can see is caught by 7. A mutant declared to
+#     survive must survive in EVERY shell: "the suite cannot see this" is a claim about all of them.
+#   - PassCodes and Environment hold in every shell.
 param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan)
 $script:baselineFailed = $false
 
@@ -57,6 +72,7 @@ $ErrorActionPreference = "Stop"
 # Each suite this tool starts is opted out of power throttling (core/Platform.ps1, Invoke-HordeSuite).
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Platform.ps1")
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "MutateShells.ps1")
 if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
 if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
 if ($Changed) {
@@ -144,9 +160,10 @@ function Invoke-HordeSuite {
     # Run a suite as its own process; returns { code; out; timedOut }. The two streams are read through
     # the process API, NOT with `2>&1`: under PowerShell 5.1 that turns the first line a suite writes to
     # stderr into a terminating error - which ended this tool's first run on its first mutation.
-    param([string]$Path, [int]$Seconds)
+    # -Exe is the shell to start it in: "powershell.exe" (5.1) or the MSI's pwsh.exe, by full path.
+    param([string]$Path, [int]$Seconds, [string]$Exe = "powershell.exe")
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
+    $psi.FileName = $Exe
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + $Path + "`""
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
@@ -221,6 +238,19 @@ if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
 foreach ($name in @($specEnv.Keys)) {
     if ("$name" -cnotmatch '^HORDE_[A-Z0-9_]+$') { Write-Host ("  spec Environment may set only HORDE_ variables, not '" + $name + "'") -ForegroundColor Red; exit 2 }
 }
+# THE SHELLS, before anything is copied: a spec that asks for a shell this machine does not have is
+# NOT RUN, never run in the shells it has (tools\MutateShells.ps1).
+$shellSel = Get-HordeMutateSpecShells -Spec $s
+if (-not $shellSel.ok) { Write-Host ("  spec " + $shellSel.problem) -ForegroundColor Red; Write-Host "mutations: not run - the spec's Shells is refused"; exit 2 }
+$shells = @()
+foreach ($sh in $shellSel.shells) {
+    $x = Get-HordeMutateShellExe -Shell $sh
+    if (-not $x.ok) { Write-Host ("  the spec runs its suite under " + $sh + ", and " + $x.problem) -ForegroundColor Red; Write-Host ("mutations: not run - " + $sh + " is not on this machine"); exit 2 }
+    $shells += [pscustomobject]@{ name = $sh; exe = $x.exe }
+}
+# Each shell's outcome gets a line of its own only when there is more than one: a 5.1-only run reads
+# exactly as it did before Shells existed.
+$manyShells = ($shells.Count -gt 1)
 
 $tagPart = ""
 if ($RunTag) { $tagPart = $RunTag + "-" }
@@ -245,14 +275,18 @@ try {
     }
     $original = [System.IO.File]::ReadAllText($target)
 
-    $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-    if ($base.timedOut -or $passCodes -notcontains $base.code) {
-        $why = "exited " + $base.code
-        if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
-        Write-Host ("  the UNMUTATED suite does not pass in the copy (" + $why + "), so no mutation result would mean anything:") -ForegroundColor Red
-        foreach ($f in (Get-HordeFailLines -Out $base.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
-        Write-Host "mutations: not run - baseline failed"
-        $script:baselineFailed = $true
+    foreach ($sh in $shells) {
+        $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Exe $sh.exe
+        if ($base.timedOut -or $passCodes -notcontains $base.code) {
+            $why = "exited " + $base.code
+            if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
+            $under = ""; if ($manyShells) { $under = " under " + $sh.name }
+            Write-Host ("  the UNMUTATED suite does not pass in the copy" + $under + " (" + $why + "), so no mutation result would mean anything:") -ForegroundColor Red
+            foreach ($f in (Get-HordeFailLines -Out $base.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+            Write-Host "mutations: not run - baseline failed"
+            $script:baselineFailed = $true
+            break
+        }
     }
 
     $script:toRun = @()
@@ -263,7 +297,7 @@ try {
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
-        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @() }
+        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); shells = @() }
         if ("$($m.Find)" -match "[\r\n]") { $row.outcome = "invalid: a find string may not span lines (line endings differ by checkout)" }
         elseif ($expect -eq "survives" -and -not "$($m.Reason)".Trim()) { $row.outcome = "invalid: a mutation expected to survive needs a Reason" }
         else {
@@ -286,15 +320,28 @@ try {
                     [void]$results.Add([pscustomobject]$row)
                     continue
                 }
-                $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-                $row.failures = @(Get-HordeFailLines -Out $run.out)
-                if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
-                elseif ($passCodes -contains $run.code) { $row.outcome = "survived" }
-                elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
-                else {
-                    $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch")
-                    $row.failures = @(Get-HordeErrorLines -Out $run.out)
+                # One run in each shell, each judged as a run always was. The mutant is caught when ANY
+                # shell's run failed a check; it survived only when EVERY shell's run passed; otherwise
+                # the first shell's timeout or break is its outcome - not a catch.
+                $per = @()
+                foreach ($sh in $shells) {
+                    $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Exe $sh.exe
+                    $fails = @(Get-HordeFailLines -Out $run.out)
+                    if ($run.timedOut) { $o = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
+                    elseif ($passCodes -contains $run.code) { $o = "survived" }
+                    elseif ($fails.Count -gt 0) { $o = "caught" }
+                    else {
+                        $o = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch")
+                        $fails = @(Get-HordeErrorLines -Out $run.out)
+                    }
+                    $per += [pscustomobject]@{ shell = $sh.name; outcome = $o; failures = $fails }
                 }
+                $caughtBy = @($per | Where-Object { $_.outcome -eq "caught" })
+                $notSurvived = @($per | Where-Object { $_.outcome -ne "survived" })
+                if ($caughtBy.Count -gt 0) { $row.outcome = "caught"; $row.failures = @($caughtBy[0].failures) }
+                elseif ($notSurvived.Count -eq 0) { $row.outcome = "survived"; $row.failures = @($per[0].failures) }
+                else { $row.outcome = $notSurvived[0].outcome; $row.failures = @($notSurvived[0].failures) }
+                if ($manyShells) { $row.shells = $per }
             }
         }
         [System.IO.File]::WriteAllText($target, $original)
@@ -305,11 +352,15 @@ try {
     # machine - during a mutant's run reads as a catch. If the unmutated suite no longer passes
     # afterwards, the environment changed under the run and its catches are not evidence.
     if (-not $script:baselineFailed -and $script:toRun.Count -gt 0) {
-        $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-        if ($after.timedOut -or $passCodes -notcontains $after.code) {
-            Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
-            foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
-            $script:baselineFailed = $true
+        foreach ($sh in $shells) {
+            $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Exe $sh.exe
+            if ($after.timedOut -or $passCodes -notcontains $after.code) {
+                $under = ""; if ($manyShells) { $under = " under " + $sh.name }
+                Write-Host ("  the UNMUTATED suite no longer passes after the run" + $under + ", so its catches are not evidence:") -ForegroundColor Red
+                foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+                $script:baselineFailed = $true
+                break
+            }
         }
     }
 }
@@ -331,7 +382,15 @@ foreach ($r in $results) {
     if (-not $ok) { $bad++ }
     $color = "DarkGray"; if (-not $ok) { $color = "Red" }
     Write-Host ("  [" + $(if ($ok) { "OK" } else { "BAD" }) + "] " + $r.name + ": " + $r.outcome + " (expected " + $r.expect + ")") -ForegroundColor $color
-    foreach ($f in $r.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
+    if (@($r.shells).Count -gt 0) {
+        # Every shell's own outcome, and the checks that failed in it.
+        foreach ($p in $r.shells) {
+            Write-Host ("      under " + $p.shell + ": " + $p.outcome) -ForegroundColor $color
+            foreach ($f in $p.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
+        }
+    } else {
+        foreach ($f in $r.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
+    }
 }
 Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad)
 if ($bad -gt 0) { exit 1 }
