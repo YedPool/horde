@@ -354,7 +354,10 @@ function Invoke-HordeWakeTick {
                 if ($null -ne $dp) { $dupList = @($dp.Value) }
                 $dupCount = $dupList.Count
                 $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" }) -Awaiting $awaitingIds -Retry $retryIds
-                foreach ($rid in $retryIds) { $Run.retried["$rid"] = $Now }
+                # THE ONE REPOST IS SPENT ONLY BY A REAL POST: a mail the plan did not contain (the restore finding lapsed) was not posted, and
+                # marking it would use up the repost it has not had.
+                $postedNow = @($sourced.entries | Where-Object { "$($_.messageId)" -cne "" -and "$($_.outcome)" -cne "unposted" } | ForEach-Object { "$($_.messageId)" })
+                foreach ($rid in $retryIds) { if ($postedNow -ccontains "$rid") { $Run.retried["$rid"] = $Now } }
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted
@@ -559,7 +562,7 @@ function Invoke-HordeWakeTick {
         # one lost to a restart is made again; the same id keeps it one mail. Live senders only: shadow has no list.
         if (-not (Test-HordeWakeSendersShadow -Run $Run)) {
             foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {
-                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source's mail " + $al.id + " to the session " + $al.session + " was posted and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It stays in its mailbox and is asked about until it is taken. Look at that session.")) }
+                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source sent the mail " + $al.id + " to the session " + $al.session + "; it may not have arrived, and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It is sent once more and watched until it is taken or given up. Look at that session.")) }
             }
         }
         if ($null -ne $silence.condition) { & $make { (New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text) } }

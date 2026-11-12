@@ -29,7 +29,7 @@
            Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
            Replace = 'if ($next[$id].state -cne "failed") { continue }' }
         @{ Name = "no-rate-limit"
-           Find = 'if ($sentLately -ge [int]$Settings.maxTellsPerHour) {'
+           Find = 'if ($sentLately -ge $cap) {'
            Replace = 'if ($false) {' }
         @{ Name = "rate-limit-of-seven"
            Find = 'maxTellsPerHour = 6'

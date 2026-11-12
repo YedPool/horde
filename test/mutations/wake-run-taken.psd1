@@ -37,7 +37,7 @@
            Replace = '-Awaiting $awaitingIds' }
         # A mail is posted once more on every pass after its alarm.
         @{ Name = "run-taken-retry-every-pass"
-           Find = 'foreach ($rid in $retryIds) { $Run.retried["$rid"] = $Now }'
+           Find = 'foreach ($rid in $retryIds) { if ($postedNow -ccontains "$rid") { $Run.retried["$rid"] = $Now } }'
            Replace = '' }
         # The warchief is not told of an alarmed resume mail.
         @{ Name = "run-taken-no-resume-untaken-tell"
@@ -51,5 +51,17 @@
         @{ Name = "run-taken-trouble-as-alarm"
            Find = '-Outcome "list-trouble"'
            Replace = '-Outcome "alarm"' }
+        # Only the first alarmed mark is told of (the reviewer's surviving mutant).
+        @{ Name = "run-taken-resume-untaken-first-mark-only"
+           Find = 'foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {'
+           Replace = 'foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome | Select-Object -First 1)) {' }
+        # A mail the plan did not contain still spends its one repost.
+        @{ Name = "run-taken-repost-spent-without-a-post"
+           Find = 'foreach ($rid in $retryIds) { if ($postedNow -ccontains "$rid") { $Run.retried["$rid"] = $Now } }'
+           Replace = 'foreach ($rid in $retryIds) { $Run.retried["$rid"] = $Now }' }
+        # The tell says the mail is in a mailbox (it is not known to be).
+        @{ Name = "run-taken-tell-claims-a-mailbox"
+           Find = '; it may not have arrived, and that session'
+           Replace = '; it is in its mailbox, and that session' }
     )
 }

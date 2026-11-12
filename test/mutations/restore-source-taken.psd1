@@ -31,5 +31,13 @@
         @{ Name = "restore-already-posted-journaled-unknown"
            Find = '} elseif (Test-HordeWakeMailAlready $took) {'
            Replace = '} elseif ($false) {' }
+        # The eviction ALARM of a full list is not journaled.
+        @{ Name = "restore-eviction-alarm-dropped"
+           Find = 'foreach ($ln in @(Get-HordeWakeMailLines $took)) {'
+           Replace = 'foreach ($ln in @()) {' }
+        # A repost the messenger already held is called an acceptance.
+        @{ Name = "restore-already-held-called-accepted"
+           Find = 'if ($took.awaiting.alreadyHeld) {'
+           Replace = 'if ($false) {' }
     )
 }

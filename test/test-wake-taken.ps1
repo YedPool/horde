@@ -237,7 +237,7 @@ try {
     Check (@($r3 | Where-Object { $_.kind -ceq "mail-taken" -and $_.outcome -ceq "alarm" }).Count -ge 3) "past the alarm time the mails not taken are alarmed"
     Set-HordeMemoryWakerClock (At ($end + 335)); $r4 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 335)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk -HordeHome $h)
     $untaken = @($r4 | Where-Object { $_.kind -ceq "tell" -and "$($_.reason)".Contains("resume-untaken") })
-    Check ($untaken.Count -ge 1 -and $script:tellBodies.Count -ge 1 -and ($script:tellBodies -join "|").Contains("restore source's mail")) "the alarm reaches the warchief: a resume-untaken tell is posted, naming the resume mail"
+    Check ($untaken.Count -ge 1 -and $script:tellBodies.Count -ge 1 -and ($script:tellBodies -join "|").Contains("restore source sent the mail")) "the alarm reaches the warchief: a resume-untaken tell is posted, naming the resume mail"
     Set-HordeMemoryWakerClock (At ($end + 365)); $r5 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 365)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk -HordeHome $h)
     Check (@($resumeIds | Where-Object { $script:postsById[$_] -ne 2 }).Count -eq 0) "each alarmed mail is posted once more under its own id"
     Set-HordeMemoryWakerClock (At ($end + 400)); $r6 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 400)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk -HordeHome $h)
@@ -310,6 +310,99 @@ $null = Update-HordeWakeTaken -Run $run -Now (At 250) -Messenger $inProcess -Hor
 [System.IO.File]::WriteAllText($listFile, "not a list")
 $b3 = @(Update-HordeWakeTaken -Run $run -Now (At 300) -Messenger $inProcess -HordeHome $h)
 Check (@($b3 | Where-Object { $_.outcome -ceq "list-trouble" }).Count -eq 1) "a second spell is journaled again"
+
+Write-Host ""
+Write-Host "--- round 3: what the resume-untaken tell says, and that every alarmed mark gets its own ---" -ForegroundColor Cyan
+Reset-HordeMemoryMessenger
+$h = New-Home
+$script:postsById = @{}
+$script:tellBodies = New-Object System.Collections.ArrayList
+$unk3 = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:postsById["$($m.messageId)"] = 1 + [int]$script:postsById["$($m.messageId)"]; if ("$($m.from.sessionId)" -ceq "horde-restore-source") { return (New-HordeUnknown -Reason "the stand-in could not tell") }; [void]$script:tellBodies.Add("$($m.body)"); New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "accepted"; at = [datetime]::UtcNow }) } -Status { param($id) New-HordeAbsent -Note "the stand-in keeps no status" }
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $read = { New-HordeKnown -Value @($fleet) }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    $run.warchief = (Sid 1)
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+    Set-HordeMemoryWakerClock (At ($end + 10)); $q1 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 10)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk3 -HordeHome $h)
+    $ids3 = @($q1 | Where-Object { $_.kind -ceq "post" } | ForEach-Object { $_.messageId })
+    Set-HordeMemoryWakerClock (At ($end + 330)); $q2 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 330)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk3 -HordeHome $h)
+    Set-HordeMemoryWakerClock (At ($end + 335)); $q3 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 335)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk3 -HordeHome $h)
+    $allBodies = ($script:tellBodies -join "|")
+    Check ($ids3.Count -eq 3 -and @($ids3 | Where-Object { -not $allBodies.Contains($_) }).Count -eq 0) "every alarmed mark is told by its own mail id: three alarmed, three ids named in the tells"
+    Check ($allBodies.Contains("may not have arrived") -and -not $allBodies.Contains("was posted") -and -not $allBodies.Contains("stays in its mailbox")) "the tell says only what is known: the mail was sent and may not have arrived, not that it is in a mailbox"
+} finally { $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
+
+Write-Host ""
+Write-Host "--- round 3: resume-untaken tells have a budget of their own ---" -ForegroundColor Cyan
+Reset-HordeMemoryMessenger
+$h = New-Home
+$many = @(1..8 | ForEach-Object { New-HordeWakeTellCondition -Kind "resume-untaken" -Subject (Sid (10 + $_)) -Instance ("0d000000-0000-4000-8000-" + $_.ToString("000000000099")) -Text "m" })
+$gaveUp = New-HordeWakeTellCondition -Kind "gave-up" -Subject (Sid 30) -Instance "2026-10-12T11:00:00Z" -Text "g"
+$bp2 = Invoke-HordeWakeTellPass -Conditions (@($many) + @($gaveUp)) -Warchief (Sid 1) -Now (At 0) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $inProcess -HordeHome $h -Now (At 0) }
+Check (@($bp2.entries | Where-Object { $_.outcome -ceq "awaiting" }).Count -eq 9 -and @($bp2.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 0) "eight alarmed resume mails and a gave-up tell in one hour are all told: the resume-untaken tells do not spend the session budget of six"
+
+Write-Host ""
+Write-Host "--- round 3: a full list evicts its oldest mark WITH the ALARM, and the journal says so ---" -ForegroundColor Cyan
+Reset-HordeMemoryMessenger
+foreach ($pair in @(@("restore", $rk, "Send-HordeRestoreMail"), @("tells", $tk, "Send-HordeWakeTell"))) {
+    $h = New-Home
+    $kk = $pair[1]
+    foreach ($n in 1..200) { $null = Add-HordeDecisionNoticeTaken -Kind $kk -HordeHome $h -NoticeId ("0e000000-0000-4000-8000-" + $n.ToString("000000000000")) -Answer 0 -SessionId (Sid 2) -Now (At 0) }
+    $over = & $pair[2] -Mail (Mail 60) -Messenger $inProcess -HordeHome $h -Now (At 5)
+    Check ($null -ne $over.PSObject.Properties["lines"] -and (@($over.lines) -join "|").Contains("ALARM:") -and (@($over.lines) -join "|").Contains("left the awaiting list because it is full")) ("the " + $pair[0] + " sender: the 201st mark's answer carries the ALARM line of the oldest mark's eviction")
+}
+$h = New-Home
+foreach ($n in 1..200) { $null = Add-HordeDecisionNoticeTaken -Kind $rk -HordeHome $h -NoticeId ("0e000000-0000-4000-8000-" + $n.ToString("000000000000")) -Answer 0 -SessionId (Sid 2) -Now (At 0) }
+$evictPass = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 10)) -Settings $settings -Post { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -Messenger $inProcess -HordeHome $h -Now (At ($end + 10)) } -Posted @{}
+Check (@($evictPass.entries | Where-Object { $_.kind -ceq "mail-taken" -and $_.outcome -ceq "evicted" -and $_.reason.StartsWith("ALARM:") }).Count -ge 1) "the restore pass journals the eviction ALARM"
+$h = New-Home
+foreach ($n in 1..200) { $null = Add-HordeDecisionNoticeTaken -Kind $tk -HordeHome $h -NoticeId ("0e000000-0000-4000-8000-" + $n.ToString("000000000000")) -Answer 0 -SessionId (Sid 1) -Now (At 0) }
+$evictTell = Invoke-HordeWakeTellPass -Conditions @($cond) -Warchief (Sid 1) -Now (At 0) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $inProcess -HordeHome $h -Now (At 0) }
+Check (@($evictTell.entries | Where-Object { $_.kind -ceq "mail-taken" -and $_.outcome -ceq "evicted" -and $_.reason.StartsWith("ALARM:") }).Count -eq 1) "and so does the tell pass"
+
+Write-Host ""
+Write-Host "--- round 3: a lapsed restore does not spend the one repost ---" -ForegroundColor Cyan
+Reset-HordeMemoryMessenger
+$h = New-Home
+$script:postsById = @{}
+$unk4 = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:postsById["$($m.messageId)"] = 1 + [int]$script:postsById["$($m.messageId)"]; return (New-HordeUnknown -Reason "the stand-in could not tell") } -Status { param($id) New-HordeAbsent -Note "none" }
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $read = { New-HordeKnown -Value @($fleet) }
+    $gone = { New-HordeKnown -Value @($fleet[0]) }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerClock (At ($end + 10)); $l1 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 10)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk4 -HordeHome $h)
+    $lid = @($l1 | Where-Object { $_.kind -ceq "post" } | ForEach-Object { $_.messageId })
+    Set-HordeMemoryWakerClock (At ($end + 330)); $l2 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 330)) -Waker $memory -ReadSessions $gone -RestoreSettings $settings -Messenger $unk4 -HordeHome $h)
+    Set-HordeMemoryWakerClock (At ($end + 335)); $l3 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 335)) -Waker $memory -ReadSessions $gone -RestoreSettings $settings -Messenger $unk4 -HordeHome $h)
+    Set-HordeMemoryWakerClock (At ($end + 365)); $l4 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 365)) -Waker $memory -ReadSessions $gone -RestoreSettings $settings -Messenger $unk4 -HordeHome $h)
+    Check ($lid.Count -eq 3 -and $run.retried.Count -eq 0 -and @($lid | Where-Object { $script:postsById[$_] -ne 1 }).Count -eq 0) "while the restore finding has lapsed nothing is posted, and no mail is marked as having had its one repost"
+    Set-HordeMemoryWakerClock (At ($end + 400)); $l5 = @(Invoke-HordeWakeTick -Run $run -Now (At ($end + 400)) -Waker $memory -ReadSessions $read -RestoreSettings $settings -Messenger $unk4 -HordeHome $h)
+    Check (@($lid | Where-Object { $script:postsById[$_] -ne 2 }).Count -eq 0 -and $run.retried.Count -eq 3) "and when the finding is back each alarmed mail is posted once more, and only then marked"
+} finally { $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
+
+Write-Host ""
+Write-Host "--- round 3: a repost the messenger already held is not called an acceptance ---" -ForegroundColor Cyan
+$h = New-Home
+$spy5 = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "accepted"; at = [datetime]::UtcNow; reason = "already-posted: already posted; nothing written and nobody woken again" }) } -Status { param($id) New-HordeAbsent -Note "none" }
+foreach ($id5 in $wouldIds) { $null = Add-HordeDecisionNoticeTaken -Kind $rk -HordeHome $h -NoticeId $id5 -Answer 0 -SessionId (Sid 2) -Now (At 0) }
+$rp = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 10)) -Settings $settings -Post { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -Messenger $spy5 -HordeHome $h -Now (At ($end + 10)) } -Posted @{} -Awaiting $wouldIds -Retry $wouldIds
+Check (@($rp.entries | Where-Object { $_.outcome -ceq "awaiting" -and $_.reason.Contains("already posted earlier") -and -not $_.reason.Contains("the messenger accepted it") }).Count -eq 3) "the restore pass's journal line for a listed mail the messenger already held says it was already posted earlier"
+$null = Add-HordeDecisionNoticeTaken -Kind $tk -HordeHome $h -NoticeId (Get-HordeWakeTellMessageId -Condition $cond) -Answer 0 -SessionId (Sid 1) -Now (At 0)
+$tl = Invoke-HordeWakeTellPass -Conditions @($cond) -Warchief (Sid 1) -Now (At 0) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $spy5 -HordeHome $h -Now (At 0) }
+Check (@($tl.entries | Where-Object { $_.outcome -ceq "awaiting" -and $_.reason.Contains("already posted earlier") }).Count -eq 1) "and so does the tell pass's"
+[void]$script:HordeMessengers.Remove("fixture-good")
+
+Write-Host ""
+Write-Host "--- round 3: the limit of their own ---" -ForegroundColor Cyan
+$small = Get-HordeWakeTellSettings -Overrides @{ maxUntakenTellsPerHour = 2 }
+$bp3 = Invoke-HordeWakeTellPass -Conditions (@($many[0..2]) + @($gaveUp)) -Warchief (Sid 1) -Now (At 0) -Settings $small -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $small -Messenger $inProcess -HordeHome $h -Now (At 0) }
+Check (@($bp3.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "awaiting" -and $_.reason.StartsWith("resume-untaken") }).Count -eq 2 -and @($bp3.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 1 -and @($bp3.entries | Where-Object { $_.kind -ceq "tell" -and $_.reason.StartsWith("gave-up") }).Count -eq 1) "and they have a limit of their own: over it a resume-untaken tell is suppressed, and the gave-up tell still goes out"
 
 Write-Host ""
 Write-Host "--- shadow writes no mark and posts nothing ---" -ForegroundColor Cyan

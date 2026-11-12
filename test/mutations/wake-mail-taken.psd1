@@ -61,5 +61,13 @@
         @{ Name = "wake-mail-alarmed-marks-never-listed"
            Find = 'if ($null -ne $e -and $e.alarmed) {'
            Replace = 'if ($false) {' }
+        # The answer does not carry the list's lines (the eviction ALARM is lost).
+        @{ Name = "wake-mail-lines-not-carried"
+           Find = '-AlreadyHeld ($heldReason -clike "already-posted*")) -Lines $awaited.lines)'
+           Replace = '-AlreadyHeld ($heldReason -clike "already-posted*")) -Lines @())' }
+        # An already-posted repost of a listed mark is not flagged.
+        @{ Name = "wake-mail-already-held-not-flagged"
+           Find = '-AlreadyHeld ($heldReason -clike "already-posted*")'
+           Replace = '-AlreadyHeld $false' }
     )
 }

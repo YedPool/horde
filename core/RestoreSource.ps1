@@ -368,6 +368,8 @@ function Invoke-HordeRestoreSourcePass {
         if ($null -eq $Post) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "unposted" -Reason "the pass was given nothing to post through" -MessageId $mail.messageId)); continue }
         $took = $null
         try { $took = & $Post $mail } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
+        # THE LIST'S OWN ALARM (an oldest mark evicted unwatched because the list is full) is journaled, not dropped (core/WakeMail.ps1).
+        foreach ($ln in @(Get-HordeWakeMailLines $took)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id "restore" -Outcome "evicted" -Reason "$ln" -MessageId $mail.messageId)) }
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
             # KNOWN IS THE POSTER'S WORD THAT THE SESSION TOOK THE MAIL (its TAKEN). Send-HordeRestoreMail never says it.
             $nextPosted[$mail.messageId] = $Now
@@ -380,7 +382,7 @@ function Invoke-HordeRestoreSourcePass {
             # POSTED, NOT DELIVERED. The restore is NOT counted done here: the mail is not in the posted table, so the pass would plan it
             # again, but the awaiting list holds it (-Awaiting), so it is not posted again either. It is counted done on its TAKEN, by the
             # tick (core/WakeRun.ps1), which journals that.
-            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "awaiting" -Reason ("restore " + $finding.value.restoreId + ": the messenger accepted it (" + $took.awaiting.stage + "); it is not counted as delivered until the session's own TAKEN") -MessageId $mail.messageId))
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "awaiting" -Reason ("restore " + $finding.value.restoreId + $(if ($took.awaiting.alreadyHeld) { ": the messenger said it was already posted earlier (" } else { ": the messenger accepted it (" }) + $took.awaiting.stage + "); it is not counted as delivered until the session's own TAKEN") -MessageId $mail.messageId))
         } else {
             $why = "the post answered with something that is not an answer"
             if (Test-HordeAnswer $took) { $why = "$($took.reason)" }

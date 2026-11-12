@@ -62,10 +62,27 @@ function New-HordeWakeMailKind {
 function New-HordeWakeMailAwaiting {
     # THE ANSWER FOR A POST THE MESSENGER ACCEPTED. It is UNKNOWN on purpose: whether the session has the mail is not known until its own
     # TAKEN, so no caller can read the answer as delivered by looking at the state. The facts of the post ride along as .awaiting.
-    param([string]$MessageId, [string]$Stage, [string]$Messenger)
+    param([string]$MessageId, [string]$Stage, [string]$Messenger, [bool]$AlreadyHeld = $false)
     $a = New-HordeUnknown -Reason ("the messenger " + $Messenger + " answered " + $Stage + ": the mail is posted and awaiting the session's own TAKEN, and is not delivered until then")
-    Add-Member -InputObject $a -NotePropertyName awaiting -NotePropertyValue ([pscustomobject]@{ messageId = $MessageId; stage = $Stage; messenger = $Messenger })
+    Add-Member -InputObject $a -NotePropertyName awaiting -NotePropertyValue ([pscustomobject]@{ messageId = $MessageId; stage = $Stage; messenger = $Messenger; alreadyHeld = $AlreadyHeld })
     return $a
+}
+
+function Set-HordeWakeMailLines {
+    # The lines the awaiting list said when the mark was added (the ALARM of an oldest mark evicted unwatched when the list is full,
+    # decisions/NoticeTaken.ps1) ride on the answer as .lines, so the pass that called the poster can journal them: every other caller
+    # of the list surfaces them (cli/RelayRunTell.ps1, cli/ServicesTell.ps1, cli/AnalystTend.ps1), and a capital-letters line nobody reads
+    # is a mark dropped in silence.
+    param($Answer, $Lines)
+    Add-Member -InputObject $Answer -NotePropertyName lines -NotePropertyValue ([string[]]@($Lines)) -Force
+    return $Answer
+}
+
+function Get-HordeWakeMailLines {
+    # The lines Set-HordeWakeMailLines put on an answer; none for an answer without them (a hand-made poster's).
+    param($Answer)
+    if ($null -eq $Answer -or $null -eq $Answer.PSObject.Properties["lines"]) { return @() }
+    return @($Answer.lines)
 }
 
 function Test-HordeWakeMailAwaiting {
@@ -106,7 +123,7 @@ function Send-HordeWakeMail {
     if (-not $awaited.ok) { return (New-HordeUnknown -Reason ("the mail cannot be awaited (" + $awaited.reason + "); nothing is posted until it can be")) }
     $posted = Send-HordeMessengerMessage -Messenger $through -Message $message
     # UNKNOWN KEEPS THE MARK: the post may have landed.
-    if ($posted.state -cne "known") { return $posted }
+    if ($posted.state -cne "known") { return (Set-HordeWakeMailLines -Answer $posted -Lines $awaited.lines) }
     if ($script:HordeWakeMailStages -cnotcontains "$($posted.value.stage)") {
         $why = ""
         $p = $posted.value.PSObject.Properties["reason"]
@@ -114,7 +131,7 @@ function Send-HordeWakeMail {
         # A KNOWN REFUSAL: the mail is in no mailbox, so its mark comes off.
         $removed = Remove-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId
         if (-not $removed.ok) { $why = $why + "; its awaiting mark could not be removed (" + $removed.reason + ")" }
-        return (New-HordeUnknown -Reason ("the messenger answered " + $posted.value.stage + $why))
+        return (Set-HordeWakeMailLines -Answer (New-HordeUnknown -Reason ("the messenger answered " + $posted.value.stage + $why)) -Lines $awaited.lines)
     }
     # ALREADY POSTED, AND THIS CALL WROTE A BRAND-NEW MARK: the messenger answered with the first copy's stage and woke nobody, so that stage
     # says nothing of THIS post (slices 5 to 7 do the same: cli/RelayRunTell.ps1, cli/AnalystTend.ps1). The mark comes off, or the next look
@@ -126,9 +143,9 @@ function Send-HordeWakeMail {
         $null = Remove-HordeDecisionNoticeTaken -Kind $Kind -HordeHome $HordeHome -NoticeId $message.messageId
         $a = New-HordeUnknown -Reason ("the messenger " + $through.name + " already held a copy of this mail from an earlier post and woke nobody, so it is not counted as delivered")
         Add-Member -InputObject $a -NotePropertyName alreadyPosted -NotePropertyValue ([pscustomobject]@{ messageId = "$($Mail.messageId)"; stage = "$($posted.value.stage)"; messenger = "$($through.name)" })
-        return $a
+        return (Set-HordeWakeMailLines -Answer $a -Lines $awaited.lines)
     }
-    return (New-HordeWakeMailAwaiting -MessageId "$($Mail.messageId)" -Stage "$($posted.value.stage)" -Messenger "$($through.name)")
+    return (Set-HordeWakeMailLines -Answer (New-HordeWakeMailAwaiting -MessageId "$($Mail.messageId)" -Stage "$($posted.value.stage)" -Messenger "$($through.name)" -AlreadyHeld ($heldReason -clike "already-posted*")) -Lines $awaited.lines)
 }
 
 function Test-HordeWakeMailAlready {

@@ -31,5 +31,21 @@
         @{ Name = "tell-already-posted-treated-as-failed"
            Find = '} elseif (Test-HordeWakeMailAlready $took) {'
            Replace = '} elseif ($false) {' }
+        # A resume-untaken tell spends the session budget.
+        @{ Name = "tell-resume-untaken-shares-the-session-budget"
+           Find = 'if ($c.kind -ceq "resume-untaken") { $class = "untaken"; $cap = [int]$Settings.maxUntakenTellsPerHour }'
+           Replace = '' }
+        # The resume-untaken cap is the session cap.
+        @{ Name = "tell-untaken-cap-is-the-session-cap"
+           Find = '$cap = [int]$Settings.maxUntakenTellsPerHour'
+           Replace = '$cap = [int]$Settings.maxTellsPerHour' }
+        # The eviction ALARM of a full list is not journaled.
+        @{ Name = "tell-eviction-alarm-dropped"
+           Find = 'foreach ($ln in @(Get-HordeWakeMailLines $took)) {'
+           Replace = 'foreach ($ln in @()) {' }
+        # A repost the messenger already held is called an acceptance.
+        @{ Name = "tell-already-held-called-accepted"
+           Find = 'if ($took.awaiting.alreadyHeld) {'
+           Replace = 'if ($false) {' }
     )
 }
