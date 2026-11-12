@@ -11,7 +11,7 @@
     Suite  = "transports\local\test\test-local.ps1"
     Mutations = @(
         @{ Name = "owner-not-checked-on-open"
-           Find = 'if (-not (Test-HordeLocalPipeOwner -Owner $owner -Expected $me)) {'
+           Find = 'if ($ownerRefusal -ne "") {'
            Replace = 'if ($false) {' }
     )
 }
