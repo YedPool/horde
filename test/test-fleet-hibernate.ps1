@@ -203,7 +203,7 @@ Section "who is never put to sleep, each with its word"
 $script:w.questions = @([pscustomobject]@{ number = 7; askedBy = "Orc Q"; waiting = @() }, [pscustomobject]@{ number = 8; askedBy = "M (Thrall)"; waiting = @("Orc LL (a lane with a longer letter)") })
 Set-Typed "T" @(, @(29, "please hold on, I am reading this"))
 Set-Typed "U" @(, @(31, "an older word from the founder"))
-Set-Typed "P" @(@(1, "wezfleet: a message is waiting for you (id 0123456789) - run 'wezfleet mail read' to take it"), @(2, ([string][char]0xFEFF + "Handoff at the lane's folder")), @(3, "MESSAGE FROM M (wezfleet mail 0123)"))
+Set-Typed "P" @(@(1, "wezfleet: a message is waiting for you (id 0123456789); this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"C:/Users/Fake/bin/wezfleet/wezfleet.ps1`" mail read"), @(2, ([string][char]0xFEFF + "Handoff at the lane's folder")), @(3, "MESSAGE FROM M (wezfleet mail 0123)"))
 Set-Typed "R" "unreadable"
 $r = Hib -Names @("everyone") -DryRun -Selector $all
 Check ((Outcome $r "M") -ceq "excluded" -and (Reason $r "M") -like "master:*") ("the master is left running, said as master (" + (Reason $r "M") + ")")

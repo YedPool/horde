@@ -5,7 +5,9 @@
 # reader would hand them to the phone as text typed at the machine (the founder saw the first as "At the
 # machine 15:44", id and all):
 #   pointer     wezfleet: a message is waiting for you (id <id>) - run 'wezfleet mail read' to take it; this line
-#               is a pointer, not the message, and re-reading it changes nothing
+#               is a pointer, not the message, and re-reading it changes nothing   (old wording), or
+#               ... (id <id>); this line is a pointer, not the message, and re-reading it changes nothing - to take it
+#               run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<path>/wezfleet.ps1" mail read   (new)
 #               (lib/Mail.ps1 Get-WfWakeNotice; "N messages are" for more than one)
 #   unconfirmed wezfleet tell to <session> NOT CONFIRMED: <what>
 #               (commands/tell.ps1 Send-WfTellUnconfirmedNotice: one line, 300 characters at most)
@@ -22,8 +24,13 @@
 # session, the reason) are one bounded line each.
 
 $script:HordeChatPointerId = '(?:[0-9a-f]{32}|[0-9a-f]{10})'
+# TWO WORDINGS, both matched (T-0426). The old tail stays in transcripts, and the installed wezfleet keeps typing it until
+# its PR 128 merges. The new tail swaps "run 'wezfleet mail read'" for a command Git Bash and PowerShell can both run, so it
+# carries a path: a bounded free part (no line break, no double quote, 240 characters at most, ending /wezfleet.ps1).
+$script:HordeChatPointerOldTail = ' - run ''wezfleet mail read'' to take it; this line is a pointer, not the message, and re-reading it changes nothing'
+$script:HordeChatPointerNewTail = '; this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell\.exe -NoProfile -ExecutionPolicy Bypass -File "[^\r\n"]{0,240}/wezfleet\.ps1" mail read'
 $script:HordeChatPointerPatterns = [ordered]@{
-    pointer = '\Awezfleet: (?:a message is|[0-9]{1,6} messages are) waiting for you \(id ' + $script:HordeChatPointerId + '\) - run ''wezfleet mail read'' to take it; this line is a pointer, not the message, and re-reading it changes nothing\z'
+    pointer = '\Awezfleet: (?:a message is|[0-9]{1,6} messages are) waiting for you \(id ' + $script:HordeChatPointerId + '\)(?:' + $script:HordeChatPointerOldTail + '|' + $script:HordeChatPointerNewTail + ')\z'
     unconfirmed = '\Awezfleet tell to [^\s]{1,128} NOT CONFIRMED: [^\r\n]{0,300}\z'
 }
 $script:HordeChatPointerRelayHeader = '\AMESSAGE FROM wezfleet tell \(wezfleet mail ' + $script:HordeChatPointerId + '\), delivered to you directly rather than typed into your input box\.'

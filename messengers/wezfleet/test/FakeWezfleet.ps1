@@ -162,7 +162,7 @@ if ($act -ceq "post") {
     if (Test-Mode $m "stalePane") { Write-FakeAnswer -Exit 4 -Id $id -To $to -Stage $stage -Woken $false -Reason "stale-session" -Detail ("not woken, nothing typed: pane 7 now belongs to session 99999999-0000-4000-8000-000000000000, seen there more recently than " + $to + ". The mail is queued under the id it was posted to") }
     $woken = $false; $reason = "no-registry-record"; $detail = "no registry record for this session on this machine, so no pane can be verified; the mail waits for its next turn boundary"
     if (-not (Test-Mode $m "noWake")) {
-        $notice = "wezfleet: a message is waiting for you (first id " + $id + ") - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing"
+        $notice = "wezfleet: a message is waiting for you (id " + $id + ")" + "; this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"C:/Users/Fake/bin/wezfleet/wezfleet.ps1`" mail read"
         [System.IO.File]::AppendAllText((Join-Path $root "typed.log"), ((@{ id = $id; text = $notice } | ConvertTo-Json -Compress) + "`n"), [System.Text.Encoding]::UTF8)
         $woken = $true; $reason = "woken"; $detail = ""
     }
