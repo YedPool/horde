@@ -57,7 +57,7 @@ if ((Find-HordeCloudflareRelayNode) -eq "") {
 $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
 $work = Join-Path $env:TEMP ("horde-cf-setup-test-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
 $prof = Join-Path $work "profile"
-[void][System.IO.Directory]::CreateDirectory($prof)
+[void](New-HordeTestProfile $prof)
 $log = Join-Path $work "wrangler.log"
 $fake = Join-Path $here "fake-wrangler.cjs"
 $clientId = "123456789012-fakeclientforhordesetup000000000.apps.googleusercontent.com"

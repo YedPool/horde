@@ -18,7 +18,8 @@ $homeA = Join-Path $work "homeA"
 $homeB = Join-Path $work "homeB"
 $savedHome = $env:HORDE_HOME
 $savedProfile = $env:USERPROFILE
-New-Item -ItemType Directory -Path $homeA, $homeB, (Join-Path $work "profile") -Force | Out-Null
+New-Item -ItemType Directory -Path $homeA, $homeB -Force | Out-Null
+[void](New-HordeTestProfile (Join-Path $work "profile"))
 
 function New-FakeTask {
     param([string]$Name, [string]$Description, [string]$Arguments)

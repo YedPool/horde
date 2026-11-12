@@ -38,7 +38,7 @@ $work = Join-Path $env:TEMP ("horde-decisions-publish-" + [guid]::NewGuid().ToSt
 New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $fakeProfile = Join-Path $work "profile"
-New-Item -ItemType Directory -Path $fakeProfile | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $keptProfile = $env:USERPROFILE
 $keptHome = $env:HORDE_HOME
 $sessionF = "11111111-1111-4111-8111-111111111111"
