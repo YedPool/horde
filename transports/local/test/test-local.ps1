@@ -29,6 +29,16 @@ $script:ownerCaseSkipped = $false
 $me = Get-HordeLocalUserSid
 function New-Id { return [guid]::NewGuid().ToString() }
 function Test-PipeListed { param([string]$Pipe) return (@([System.IO.Directory]::EnumerateFiles($script:HordeLocalPipeRoot, $Pipe)).Count -gt 0) }
+function New-TestPipeServer {
+    # A server pipe made with -Security, in either shell (T-0450). .NET Core has no NamedPipeServerStream
+    # constructor that takes a PipeSecurity - measured 2026-11-11 on 7.6.7: "Cannot find an overload for
+    # NamedPipeServerStream and the argument count: 8" - and NamedPipeServerStreamAcl.Create is its form there.
+    # Chosen by whether that type exists, not by the shell's version.
+    param([string]$Name, [int]$Buffer, [System.IO.Pipes.PipeSecurity]$Security)
+    $acl = "System.IO.Pipes.NamedPipeServerStreamAcl" -as [type]
+    if ($null -ne $acl) { return $acl::Create($Name, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, $Buffer, $Buffer, $Security) }
+    return (New-Object System.IO.Pipes.NamedPipeServerStream($Name, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, $Buffer, $Buffer, $Security))
+}
 
 Write-Host ""
 Write-Host "--- the pipe name comes only from a device id ---" -ForegroundColor Cyan
@@ -136,7 +146,7 @@ $deny = New-Object System.IO.Pipes.PipeSecurity
 $deny.SetAccessRuleProtection($true, $false)
 $deny.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::CreateNewInstance, [System.Security.AccessControl.AccessControlType]::Allow)))
 $deny.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::ReadWrite, [System.Security.AccessControl.AccessControlType]::Deny)))
-$other = New-Object System.IO.Pipes.NamedPipeServerStream($pipe, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096, $deny)
+$other = New-TestPipeServer -Name $pipe -Buffer 4096 -Security $deny
 try {
     $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "node" -TimeoutMs 2000
     Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*refused*ACL*") "dialling a pipe whose ACL denies this user is refused, and says the ACL refused it"
@@ -162,11 +172,15 @@ Write-Host "  NOT SHOWN end to end: a pipe really owned by another user needs a 
 
 # THE OWNER IS READ IN BOTH SHELLS, AND A READ THAT FAILS REFUSES WITHOUT BLAMING A SQUATTER (T-0450).
 # Under pwsh 7 the pipe had no GetAccessControl method, the read threw, and every dial to this user's own
-# node was refused as "owned by ''". A pipe of this suite's own, dialled directly, is read here; a
-# disposed one cannot be read in either shell (measured 2026-11-11: ObjectDisposedException, "Cannot
-# access a closed pipe", on 5.1.26100 and 7.6.7).
+# node was refused as "owned by ''". A pipe made as the transport makes its own, dialled directly, is
+# read here: New-HordeLocalServer names this user as owner, where a pipe made without one comes out owned
+# by Administrators on an elevated token (measured 2026-11-11 in the slot's run: S-1-5-32-544). A disposed
+# pipe cannot be read in either shell (ObjectDisposedException, "Cannot access a closed pipe", on
+# 5.1.26100 and 7.6.7).
 $ownName = "horde-test-owner-" + [guid]::NewGuid().ToString()
-$ownServer = New-Object System.IO.Pipes.NamedPipeServerStream($ownName, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous)
+$ownMade = New-HordeLocalServer -Pipe $ownName -First
+if ($null -eq $ownMade.stream) { throw ("the owner case's pipe could not be made: " + $ownMade.reason) }
+$ownServer = $ownMade.stream
 $ownClient = New-Object System.IO.Pipes.NamedPipeClientStream(".", $ownName, [System.IO.Pipes.PipeDirection]::InOut)
 try {
     $ownClient.Connect(5000)
@@ -356,7 +370,7 @@ try {
         $sec = New-Object System.IO.Pipes.PipeSecurity
         $sec.SetOwner($ba)
         $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
-        $baPipe = New-Object System.IO.Pipes.NamedPipeServerStream((Get-HordeLocalPipeName -DeviceId $id), [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
+        $baPipe = New-TestPipeServer -Name (Get-HordeLocalPipeName -DeviceId $id) -Buffer 0 -Security $sec
     } catch {
         $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
         $baWhy = $e.Message; $baCode = $e.HResult
@@ -408,6 +422,16 @@ Check ((Test-HordeLocalNodeImage -Image $psImage) -eq $true) "the node's own int
 Check ((Test-HordeLocalNodeImage -Image $psImage.ToUpperInvariant()) -eq $true) "compared without case, as Windows paths are"
 Check ((Test-HordeLocalNodeImage -Image "C:\Users\Public\powershell.exe") -eq $false) "a copy of it elsewhere is not"
 Check ((Test-HordeLocalNodeImage -Image "") -eq $false) "an unreadable image is not"
+# PowerShell 7 from its MSI install is a node's interpreter too (T-0450), and only that one path: the list
+# must not grow by a look-alike (N, 2026-11-11).
+$pf = $(if ("$env:ProgramW6432" -ne "") { $env:ProgramW6432 } else { $env:ProgramFiles })
+$pwshImage = Join-Path $pf "PowerShell\7\pwsh.exe"
+Check ((Test-HordeLocalNodeImage -Image $pwshImage) -eq $true) ("PowerShell 7's MSI install is an accepted image (" + $pwshImage + ")")
+Check ((Test-HordeLocalNodeImage -Image (Join-Path $pf "PowerShell\7-preview\pwsh.exe")) -eq $false) "a preview build of it is not"
+Check ((Test-HordeLocalNodeImage -Image (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe")) -eq $false) "the Store's pwsh is not"
+Check ((Test-HordeLocalNodeImage -Image "C:\Users\Public\PowerShell\7\pwsh.exe") -eq $false) "the same file under a user folder is not"
+Check ((Test-HordeLocalNodeImage -Image (Join-Path ${env:ProgramFiles(x86)} "PowerShell\7\pwsh.exe")) -eq $false) "nor under the x86 Program Files"
+Check (@($script:HordeLocalNodeImages).Count -eq 3) ("the list holds exactly three images: " + (@($script:HordeLocalNodeImages) -join "; "))
 
 Write-Host ""
 Write-Host "--- no gap between links: the name stays held while the node listens ---" -ForegroundColor Cyan

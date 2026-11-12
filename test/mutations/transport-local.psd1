@@ -108,6 +108,12 @@
         @{ Name = "unreadable-owner-called-a-squatter"
            Find = 'return ("refused: the owner of " + $Name + " could not be read (" + $e.Message + "); a pipe whose owner cannot be read is not dialled")'
            Replace = 'return ("refused: " + $Name + " is owned by '''', not by this user; it may be a squatter")' }
+        @{ Name = "pwsh-image-dropped"
+           Find = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe")'
+           Replace = '(Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe")' }
+        @{ Name = "pwsh-preview-admitted"
+           Find = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe")'
+           Replace = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe"), (Join-Path $script:HordeLocalProgramFiles "PowerShell\7-preview\pwsh.exe")' }
         # Not here: a mutant that drops the PipesAclExtensions branch. It changes only pwsh 7, and
         # Mutate runs its suite under 5.1 alone (T-0422), so it would survive for that reason; the
         # check "a dialled pipe's owner is read in this shell" catches it when test-local runs under 7.

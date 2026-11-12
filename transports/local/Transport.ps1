@@ -83,11 +83,16 @@ $script:HordeLocalHubEndpointPrefix = "hub:"
 # \A and \z, not ^ and $: in .NET, $ also matches before a final LF (review of PR #39).
 $script:HordeLocalIdPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeLocalBufferBytes = 65536
-# The interpreters a node runs in. Windows PowerShell 5.1 only, today; a node under PowerShell 7 adds
-# its path here (remote design 12.2).
+# The interpreters a node runs in: Windows PowerShell 5.1, and PowerShell 7 from its MSI install (remote
+# design 12.2; T-0450). Each path is writable only with admin rights, so the bar is the same for both.
+# Exactly one pwsh path: no Store package (CONTRIBUTING 16), no preview build, nothing found on PATH.
+# ProgramW6432 names the 64-bit Program Files even in a 32-bit process, where ProgramFiles names the x86
+# one; where it is not set, ProgramFiles is it.
+$script:HordeLocalProgramFiles = $(if ("$env:ProgramW6432" -ne "") { $env:ProgramW6432 } else { $env:ProgramFiles })
 $script:HordeLocalNodeImages = @(
     (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"),
-    (Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
+    (Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"),
+    (Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe")
 )
 
 function Get-HordeLocalPipeName {
