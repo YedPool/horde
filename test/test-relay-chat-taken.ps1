@@ -758,16 +758,24 @@ try {
     Write-Host ""
     Write-Host "--- TAKEN 22. -Reread has ONE production caller (S-a) ---" -ForegroundColor Cyan
     $users = New-Object System.Collections.ArrayList
+    $answerFns = New-Object System.Collections.ArrayList
     foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -Filter "*.ps1" -File)) {
         $rel = $f.FullName.Substring($root.Length).TrimStart("\", "/")
         if ($rel -match '\A(test|\.git|node_modules)[\\/]' -or $rel -match '[\\/]test[\\/]') { continue }
         $n = 0
-        foreach ($ln in @([System.IO.File]::ReadAllLines($f.FullName))) { if ($ln -notmatch '\A\s*#' -and $ln -match '(?<![\w$])-Reread\b') { $n++ } }
+        $fn = ""
+        foreach ($ln in @([System.IO.File]::ReadAllLines($f.FullName))) {
+            if ($ln -match '\Afunction\s+([\w-]+)') { $fn = $Matches[1] }
+            if ($ln -notmatch '\A\s*#' -and $ln -match '(?<![\w$])-Reread\b') { $n++; if ($rel -ceq "channels\chat\Answer.ps1") { [void]$answerFns.Add($fn) } }
+        }
         if ($n -gt 0) { [void]$users.Add(($rel -replace '/', '\') + "=" + $n) }
     }
     $usersText = (@($users.ToArray()) | Sort-Object) -join ","
     Check ($usersText.Contains("channels\chat\Taken.ps1=1")) ("CONTROL: the scan finds the known caller (" + $usersText + ")")
-    Check ($usersText -ceq "channels\chat\Taken.ps1=1,channels\Port.ps1=1") ("only Taken.ps1 calls Open-HordeRelayChannelRecord -Reread, and Port.ps1 forwards it once to the envelope (" + $usersText + ")")
+    # Answer.ps1 rereads the words of an answer it already sent (T-0352), to tell the phone held/not-delivered; it counts nothing as
+    # delivered and hands nothing to an Accept. It may do so ONLY inside Get-HordeChatAnswerWords, never in the Accept or the tick.
+    Check ($usersText -ceq "channels\chat\Answer.ps1=1,channels\chat\Taken.ps1=1,channels\Port.ps1=1") ("only Taken.ps1 and Answer.ps1 call Open-HordeRelayChannelRecord -Reread, and Port.ps1 forwards it once to the envelope (" + $usersText + ")")
+    Check ((@($answerFns.ToArray()) -join ",") -ceq "Get-HordeChatAnswerWords") ("and Answer.ps1 does so only in Get-HordeChatAnswerWords, the words-for-a-receipt reader (" + (@($answerFns.ToArray()) -join ",") + ")")
 
     Write-Host ""
     Write-Host "--- TAKEN 23. -Reread still refuses what is wrong with the record; the normal path still judges the sender and the session (S-b) ---" -ForegroundColor Cyan
