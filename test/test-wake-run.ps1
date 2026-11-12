@@ -433,7 +433,7 @@ try {
     $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
     $tellKinds = New-Object System.Collections.ArrayList
     foreach ($sec in @(0, 3, 6, 100, 310, 313, 400, 700)) { if ($sec -eq 100) { Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "Scribe" -UnreadCount 6 -OldestUnreadAt (At -60) -Duplicate "yes" }; Set-HordeMemoryWakerClock (At $sec); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky -HordeHome $h)) { if ($e.kind -ceq "tell") { [void]$tellKinds.Add($e.outcome) } } }
-    Check ((@($tellKinds) -join ",") -ceq "unknown,posted" -and $script:dupPosts -eq 2) ("a first post that fails is tried again by a later pass and told, once, and not again after (" + (@($tellKinds) -join ",") + ", " + $script:dupPosts + " posts)")
+    Check ((@($tellKinds) -join ",") -ceq "unknown,awaiting" -and $script:dupPosts -eq 2) ("a first post that fails is tried again by a later pass and told, once, and not again after (" + (@($tellKinds) -join ",") + ", " + $script:dupPosts + " posts)")
     Check ($script:dupBodies.Count -eq 1 -and "$($script:dupBodies[0])".Contains("has 6 unread") -and "$($script:dupBodies[0])".Contains("Scribe") -and "$($script:dupBodies[0])".Contains((Sid 2)) -and "$($script:dupBodies[0])".Contains("Close all but one of the copies")) "and the retried mail carries the CURRENT count, names the session by its label and id, and says what to do"
 } finally { $script:HordeWakeSendersPost = $postWas }
 # THE WATCHER'S OWN SESSION AND A SENDER'S LABEL, through the tick, live: said once, never nudged.
@@ -678,7 +678,7 @@ try {
     $on = New-Object System.Collections.ArrayList
     foreach ($s in @(0, 3, 6)) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$on.Add($e) } }
     $tells = @($on | Where-Object { $_.kind -ceq "tell" })
-    Check ($tells.Count -eq 1 -and $tells[0].outcome -ceq "posted" -and @($on | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 0) "with the switch on, a live run tells the warchief for real, once"
+    Check ($tells.Count -eq 1 -and $tells[0].outcome -ceq "awaiting" -and @($on | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 0) "with the switch on, a live run posts the warchief the tell for real, once (awaiting its TAKEN, not yet told)"
     $got = & $watch.Observe $box $tells[0].messageId
     Check ($got.records -eq 1 -and "$(@($got.bodies)[0])".StartsWith("AUTOMATED, from the wake watcher: the mailbox of the session " + (Sid 2))) "the mail is in the messenger's store, one record, and says it is automated"
     Check ((Test-Path -LiteralPath (Join-Path $h "wake\tells-live.json")) -and -not (Test-Path -LiteralPath (Join-Path $h "wake\tells-of-live-run-shadow.json"))) "and what was really told is kept in the live file"
@@ -687,7 +687,7 @@ try {
     $dark = New-Object System.Collections.ArrayList
     foreach ($n in 0..11) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At (100 + $n * 3)) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$dark.Add($e) } }
     $told = @($dark | Where-Object { $_.kind -ceq "tell" })
-    Check ($told.Count -eq 1 -and $told[0].outcome -ceq "posted" -and (& $watch.Observe $box $told[0].messageId).records -eq 1) "a fleet that can no longer be read is told to the warchief the last good pass named: the pass that most needs somebody told is the one that cannot say who"
+    Check ($told.Count -eq 1 -and $told[0].outcome -ceq "awaiting" -and (& $watch.Observe $box $told[0].messageId).records -eq 1) "a fleet that can no longer be read is told to the warchief the last good pass named: the pass that most needs somebody told is the one that cannot say who"
     Set-HordeMemoryWakerFault -Call "targets" -Kind ""
     # THE RESTORE SOURCE TURNS ON WITH IT.
     $h = New-Home
@@ -695,7 +695,7 @@ try {
     $run = New-HordeWakeRun -Live -HordeHome $h
     $script:reads = 0
     $posts = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h | Where-Object { $_.kind -ceq "post" -or $_.kind -ceq "would-post" })
-    Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "posted" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted, and marked in the live file"
+    Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "awaiting" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted (awaiting their TAKEN), and the live file is kept"
     # A SHADOW RUN IS SHADOW WHATEVER THE SWITCH SAYS.
     $h = New-Home
     Reset-HordeMemoryWaker

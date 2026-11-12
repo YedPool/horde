@@ -9,6 +9,7 @@
 #   nudge-killed        a nudge the waker had to stop part-way, which may have left text in a session's box
 #   fleet-silent        every nudge answered woken for five minutes and no session took any mail: a
 #                       fleet that cannot answer (core/Wake.ps1, Update-HordeWakeSilence)
+#   resume-untaken      a resume mail or stall notice the restore source posted that its session did not take in time (T-0391 slice 9)
 #   duplicate-copies    a session with unread mail that has more than one running copy, so it cannot be nudged (T-0116)
 #   silent-probes-ended the last stretched probe of a silent fleet went unanswered too: from there it is
 #                       asked only every six hours, and somebody should look (Update-HordeWakeSilence)
@@ -48,7 +49,10 @@
 
 # WHO A TELL IS FROM: this module, by a name of its own in place of a session id.
 $script:HordeWakeTellFrom = "horde-wake-watcher"
-$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended", "duplicate-copies")
+# ITS AWAITING LIST (T-0391 slice 9): a tell the messenger accepted is POSTED, NOT TOLD, until the warchief's own session took it
+# (wake\tells-taken.json, core/WakeMail.ps1). Until then its state is "awaiting".
+$script:HordeWakeTellTakenKind = New-HordeWakeMailKind -Stem "tells" -Label "wake tells" -Notice "wake tell" -From "the wake watcher"
+$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended", "duplicate-copies", "resume-untaken")
 
 function Get-HordeWakeTellSettings {
     # The tell sender's settings, with -Overrides laid over the defaults. A name that is not a setting
@@ -57,6 +61,8 @@ function Get-HordeWakeTellSettings {
     $s = [ordered]@{
         # At most this many tells in any hour (the header, ONE MAIL A CONDITION).
         maxTellsPerHour = 6
+        # The same for the resume-untaken tells, counted apart (the pass, below): a restore of a whole fleet can leave dozens untaken.
+        maxUntakenTellsPerHour = 30
         # A post that could not say is tried again after this long.
         retrySeconds = 300
         # What was told is forgotten after this long: a week. A condition that is still there then is
@@ -97,6 +103,7 @@ function Get-HordeWakeTellClass {
     if ($null -eq $Mark) { return "session" }
     $p = $Mark.PSObject.Properties["class"]
     if ($null -ne $p -and "$($p.Value)" -ceq "fleet") { return "fleet" }
+    if ($null -ne $p -and "$($p.Value)" -ceq "untaken") { return "untaken" }
     return "session"
 }
 
@@ -132,15 +139,20 @@ function Invoke-HordeWakeTellPass {
         $id = Get-HordeWakeTellMessageId -Condition $c
         $class = "session"
         if ("$($c.subject)" -ceq "") { $class = "fleet" }
+        # A TELL ABOUT AN UNTAKEN RESUME MAIL HAS A BUDGET OF ITS OWN (T-0391 slice 9, round 3): a restore that leaves seven sessions untaken
+        # would otherwise spend the six session tells of the hour, suppress the seventh for keepSeconds, and starve the gave-up, bad-mail and
+        # duplicate-copies tells. One tell a mail id stays (the engine's design); only the cap is apart.
+        $cap = [int]$Settings.maxTellsPerHour
+        if ($c.kind -ceq "resume-untaken") { $class = "untaken"; $cap = [int]$Settings.maxUntakenTellsPerHour }
         if ($next.ContainsKey($id)) {
             # HANDLED ALREADY, unless it is a post that could not say and its retry is due.
             if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }
         }
         $body = "$($Settings.prefix)" + $c.text
-        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count
-        if ($sentLately -ge [int]$Settings.maxTellsPerHour) {
+        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "awaiting" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count
+        if ($sentLately -ge $cap) {
             $next[$id] = [pscustomobject]@{ at = $Now; state = "suppressed"; class = $class }
-            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell-suppressed" -Id $c.subject -Outcome "suppressed" -Reason ($c.kind + ": over " + $Settings.maxTellsPerHour + " tells in an hour, so this one is only here: " + $c.text) -MessageId $id))
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell-suppressed" -Id $c.subject -Outcome "suppressed" -Reason ($c.kind + ": over " + $cap + " tells in an hour, so this one is only here: " + $c.text) -MessageId $id))
             continue
         }
         # SHADOW: the tell is journaled once and marked, and nothing is handed to the poster.
@@ -149,9 +161,20 @@ function Invoke-HordeWakeTellPass {
         if ($null -eq $Post) { $next[$id] = [pscustomobject]@{ at = $Now; state = "unposted"; class = $class }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unposted" -Reason ($c.kind + ": the pass was given nothing to post through: " + $c.text) -MessageId $id)); continue }
         $took = $null
         try { $took = & $Post ([pscustomobject]@{ kind = $c.kind; to = $Warchief; messageId = $id; body = $body }) } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
+        # THE LIST'S OWN ALARM (an oldest mark evicted unwatched because the list is full) is journaled, not dropped (core/WakeMail.ps1).
+        foreach ($ln in @(Get-HordeWakeMailLines $took)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id "tells" -Outcome "evicted" -Reason "$ln" -MessageId $id)) }
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
             $next[$id] = [pscustomobject]@{ at = $Now; state = "told"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "posted" -Reason ($c.kind + ": " + $c.text) -MessageId $id))
+        } elseif (Test-HordeWakeMailAlready $took) {
+            # The messenger already held a copy and woke nobody: handled, never posted again, NOT told.
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "undelivered"; class = $class }
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "already-posted" -Reason ($c.kind + ": the messenger already held a copy of it from an earlier post; the warchief is not counted as told: " + $c.text) -MessageId $id))
+        } elseif (Test-HordeWakeMailAwaiting $took) {
+            # POSTED, NOT TOLD: the warchief's session has not taken it. The state is "awaiting" (handled, never posted again, and it counts
+            # against the hour's budget as a tell sent); the tick makes it "told" on the session's TAKEN (core/WakeRun.ps1).
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "awaiting"; class = $class }
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "awaiting" -Reason ($c.kind + $(if ($took.awaiting.alreadyHeld) { ": the messenger said it was already posted earlier (" } else { ": the messenger accepted it (" }) + $took.awaiting.stage + "); the warchief is not counted as told until its session's own TAKEN: " + $c.text) -MessageId $id))
         } else {
             $why = "the post answered with something that is not an answer"
             if (Test-HordeAnswer $took) { $why = "$($took.reason)" }
@@ -165,8 +188,10 @@ function Invoke-HordeWakeTellPass {
 function Send-HordeWakeTell {
     # Post one tell ({ to; messageId; body }, as Invoke-HordeWakeTellPass's -Post is handed) through the
     # messenger port (core/WakeMail.ps1), as this sender. A tristate answer.
-    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeWakeTellSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome))
-    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeWakeTellFrom -Label "$($Settings.fromLabel)" -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome)
+    # T-0391 slice 9: the answer is NEVER known. A post the messenger accepted is unknown with .awaiting (Test-HordeWakeMailAwaiting): it
+    # is marked on the awaiting list first and the warchief is told only on its session's own TAKEN.
+    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeWakeTellSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome), [datetime]$Now = [datetime]::UtcNow)
+    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeWakeTellFrom -Label "$($Settings.fromLabel)" -Kind $script:HordeWakeTellTakenKind -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome -Now $Now)
 }
 
 # ---- the file: <home>\wake\tells-<mode>.json ----
