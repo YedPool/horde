@@ -1,6 +1,8 @@
 # Mutations of tools\MutateShells.ps1, the Shells rule (T-0422); test\test-mutate.ps1 must fail for
 # every one. Not here: a mutant that admits a shell named twice - test\test-mutation-specs.ps1 is the
 # suite that checks that, by text, and a spec has one suite.
+# Its runs under both shells need the MSI's pwsh.exe; without it test	est-mutate.ps1 passes with 3 (NOT
+# RUN), and these mutants could survive for that reason - so this spec accepts only 0.
 @{
     Target = "tools\MutateShells.ps1"
     Suite  = "test\test-mutate.ps1"

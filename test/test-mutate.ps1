@@ -120,7 +120,12 @@ if ($pwshHere) {
     Check ($sbothCode -eq 0 -and $i7 -ge 0) ("with both shells, the mutant only 7 sees is caught (" + $sbothCode + ": " + (@($sboth | Select-Object -Last 8) -join " | ") + ")")
     Check ($i7 -ge 0 -and $i7 + 2 -lt $sboth.Count -and $sboth[$i7 + 1] -match '^\s+under powershell: survived$' -and $sboth[$i7 + 2] -match '^\s+under pwsh: caught$') "and each shell's outcome is printed under it: survived under 5.1, caught under 7"
     Check (@($sboth | Where-Object { $_ -match '\[FAIL\] Get-EditionTwo returns two under Core' }).Count -eq 1) "and the check that caught it under 7 is named"
-    Check (@($sboth | Where-Object { $_ -match '\[OK\] both-see: caught' }).Count -eq 1 -and @($sboth | Where-Object { $_ -match '^mutations: 2, as expected: 2, not: 0' }).Count -eq 1) "a mutant both shells see is caught too, and the total counts each mutant once"
+    # A CATCH BY A LATER SHELL AFTER AN EARLIER ONE BROKE is still a catch: the first shell's run broke
+    # with no failed check, the second failed one (review of PR 497, finding 1 - without this case, a
+    # rule that read only the first shell's outcome gave the same answers as the real one).
+    $ib = [array]::IndexOf([string[]]$sboth, @($sboth | Where-Object { $_ -match '\[OK\] broken-under-5-1-caught-under-7: caught' } | Select-Object -First 1)[0])
+    Check ($ib -ge 0 -and $ib + 2 -lt $sboth.Count -and $sboth[$ib + 1] -match '^\s+under powershell: the suite broke \(exit [0-9]+\) with no failed check - not a catch$' -and @($sboth[($ib + 2)..([Math]::Min($ib + 4, $sboth.Count - 1))] | Where-Object { $_ -match '^\s+under pwsh: caught$' }).Count -eq 1) ("a mutant that breaks the suite under 5.1 and fails a check under 7 is caught, by 7 (" + (@($sboth | Where-Object { $_ -match 'broken-under|under ' }) -join " | ") + ")")
+    Check (@($sboth | Where-Object { $_ -match '\[OK\] both-see: caught' }).Count -eq 1 -and @($sboth | Where-Object { $_ -match '^mutations: 3, as expected: 3, not: 0' }).Count -eq 1) "a mutant both shells see is caught too, and the total counts each mutant once"
     # A DECLARED SURVIVOR MUST SURVIVE IN EVERY SHELL.
     $ss = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-shells-survivor.psd1" | ForEach-Object { "$_" })
     Check ($LASTEXITCODE -eq 1 -and @($ss | Where-Object { $_ -match '\[BAD\] only-7-sees: caught \(expected survives\)' }).Count -eq 1) "a mutant declared to survive that one shell catches is rejected"
