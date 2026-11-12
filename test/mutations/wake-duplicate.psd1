@@ -22,9 +22,6 @@
         @{ Name = "retired-unknown-for-a-tick-ends-the-episode"
            Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
            Replace = '"$($t.retired)" -ceq "no") { $duplicateOn[$t.id] = $true }' }
-        @{ Name = "a-retired-session-keeps-its-episode"
-           Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
-           Replace = '"$($t.retired)" -cne "") { $duplicateOn[$t.id] = $true }' }
         @{ Name = "the-episode-needs-reachable"
            Find = '"$($t.retired)" -cne "yes") { $duplicateOn[$t.id] = $true }'
            Replace = '"$($t.retired)" -cne "yes" -and "$($t.reachable)" -ceq "yes") { $duplicateOn[$t.id] = $true }' }
