@@ -42,7 +42,7 @@ $script:work = Join-Path $env:TEMP ("horde-db-e2e-" + [guid]::NewGuid().ToString
 New-Item -ItemType Directory -Path $script:work | Out-Null
 $hordeHome = Join-Path $script:work "home"
 $fakeProfile = Join-Path $script:work "profile"
-New-Item -ItemType Directory -Path $fakeProfile | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $realHomes = @((Join-Path (Join-Path "$env:USERPROFILE" ".horde") "fleet.db"))
 if ("$env:HORDE_HOME".Trim() -ne "") { $realHomes += (Join-Path $env:HORDE_HOME "fleet.db") }
 $realBefore = @($realHomes | ForEach-Object { Test-Path -LiteralPath $_ })
@@ -288,7 +288,7 @@ $w2 = Invoke-Work @("start", "-Kind", "agent", "-ParentSession", $parentId, "-Ag
 Check ($w2.code -eq 0 -and $w2.out -cmatch '(?m)^already started agent [0-9A-Z]{26}\r?$') "the same start again says already started and exits 0"
 # The flip unsets HORDE_HOME: a hook then finds the home by the pointer alone, in a profile of its own.
 $pointerProfile = Join-Path $script:work "profile-pointer"
-New-Item -ItemType Directory -Force -Path $pointerProfile | Out-Null
+[void](New-HordeTestProfile $pointerProfile)
 [System.IO.File]::WriteAllText((Join-Path $pointerProfile ".horde-home.json"), ('{"v":1,"hordeHome":' + (ConvertTo-Json $workHome) + '}'))
 $wp = Invoke-Work @("list") @{ HORDE_HOME = ""; USERPROFILE = $pointerProfile }
 Check ($wp.code -eq 0 -and $wp.out -like "*$agentName*") ("with HORDE_HOME unset, work finds the home by the pointer (" + $wp.code + ")")

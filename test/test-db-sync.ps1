@@ -37,11 +37,10 @@ $work = Join-Path $env:TEMP ("horde-db-sync-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $fakeProfile = Join-Path $work "profile"
-# The fake profile has its own AppData\Local (T-0411). Without it, Windows PowerShell 5.1 finds no local
-# application data folder under USERPROFILE and gets "" for it, so a child that lives long enough (about 20 s;
-# a sleeper that a mutant leaves unkilled) saves its module analysis cache as a relative path - into its
-# working folder, the repo root, as Microsoft\Windows\PowerShell\ModuleAnalysisCache.
-New-Item -ItemType Directory -Path $hordeHome, $fakeProfile, (Join-Path $fakeProfile "AppData\Local"), (Join-Path $fakeProfile "AppData\Roaming") | Out-Null
+# The fake profile has its own AppData\Local (T-0411; test\lib\Suite.ps1, New-HordeTestProfile): a sleeper
+# that a mutant leaves unkilled lives long enough to save its module analysis cache otherwise.
+New-Item -ItemType Directory -Path $hordeHome | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 # The fake snapshot the sessions step reads: one session in pane 3 of a terminal that lists pane 3, its transcript idle. The fixture
 # script stands in for fleet-db\SessionSnapshotRun.ps1 (HORDE_DB_SYNC_TEST_SNAPSHOT); its mode says fail, hang or write.

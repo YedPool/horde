@@ -284,7 +284,7 @@ Check ($r.code -eq 0 -and $saidThree.Success -and $saidThree.Groups[1].Value -cn
 $home4 = Join-Path $script:work "home-four"
 $store4 = Join-Path $home4 "store\files"
 $profile4 = Join-Path $script:work "profile"
-New-Item -ItemType Directory -Path $profile4 | Out-Null
+[void](New-HordeTestProfile $profile4)
 $harnessFolders = New-Object System.Collections.ArrayList
 $harnessVariables = New-Object System.Collections.ArrayList
 foreach ($storesFile in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | Sort-Object Name | ForEach-Object { Join-Path $_.FullName "stores.json" } | Where-Object { Test-Path -LiteralPath $_ })) {

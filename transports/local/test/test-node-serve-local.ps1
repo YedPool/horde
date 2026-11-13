@@ -54,7 +54,8 @@ function Req {
 }
 
 try {
-    New-Item -ItemType Directory -Path $homeDir, $profileDir | Out-Null
+    New-Item -ItemType Directory -Path $homeDir | Out-Null
+    [void](New-HordeTestProfile $profileDir)
     # The child inherits this environment; it is restored in finally.
     $env:HORDE_HOME = $homeDir
     $env:USERPROFILE = $profileDir

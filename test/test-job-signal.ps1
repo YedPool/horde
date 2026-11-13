@@ -26,7 +26,7 @@ $work = Join-Path $env:TEMP ("horde-job-signal-" + [guid]::NewGuid().ToString("N
 New-Item -ItemType Directory -Path $work | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $fakeProfile = Join-Path $work "profile"
-New-Item -ItemType Directory -Path $fakeProfile | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 
 $shells = New-Object System.Collections.ArrayList
 [void]$shells.Add([pscustomobject]@{ name = "Windows PowerShell 5.1"; exe = "powershell.exe" })

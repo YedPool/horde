@@ -259,7 +259,7 @@ try {
     $script:labels = @()
     $H = New-Home
     $profileDir = Join-Path $work "profile"
-    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    [void](New-HordeTestProfile $profileDir)
     $envNone = @{ HORDE_HOME = $H; USERPROFILE = $profileDir }
     $cf = Secret-Path "cli"
     # Registered in the suite's process (the registrar's proof is notices/Sender.ps1's own suite); the CLI then proves and sends.

@@ -234,7 +234,7 @@ try {
     # THIS SUITE'S OWN PROCESS IS THE SESSION: a control file names it, with its own start time, so the
     # real identity reader verifies it, and `horde notify`, run as this process's child, is inside it.
     $H = New-Home
-    $profileDir = Join-Path $work "profile"
+    $profileDir = New-HordeTestProfile (Join-Path $work "profile")
     # The agent's own folder under the profile, where core/Identity.ps1 looks by default.
     $agentHome = Join-Path $profileDir ".claude"
     $agentDir = Join-Path $agentHome "sessions"

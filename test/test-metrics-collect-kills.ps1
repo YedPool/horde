@@ -43,7 +43,7 @@ function Read-IndexLocked {
 }
 
 try {
-    $env:USERPROFILE = Join-Path $work "profile"
+    $env:USERPROFILE = New-HordeTestProfile (Join-Path $work "profile")
     $env:HORDE_HOME = Join-Path $work "home"
     $stores = Get-HordeAgentStores -Root $root
     # A fixture whose own file name is its identity inside it, so new names make new sessions.

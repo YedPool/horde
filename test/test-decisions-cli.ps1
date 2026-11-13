@@ -456,7 +456,7 @@ Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan
 # With HORDE_HOME empty and the profile aimed at a folder of this suite, the store must appear under
 # THAT profile's .horde - the default, proven without going near the real one.
 $fakeProfile = Join-Path $script:work "fake-profile"
-New-Item -ItemType Directory -Path $fakeProfile | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $plainFile = Write-Json "plain.json" '{"title":"Is the default home under the user profile used here?","kind":"yes-no","whatItIs":"A test of where the store is.","group":"the fleet tool","askedBy":"orc-a"}'
 $def = Invoke-Decisions @("add", "-File", $plainFile) -Env @{ HORDE_HOME = ""; USERPROFILE = $fakeProfile }
 Check ($def.code -eq 0 -and (Test-Path -LiteralPath (Join-Path $fakeProfile ".horde\store\decisions\0000000001.json"))) "with no HORDE_HOME the store is <profile>\.horde\store\decisions"
