@@ -24,7 +24,8 @@
 #
 # NOTHING HERE DEPLOYS OR CONTACTS ANYTHING REAL: the wrangler is test/fake-wrangler.cjs, named by the
 # home's own setting; every command runs with USERPROFILE pointed at a profile folder of the suite's
-# own, so the default Google client file is never the real one; no network, no scheduler, no key made
+# own, so the default Google client file is never the real one; no network (the deploy's check of its Worker asks a
+# stand-in on 127.0.0.1), no scheduler, no key made
 # (the identity's fix is -NoFix'd through the command, and a stand-in in this process).
 #
 # NODE IS NEEDED (the fake wrangler is a node script, and node is an operator's step). Without it the
@@ -343,7 +344,24 @@ try {
     $s = Setup $ho @("-Operator", "-NoFix", "machine-identity")
     Check ((Has $s ("  TO DO relay origin: this home uses the shipped relay at " + $shipped + ", which every Horde user shares; a home that hosts its own names it in the setting relayOrigin")) -and $s.next -clike ("next: choose where your relay will answer: find your subdomain in the Cloudflare dashboard*then write " + $cfSettings + " as {""schemaVersion"": 1, ""settings"": {""relayOrigin"": ""https://relay.<subdomain>.workers.dev""}}")) ("MUST FAIL: an operator with no origin of his own is asked for one first (" + $s.next + ")")
     Check (-not (Test-Path -LiteralPath (Join-Path $ho "settings\relay.json"))) "and no user step ran before the operator's"
-    Write-Text $cfSettings ('{"schemaVersion":1,"settings":{"relayOrigin":"' + $own + '","wranglerScript":' + (ConvertTo-HordeSetupJsonString $fake) + '}}')
+    # The deploy checks the Worker it just deployed (GET <origin>/auth/google, Deploy.ps1). Without a stand-in it asks the
+    # origin named below for real: relay.example.workers.dev answers nothing, so every deploy here was reported failed
+    # (red on main 2026-11-12, since 30befda3 added the check). The stand-in is test/fake-signin-start.cjs, named by the
+    # setting deployCheckOrigin, the way test-cloudflare-deploy.ps1 does it.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Find-HordeCloudflareRelayNode
+    $psi.Arguments = '"' + (Join-Path $here "fake-signin-start.cjs") + '" ' + $clientId + ' same'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $script:signinStand = [System.Diagnostics.Process]::Start($psi)
+    $null = $script:signinStand.StandardError.ReadToEndAsync()
+    $portLine = $script:signinStand.StandardOutput.ReadLineAsync()
+    if (-not $portLine.Wait(30000) -or "" + $portLine.Result -cnotmatch '\APORT ([0-9]+)\z') { throw ("the fake sign-in start did not start: " + $portLine.Result) }
+    $checkOrigin = "http://127.0.0.1:" + $Matches[1]
+    Write-Text $cfSettings ('{"schemaVersion":1,"settings":{"relayOrigin":"' + $own + '","wranglerScript":' + (ConvertTo-HordeSetupJsonString $fake) + ',"deployCheckOrigin":"' + $checkOrigin + '"}}')
     $s = Setup $ho @("-Operator", "-NoFix", "machine-identity")
     Check ((Has $s ("  done  relay origin: the relay will answer at " + $own + ", as the Worker relay")) -and (Has $s ("  TO DO Google sign-in client: there is no Google client file at " + $clientFile + ": download the web client's JSON from the Google Cloud console there, or name it in the setting googleClientFile")) -and (Has $s ("        " + $register))) "MUST FAIL: no client file - setup names that step, the default place under the profile, and the exact redirect URI and JavaScript origin to register"
     Check ($s.next -clike ("next: make the phone's sign-in client in the Google Cloud console*Web application; give it the redirect URI and JavaScript origin below; download its JSON to " + $clientFile + ", outside every repository*")) ("and how to make it and where to put it (" + $s.next + ")")
@@ -357,7 +375,7 @@ try {
     Write-Client -Origin $own -WithCallback
     $r = Horde $ho @("relay", "deploy")
     $runs = @($(if (Test-Path -LiteralPath $log) { [System.IO.File]::ReadAllLines($log) | Where-Object { $_ -ne "" } | ForEach-Object { $_ | ConvertFrom-Json } }))
-    Check ($r.code -eq 0 -and $runs.Count -eq 4 -and @($runs | Where-Object { (Get-HordeTestMember $_ "config.origin") -cne $own -or (Get-HordeTestMember $_ "config.name") -cne "relay" }).Count -eq 0) ("the operator's deploy goes to his own origin, with the fake wrangler (exit " + $r.code + ")")
+    Check ($r.code -eq 0 -and $runs.Count -eq 4 -and @($runs | Where-Object { (Get-HordeTestMember $_ "config.origin") -cne $own -or (Get-HordeTestMember $_ "config.name") -cne "relay" }).Count -eq 0) ("the operator's deploy goes to his own origin, with the fake wrangler (exit " + $r.code + "; wrangler runs " + $runs.Count + "; " + $r.out.Trim() + ")")
     $s = Setup $ho @("-Operator", "-NoFix", "machine-identity")
     Check (-not $s.out.Contains("WARNING") -and (HasLike $s ("  done  relay deployed: deployed from this home to " + $own + " on *")) -and (Has $s ("  fixed relay settings: wrote " + (Join-Path $ho "settings\relay.json") + ": the horde home, the phone app at " + $own)) -and $s.next -ceq "next: horde relay identity -New") ("deployed, the operator goes on to the user's steps, for his own relay (" + $s.next + ")")
 
@@ -400,6 +418,7 @@ try {
     Check (-not $all.Contains($clientSecret) -and -not $all.Contains($clientId)) "nothing setup said ever holds the client's id or secret"
     Check (@($all.ToCharArray() | Where-Object { [int]$_ -gt 126 }).Count -eq 0) "and all of it is ASCII"
 } finally {
+    if ($null -ne $script:signinStand) { try { if (-not $script:signinStand.HasExited) { $script:signinStand.StandardInput.BaseStream.Close(); if (-not $script:signinStand.WaitForExit(10000)) { $script:signinStand.Kill() } } } catch { }; $script:signinStand.Dispose() }
     # Every key a pairing home made, removed, then checked gone (as test/test-relay-pair-cli.ps1 does).
     $made = New-Object System.Collections.ArrayList
     foreach ($h in @($script:pairHomes)) {
