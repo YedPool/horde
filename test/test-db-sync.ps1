@@ -37,7 +37,7 @@ $work = Join-Path $env:TEMP ("horde-db-sync-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $fakeProfile = Join-Path $work "profile"
-# The fake profile has its own AppData\Local (T-0411; test\lib\Suite.ps1, New-HordeTestProfile): a sleeper
+# The fake profile has its own AppData\Local (T-0411; test\lib\TestProfile.ps1, New-HordeTestProfile): a sleeper
 # that a mutant leaves unkilled lives long enough to save its module analysis cache otherwise.
 New-Item -ItemType Directory -Path $hordeHome | Out-Null
 [void](New-HordeTestProfile $fakeProfile)
