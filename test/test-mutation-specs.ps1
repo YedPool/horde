@@ -26,6 +26,8 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\SuiteFiles.ps1")
+# The Shells rule tools\Mutate.ps1 runs by (T-0422): a spec it would refuse fails here first.
+. (Join-Path $root "tools\MutateShells.ps1")
 
 function Get-FindCount {
     param([string]$Text, [string]$Find)
@@ -47,6 +49,9 @@ function Get-SpecProblems {
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { [void]$out.Add($rel + ": its target " + $s.Target + " does not exist"); continue }
         $suitePath = Join-Path $rootFull "$($s.Suite)"
         if ("$($s.Suite)" -match "[\x00-\x1F]" -or -not (Test-Path -LiteralPath $suitePath -PathType Leaf)) { [void]$out.Add($rel + ": its suite " + ("$($s.Suite)" -replace "[\x00-\x1F]", "?") + " does not exist") }
+        # A Shells list tools\Mutate.ps1 would refuse (tools\MutateShells.ps1, the one rule both read).
+        $sh = Get-HordeMutateSpecShells -Spec $s
+        if (-not $sh.ok) { [void]$out.Add($rel + ": " + $sh.problem + ", which tools\Mutate.ps1 refuses") }
         $text = [System.IO.File]::ReadAllText($target)
         foreach ($m in @($s.Mutations)) {
             # tools\Mutate.ps1 refuses a find that spans lines, since line endings differ by checkout;
@@ -113,6 +118,16 @@ try {
     Check (@($planted2 | Where-Object { $_ -match 'fixture-data' }).Count -eq 0) "CONTROL: a mutations folder under test\fixtures is data, not a spec"
     Check (@($planted2 | Where-Object { $_ -match 'sub\\nested\.psd1 :: nested-twice: its find string occurs 2 times' }).Count -eq 1) "a spec in a subfolder of mutations is checked too"
     Check (@($planted2 | Where-Object { $_ -match 'multiline\.psd1 :: spans: its find string spans lines' }).Count -eq 1) "a find string that spans lines is refused, as tools\Mutate.ps1 refuses it"
+    # A Shells LIST THE TOOL WOULD REFUSE is refused here first (T-0422): a name that is not a shell, an
+    # empty list, a shell named twice. CONTROL: both shells, and no Shells at all, are not.
+    foreach ($pair in @(@("shells-cmd", "@('powershell', 'cmd')"), @("shells-empty", "@()"), @("shells-twice", "@('pwsh', 'pwsh')"), @("shells-both", "@('powershell', 'pwsh')"))) {
+        [System.IO.File]::WriteAllText((Join-Path $fx ("test\mutations\" + $pair[0] + ".psd1")), ("@{ Target = 't.ps1'; Suite = 's.ps1'; Shells = " + $pair[1] + "; Mutations = @(@{ Name = 'ok'; Find = 'function A'; Replace = 'function Z' }) }"))
+    }
+    $planted4 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
+    Check (@($planted4 | Where-Object { $_ -match "shells-cmd\.psd1: Shells names 'cmd'" }).Count -eq 1) "a spec whose Shells names something that is not a shell is reported"
+    Check (@($planted4 | Where-Object { $_ -match 'shells-empty\.psd1: Shells is empty' }).Count -eq 1) "a spec with an empty Shells is reported"
+    Check (@($planted4 | Where-Object { $_ -match 'shells-twice\.psd1: Shells names a shell twice' }).Count -eq 1) "a spec that names a shell twice is reported"
+    Check (@($planted4 | Where-Object { $_ -match 'shells-both\.psd1' }).Count -eq 0 -and @($planted4 | Where-Object { $_ -match 'planted\.psd1: Shells' }).Count -eq 0) "CONTROL: a spec naming both shells, and one naming none, are not"
 } finally {
     if ((Split-Path -Leaf $fx) -match '^horde-specfind-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
 }
