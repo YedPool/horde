@@ -224,6 +224,42 @@ if ((Split-Path -Leaf $letterTree) -match '\Ahorde-suite-letters-[0-9a-f]{32}\z'
 Check (-not (Test-Path -LiteralPath $letterTree)) "the tree is removed"
 
 Write-Host ""
+Write-Host "--- a fake profile keeps PowerShell's own files inside it (T-0470) ---" -ForegroundColor Cyan
+# test/lib/Suite.ps1 says why: without AppData\Local, a Windows PowerShell 5.1 child under a fake
+# USERPROFILE gets "" for its local application data and saves its module cache into its working folder.
+function Get-HordeChildLocalAppData {
+    # The local application data folder a 5.1 child sees under -ChildProfile, run in -WorkDir.
+    param([string]$ChildProfile, [string]$WorkDir)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -NonInteractive -Command `"[Console]::Out.Write([Environment]::GetFolderPath('LocalApplicationData'))`""
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $WorkDir
+    $psi.EnvironmentVariables["USERPROFILE"] = $ChildProfile
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try { $e = $p.StandardError.ReadToEndAsync(); $o = $p.StandardOutput.ReadToEnd().Trim(); $p.WaitForExit(); $null = $e.Result } finally { $p.Dispose() }
+    return $o
+}
+$profTree = Join-Path $env:TEMP ("horde-suite-profile-" + [guid]::NewGuid().ToString("N"))
+try {
+    $made = Join-Path $profTree "deep\profile"
+    $back = New-HordeTestProfile -Path $made
+    Check ($back -ceq $made) "New-HordeTestProfile returns the folder it made"
+    Check ((Test-Path -LiteralPath (Join-Path $made "AppData\Local") -PathType Container) -and (Test-Path -LiteralPath (Join-Path $made "AppData\Roaming") -PathType Container)) "it makes the folder, its missing parents, and AppData\Local and AppData\Roaming inside"
+    $again = New-HordeTestProfile -Path $made
+    Check ($again -ceq $made) "making it again over the same folder is no error"
+    $seen = Get-HordeChildLocalAppData -ChildProfile $made -WorkDir $profTree
+    Check ([string]::Equals($seen, (Join-Path $made "AppData\Local"), [System.StringComparison]::OrdinalIgnoreCase)) ("a 5.1 child under it has its local application data inside it (" + $seen + ")")
+    $bare = Join-Path $profTree "bare-profile"
+    [void][System.IO.Directory]::CreateDirectory($bare)
+    $seenBare = Get-HordeChildLocalAppData -ChildProfile $bare -WorkDir $profTree
+    Check ($seenBare -ceq "") ("CONTROL: under a bare folder the same child gets no local application data at all, which is what the helper prevents (" + $seenBare + ")")
+} finally {
+    if ((Split-Path -Leaf $profTree) -match '\Ahorde-suite-profile-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $profTree)) { Remove-Item -LiteralPath $profTree -Recurse -Force }
+}
+Check (-not (Test-Path -LiteralPath $profTree)) "the profile tree is removed"
+
+Write-Host ""
 Write-Host "--- controls ---" -ForegroundColor Cyan
 $c = Invoke-Fixture "caught"
 Check ($c.code -eq 0) "CONTROL: an error a test catches on purpose does not fail the suite"

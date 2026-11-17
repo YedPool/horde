@@ -27,6 +27,7 @@ Add-Type -Namespace HordeProbe -Name Native -MemberDefinition @'
 # command under test asks it, so this helper has no call of its own for it (it had one, the third
 # copy in the repository; the review of 2026-10-06 counted them).
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\WindowFollowPort.ps1")
+. (Join-Path $PSScriptRoot "TestProfile.ps1")
 foreach ($probeFollowerFile in @(Get-HordeWindowFollowerFiles)) { . $probeFollowerFile }
 $script:HordeProbeRealScale = Enable-HordeWindowFollowRealScale
 
@@ -56,6 +57,9 @@ function New-HordeProbeRunningSession {
     # when the file says, so -ProcessId is a real process: one this scenario started, or itself.
     # Returns the time that process started, in UTC: a record written after it is this run's.
     param([Parameter(Mandatory = $true)][string]$Profile, [Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)][int]$ProcessId)
+    # The profile gets its own AppData too (T-0470): the command a scenario starts under it is a 5.1
+    # child that lives long enough to save its module cache, which would otherwise land in its working folder.
+    [void](New-HordeTestProfile -Path $Profile)
     $dir = Join-Path (Join-Path $Profile ".claude") "sessions"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $started = (Get-Process -Id $ProcessId).StartTime.ToUniversalTime()

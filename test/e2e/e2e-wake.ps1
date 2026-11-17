@@ -40,7 +40,8 @@ $pinnedHome = Join-Path $script:work "home"
 $fleetHome = Join-Path $script:work "home-with-fleet"
 $fakeProfile = Join-Path $script:work "profile"
 $checkout = Join-Path $script:work "checkout"
-foreach ($d in @($pinnedHome, $fleetHome, $fakeProfile, $checkout)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+foreach ($d in @($pinnedHome, $fleetHome, $checkout)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+[void](New-HordeTestProfile $fakeProfile)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Get-RealWakeListing {

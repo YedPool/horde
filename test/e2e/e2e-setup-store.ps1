@@ -28,7 +28,7 @@ Set-StrictMode -Version Latest
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-e2e-setup-store-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
 $prof = Join-Path $work "profile"
-[void][System.IO.Directory]::CreateDirectory($prof)
+[void](New-HordeTestProfile $prof)
 $machine = Join-Path $work "pretend-machine.json"
 $storePwsh = "C:\Program Files\WindowsApps\Microsoft.PowerShell_7.5.3.0_x64__8wekyb3d8bbwe\pwsh.exe"
 $realBefore = [Microsoft.Win32.Registry]::GetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\WindowsStore", "AutoDownload", $null)

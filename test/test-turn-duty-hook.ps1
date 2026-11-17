@@ -35,7 +35,8 @@ $profileDir = Join-Path $work "profile"
 $pointerFile = Join-Path $profileDir ".horde-home.json"
 $ptrHome1 = Join-Path $work "pointer-home-one"
 $ptrHome2 = Join-Path $work "pointer-home-two"
-New-Item -ItemType Directory -Path $profileDir, $ptrHome1, $ptrHome2 -Force | Out-Null
+New-Item -ItemType Directory -Path $ptrHome1, $ptrHome2 -Force | Out-Null
+[void](New-HordeTestProfile $profileDir)
 New-Item -ItemType Directory -Path $registry -Force | Out-Null
 
 $home1 = "C:\fleet-home\one"
