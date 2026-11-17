@@ -146,8 +146,9 @@ function Test-MergeCall { param($Case) return [bool](@(Get-GhCalls $Case | Where
 
 # PART 1'S TOOLS. Everything a tool sees and does is kept in $script: tables the checks read.
 function New-SuiteTools {
-    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null, [switch]$IntentFails)
+    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "", [switch]$OwedFails, [scriptblock]$GuardOverride = $null, [switch]$IntentFails, [string]$CheckoutFails = "")
     $script:gitFails = $GitFails
+    $script:checkoutFails = $CheckoutFails
     $script:intentFails = [bool]$IntentFails
     $script:guardOverride = $GuardOverride
     $script:said = New-Object System.Collections.ArrayList
@@ -165,7 +166,7 @@ function New-SuiteTools {
     return @{
         Gh = { param([string[]]$Arguments) return (Invoke-MergeStandInGh -StatePath $script:toolCase.gh -Arguments $Arguments) }
         # The real git, but a call naming -GitFails as one of its words fails as git would.
-        Git = { param([string[]]$Arguments) if ($script:gitFails -ne "" -and @($Arguments) -ccontains $script:gitFails) { return [pscustomobject]@{ code = 128; out = ""; err = ("fatal: stand-in failure of " + $script:gitFails) } }; return (& $script:realGit $Arguments) }
+        Git = { param([string[]]$Arguments) if ($script:checkoutFails -ne "" -and @($Arguments) -ccontains "checkout" -and @($Arguments) -ccontains $script:checkoutFails) { return [pscustomobject]@{ code = 128; out = ""; err = ("fatal: stand-in failure of checkout " + $script:checkoutFails) } }; if ($script:gitFails -ne "" -and @($Arguments) -ccontains $script:gitFails) { return [pscustomobject]@{ code = 128; out = ""; err = ("fatal: stand-in failure of " + $script:gitFails) } }; return (& $script:realGit $Arguments) }
         Guard = {
             param([string]$Checkout, [string]$Suite, [string]$Shell)
             if ($null -ne $script:beforeGuard) { & $script:beforeGuard }
@@ -585,8 +586,8 @@ Check ($r.outcome -ceq "refused" -and -not (Test-MergeCall $c) -and @(Read-OwedL
 Write-Host "== the nightly run (horde merge -RunOwed): which queued merge turned a guard red"
 $nightly = [datetime]::new(2026, 10, 23, 3, 0, 0, [System.DateTimeKind]::Utc)
 function Invoke-OwedRun {
-    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null, $Now = $null, [scriptblock]$GhWrap = $null)
-    $tools = New-SuiteTools -Case $Case -GuardOverride $GuardOverride
+    param($Case, [string]$Repo = "", [scriptblock]$GuardOverride = $null, $Now = $null, [scriptblock]$GhWrap = $null, [string]$CheckoutFails = "")
+    $tools = New-SuiteTools -Case $Case -GuardOverride $GuardOverride -CheckoutFails $CheckoutFails
     # A GhWrap sees each gh call first ($Arguments, and $script:innerGh for the stand-in) and may answer in its place.
     if ($null -ne $GhWrap) { $script:innerGh = $tools["Gh"]; $script:ghWrap = $GhWrap; $tools["Gh"] = { param([string[]]$Arguments) return (& $script:ghWrap $Arguments) } }
     if ($null -eq $Now) { $Now = $nightly }
@@ -1452,6 +1453,127 @@ Check ($run.exit -eq 1 -and @($script:said | Where-Object { $_ -clike ("RED " + 
 $caseReq = Test-HordeMergeRequest -Pr "YedPool/Horde#7" -Task "T-0247" -State "done" -By "F" -Guards "later"
 $caseLine = ConvertFrom-HordeJson -Text (Format-HordeMergeIntentLine -Request $caseReq -HeadSha ("d" * 40) -BaseRef "main" -Now $nightly)
 Check ($caseReq.ok -eq $true -and $caseLine.repo -ceq "yedpool/horde" -and $caseLine.name -ceq "Horde" -and $caseLine.pr -ceq "YedPool/Horde#7") ("an intent line lower-cases the repo for the queue and keeps the PR as written: " + $caseLine.repo)
+
+Write-Host "== T-0347 round 2: the walk for a red that may have ended and begun again has a budget, and fails and stops plainly"
+# The baseline is red (#100), #200 does not fix it, a push (250) does, #300 breaks it again. -PushAfter adds a push after #300 that keeps it red,
+# so #300 is not the tip and only the walk ever runs the guard there. Night 1 is done. Cost in guard runs with both shells red at the tip: the
+# baseline 4 (not in the budget), #200 4 (red: 2 shells, 2 tries), the push 250 2 (green), #300 4.
+function New-WalkCase {
+    param([switch]$PushAfter)
+    $wh = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+    $null = Invoke-OwedRun -Case $wh.c -Now $n1
+    $w2 = Add-HandMerge -Case $wh.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+    $w250 = Add-HandMerge -Case $wh.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+    $w3 = Add-HandMerge -Case $wh.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+    $wtip = $w3
+    if ($PushAfter) { $wtip = Add-HandMerge -Case $wh.c -Files @{ "two.txt" = "2" } -By "K" -Number 350 -Unqueued }
+    return [pscustomobject]@{ c = $wh.c; m1 = $wh.shas[0]; m2 = $w2; m250 = $w250; m3 = $w3; tip = $wtip }
+}
+function Get-WalkRunCount {
+    # Runs of one guard at the commits the walk looks at: not the tip, and not the baseline (the first parent of the first owed merge).
+    param([string]$Suite, [string]$Tip, [string]$Baseline)
+    return @($script:guardRuns | Where-Object { $_.suite -ceq $Suite -and $_.commit -cne $Tip -and $_.commit -cne $Baseline }).Count
+}
+function Get-RunsAt {
+    param([string]$Suite, [string]$Commit, [string]$Shell = "")
+    return @($script:guardRuns | Where-Object { $_.suite -ceq $Suite -and $_.commit -ceq $Commit -and ($Shell -eq "" -or $_.shell -ceq $Shell) }).Count
+}
+# On code without the budget the variable does not exist: the walk checks below then fail by name, not by an error in the suite.
+$budgetWas = 24
+$budgetVar = Get-Variable -Name HordeMergeWalkRunBudget -Scope Script -ErrorAction SilentlyContinue
+if ($null -ne $budgetVar) { $budgetWas = $budgetVar.Value }
+# A merge point that cannot be checked out: nothing is blamed, the merges stay owed, the open red stays open.
+foreach ($fc in @("the push before the merge", "the merge itself")) {
+    $w = New-WalkCase -PushAfter
+    $bad = $w.m250
+    if ($fc -ceq "the merge itself") { $bad = $w.m3 }
+    $run = Invoke-OwedRun -Case $w.c -Now $n2 -CheckoutFails $bad
+    $rec = @(Get-RedRecord $w.c)
+    Check ($run.exit -eq 2 -and (Said ("COULD NOT RUN on main: checking out " + $bad.Substring(0, 8) + "*")) -and -not (Said "RED *") -and -not (Said "*first red at the merge of YedPool/horde#300*")) ("W1 " + $fc + " cannot be checked out: exit 2, could not run, no red, no merge named (exit " + $run.exit + ")")
+    Check ((Said "2 merge(s) stay owed and 1 open red(s) stay open*") -and (Said ("STILL OPEN: the red on main (since " + $st1 + ") stays open*")) -and @(Read-CheckedLines $w.c).Count -eq 1) ("  " + $fc + ": the two merges stay owed (only #100 is marked checked) and the red stays open")
+    Check ($rec.Count -eq 1 -and $rec[0].guards[0].merge.mergeSha -ceq $w.m1 -and $rec[0].guards[0].since -ceq $st1) "  and the record still names #100 and night 1"
+}
+# Two guards with an open red at once, each walked on its own: G1 returns at #300, G2 only at #400.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red hostnames-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$m4 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red hostnames-red" } -By "L" -Number 400
+Check (@(Get-RedRecord $h.c)[0].guards.Count -eq 2) "W2 night 1 holds both guards red"
+$script:HordeMergeWalkRunBudget = 24
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$script:HordeMergeWalkRunBudget = $budgetWas
+$rec = @(Get-RedRecord $h.c)
+$recG1 = @($rec[0].guards | Where-Object { $_.guard -ceq $g1 })
+$recG2 = @($rec[0].guards | Where-Object { $_.guard -ceq $g2 })
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $m3 + ")*")) -and (Said ("RED " + $g2 + " in *: first red at the merge of YedPool/horde#400 (task T-0247, by L, mergeSha " + $m4 + ")*")) -and -not (Said "*STILL RED*")) ("W2 two open guards: each is walked on its own, G1 names #300 and G2 names #400 (exit " + $run.exit + ")")
+Check ($rec.Count -eq 1 -and $recG1.Count -eq 1 -and $recG2.Count -eq 1 -and $recG1[0].merge.mergeSha -ceq $m3 -and $recG2[0].merge.mergeSha -ceq $m4 -and $recG1[0].since -ceq $st2 -and $recG2[0].since -ceq $st2) "  and the record holds both, each with its own merge and night 2"
+# The budget is shared by the guards of a branch: the first guard listed (G2, host-names) costs 12 and fits in 13, G1's first step (4) does not.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red hostnames-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 300
+$m4 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red hostnames-red" } -By "L" -Number 400
+$script:HordeMergeWalkRunBudget = 13
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$script:HordeMergeWalkRunBudget = $budgetWas
+$rec = @(Get-RedRecord $h.c)
+$recG1 = @($rec[0].guards | Where-Object { $_.guard -ceq $g1 })
+$recG2 = @($rec[0].guards | Where-Object { $_.guard -ceq $g2 })
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: first red at the merge of YedPool/horde#400*")) -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*(this run: *not walked past the baseline *: the walk's budget of 13 guard runs is used up (12 runs)*")) -and -not (Said "*horde#300*")) ("W3 two open guards share one budget: G2 is walked, G1 is not walked at all, says so, and is not blamed on #300 (exit " + $run.exit + ")")
+Check ($recG2.Count -eq 1 -and $recG2[0].merge.mergeSha -ceq $m4 -and $recG1.Count -eq 1 -and $recG1[0].since -ceq $st1 -and $recG1[0].merge.pr -ceq "YedPool/horde#100") "  and G1's record keeps #100 and night 1"
+# A queue of one merge: the walk has a single step, and the budget is spent on it.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$m1 = $h.shas[0]
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 300
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*")) -and -not (Said "*not walked past*") -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "W4 a queue of one that does not touch the red: it is the same red, #100 stays named"
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "J" -Number 300
+$null = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "specs-red" } -By "K" -Number 350 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+$rec = @(Get-RedRecord $h.c)
+Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: red before today's first queued merge, green after it, and red again at the tip*an earlier red of this guard, since " + $st1 + ", had ended*")) -and -not (Said "*horde#100*") -and $null -eq $rec[0].guards[0].merge -and $rec[0].guards[0].since -ceq $st2) ("W4 a queue of one that fixes it, then a push breaks it again: a new red dated night 2, no merge named (exit " + $run.exit + ")")
+# THE SHELLS: the walk runs the guard only in the shells that are red at the tip, at the push commit and at the merge alike.
+$h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "red-in-7" }; by = "F" })
+$null = Invoke-OwedRun -Case $h.c -Now $n1
+$m2 = Add-HandMerge -Case $h.c -Files @{ "one.txt" = "1" } -By "J" -Number 200
+$m250 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "green" } -By "F" -Number 250 -Unqueued
+$m3 = Add-HandMerge -Case $h.c -Files @{ "guard.txt" = "red-in-7" } -By "K" -Number 300
+$tip = Add-HandMerge -Case $h.c -Files @{ "two.txt" = "2" } -By "K" -Number 350 -Unqueued
+$run = Invoke-OwedRun -Case $h.c -Now $n2
+Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in PowerShell 7: first red at the merge of YedPool/horde#300*")) -and -not (Said "*in Windows PowerShell 5.1*")) ("W5 red in PowerShell 7 only: the walk still names #300 (exit " + $run.exit + ")")
+Check ((Get-RunsAt -Suite $g2 -Commit $m250 -Shell "7") -gt 0 -and (Get-RunsAt -Suite $g2 -Commit $m250 -Shell "5.1") -eq 0) "  the push commit before #300 was run in PowerShell 7 and never in 5.1"
+Check ((Get-RunsAt -Suite $g2 -Commit $m3 -Shell "7") -gt 0 -and (Get-RunsAt -Suite $g2 -Commit $m3 -Shell "5.1") -eq 0 -and (Get-RunsAt -Suite $g2 -Commit $m2 -Shell "7") -gt 0 -and (Get-RunsAt -Suite $g2 -Commit $m2 -Shell "5.1") -eq 0) "  and the merges #200 and #300 were run in PowerShell 7 and never in 5.1"
+# THE BUDGET, by number: the whole walk costs 10 runs. 10 reaches #300; 9 stops before it; 4 stops after #200; 3 cannot start.
+foreach ($b in @(@{ n = 10; runs = 10; past = ""; green = $false }, @{ n = 9; runs = 6; past = "the commit * pushed before the merge of YedPool/horde#300"; green = $true }, @{ n = 4; runs = 4; past = "the merge of YedPool/horde#200"; green = $false }, @{ n = 3; runs = 0; past = "the baseline *"; green = $false })) {
+    $w = New-WalkCase -PushAfter
+    $script:HordeMergeWalkRunBudget = $b.n
+    $run = Invoke-OwedRun -Case $w.c -Now $n2
+    $script:HordeMergeWalkRunBudget = $budgetWas
+    $rec = @(Get-RedRecord $w.c)
+    $sum = ConvertFrom-HordeJson -Text $run.json
+    $nm = "W6 budget " + $b.n
+    Check ((Get-WalkRunCount -Suite $g1 -Tip $w.tip -Baseline $w.m1) -eq $b.runs) ($nm + ": the walk started " + $b.runs + " runs and no more (" + (Get-WalkRunCount -Suite $g1 -Tip $w.tip -Baseline $w.m1) + ")")
+    if ($b.past -ceq "") {
+        Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: first red at the merge of YedPool/horde#300 (task T-0247, by K, mergeSha " + $w.m3 + ")*")) -and -not (Said "*not walked past*") -and $rec[0].guards[0].merge.mergeSha -ceq $w.m3) ($nm + " is enough for the whole walk: #300 is named and nothing is said of a budget (exit " + $run.exit + ")")
+    } else {
+        Check ($run.exit -eq 1 -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*(this run: *not walked past " + $b.past + ": the walk's budget of " + $b.n + " guard runs is used up (" + $b.runs + " runs), so a later merge that broke this guard again is not looked for*")) -and -not (Said "*first red at the merge of YedPool/horde#300*")) ($nm + " is not enough: the report says the walk stopped, where, and keeps #100 (exit " + $run.exit + ")")
+        Check ($rec.Count -eq 1 -and $rec[0].guards[0].merge.mergeSha -ceq $w.m1 -and $rec[0].guards[0].since -ceq $st1 -and (Get-RunsAt -Suite $g1 -Commit $w.m3) -eq 0) ($nm + ": no merge after the stop is blamed or even run, and the old blame and date stay in the record")
+        Check ((Said ("*: not walked past " + $b.past + "*")) -and ($sum.repos[0].reds[0].note -clike ("*this run: not walked past " + $b.past + "*"))) ($nm + ": the stop is in the JSON note too: " + $sum.repos[0].reds[0].note)
+        Check ([bool]($b.green) -eq (Said "*the guard was green at a point the walk did reach, so the merge the record names may no longer be the cause of this red*")) ($nm + ": the report says the old merge may no longer be the cause only when the guard was seen green")
+    }
+}
+# A later night with room picks the walk up again: the stop is for one run only.
+$w = New-WalkCase -PushAfter
+$script:HordeMergeWalkRunBudget = 4
+$null = Invoke-OwedRun -Case $w.c -Now $n2
+$script:HordeMergeWalkRunBudget = $budgetWas
+Check (@(Read-CheckedLines $w.c).Count -eq 3 -and @(Get-RedRecord $w.c)[0].guards[0].merge.mergeSha -ceq $w.m1) "W7 a budget stop is a finished run: the owed merges are marked checked as in any run, and the old blame stays in the record"
 
 Write-Host "== T-0347 round 3: when the whole repo fails, every open red is still named"
 $h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })
