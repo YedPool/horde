@@ -215,7 +215,7 @@ function Write-HordeWakeHeartbeat {
     if ($null -ne $Counts) {
         $row = [ordered]@{ since = (ConvertTo-HordeWakeTimeText $Counts.since); startedAt = (ConvertTo-HordeWakeTimeText $Counts.startedAt); passes = [long]$Counts.passes; looks = [long]$Counts.looks; blindLooks = [long]$Counts.blindLooks; blindPasses = [long]$Counts.blindPasses }
         try { Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "counts" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $row -Compress) }
-        catch { $countsError = "the counts of passes and looks could not be saved, so a restart will not go on from them: " + $_.Exception.Message }
+        catch { $countsError = "the counts of passes and looks could not be saved, so a restart will not go on from them (" + $_.Exception.GetType().Name + ")" }
         $beat["counts"] = $row
     }
     Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $beat -Compress)

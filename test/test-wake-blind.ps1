@@ -14,7 +14,7 @@
 #     spell starts or its reason changes, and pane-seen, with how many looks it lasted, when a look reads.
 #   - IT IS COUNTED: the heartbeat carries passes, looks, blindLooks, blindPasses and when they began; the same
 #     numbers are in a counts file beside it, and a run that starts again goes on from them.
-#   - `horde wake status` says "looks N, blind N (P passes)".
+#   - `horde wake status` says "looks L, blind N, blind in P of M passes since <time>".
 #   - A BLIND LOOK IS NOT A VERDICT: no session is dead, gone, retired, asleep or held for it, no episode of a
 #     duplicated session ends, no attempt is counted, and the restore source says what it says without it.
 # Every check that reads a member the old code does not have reads it through Get-HordeTestMember, so on the
@@ -107,7 +107,7 @@ Check (-not (Test-Path -LiteralPath (Join-Path (Join-Path $state.home "wake") "c
 Write-Host ""
 Write-Host "--- `wake status` says it ---" -ForegroundColor Cyan
 $st = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "status") -Env @{ HORDE_HOME = $state.home; WEZFLEET_ROOT = $fleetPin.path }
-Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 4, blind 4 (10 passes)")) ("wake status shows 'looks 4, blind 4 (10 passes)' for the shadow run (exit " + $st.code + ")")
+Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 4, blind 4, blind in 10 of 10 passes since ")) ("wake status shows 'looks 4, blind 4, blind in 10 of 10 passes' for the shadow run (exit " + $st.code + ")")
 Check ($st.out.Contains("LIVE: it has never run")) "CONTROL: the live run, which never ran, has no counts to show"
 
 Write-Host ""
@@ -128,7 +128,7 @@ Check ($seen.Count -eq 1 -and $seen[0].id -ceq (Sid 1) -and $seen[0].outcome -ce
 Check ($seen.Count -eq 1 -and "$($seen[0].reason)".Contains("after 1 blind look")) "saying how many looks it lasted (the restarted run's own spell: 1)"
 Check (@(Read-Lines $state.home | Where-Object { $_.kind -ceq "would-nudge" }).Count -eq 1) "and the session, now seen, is decided on as any other (shadow: one would-nudge)"
 $st = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "status") -Env @{ HORDE_HOME = $state.home; WEZFLEET_ROOT = $fleetPin.path }
-Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 6, blind 5 (11 passes), of 12 passes since ")) ("and wake status, after the restart, counts on from the first run: 'looks 6, blind 5 (11 passes), of 12 passes' (exit " + $st.code + ")")
+Check ($st.code -eq 0 -and $st.out.Contains("SHADOW: looks 6, blind 5, blind in 11 of 12 passes since ")) ("and wake status, after the restart, counts on from the first run: 'looks 6, blind 5, blind in 11 of 12 passes' (exit " + $st.code + ")")
 & $fx.Remove $state
 $state = $null
 
@@ -267,6 +267,28 @@ Check ($run.blind.ContainsKey((Sid 1))) "while the fleet cannot be listed the sp
 foreach ($e in @(Step $state $run 6)) { [void]$all.Add($e) }
 Check ($run.blind.ContainsKey((Sid 1)) -and $run.blind[(Sid 1)].looks -eq 2) "and when it can, the spell goes on from where it was: 2 looks, not a new spell"
 Check (@($all | Where-Object { $_.kind -ceq "pane-blind" }).Count -eq 1 -and @($all | Where-Object { $_.kind -ceq "pane-seen" }).Count -eq 0) "with one pane-blind line and no pane-seen"
+& $fx.Remove $state
+$state = $null
+
+Write-Host ""
+Write-Host "--- a spell table that cannot be kept costs nothing else, and is said once ---" -ForegroundColor Cyan
+# Update-HordeWakeBlind throws on every tick (T-0116, round 3): the ledger is kept before it, the heartbeat is written after it,
+# and the failure is ONE journal line with a stable reason, not one per tick.
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+function Update-HordeWakeBlind { throw "injected spell failure" }
+$run = New-HordeWakeRun -HordeHome $state.home
+$all = New-Object System.Collections.ArrayList
+try { foreach ($sec in @(0, 3, 6, 9, 12)) { foreach ($e in @(Step $state $run $sec)) { [void]$all.Add($e) } } }
+finally { Remove-Item Function:\Update-HordeWakeBlind; . (Join-Path $root "core\Wake.ps1") }
+$beat = Read-HordeWakeHeartbeat -Shadow -HordeHome $state.home
+$blindLines = @(Read-Lines $state.home | Where-Object { $_.id -ceq "blind" })
+$ledgerFile = Join-Path (Join-Path $state.home "wake") "ledger-shadow.json"
+Check ($beat.state -ceq "known" -and $beat.value.pass -eq 5) "when the spells cannot be kept, the heartbeat is still written on every one of 5 ticks"
+Check (Test-Path -LiteralPath $ledgerFile -PathType Leaf) "and the ledger is still saved"
+Check (@($all | Where-Object { $_.id -ceq "blind" }).Count -eq 1 -and $blindLines.Count -eq 1) ("and the failure is said once, not on every tick (" + @($all | Where-Object { $_.id -ceq "blind" }).Count + " returned, " + $blindLines.Count + " journaled)")
+Check ($blindLines.Count -eq 1 -and "$($blindLines[0].reason)" -ceq "the blind looks could not be kept: injected spell failure") "with a reason that names the failure"
+Check (@($all | Where-Object { $_.id -ceq "pass" }).Count -eq 0) "and it is the spells' own line, not the whole pass failing"
 & $fx.Remove $state
 $state = $null
 

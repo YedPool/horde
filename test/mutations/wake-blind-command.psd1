@@ -9,8 +9,8 @@
            Find = '", blind " + $counts.blindLooks'
            Replace = '", blind " + $counts.looks' }
         @{ Name = "status-shows-all-passes-as-the-blind-ones"
-           Find = '" (" + $counts.blindPasses + " passes)'
-           Replace = '" (" + $counts.passes + " passes)' }
+           Find = '", blind in " + $counts.blindPasses + " of "'
+           Replace = '", blind in " + $counts.passes + " of "' }
         @{ Name = "status-shows-no-counts"
            Find = 'if ($null -ne $counts) {'
            Replace = 'if ($false) {' }

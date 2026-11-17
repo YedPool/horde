@@ -26,6 +26,12 @@
         @{ Name = "only-a-pass-with-a-blind-look-is-a-blind-pass"
            Find = 'if ($Run.blind.Count -gt 0) { $Run.counts.blindPasses'
            Replace = 'if ($result.blindLooks.Count -gt 0) { $Run.counts.blindPasses' }
+        @{ Name = "the-spell-failure-ends-the-pass"
+           Find = '} catch { [void]$failed.Add([pscustomobject]@{ id = "blind"; reason = ("the blind looks could not be kept: " + $_.Exception.Message) }) }'
+           Replace = '} catch { throw }' }
+        @{ Name = "the-spell-failure-is-journaled-every-tick"
+           Find = 'reason = ("the blind looks could not be kept: " + $_.Exception.Message)'
+           Replace = 'reason = ("the blind looks could not be kept at " + $Now.Ticks + ": " + $_.Exception.Message)' }
         @{ Name = "unreadable-counts-not-said"
            Find = 'elseif ($savedCounts.state -ceq "unknown") {'
            Replace = 'elseif ($false) {' }
