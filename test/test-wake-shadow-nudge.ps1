@@ -71,6 +71,44 @@ Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without a nudge") -
 Check ($null -ne $memory.nudge) "and the installed waker itself still has its nudge: the view is a copy, not an edit"
 
 Write-Host ""
+Write-Host "--- a shadow tick's looks go through the registered waker's own blocks, never its nudge or its exit (T-0116 round 3) ---" -ForegroundColor Cyan
+
+# A waker whose nudge and exit RECORD every call, and whose other blocks record theirs and then answer as the memory waker does.
+# The view copies targets, state, confirm, begin, source and reserved from it; if the view's confirm (or state, or begin)
+# were the nudge, a look (the state read with -Full) would nudge, and a suite that only checked the view's nudge member
+# would stay green. So this counts what the registered waker was asked, block by block.
+$script:calls = @{ targets = 0; state = 0; confirm = 0; nudge = 0; begin = 0; exit = 0 }
+$script:memoryWaker = $memory
+$rec = Register-HordeWaker -Name "fixture-good" -Folder (Join-Path $root ("test" + [char]92 + "fixtures" + [char]92 + "waker" + [char]92 + "caps" + [char]92 + "fixture-good"))`
+    -Targets { $script:calls.targets++; & $script:memoryWaker.targets } `
+    -State { param($id) $script:calls.state++; & $script:memoryWaker.state $id } `
+    -Confirm { param($id) $script:calls.confirm++; & $script:memoryWaker.confirm $id } `
+    -Nudge { param($id) $script:calls.nudge++; & $script:memoryWaker.nudge $id } `
+    -Begin { $script:calls.begin++; & $script:memoryWaker.begin } `
+    -Exit { param($id, $why) $script:calls.exit++; New-HordeUnknown -Reason "the fixture ends nobody" }
+try {
+    $h = New-Home
+    Seat-Fleet
+    Set-HordeMemoryWakerCheap -On $true
+    $plan = Get-HordeWakeRunPlan -Mode "shadow" -Picked (New-HordeKnown -Value $rec)
+    Check ($plan.ok -eq $true -and $plan.live -eq $false) "CONTROL: the plan for a shadow run through the recording waker is ok, and not live"
+    $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target -Self "" -HordeHome $h
+    for ($i = 0; $i -lt 10; $i++) {
+        Set-HordeMemoryWakerClock (At ($i * 3))
+        $null = Invoke-HordeWakeTick -Run $run -Now (At ($i * 3)) -Waker $plan.waker -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $h
+    }
+    Check ($script:calls.confirm -gt 0 -and @(Get-HordeMemoryWakerLooks).Count -gt 0) ("CONTROL: the shadow ticks did look at sessions, through the waker's own confirm (" + $script:calls.confirm + " looks)")
+    Check ($script:calls.targets -ge 10 -and $script:calls.state -gt 0) ("and read the targets and the state through the waker's own blocks (" + $script:calls.targets + ", " + $script:calls.state + ")")
+    Check ($script:calls.begin -ge 10) ("and told it a pass begins, through its own begin (" + $script:calls.begin + ")")
+    Check ($script:calls.nudge -eq 0) ("and in ten ticks over three sessions with mail, looks included, its nudge was asked for nothing (" + $script:calls.nudge + ")")
+    Check ($script:calls.exit -eq 0) ("and its exit was asked for nothing (" + $script:calls.exit + ")")
+    Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) "and the memory waker underneath was asked to nudge nobody"
+} finally {
+    [void]$script:HordeWakers.Remove("fixture-good"); $script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
+    Set-HordeMemoryWakerCheap -On $false
+}
+
+Write-Host ""
 Write-Host "--- a proof run and a live run are handed the real waker, with its nudge ---" -ForegroundColor Cyan
 
 $h = New-Home

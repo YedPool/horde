@@ -35,5 +35,23 @@
         @{ Name = "the-view-of-a-view-is-another-view"
            Find = 'if ($script:HordeWakerViews.ContainsKey($name) -and [object]::ReferenceEquals($script:HordeWakerViews[$name], $Waker)) { return $Waker }'
            Replace = 'if ($false) { return $Waker }' }
+        @{ Name = "the-view-confirm-is-the-nudge"
+           Find = 'nudge = $null; begin = $Waker.begin; confirm = $Waker.confirm;'
+           Replace = 'nudge = $null; begin = $Waker.begin; confirm = $Waker.nudge;' }
+        @{ Name = "the-view-state-is-the-nudge"
+           Find = 'targets = $Waker.targets; state = $Waker.state; nudge = $null;'
+           Replace = 'targets = $Waker.targets; state = $Waker.nudge; nudge = $null;' }
+        @{ Name = "the-view-begin-is-the-nudge"
+           Find = 'nudge = $null; begin = $Waker.begin;'
+           Replace = 'nudge = $null; begin = $Waker.nudge;' }
+        @{ Name = "the-view-targets-is-the-nudge"
+           Find = 'targets = $Waker.targets; state = $Waker.state; nudge = $null;'
+           Replace = 'targets = $Waker.nudge; state = $Waker.state; nudge = $null;' }
+        @{ Name = "the-view-source-is-the-nudge"
+           Find = 'source = $Waker.source; reserved = $Waker.reserved; exit = $null }'
+           Replace = 'source = $Waker.nudge; reserved = $Waker.reserved; exit = $null }' }
+        @{ Name = "the-view-reserved-is-the-exit"
+           Find = 'source = $Waker.source; reserved = $Waker.reserved; exit = $null }'
+           Replace = 'source = $Waker.source; reserved = $Waker.exit; exit = $null }' }
     )
 }

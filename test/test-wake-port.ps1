@@ -595,5 +595,34 @@ $script:HordeWakers["fixture-good"] = $good
 $good.exit = $null
 $script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
 
+Write-Host ""
+Write-Host "--- every member the view carries is the registered waker's own block, and none is its nudge or its exit (T-0116 round 3) ---" -ForegroundColor Cyan
+
+# The view copies targets, state, confirm, begin, source and reserved. A shadow tick looks at sessions through confirm
+# (Get-HordeWakeState -Full), so a view whose confirm were the nudge would type into a live session on every look.
+# Each of the six is given a block of its own here, so that "the same block" cannot be satisfied by two nulls.
+$members = @("targets", "state", "confirm", "begin", "source", "reserved")
+$saved = @{}
+foreach ($m in $members) { $saved[$m] = $good.$m }
+$savedExit = $good.exit
+foreach ($m in $members) { $good.$m = [scriptblock]::Create('$script:calls++; "' + $m + '"') }
+$good.exit = { $script:calls++; "exit" }
+$script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
+$view = Get-HordeWakerReadOnly -Waker $good
+foreach ($m in $members) {
+    Check ($null -ne $view.$m -and [object]::ReferenceEquals($view.$m, $good.$m)) ("the view's " + $m + " is the registered waker's own block")
+    foreach ($bad in @("nudge", "exit")) {
+        Check (-not [object]::ReferenceEquals($view.$m, $good.$bad)) ("and the view's " + $m + " is not the waker's " + $bad)
+    }
+}
+Check ($null -eq $view.nudge -and $null -eq $view.exit) "while the view's nudge and exit are nothing"
+Check ($view.name -ceq $good.name -and [object]::ReferenceEquals($view.folder, $good.folder) -and [object]::ReferenceEquals($view.capabilities, $good.capabilities)) "and its name, folder and capabilities are the registered waker's"
+$script:calls = 0
+$a = Get-HordeWakeState -Waker $view -Id $sid -Full
+Check ($script:calls -eq 1) "a full look through the view runs the registered waker's confirm once, and nothing else"
+foreach ($m in $members) { $good.$m = $saved[$m] }
+$good.exit = $savedExit
+$script:HordeWakerViews.Remove("fixture-good"); $script:HordeWakerViewOrigin.Remove("fixture-good")
+
 Reset-HordeMemoryWaker
 Complete-HordeSuite -Success "a waker is registered only with valid capabilities, only yes counts, and no answer of an adapter is passed on unchecked"

@@ -235,7 +235,8 @@ function Test-HordeWakeSendersShadow {
     # one while THE ONE SWITCH is off (the top of this file).
     param([Parameter(Mandatory = $true)]$Run)
     if ((Get-HordeWakeRunMode -Run $Run) -cne "live") { return $true }
-    return ($script:HordeWakeSendersPost -ne $true)
+    # Only a real boolean true turns the senders on: 1, "True" or any other truthy value is still shadow.
+    return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))
 }
 
 function Get-HordeWakeSenderFile {

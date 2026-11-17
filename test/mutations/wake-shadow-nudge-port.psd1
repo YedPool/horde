@@ -12,5 +12,14 @@
         @{ Name = "the-port-does-not-refuse-a-waker-with-no-nudge"
            Find = 'if ($null -eq $Waker.nudge) { return (New-HordeUnknown'
            Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "the-view-confirm-is-the-nudge"
+           Find = 'nudge = $null; begin = $Waker.begin; confirm = $Waker.confirm;'
+           Replace = 'nudge = $null; begin = $Waker.begin; confirm = $Waker.nudge;' }
+        @{ Name = "the-view-state-is-the-nudge"
+           Find = 'targets = $Waker.targets; state = $Waker.state; nudge = $null;'
+           Replace = 'targets = $Waker.targets; state = $Waker.nudge; nudge = $null;' }
+        @{ Name = "the-view-begin-is-the-nudge"
+           Find = 'nudge = $null; begin = $Waker.begin;'
+           Replace = 'nudge = $null; begin = $Waker.nudge;' }
     )
 }

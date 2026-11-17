@@ -362,5 +362,8 @@
         @{ Name = "duplicates-not-handed-to-the-restore-pass"
            Find = '-UncountedDuplicates $dupCount'
            Replace = '-UncountedDuplicates 0' }
+        @{ Name = "senders-switch-on-for-anything-truthy"
+           Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
+           Replace = 'return ($script:HordeWakeSendersPost -ne $true)' }
     )
 }
