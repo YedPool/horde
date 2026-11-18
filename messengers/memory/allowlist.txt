@@ -12,3 +12,4 @@
 # path | mentions | why this file may name the messenger
 test/test-messenger-port.ps1 | 11 | the port suite drives the memory messenger through its test helpers (reset, move a stage, read the log) to prove a repost makes one record
 test/mutations/messenger-conformance-memory.psd1 | 3 | a mutation spec quotes the code it changes
+test/test-wake-taken.ps1 | 30 | the wake senders' awaiting-list suite drives the memory messenger through its test helpers (reset, move a stage to handed-over or seen, read the log) to prove an accepted post is not delivered until the session's own TAKEN

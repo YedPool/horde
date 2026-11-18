@@ -29,7 +29,7 @@
            Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
            Replace = 'if ($next[$id].state -cne "failed") { continue }' }
         @{ Name = "no-rate-limit"
-           Find = 'if ($sentLately -ge [int]$Settings.maxTellsPerHour) {'
+           Find = 'if ($sentLately -ge $cap) {'
            Replace = 'if ($false) {' }
         @{ Name = "rate-limit-of-seven"
            Find = 'maxTellsPerHour = 6'
@@ -38,7 +38,7 @@
            Find = '-and ($Now - $_.at).TotalSeconds -lt 3600 -and'
            Replace = '-and' }
         @{ Name = "suppressed-tells-count-against-the-limit"
-           Find = '$next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and'
+           Find = '$next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "awaiting" -or $_.state -ceq "would-tell") -and'
            Replace = '$next.Values | Where-Object { $true -and' }
         @{ Name = "shadow-tells"
            Find = 'if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell"; class = $class };'
@@ -71,8 +71,8 @@
            Find = 'if ($script:HordeWakeTellKinds -cnotcontains $Kind) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "the-end-of-the-silent-probes-is-no-kind-the-warchief-is-told-of"
-           Find = '"fleet-silent", "silent-probes-ended", "duplicate-copies")'
-           Replace = '"fleet-silent", "duplicate-copies")' }
+           Find = '"fleet-silent", "silent-probes-ended", "duplicate-copies", "resume-untaken")'
+           Replace = '"fleet-silent", "duplicate-copies", "resume-untaken")' }
         @{ Name = "tell-state-saved-under-another-mode"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }
