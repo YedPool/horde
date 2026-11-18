@@ -324,9 +324,13 @@ function Find-HordeNightlyCulprit {
     # could not be told (the run did not happen). The last night's tip (before the first merge) was green and the tip
     # (the last merge) is red, and that is CHECKED first: a tip that is not red now is "flaky". A bisect that gets
     # an unreadable answer ends "inconclusive" with what it knew. -MaxRuns caps the runs (the tip check counts).
-    # { state = "found" | "flaky" | "inconclusive" | "capped" | "none"; sha; runs; between }
-    #   between: when not found, the pair (last known green sha or "" , first known red sha) the search had narrowed to.
-    param([string[]]$Merges, [scriptblock]$IsRed, [int]$MaxRuns = 40)
+    # -Base, last night's tip, is then RUN AGAIN rather than taken as green (T-0465): on 2026-11-11 the box's sessions
+    # turned elevated, a unit went red at every commit, and the first merge of the day (PR 494) was named. Red there
+    # too is "base-red": none of the day's merges did it. An empty -Base (no last tip known) keeps the old assumption.
+    # { state = "found" | "flaky" | "base-red" | "inconclusive" | "capped" | "none"; sha; runs; between }
+    #   between: when not found, the pair (last known green sha or "" , first known red sha) the search had narrowed to;
+    #   for base-red, (the base, "").
+    param([string[]]$Merges, [scriptblock]$IsRed, [int]$MaxRuns = 40, [string]$Base = "")
     $m = @($Merges)
     $runs = 0
     if ($m.Count -eq 0) { return [pscustomobject]@{ state = "none"; sha = ""; runs = 0; between = @("", "") } }
@@ -335,7 +339,14 @@ function Find-HordeNightlyCulprit {
     $r = & $IsRed $tip
     if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }
     if (-not $r) { return [pscustomobject]@{ state = "flaky"; sha = ""; runs = $runs; between = @("", $tip) } }
-    $lo = -1                   # index of the last merge known green (-1: the last night's tip)
+    if ($Base -ne "") {
+        if ($runs -ge $MaxRuns) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @("", $tip) } }
+        $runs++
+        $r = & $IsRed $Base
+        if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }
+        if ($r) { return [pscustomobject]@{ state = "base-red"; sha = ""; runs = $runs; between = @($Base, "") } }
+    }
+    $lo = -1                  # index of the last merge known green (-1: the last night's tip)
     $hi = $m.Count - 1         # index of the first merge known red
     while ($hi - $lo -gt 1) {
         $mid = [int][math]::Floor(($lo + $hi) / 2)
@@ -493,6 +504,7 @@ function Get-HordeNightlyFindingLines {
     foreach ($k in @($Row.culprits)) {
         if ($k.state -ceq "found") { $lines += ("RED " + $k.unit + " first red at merge " + (Format-HordeNightlyMerge -Merge $k.merge) + " (" + $k.runs + " runs)") }
         elseif ($k.state -ceq "flaky") { $lines += ("RED " + $k.unit + " was not red when run again at the tip: flaky, no merge named") }
+        elseif ($k.state -ceq "base-red") { $lines += ("RED " + $k.unit + " was red at last night's tip " + (Format-HordeNightlySha $k.between[0]) + " too: not the day's merges (the box or a need changed?), no merge named") }
         elseif ($k.state -ceq "capped") { $lines += ("RED " + $k.unit + " not bisected to one merge (run cap): after " + $(if ("" + $k.between[0] -eq "") { "last night" } else { (Format-HordeNightlySha $k.between[0]) }) + " up to " + (Format-HordeNightlySha $k.between[1])) }
         elseif ($k.state -ceq "none") { $lines += ("RED " + $k.unit + " has no merge since last night to name") }
         else { $lines += ("RED " + $k.unit + " bisect inconclusive (a run did not happen): " + $k.state) }
