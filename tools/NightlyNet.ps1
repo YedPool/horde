@@ -550,7 +550,7 @@ function Invoke-NightlyBisect {
             $memo[$key] = $res
             return $res
         }
-        $found = Find-HordeNightlyCulprit -Merges $shas -IsRed $isRed -MaxRuns $budget
+        $found = Find-HordeNightlyCulprit -Merges $shas -IsRed $isRed -MaxRuns $budget -Base $Ctx.state.lastTip
         $merge = $null
         if ($found.state -ceq "found") { $merge = @($Ctx.merges | Where-Object { $_.sha -ceq $found.sha })[0] }
         $Ctx.culprits += [pscustomobject]@{ unit = $u; state = $found.state; sha = $found.sha; merge = $merge; runs = $found.runs; between = $found.between }
