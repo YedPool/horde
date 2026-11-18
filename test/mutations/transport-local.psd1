@@ -119,8 +119,11 @@
            Replace = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe"), (Join-Path $script:HordeLocalProgramFiles "PowerShell\7-preview\pwsh.exe")' }
         # The branch only PowerShell 7 takes (the ACL read is an extension method there): with it gone
         # no pipe's owner is read under 7 and every dial is refused. 5.1 never takes it, so the run
-        # under 7 catches it ("a dialled pipe's owner is read in this shell"); left out of this spec
-        # by PR #496 until Mutate could run a suite under 7 (T-0422).
+        # under 7 catches it: the owner-refusal checks fail ("a pipe owned by this user is not refused",
+        # and the other-expected-owner case), and so do the dials after them. The check "a dialled pipe's owner is
+        # read in this shell" is not what fails: its read throws outside a check, the suite's trap
+        # records an [ERROR], and that check never runs (review of PR #501). Left out of this spec by
+        # PR #496 until Mutate could run a suite under 7 (T-0422).
         @{ Name = "pwsh-owner-read-dropped"
            Find = 'return [System.IO.Pipes.PipesAclExtensions]::GetAccessControl($Pipe)'
            Replace = 'return $null' }
