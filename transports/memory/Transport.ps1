@@ -114,10 +114,17 @@ $null = Register-HordeTransport -Folder $script:HordeMemoryFolder `
     } `
     -Accept {
         param($ListenerState, [int]$TimeoutMs)
+        # WAIT UNTIL A DIAL IS TAKEN OR THE TIME IS UP, NOT UNTIL THE FIRST WAKE-UP (T-0421). Each dial queues itself
+        # and releases the signal once, but an accept that finds a dial already queued takes it without waiting,
+        # so that release stays unspent; one wait woke on it, found nothing, and said "no peer connected" at
+        # once (measured 0 ms of 1500 in test-transport-conformance). The node's loop reads a quick failure as a
+        # broken listener and replaces it, and a dial queued on the old one was never answered.
         $ch = $null
-        if (-not $ListenerState.pending.TryDequeue([ref]$ch)) {
-            [void]$ListenerState.signal.Wait([Math]::Max(0, $TimeoutMs))
-            if (-not $ListenerState.pending.TryDequeue([ref]$ch)) { return (New-HordeMemoryResult -Ok $false -Reason ("no peer connected within " + $TimeoutMs + " ms")) }
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not $ListenerState.pending.TryDequeue([ref]$ch)) {
+            $left = [Math]::Max(0, $TimeoutMs) - $clock.ElapsedMilliseconds
+            if ($left -le 0) { return (New-HordeMemoryResult -Ok $false -Reason ("no peer connected within " + $TimeoutMs + " ms")) }
+            [void]$ListenerState.signal.Wait([int]$left)
         }
         $peer = New-HordeMemoryPeer
         return (New-HordeMemoryResult -Ok $true -Channel (New-HordeMemoryChannel -Inbound $ch.inbound -Outbound $ch.outbound) -Peer $peer)

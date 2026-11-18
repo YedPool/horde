@@ -123,6 +123,14 @@ try {
     $badFile = Join-Path $utf8Dir "bad.v1.json"
     [System.IO.File]::WriteAllText($badFile, '{ "properties": { "q": { "maximum": 3 } } }', (New-Object System.Text.UTF8Encoding($false)))
     Check (Throws { Read-HordeSchemaFile -Path $badFile } "the schema uses 'maximum' at #/properties/q") "a schema file with a node this validator cannot honour is refused when it is read"
+    # A SCHEMA FILE'S NUMBERS ARE READ ALIKE IN BOTH SHELLS (T-0436). Read bare, pwsh 7 gave this minimum as the
+    # Double 1 and the file loaded; 5.1 gave the Decimal and refused it. Through core/JsonText.ps1 both refuse it.
+    $hairFile = Join-Path $utf8Dir "hair.v1.json"
+    [System.IO.File]::WriteAllText($hairFile, '{ "properties": { "q": { "minimum": 1.00000000000000000001 } } }', (New-Object System.Text.UTF8Encoding($false)))
+    Check (Throws { Read-HordeSchemaFile -Path $hairFile } "minimum at #/properties/q must be a whole number") "a schema file whose minimum is a hair above 1 is refused when it is read, in either shell"
+    $wholeFile = Join-Path $utf8Dir "whole.v1.json"
+    [System.IO.File]::WriteAllText($wholeFile, '{ "properties": { "q": { "minimum": 1 } } }', (New-Object System.Text.UTF8Encoding($false)))
+    Check ((Read-HordeSchemaFile -Path $wholeFile).properties.q.minimum -eq 1) "CONTROL: a schema file whose minimum is 1 is read"
 } finally { Remove-Item -LiteralPath $utf8Dir -Recurse -Force }
 Check (-not (Test-Path -LiteralPath $utf8Dir)) "the UTF-8 test's temporary folder is gone"
 

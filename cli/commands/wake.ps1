@@ -84,6 +84,16 @@ $HordeCommand = @{
                     $how = "fresh"
                     if ($age -gt $limit) { $how = "STALE (over " + $limit + " s): this watcher is not running" }
                     Write-Output ($shown + ": heartbeat " + $age + " s ago, " + $how + " (pass " + $beat.value.pass + ", pid " + $beat.value.pid + ")")
+                    # THE RUN-LONG COUNTS (T-0116), when the heartbeat carries them: looks at a session's box and turn,
+                    # how many the terminal did not answer (blind), and in how many of the passes there were ("blind in P of M passes")
+                    # a blind spell was open; and since when they have been counted, so the read of a 48 h run says how many ticks were blind.
+                    $counts = $beat.value.counts
+                    if ($null -ne $counts) {
+                        # A time is shown as one text whichever PowerShell read it (7 turns a time in JSON into a date).
+                        $sinceAt = ConvertFrom-HordeWakeTimeText $counts.since
+                        $sinceText = $(if ($null -ne $sinceAt) { ConvertTo-HordeWakeTimeText $sinceAt } else { "$($counts.since)" })
+                        Write-Output ($shown + ": looks " + $counts.looks + ", blind " + $counts.blindLooks + ", blind in " + $counts.blindPasses + " of " + $counts.passes + " passes since " + $sinceText)
+                    }
                     # WHICH SESSION THAT WATCHER HOLDS AS ITS OWN, when its heartbeat says.
                     $own = $beat.value.self
                     if ($own -is [string]) { Write-Output ($shown + ": " + (Get-HordeWakeSelfLine -Self $own)) }

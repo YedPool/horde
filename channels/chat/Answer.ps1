@@ -290,7 +290,7 @@ function Invoke-HordeChatAnswerAccept {
         "accepted" {
             # IN THE ORC'S MAILBOX, NOT YET TAKEN: owned by the awaiting list from here, written BEFORE the record is done.
             $wp = $posted.value.PSObject.Properties["woken"]
-            $entry = [pscustomobject]@{ messageId = $ans.messageId; messengerId = $message.messageId; postedMs = (Get-HordeChatTakenNowMs); from = "$($Item.from)"; seq = [long]$Item.seq; alarmed = $false; woken = ($null -ne $wp -and $wp.Value -eq $true) }
+            $entry = [pscustomobject]@{ messageId = $ans.messageId; messengerId = $message.messageId; postedMs = (Get-HordeChatTakenNowMs); from = "$($Item.from)"; seq = [long]$Item.seq; alarmed = $false; woken = ($null -ne $wp -and $wp.Value -eq $true); session = "" }
             $already = Get-HordeChatTakenEntry -State $lg.ledger -MessageId $ans.messageId
             if ($null -ne $already -and $already.alarmed) {
                 return [pscustomobject]@{ outcome = "done"; reason = ("answer " + $ans.messageId + ": already awaited and alarmed - no receipt sent over the alarm") }

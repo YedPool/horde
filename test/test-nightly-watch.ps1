@@ -445,8 +445,38 @@ try {
     Check ($LASTEXITCODE -eq 0 -and $txt -like "*dry run*" -and $txt -like "*founder phone channel ON*" -and $txt -notlike ("*" + $secretWord + "*")) "-WhatIf registers nothing and shows the channel on, never the secret"
     $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\Register-NightlyWatchTask.ps1") -Plan -HordeRoot $root -NoticeService nightly-watch)
     Check ($LASTEXITCODE -ne 0) "a service without its secret file is refused"
+
+    Write-Host ""
+    Write-Host "--- T-0460: the watcher also runs at logon (a restart left the PC at the lock screen, 2026-11-10) ---" -ForegroundColor Cyan
+    # The real trigger objects, built and read, never registered: New-ScheduledTaskTrigger does not touch the scheduler.
+    $tr = @()
+    try { $tr = @(New-HordeNightlyWatchTriggers -First ([datetime]"2026-11-12") -UserId "HOST\someone") } catch { Write-Host ("  triggers: " + $_.Exception.Message) }
+    $daily = @($tr | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskDailyTrigger" })
+    $logon = @($tr | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskLogonTrigger" })
+    Check ($tr.Count -eq 2 -and $daily.Count -eq 1 -and $logon.Count -eq 1) ("two triggers: daily and at logon (" + $tr.Count + ")")
+    Check ($daily.Count -eq 1 -and ("" + $daily[0].StartBoundary) -ceq "2026-11-12T07:15:00") "the daily one is 07:15 wall-clock with no offset"
+    Check ($logon.Count -eq 1 -and ("" + $logon[0].UserId) -ceq "HOST\someone") "the logon one is for that user only, not every logon"
+    Check ($logon.Count -eq 1 -and ("" + $logon[0].Delay) -ceq "PT5M") "and waits 5 minutes after the logon, so the tell can land"
+    $refused = $false
+    try { [void](New-HordeNightlyWatchTriggers -First ([datetime]"2026-11-12") -UserId "") } catch { $refused = $true }
+    Check $refused "no user is refused: a logon trigger for every logon is never built"
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\Register-NightlyWatchTask.ps1") -Plan -HordeRoot $root)
+    $txt = $o -join "`n"
+    Check ($LASTEXITCODE -eq 0 -and $txt -match 'trigger: at logon of \S+ after PT5M') "-Plan prints the logon trigger it would register"
+    Check ($txt -match 'trigger: daily, <StartBoundary>\d{4}-\d\d-\d\dT07:15:00</StartBoundary>') "and the daily trigger, read from the same task object"
+    # The morning of 2026-11-11: the 07:15 run never happened, the first logon was 11:12. Run at that logon, the watcher judges
+    # the night of 11-10 (not today's), says it did not start and that the PC restarted, and a second logon says nothing new.
+    $lr = New-Rig
+    Add-Night $lr "2026-11-09" "2026-11-10"
+    $r = Invoke-Watch $lr "2026-11-11 11:17" -Boot "2026-11-10 20:32:57"
+    Check ($r.code -eq 0 -and (AlarmText $lr "2026-11-10") -like "*NOT STARTED*") ("a logon run at 11:17 judges the night of 11-10 and alarms NOT STARTED (" + $r.code + ")")
+    $n1 = (Lines $lr.rec).Count
+    $r = Invoke-Watch $lr "2026-11-11 14:02" -Boot "2026-11-10 20:32:57"
+    Check ($r.code -eq 0 -and $n1 -ge 1 -and (Lines $lr.rec).Count -eq $n1) ("a second logon the same day sends nothing new (" + $n1 + " then " + (Lines $lr.rec).Count + ")")
+    $r = Invoke-Watch $lr "2026-11-12 02:10" -Boot "2026-11-10 20:32:57" -More @("-Plan")
+    Check ($r.code -eq 0 -and $r.out -like "*PLAN night 2026-11-10:*") "a logon at 02:10 judges the last FINISHED night, never the one still running"
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "the watcher judges the night that began yesterday by calendar, tells RAN from NOT STARTED, REFUSED, FAILED, BUSY, NOT REPORTED and NOT TOLD from the evidence alone, reads the task XML for a missing, disabled or offset task, alarms once a morning with a streak and a recovery, keeps each of two channels independent, exits non-zero only when all fail, and never silences itself on an empty folder or a corrupt memory"
+Complete-HordeSuite -Success "the watcher judges the night that began yesterday by calendar, tells RAN from NOT STARTED, REFUSED, FAILED, BUSY, NOT REPORTED and NOT TOLD from the evidence alone, reads the task XML for a missing, disabled or offset task, alarms once a morning with a streak and a recovery, keeps each of two channels independent, exits non-zero only when all fail, never silences itself on an empty folder or a corrupt memory, and is registered to run at its user's logon too, judging the last finished night once"

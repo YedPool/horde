@@ -42,5 +42,8 @@
         @{ Name = "notice-wears-no-label"
            Find = 'sessionId = $script:HordeRelayRunTellFrom; label = $FromLabel }'
            Replace = 'sessionId = $script:HordeRelayRunTellFrom; label = "" }' }
+        @{ Name = "accepted-post-without-a-reason-throws"
+           Find = '(Get-HordeMessengerMember $posted.value ''reason'').value)" -clike "already-posted*"'
+           Replace = '$posted.value.reason)" -clike "already-posted*"' }
     )
 }

@@ -29,6 +29,16 @@ $script:ownerCaseSkipped = $false
 $me = Get-HordeLocalUserSid
 function New-Id { return [guid]::NewGuid().ToString() }
 function Test-PipeListed { param([string]$Pipe) return (@([System.IO.Directory]::EnumerateFiles($script:HordeLocalPipeRoot, $Pipe)).Count -gt 0) }
+function New-TestPipeServer {
+    # A server pipe made with -Security, in either shell (T-0450). .NET Core has no NamedPipeServerStream
+    # constructor that takes a PipeSecurity - measured 2026-11-11 on 7.6.7: "Cannot find an overload for
+    # NamedPipeServerStream and the argument count: 8" - and NamedPipeServerStreamAcl.Create is its form there.
+    # Chosen by whether that type exists, not by the shell's version.
+    param([string]$Name, [int]$Buffer, [System.IO.Pipes.PipeSecurity]$Security)
+    $acl = "System.IO.Pipes.NamedPipeServerStreamAcl" -as [type]
+    if ($null -ne $acl) { return $acl::Create($Name, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, $Buffer, $Buffer, $Security) }
+    return (New-Object System.IO.Pipes.NamedPipeServerStream($Name, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, $Buffer, $Buffer, $Security))
+}
 
 Write-Host ""
 Write-Host "--- the pipe name comes only from a device id ---" -ForegroundColor Cyan
@@ -57,7 +67,7 @@ Check ($la.state -ceq "known") "a listener starts on a fresh device id"
 if ($la.state -eq "known") {
     $listener = Get-HordeValue $la
     try {
-        $sec = $listener.state.server.GetAccessControl()
+        $sec = (Get-HordeLocalPipeSecurity -Pipe $listener.state.server)
         $rules = @($sec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
         $net = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::NetworkSid, $null)
         Write-Host ("  rules: " + (($rules | ForEach-Object { "" + $_.IdentityReference + " " + $_.AccessControlType + " " + $_.PipeAccessRights }) -join "; ")) -ForegroundColor DarkGray
@@ -88,12 +98,12 @@ if ($ln.state -eq "known" -and $lh.state -eq "known") {
     $nl = Get-HordeValue $ln; $hl = Get-HordeValue $lh
     try {
         Check (Test-PipeListed ("horde-hub-" + $id)) "the hub's pipe is \\.\pipe\horde-hub-<hubId>"
-        $hs = $hl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
-        $ns = $nl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        $hs = (Get-HordeLocalPipeSecurity -Pipe $hl.state.server).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        $ns = (Get-HordeLocalPipeSecurity -Pipe $nl.state.server).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
         Check ($hs -ceq $ns -and $hs.Contains("(D;;") -and $hs.Contains($me.Value)) ("its owner and ACL are the node pipe's, read back: " + $hs)
         # The ACL itself, rule by rule, not the owner: this session may be elevated, where a pipe made
         # without an explicit owner comes out owned by Administrators (review of #138).
-        $hsec = $hl.state.server.GetAccessControl()
+        $hsec = (Get-HordeLocalPipeSecurity -Pipe $hl.state.server)
         $hrules = @($hsec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
         $netSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::NetworkSid, $null)
         Write-Host ("  hub pipe rules: " + (($hrules | ForEach-Object { "" + $_.IdentityReference + " " + $_.AccessControlType + " " + $_.PipeAccessRights }) -join "; ")) -ForegroundColor DarkGray
@@ -136,7 +146,7 @@ $deny = New-Object System.IO.Pipes.PipeSecurity
 $deny.SetAccessRuleProtection($true, $false)
 $deny.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::CreateNewInstance, [System.Security.AccessControl.AccessControlType]::Allow)))
 $deny.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::ReadWrite, [System.Security.AccessControl.AccessControlType]::Deny)))
-$other = New-Object System.IO.Pipes.NamedPipeServerStream($pipe, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096, $deny)
+$other = New-TestPipeServer -Name $pipe -Buffer 4096 -Security $deny
 try {
     $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "node" -TimeoutMs 2000
     Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*refused*ACL*") "dialling a pipe whose ACL denies this user is refused, and says the ACL refused it"
@@ -159,6 +169,30 @@ Check ((Test-HordeLocalPipeOwner -Owner $me -Expected $me) -eq $true) "a pipe ow
 Check ((Test-HordeLocalPipeOwner -Owner $system -Expected $me) -eq $false) "a pipe owned by another principal (SYSTEM here) fails"
 Check ((Test-HordeLocalPipeOwner -Owner $null -Expected $me) -eq $false) "a pipe whose owner could not be read fails"
 Write-Host "  NOT SHOWN end to end: a pipe really owned by another user needs a second account, which this machine does not have." -ForegroundColor Yellow
+
+# THE OWNER IS READ IN BOTH SHELLS, AND A READ THAT FAILS REFUSES WITHOUT BLAMING A SQUATTER (T-0450).
+# Under pwsh 7 the pipe had no GetAccessControl method, the read threw, and every dial to this user's own
+# node was refused as "owned by ''". A pipe made as the transport makes its own, dialled directly, is
+# read here: New-HordeLocalServer names this user as owner, where a pipe made without one comes out owned
+# by Administrators on an elevated token (measured 2026-11-11 in the slot's run: S-1-5-32-544). A disposed
+# pipe cannot be read in either shell (ObjectDisposedException, "Cannot access a closed pipe", on
+# 5.1.26100 and 7.6.7).
+$ownName = "horde-test-owner-" + [guid]::NewGuid().ToString()
+$ownMade = New-HordeLocalServer -Pipe $ownName -First
+if ($null -eq $ownMade.stream) { throw ("the owner case's pipe could not be made: " + $ownMade.reason) }
+$ownServer = $ownMade.stream
+$ownClient = New-Object System.IO.Pipes.NamedPipeClientStream(".", $ownName, [System.IO.Pipes.PipeDirection]::InOut)
+try {
+    $ownClient.Connect(5000)
+    $ownRead = (Get-HordeLocalPipeSecurity -Pipe $ownClient).GetOwner([System.Security.Principal.SecurityIdentifier])
+    Check ("$ownRead" -ceq "$me") ("a dialled pipe's owner is read in this shell, " + $PSVersionTable.PSVersion + " (" + $ownRead + ")")
+    Check ((Get-HordeLocalOwnerRefusal -Pipe $ownClient -Name $ownName -Expected $me) -ceq "") "a pipe owned by this user is not refused on its owner"
+    $otherWhy = Get-HordeLocalOwnerRefusal -Pipe $ownClient -Name $ownName -Expected $system
+    Check ($otherWhy -like ("refused: " + $ownName + " is owned by '" + $me + "', not by this user; it may be a squatter")) ("a pipe owned by someone other than the expected user is refused, naming its owner (" + $otherWhy + ")")
+} finally { $ownClient.Dispose(); $ownServer.Dispose() }
+$unreadWhy = Get-HordeLocalOwnerRefusal -Pipe $ownClient -Name $ownName -Expected $me
+Check ($unreadWhy -like ("refused: the owner of " + $ownName + " could not be read (*")) ("a pipe whose owner cannot be read is refused, as could not be read (" + $unreadWhy + ")")
+Check ($unreadWhy -notlike "*squatter*" -and $unreadWhy -notlike "*owned by*") "and the refusal does not call it a squatter or name an owner it never read"
 
 $id = New-Id
 $la = Start-HordeTransportListener -Transport $t -Endpoint $id
@@ -336,7 +370,7 @@ try {
         $sec = New-Object System.IO.Pipes.PipeSecurity
         $sec.SetOwner($ba)
         $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
-        $baPipe = New-Object System.IO.Pipes.NamedPipeServerStream((Get-HordeLocalPipeName -DeviceId $id), [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
+        $baPipe = New-TestPipeServer -Name (Get-HordeLocalPipeName -DeviceId $id) -Buffer 0 -Security $sec
     } catch {
         $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
         $baWhy = $e.Message; $baCode = $e.HResult
@@ -352,7 +386,7 @@ try {
         Check $false ("an Administrators-owned pipe for the owner case (" + $baWhy + ", HRESULT " + $baCode + ")")
     } else {
         try {
-            $read = $baPipe.GetAccessControl().GetOwner([System.Security.Principal.SecurityIdentifier])
+            $read = (Get-HordeLocalPipeSecurity -Pipe $baPipe).GetOwner([System.Security.Principal.SecurityIdentifier])
             Check ("$read" -ceq "$ba") ("CONTROL: the pipe's owner reads back as Administrators (" + $read + ")")
             $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
             Check ($o.state -ceq "unknown" -and "$($o.reason)" -like ("*owned by '" + $ba + "', not by this user*")) ("the hub refuses a pipe owned by another principal, served by its own interpreter at its own level (" + $o.reason + ")")
@@ -388,6 +422,16 @@ Check ((Test-HordeLocalNodeImage -Image $psImage) -eq $true) "the node's own int
 Check ((Test-HordeLocalNodeImage -Image $psImage.ToUpperInvariant()) -eq $true) "compared without case, as Windows paths are"
 Check ((Test-HordeLocalNodeImage -Image "C:\Users\Public\powershell.exe") -eq $false) "a copy of it elsewhere is not"
 Check ((Test-HordeLocalNodeImage -Image "") -eq $false) "an unreadable image is not"
+# PowerShell 7 from its MSI install is a node's interpreter too (T-0450), and only that one path: the list
+# must not grow by a look-alike (N, 2026-11-11).
+$pf = $(if ("$env:ProgramW6432" -ne "") { $env:ProgramW6432 } else { $env:ProgramFiles })
+$pwshImage = Join-Path $pf "PowerShell\7\pwsh.exe"
+Check ((Test-HordeLocalNodeImage -Image $pwshImage) -eq $true) ("PowerShell 7's MSI install is an accepted image (" + $pwshImage + ")")
+Check ((Test-HordeLocalNodeImage -Image (Join-Path $pf "PowerShell\7-preview\pwsh.exe")) -eq $false) "a preview build of it is not"
+Check ((Test-HordeLocalNodeImage -Image (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe")) -eq $false) "the Store's pwsh is not"
+Check ((Test-HordeLocalNodeImage -Image "C:\Users\Public\PowerShell\7\pwsh.exe") -eq $false) "the same file under a user folder is not"
+Check ((Test-HordeLocalNodeImage -Image (Join-Path ${env:ProgramFiles(x86)} "PowerShell\7\pwsh.exe")) -eq $false) "nor under the x86 Program Files"
+Check (@($script:HordeLocalNodeImages).Count -eq 3) ("the list holds exactly three images: " + (@($script:HordeLocalNodeImages) -join "; "))
 
 Write-Host ""
 Write-Host "--- no gap between links: the name stays held while the node listens ---" -ForegroundColor Cyan
@@ -483,7 +527,7 @@ $la = Start-HordeTransportListener -Transport $t -Endpoint $id
 if ($la.state -eq "known") {
     $listener = Get-HordeValue $la
     try {
-        $sec = $listener.state.server.GetAccessControl()
+        $sec = (Get-HordeLocalPipeSecurity -Pipe $listener.state.server)
         Check ($sec.AreAccessRulesCanonical -eq $true) "the DACL is in canonical order: the NETWORK deny comes before the allow"
     } finally { Stop-HordeTransportListener -Listener $listener }
 } else { Check $false "a listener for the DACL-order case" }

@@ -123,5 +123,21 @@
         @{ Name = "later-channel-skipped-after-a-failure"
            Find = 'try { $ok = ((& $ch.send $results) -eq $true) }'
            Replace = 'if ($results.Values -contains $false) { $results[$ch.name] = $false; continue }; try { $ok = ((& $ch.send $results) -eq $true) }' }
+        # T-0460: the watcher task's logon trigger (a PC left at the lock screen after a restart skips the morning run).
+        @{ Name = "logon-trigger-dropped"
+           Find = 'return @($daily, $logon)'
+           Replace = 'return @($daily)' }
+        @{ Name = "logon-trigger-for-every-user"
+           Find = '$logon = New-ScheduledTaskTrigger -AtLogOn -User $UserId'
+           Replace = '$logon = New-ScheduledTaskTrigger -AtLogOn' }
+        @{ Name = "logon-trigger-without-delay"
+           Find = '$logon.Delay = "PT" + $LogonDelayMinutes + "M"'
+           Replace = '$logon.Delay = $null' }
+        @{ Name = "logon-trigger-for-no-user-accepted"
+           Find = 'if ("" + $UserId -eq "") { throw "-UserId is required'
+           Replace = 'if ($false) { throw "-UserId is required' }
+        @{ Name = "watch-daily-boundary-keeps-the-offset"
+           Find = '$daily.StartBoundary = Get-HordeNightlyTaskBoundary -Date $First.Date -Hour $Hour -Minute $Minute'
+           Replace = '$daily.StartBoundary = $daily.StartBoundary' }
     )
 }

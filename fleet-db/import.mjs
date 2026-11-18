@@ -361,7 +361,7 @@ const orcRef = (ctx, name) => (typeof name === 'string' ? (ctx.byLetter.get(name
 // ---------------------------------------------------------------------------------------------------------
 // session
 
-function sessionOrc(ctx, rec, rank, rep) {
+function sessionOrc(ctx, rec, rank, rep = null) {
   const owner = nz(rec.owner);
   const label = nz(rec.label);
   const single = (v) => (v !== null && /^[A-Z]$/.test(v) ? v : null);
@@ -371,7 +371,7 @@ function sessionOrc(ctx, rec, rank, rep) {
   const letter = rank === 'orc' || rank === 'thrall' ? (single(label) ?? single(owner)) : (single(owner) ?? lead(label));
   if (letter === null) return null;
   const id = ctx.byLetter.get(letter) ?? null;
-  if (id === null) rep.unlink('registry', 'owner/label ' + letter + ' names no Orc row (session kept without one)', letter);
+  if (id === null && rep !== null) rep.unlink('registry', 'owner/label ' + letter + ' names no Orc row (session kept without one)', letter);
   return id;
 }
 
@@ -409,22 +409,62 @@ function stepSessions(ctx, data) {
   const order = [...rows.values()].sort((a, b) => b.last - a.last || (a.id < b.id ? -1 : 1));
   const done = new Set();
   const visiting = new Set();
-  const exists = db.prepare('SELECT rank, orc_id FROM session WHERE id = ?');
-  const seat = db.prepare("SELECT id FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
+  const exists = db.prepare('SELECT rank, orc_id, retired_at FROM session WHERE id = ?');
+  const seat = db.prepare("SELECT id, last_seen FROM session WHERE orc_id = ? AND node_id = ? AND retired_at IS NULL AND rank IN ('thrall', 'orc')");
+  const retiredAtOf = (row) => {
+    const at = parseTime(row.rec.retiredAt);
+    if (at !== null) return at;
+    rep.unlink('registry', 'retiredAt is not a time (lastSeen used)', row.id);
+    return row.last;
+  };
+  // A RETIREMENT THE REGISTRY RECORDS REACHES A ROW ALREADY THERE (T-0410): the sync step files every record on every
+  // tick, so a session retired after its row was made would otherwise read live for good. Nothing is ever un-retired.
+  const retire = db.prepare('UPDATE session SET retired_at = ? WHERE id = ? AND retired_at IS NULL');
+  order.forEach((row) => {
+    const have = exists.get(row.id);
+    if (have !== undefined && have.retired_at === null && row.rec.retired === true) retire.run(retiredAtOf(row), row.id);
+  });
   // SEATS ARE DECIDED BEFORE ANY INSERT, freshest session first: the schema allows one live seat per Orc
   // and PC, and the freshest session must hold it. Inserting a parent early (for its child) never claims
   // one, because the claim was made here, by freshness, not by the order the rows happen to be written in.
-  const claimed = new Set();
+  // THE RULE HOLDS FOR ROWS ALREADY THERE TOO (T-0410): a fresher session of an Orc takes the seat from the row that held
+  // it, which then reads rank unknown, as a newer loser always did. The old holder is not retired: freshness is not an
+  // ending, and a holder that becomes the freshest again takes the seat back. A holder the registry does not list this
+  // time (a partial read) is compared by its stored last_seen, and keeps the seat on a tie.
+  // claimed: Orc -> the session that holds its seat after this import (a holder kept on a tie is named, so its own turn keeps it).
+  const claimed = new Map();
+  const demote = db.prepare("UPDATE session SET rank = 'unknown' WHERE id = ?");
+  const takeSeat = (row) => {
+    if (claimed.has(row.orcId)) return claimed.get(row.orcId) === row.id;
+    const holder = seat.get(row.orcId, ctx.nodeId);
+    if (holder === undefined || holder.id === row.id) { claimed.set(row.orcId, row.id); return true; }
+    const holderLast = rows.has(holder.id) ? rows.get(holder.id).last : holder.last_seen;
+    if (holderLast >= row.last) { claimed.set(row.orcId, holder.id); return false; }
+    claimed.set(row.orcId, row.id);
+    demote.run(holder.id);
+    rep.unlink('registry', 'the seat moved to a fresher session (the old holder reads rank unknown)', holder.id);
+    return true;
+  };
   for (const row of order) {
     const rec = row.rec;
-    // A record's kind is read into rank when the session is new. A row already there keeps its rank; a kind
-    // that disagrees is reported, never written over it. A kind that is none of the three is reported too.
+    // A record's kind is read into rank when the session is new. A row already there keeps its rank, except for the
+    // seat (above); a kind that disagrees is reported, never written over it. A kind that is none of the three is reported too.
     if (rec.kind !== undefined && rec.kind !== null && !RECORD_KINDS.includes(rec.kind)) rep.unlink('registry', 'kind is not thrall, orc or warg (the older rule decides the rank)', row.id);
     const have = exists.get(row.id);
     // A STUB (rank unknown, no Orc) is what horde work start writes for a session the importer has not seen
     // yet: the record upgrades it, and is not a disagreement with it.
     const stub = have !== undefined && have.rank === 'unknown' && have.orc_id === null;
     if (have && !stub) {
+      // A seat rank the record gives, on a row of that same Orc that is not retired: the seat is decided again.
+      const kind = rankOf(rec);
+      const seatKind = (kind === 'orc' || kind === 'thrall') && (have.rank === kind || have.rank === 'unknown');
+      if (seatKind && have.retired_at === null && have.orc_id === sessionOrc(ctx, rec, kind)) {
+        row.orcId = have.orc_id;
+        if (takeSeat(row)) {
+          if (have.rank !== kind) db.prepare('UPDATE session SET rank = ? WHERE id = ?').run(kind, row.id);
+        } else if (have.rank !== 'unknown') demote.run(row.id);
+        continue;
+      }
       if (RECORD_KINDS.includes(rec.kind) && have.rank !== rec.kind) rep.unlink('registry', 'kind ' + rec.kind + ' disagrees with the stored rank ' + have.rank + ' (rank kept)', row.id);
       continue;
     }
@@ -435,16 +475,12 @@ function stepSessions(ctx, data) {
       row.rank = 'unknown';
     }
     row.retired = rec.retired === true;
-    row.retiredAt = null;
-    if (row.retired) {
-      row.retiredAt = parseTime(rec.retiredAt);
-      if (row.retiredAt === null) { rep.unlink('registry', 'retiredAt is not a time (lastSeen used)', row.id); row.retiredAt = row.last; }
-    }
+    row.retiredAt = row.retired ? (have !== undefined && have.retired_at !== null ? have.retired_at : retiredAtOf(row)) : null;
     if ((row.rank === 'orc' || row.rank === 'thrall') && !row.retired) {
-      if (claimed.has(row.orcId) || seat.get(row.orcId, ctx.nodeId)) {
+      if (!takeSeat(row)) {
         rep.unlink('registry', 'a second live seat for one Orc (rank unknown)', row.id);
         row.rank = 'unknown';
-      } else claimed.add(row.orcId);
+      }
     }
     if (stub && (row.rank !== 'unknown' || row.orcId !== null)) {
       db.prepare('UPDATE session SET rank = ?, orc_id = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?').run(row.rank, row.orcId, row.retiredAt, row.id);

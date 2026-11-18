@@ -30,7 +30,8 @@ $fakeProfile = Join-Path $script:work "profile"
 $homeA = Join-Path $script:work "homeA"
 $homeB = Join-Path $script:work "homeB"
 $bare = Join-Path $script:work "bare"
-New-Item -ItemType Directory -Path $fakeProfile, $homeA, $homeB, $bare -Force | Out-Null
+New-Item -ItemType Directory -Path $homeA, $homeB, $bare -Force | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $pointer = Join-Path $fakeProfile ".horde-home.json"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $noHome = @{ HORDE_HOME = ""; USERPROFILE = $fakeProfile }

@@ -118,6 +118,9 @@ function Test-HordeTestMember {
     return [bool](Resolve-HordeTestMember -Object $Object -Path $Path).found
 }
 
+# A FAKE PROFILE FOR A CHILD (T-0470): New-HordeTestProfile, in test/lib/TestProfile.ps1, says why.
+. (Join-Path $PSScriptRoot "TestProfile.ps1")
+
 function Register-HordeSuiteError {
     # Called by the suite's trap line. Records an error no test expected, so the suite cannot pass.
     param($ErrorRecord)

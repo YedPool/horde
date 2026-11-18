@@ -39,8 +39,38 @@
            Find = '.run(p, ctx.nodeId, child.first, child.first);'
            Replace = '.run(p, ctx.nodeId, child.last, child.last);' }
         @{ Name = "second-live-seat-not-refused"
-           Find = 'if (claimed.has(row.orcId) || seat.get(row.orcId, ctx.nodeId)) {'
+           Find = 'if (!takeSeat(row)) {'
            Replace = 'if (false) {' }
+        @{ Name = "later-retirement-not-carried"
+           Find = 'if (have !== undefined && have.retired_at === null && row.rec.retired === true) retire.run'
+           Replace = 'if (false) retire.run' }
+        @{ Name = "retirement-redated"
+           Find = 'if (have !== undefined && have.retired_at === null && row.rec.retired === true) retire.run'
+           Replace = 'if (have !== undefined && row.rec.retired === true) db.prepare(''UPDATE session SET retired_at = ? WHERE id = ?'').run' }
+        @{ Name = "existing-row-never-reseated"
+           Find = 'if (seatKind && have.retired_at === null && have.orc_id === sessionOrc(ctx, rec, kind)) {'
+           Replace = 'if (false) {' }
+        @{ Name = "retired-row-reseated"
+           Find = 'if (seatKind && have.retired_at === null && have.orc_id === sessionOrc(ctx, rec, kind)) {'
+           Replace = 'if (seatKind && have.orc_id === sessionOrc(ctx, rec, kind)) {' }
+        @{ Name = "other-orc-record-reseats"
+           Find = 'if (seatKind && have.retired_at === null && have.orc_id === sessionOrc(ctx, rec, kind)) {'
+           Replace = 'if (seatKind && have.retired_at === null) {' }
+        @{ Name = "seat-loser-of-other-rank-reseated"
+           Find = '(have.rank === kind || have.rank === ''unknown'')'
+           Replace = 'true' }
+        @{ Name = "tie-takes-the-seat"
+           Find = 'if (holderLast >= row.last) {'
+           Replace = 'if (holderLast > row.last) {' }
+        @{ Name = "holder-left-out-loses"
+           Find = 'rows.has(holder.id) ? rows.get(holder.id).last : holder.last_seen'
+           Replace = 'rows.has(holder.id) ? rows.get(holder.id).last : 0' }
+        @{ Name = "tie-holder-not-named"
+           Find = '{ claimed.set(row.orcId, holder.id); return false; }'
+           Replace = '{ claimed.set(row.orcId, row.id); return false; }' }
+        @{ Name = "new-holder-not-promoted"
+           Find = 'if (have.rank !== kind) db.prepare(''UPDATE session SET rank = ? WHERE id = ?'').run(kind, row.id);'
+           Replace = 'void 0;' }
         @{ Name = "stalest-session-takes-the-seat"
            Find = '.sort((a, b) => b.last - a.last ||'
            Replace = '.sort((a, b) => a.last - b.last ||' }
@@ -114,11 +144,11 @@
            Find = 'for (const row of order) {'
            Replace = 'for (const row of [...order].reverse()) {' }
         @{ Name = "seat-claims-not-remembered"
-           Find = 'claimed.has(row.orcId) || '
-           Replace = '' }
+           Find = 'if (claimed.has(row.orcId)) return'
+           Replace = 'if (false) return' }
         @{ Name = "seats-in-the-database-ignored"
-           Find = ' || seat.get(row.orcId, ctx.nodeId)) {'
-           Replace = ') {' }
+           Find = 'const holder = seat.get(row.orcId, ctx.nodeId);'
+           Replace = 'const holder = undefined;' }
         @{ Name = "sub-session-writer-gives-no-orc"
            Find = 'if (lead !== null) row.by_orc_id = lead;'
            Replace = 'if (false) row.by_orc_id = lead;' }
@@ -180,8 +210,8 @@
            Find = '{ rep.unlink(''registry'', ''lastSeen is not a time (firstSeen used)'', id); last = first; }'
            Replace = '{ last = first; }' }
         @{ Name = "retired-at-substitution-silent"
-           Find = '{ rep.unlink(''registry'', ''retiredAt is not a time (lastSeen used)'', row.id); row.retiredAt = row.last; }'
-           Replace = '{ row.retiredAt = row.last; }' }
+           Find = '    rep.unlink(''registry'', ''retiredAt is not a time (lastSeen used)'', row.id);'
+           Replace = '' }
         @{ Name = "ledger-without-orcs-accepted"
            Find = '.get().n === 0) {'
            Replace = '.get().n === -1) {' }

@@ -376,8 +376,8 @@ export function runSessionsStep(db, raw, { now = Date.now(), stepBytes = STEP_RE
 
     // ---- state and activity: a row is written only when something in it changed
     const upd = db.prepare('UPDATE session SET last_activity_at = ?, last_assistant_at = ?, in_turn = ?, waits_person = ?, state = ?, transcript_offset = ? WHERE id = ?');
-    // The importer inserts a row and never updates it, so last_seen would freeze at the first tick. Rank and retired_at are not
-    // refreshed: a new seat can read rank 'unknown' while an old seat holder stays unretired, until seat binding owns that.
+    // The importer does not refresh last_seen, so it would freeze at the first tick. It does carry a retirement and move the
+    // seat to the freshest session on every tick (T-0410); this last_seen is what it compares a holder the registry left out by.
     const seenUpd = db.prepare('UPDATE session SET last_seen = ? WHERE id = ? AND last_seen < ?');
     const checked = [];
     for (const e of uniq) {

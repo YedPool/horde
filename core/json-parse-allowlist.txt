@@ -22,7 +22,6 @@ core/PermissionLevels.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed w
 core/Projection.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/RestoreSource.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Roles.ps1 | 3 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
-core/Schema.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/Wake.ps1 | 2 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/WakeFiles.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)
 core/WakeTell.ps1 | 1 | not yet moved to ConvertFrom-HordeJson; listed when the seam landed (PR 279)

@@ -128,6 +128,23 @@ $r = Run-Bisect -N 8 -Break 3 -NullAt "m8"
 Check ($r.state -ceq "inconclusive") "a tip that could not be run is inconclusive"
 $r = Run-Bisect -N 8 -Break 3 -NullAt "m4"
 Check ($r.state -ceq "inconclusive" -and "" + $r.between[1] -ceq "m8") "a middle run that did not happen stops the search, saying how far it got"
+# T-0465: RED AT LAST NIGHT'S TIP TOO names no merge. 2026-11-11: test-fleet-liveness went red because the box's
+# sessions turned elevated, red at every commit; the bisect took last night's tip as green and named the first
+# merge (PR 494). Last night's tip (-Base) is run again after the tip, and red there means no merge of the day did it.
+$t8 = @(1..8 | ForEach-Object { "m" + $_ })
+$script:asked = @()
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) $script:asked += $sha; return $true } -Base "m0"
+Check ($r.state -ceq "base-red" -and $r.sha -ceq "" -and $r.runs -eq 2) ("T-0465: red at last night's tip too names no merge (" + $r.state + " " + $r.sha + " in " + $r.runs + ")")
+Check (($script:asked -join ",") -ceq "m8,m0") ("T-0465: the tip is run first, then last night's tip (" + ($script:asked -join ",") + ")")
+Check ("" + $r.between[0] -ceq "m0") "T-0465: and it says which tip was red"
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) if ($sha -ceq "m0") { return $null } return $true } -Base "m0"
+Check ($r.state -ceq "inconclusive") ("T-0465: last night's tip that could not be run is inconclusive, no merge named (" + $r.state + ")")
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return ($sha -cne "m0" -and [int]($sha.Substring(1)) -ge 3) } -Base "m0"
+Check ($r.state -ceq "found" -and $r.sha -ceq "m3") ("T-0465: green at last night's tip, the bisect goes on and names the merge (" + $r.state + " " + $r.sha + ")")
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return $false } -Base "m0"
+Check ($r.state -ceq "flaky" -and $r.runs -eq 1) "T-0465: a tip that is not red is still flaky, last night's tip not run"
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return $true } -Base "m0" -MaxRuns 1
+Check ($r.state -ceq "capped") ("T-0465: a cap that leaves no run for last night's tip ends capped, never a merge named (" + $r.state + ")")
 $r = Run-Bisect -N 16 -Break 7 -Max 2
 Check ($r.state -ceq "capped") "the run cap stops it, saying so"
 
@@ -321,6 +338,11 @@ foreach ($st in @("capped", "inconclusive", "flaky")) {
 $fr = $okRow.PSObject.Copy(); $fr.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "found"; sha = $merge.sha; merge = $merge; runs = 3; between = @("", $merge.sha) })
 $h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($fr)) -split "`n" | Select-Object -First 1
 Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") "R5: a bisect that named its merge leaves the night COMPLETE"
+$br = $okRow.PSObject.Copy(); $br.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "base-red"; sha = ""; merge = $null; runs = 2; between = @("abcdef0123", "") })
+$bl = @(Get-HordeNightlyFindingLines -Row $br)
+Check (@($bl | Where-Object { $_ -like "RED u|ps51 was red at last night's tip abcdef01 too*no merge named*" }).Count -eq 1) ("T-0465: the report says red at last night's tip, no merge named (" + ($bl -join " | ") + ")")
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($br)) -split "`n" | Select-Object -First 1
+Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") ("T-0465: a red at last night's tip is an answer, so the night stays COMPLETE (" + $h + ")")
 
 Write-Host ""
 Write-Host "--- R2: the state is always saved, and what M was not told stays pending until a tell gets through ---" -ForegroundColor Cyan
@@ -756,6 +778,11 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     $bTail = $bLog.Substring([Math]::Max(0, $bLast))
     $jBisect = $bTail.IndexOf(" bisect test/test-a.ps1|ps51 -> "); $jReport = $bTail.IndexOf("report written: "); $jGone = $bTail.IndexOf("first claim on the heavy slot released")
     Check ($jBisect -gt 0 -and $jReport -gt $jBisect -and $jGone -gt $jReport) ("T-0447: the log says bisect, then report written, then released (" + $jBisect + " " + $jReport + " " + $jGone + ")")
+    # T-0465, through the real net: the stub is red at every commit, last night's tip included (a box change, as
+    # on 2026-11-11), so the bisect names no merge.
+    Check ($bTail -like "* bisect test/test-a.ps1|ps51 -> base-red *") ("T-0465: the net finds the unit red at last night's tip too (" + (@($bTail -split "`n" | Where-Object { $_ -like "* bisect *" }) -join " | ") + ")")
+    $bRep = @(Get-ChildItem -LiteralPath $bwr -Recurse -Filter "*.txt" | Where-Object { $_.Name -like "20*-*.txt" } | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
+    Check ($bRep -like "*red at last night's tip*" -and $bRep -notlike "*first red at merge*") "T-0465: and its report names no merge"
     $probe = $null
     Check (-not [System.Threading.Mutex]::TryOpenExisting($bClaim, [ref]$probe)) "T-0447: and no claim is left once the net has ended"
     # A plan, and a suite run that names no claim, take none of the machine's.

@@ -83,11 +83,16 @@ $script:HordeLocalHubEndpointPrefix = "hub:"
 # \A and \z, not ^ and $: in .NET, $ also matches before a final LF (review of PR #39).
 $script:HordeLocalIdPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeLocalBufferBytes = 65536
-# The interpreters a node runs in. Windows PowerShell 5.1 only, today; a node under PowerShell 7 adds
-# its path here (remote design 12.2).
+# The interpreters a node runs in: Windows PowerShell 5.1, and PowerShell 7 from its MSI install (remote
+# design 12.2; T-0450). Each path is writable only with admin rights, so the bar is the same for both.
+# Exactly one pwsh path: no Store package (CONTRIBUTING 16), no preview build, nothing found on PATH.
+# ProgramW6432 names the 64-bit Program Files even in a 32-bit process, where ProgramFiles names the x86
+# one; where it is not set, ProgramFiles is it.
+$script:HordeLocalProgramFiles = $(if ("$env:ProgramW6432" -ne "") { $env:ProgramW6432 } else { $env:ProgramFiles })
 $script:HordeLocalNodeImages = @(
     (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"),
-    (Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
+    (Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"),
+    (Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe")
 )
 
 function Get-HordeLocalPipeName {
@@ -128,6 +133,35 @@ function Test-HordeLocalPipeOwner {
     param($Owner, $Expected)
     if ($null -eq $Owner -or $null -eq $Expected) { return $false }
     return ("$Owner" -ceq "$Expected")
+}
+
+function Get-HordeLocalPipeSecurity {
+    # A pipe's security descriptor, in either shell (T-0450). In .NET Framework (5.1) GetAccessControl is
+    # a method of the pipe; in .NET Core (pwsh 7) it is the extension method PipesAclExtensions, which
+    # PowerShell cannot call as a method - measured 2026-11-11 on 7.6.7, the call threw, the old
+    # `catch { }` left the owner '', and every dial to this user's own node was refused as a squatter.
+    # Chosen by whether the method is there, not by the shell's version (the repo's pattern:
+    # cli/HubRegistry.ps1). Throws when the descriptor cannot be read; the caller decides what that means.
+    param([Parameter(Mandatory = $true)]$Pipe)
+    if ($Pipe.PSObject.Methods["GetAccessControl"]) { return $Pipe.GetAccessControl() }
+    return [System.IO.Pipes.PipesAclExtensions]::GetAccessControl($Pipe)
+}
+
+function Get-HordeLocalOwnerRefusal {
+    # Why a dialled pipe is refused on its owner, or "" when its owner is the expected user.
+    # FAIL-CLOSED: an owner that cannot be read refuses the link, as one owned by someone else does; only
+    # the reason differs, so a broken read is never reported as a squatter (T-0450).
+    param([Parameter(Mandatory = $true)]$Pipe, [string]$Name, $Expected)
+    $owner = $null
+    try { $owner = (Get-HordeLocalPipeSecurity -Pipe $Pipe).GetOwner([System.Security.Principal.SecurityIdentifier]) }
+    catch {
+        $e = $_.Exception
+        while ($null -ne $e.InnerException) { $e = $e.InnerException }
+        return ("refused: the owner of " + $Name + " could not be read (" + $e.Message + "); a pipe whose owner cannot be read is not dialled")
+    }
+    if ($null -eq $owner) { return ("refused: the owner of " + $Name + " could not be read (no owner in its security descriptor); a pipe whose owner cannot be read is not dialled") }
+    if (-not (Test-HordeLocalPipeOwner -Owner $owner -Expected $Expected)) { return ("refused: " + $Name + " is owned by '" + $owner + "', not by this user; it may be a squatter") }
+    return ""
 }
 
 function Test-HordeLocalPeerIntegrity {
@@ -228,11 +262,10 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
             return (New-HordeLocalResult -Ok $false -Reason ("could not connect to " + $pipe + ": " + $e.Message))
         }
         $me = Get-HordeLocalUserSid
-        $owner = $null
-        try { $owner = $cli.GetAccessControl().GetOwner([System.Security.Principal.SecurityIdentifier]) } catch { }
-        if (-not (Test-HordeLocalPipeOwner -Owner $owner -Expected $me)) {
+        $ownerRefusal = Get-HordeLocalOwnerRefusal -Pipe $cli -Name $pipe -Expected $me
+        if ($ownerRefusal -ne "") {
             $cli.Dispose()
-            return (New-HordeLocalResult -Ok $false -Reason ("refused: " + $pipe + " is owned by '" + $owner + "', not by this user; it may be a squatter"))
+            return (New-HordeLocalResult -Ok $false -Reason $ownerRefusal)
         }
         # Who serves it: the owner is the same for a low-integrity process of this user (see header).
         $serverPid = [HordeLocalNative]::ServerPid($cli.SafePipeHandle)

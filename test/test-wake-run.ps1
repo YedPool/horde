@@ -55,7 +55,7 @@ for ($i = 0; $i -lt 20; $i++) {
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) "twenty ticks over six sessions that qualify ask the waker for no nudge at all"
 Check (@($kinds | Where-Object { $_ -cnotlike "would-*" }).Count -eq 0 -and @($kinds | Where-Object { $_ -ceq "would-nudge" }).Count -ge 6 -and @($kinds | Where-Object { $_ -ceq "would-post" }).Count -eq 6 -and @($kinds | Where-Object { $_ -ceq "would-stall" }).Count -eq 1) ("every entry says would: a would-nudge for each session, one would-post for each restored orc, one would-stall (" + (@($kinds | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger and restore state, and no file of a live run (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger and restore state, and no file of a live run (" + ($names -join ",") + ")")
 Check (@(Read-Lines $h).Count -eq $kinds.Count) "what a tick returns is what it journaled"
 $beat = Read-HordeWakeHeartbeat -Shadow -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.pass -eq 20 -and $beat.value.shadow -eq $true -and $beat.value.tickSeconds -eq 3 -and $beat.value.pid -eq 4242 -and $beat.value.at -eq (At 57)) "the heartbeat is the last tick's: its pass, its time, shadow, the tick and the process"
@@ -120,7 +120,7 @@ $run = New-HordeWakeRun -Live -HordeHome $h
 Set-HordeMemoryWakerClock (At 0)
 $first = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.id })
 Check (($first -join ",") -ceq ("nudge-killed:" + (Sid 2) + ",would-tell:" + (Sid 2)) -and $run.warchief -ceq (Sid 1)) ("a nudge that had to be killed is journaled, and the warchief would be told of it - would, because the senders are shadow even in a live run (" + ($first -join ",") + ")")
-Check ((@(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,silence-live.json,tells-of-live-run-shadow.json") "and what the live run would have told is kept in a shadow file of its own - never tells-live.json, which is for what was really told, and never the shadow run's"
+Check ((@(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "counts-live.json,heartbeat-live.json,journal-live.jsonl,ledger-live.json,silence-live.json,tells-of-live-run-shadow.json") "and what the live run would have told is kept in a shadow file of its own - never tells-live.json, which is for what was really told, and never the shadow run's"
 $h = New-Home
 Reset-HordeMemoryWaker
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "busy" -OutcomeReason "mid-turn"
@@ -696,6 +696,23 @@ try {
     $script:reads = 0
     $posts = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h | Where-Object { $_.kind -ceq "post" -or $_.kind -ceq "would-post" })
     Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "posted" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted, and marked in the live file"
+    # T-0116 (PR 472 follow-up): THE DUPLICATE'S NAME REACHES THE BODY OF THE BOUND STALL NOTICE. The restore source's
+    # own suite hands the names to the pass itself; this is the wiring in the tick (-DuplicateNames), which nothing else
+    # checked: without it a real run sends the notice with "unnamed" where the sessions belong.
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    $restoredChief = @($restored) + [pscustomobject]@{ id = (Sid 7); role = "warchief"; parent = ""; startedAt = (At -385); lastChangeAt = (At -383); status = "idle"; firstSeenAt = (At -90000) }
+    $readDupChief = { $a = New-HordeKnown -Value $restoredChief; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-a"); sources = @("c\501.json", "c\502.json") }); $a }
+    $run = New-HordeWakeRun -Live -HordeHome $h
+    $boundLines = New-Object System.Collections.ArrayList
+    foreach ($s in @(0, 2000)) { Set-HordeMemoryWakerClock (At $s); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $readDupChief -Messenger $inProcess -HordeHome $h)) { [void]$boundLines.Add($e) } }
+    $boundStall = @($boundLines | Where-Object { $_.kind -ceq "stall" -and $_.outcome -ceq "posted" })
+    Check ($boundStall.Count -eq 1) ("past the bound a live run posts the bound stall notice, once (" + @($boundStall).Count + ")")
+    if ($boundStall.Count -eq 1) {
+        $boundGot = & $watch.Observe $box $boundStall[0].messageId
+        $boundBody = "$(@($boundGot.bodies)[0])"
+        Check ($boundGot.records -eq 1 -and $boundBody.Contains((Sid 9)) -and -not $boundBody.Contains("unnamed")) "and the body names the duplicated session, not 'unnamed': the tick hands the duplicates' names to the restore pass"
+    }
     # A SHADOW RUN IS SHADOW WHATEVER THE SWITCH SAYS.
     $h = New-Home
     Reset-HordeMemoryWaker
@@ -785,7 +802,7 @@ Check (@($kinds | Where-Object { $_ -clike "nudge:*:woken" }).Count -eq 2 -and @
 # THE RESTORE SOURCE IS SHADOW EVEN NOW: a restore is found and mail is planned, and none is posted.
 Check (@($kinds | Where-Object { $_ -clike "would-post:*" }).Count -eq 6 -and @($kinds | Where-Object { $_ -clike "would-stall:*" }).Count -eq 1 -and @($kinds | Where-Object { $_ -clike "post:*" -or $_ -clike "stall:*" }).Count -eq 0) ("in a live run the restore source still only journals would-post and would-stall, and posts nothing (" + (@($kinds | ForEach-Object { ($_ -split ":")[0] } | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,restore-of-live-run-shadow.json,silence-live.json") ("it wrote the live run's own journal, heartbeat and ledger, and kept what the source would have posted in a shadow file of its own - never restore-live.json, which is for mail really posted (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-live.json,heartbeat-live.json,journal-live.jsonl,ledger-live.json,restore-of-live-run-shadow.json,silence-live.json") ("it wrote the live run's own journal, heartbeat and ledger, and kept what the source would have posted in a shadow file of its own - never restore-live.json, which is for mail really posted (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.shadow -eq $false -and $beat.value.pass -eq 2 -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat is the live one, marked not shadow, and no shadow heartbeat was written"
 # A SHADOW RUN BESIDE IT, on the same home: each keeps its own heartbeat and journal.
@@ -902,7 +919,7 @@ $proved = @(Invoke-HordeWakeTick -Run $proof -Now (At 0) -Waker $memory -ReadSes
 Check ($proof.mode -ceq "proof" -and $proof.live -eq $true -and @(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($proved | Where-Object { $_ -ceq "nudge" }).Count -eq 1) "a proof run's tick sends the real nudge"
 Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq "tell" }).Count -eq 0 -and @($proved | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "and posts nothing: the senders are shadow in a proof run"
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-live.json,restore-of-proof-run-shadow.json,silence-live.json") ("it wrote the proof run's own journal and heartbeat, and counted its nudge in the ONE ledger the sending runs share - no ledger of its own (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-proof.json,heartbeat-proof.json,journal-proof.jsonl,ledger-live.json,restore-of-proof-run-shadow.json,silence-live.json") ("it wrote the proof run's own journal and heartbeat, and counted its nudge in the ONE ledger the sending runs share - no ledger of its own (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
 $switchWas = $script:HordeWakeSendersPost
