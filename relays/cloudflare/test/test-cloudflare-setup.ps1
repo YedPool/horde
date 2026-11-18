@@ -376,6 +376,13 @@ try {
     $r = Horde $ho @("relay", "deploy")
     $runs = @($(if (Test-Path -LiteralPath $log) { [System.IO.File]::ReadAllLines($log) | Where-Object { $_ -ne "" } | ForEach-Object { $_ | ConvertFrom-Json } }))
     Check ($r.code -eq 0 -and $runs.Count -eq 4 -and @($runs | Where-Object { (Get-HordeTestMember $_ "config.origin") -cne $own -or (Get-HordeTestMember $_ "config.name") -cne "relay" }).Count -eq 0) ("the operator's deploy goes to his own origin, with the fake wrangler (exit " + $r.code + "; wrangler runs " + $runs.Count + "; " + $r.out.Trim() + ")")
+    # The protection against the network coming back: the settings this suite wrote name a stand-in on this machine, and the
+    # stand-in itself saw the deploy's GET /auth/google (fake-signin-start.cjs says ASKED for each one). A later edit that drops
+    # the stand-in, or a deploy that asks the named origin instead, turns one of these two red (T-0474).
+    $wroteCheck = "" + (([System.IO.File]::ReadAllText($cfSettings) | ConvertFrom-Json).settings.deployCheckOrigin)
+    Check ($wroteCheck -cmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') ("the operator settings the suite wrote name a stand-in on this machine to check the deployed Worker (" + $wroteCheck + ")")
+    $askedLine = $script:signinStand.StandardOutput.ReadLineAsync()
+    Check ($askedLine.Wait(10000) -and "" + $askedLine.Result -ceq "ASKED") "and the stand-in saw the deploy's GET /auth/google, so the check never reached the network"
     $s = Setup $ho @("-Operator", "-NoFix", "machine-identity")
     Check (-not $s.out.Contains("WARNING") -and (HasLike $s ("  done  relay deployed: deployed from this home to " + $own + " on *")) -and (Has $s ("  fixed relay settings: wrote " + (Join-Path $ho "settings\relay.json") + ": the horde home, the phone app at " + $own)) -and $s.next -ceq "next: horde relay identity -New") ("deployed, the operator goes on to the user's steps, for his own relay (" + $s.next + ")")
 

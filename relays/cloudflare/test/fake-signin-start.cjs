@@ -10,7 +10,8 @@
 //   space  the same, the id with a space after it
 //   none   503, as a Worker whose sign-in is not set up answers
 //   two    303 with client_id twice
-// Anything else is 404. It ends when its standard input closes.
+// Anything else is 404. Each GET /auth/google it answers (any mode) is also reported as the line ASKED on
+// standard output, after the PORT line, so a suite can prove the check reached it. It ends when its standard input closes.
 const http = require("node:http");
 const [, , clientId, mode] = process.argv;
 const google = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -23,6 +24,7 @@ function location() {
 }
 const server = http.createServer((req, res) => {
   if (req.method !== "GET" || req.url !== "/auth/google") { res.writeHead(404); res.end(); return; }
+  process.stdout.write("ASKED" + String.fromCharCode(10));
   if (mode === "none") { res.writeHead(503, { "Content-Type": "application/json" }); res.end('{"error":"sign-in is not set up on this relay"}'); return; }
   res.writeHead(303, { Location: location() });
   res.end();
