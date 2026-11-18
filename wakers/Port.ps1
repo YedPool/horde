@@ -77,6 +77,9 @@
 #            cannot be read at all (core/Wake.ps1, Update-HordeWakeFleetRead).
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
 #            and unreadableCount when the waker can count mail it could not read, or unknown
+#            and blindReason on a Confirm answer: one lower-case hyphenated word when the box or the turn is
+#            unknown BECAUSE the look failed (the terminal did not answer), else "" or left out. A blind look
+#            is no verdict on the session (core/Wake.ps1, Update-HordeWakeBlind) - T-0116.
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the
 #            nudge, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
@@ -656,6 +659,17 @@ function Get-HordeWakeState {
         $handedAt = ConvertTo-HordeWakerUtc $hoAt.value
         if ($null -eq $handedAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an oldestHandedOverAt that is not a time with a zone")) }
     }
+    # blindReason IS OPTIONAL (T-0116): on a Confirm answer, the waker's one-word reason (lower-case words
+    # joined by hyphens) that the box or the turn is unknown BECAUSE the look itself failed - the terminal did
+    # not answer - and "" for a look that read. A waker that leaves it out says "" (no look was blind). The
+    # port only carries it: that a blind look is not a dead session, and is not looked at again at once, is
+    # the watcher's to say (core/Wake.ps1).
+    $blindReason = ""
+    $bl = Get-HordeWakerMember $v "blindReason"
+    if ($bl.has -and $null -ne $bl.value) {
+        if ($bl.value -isnot [string] -or ($bl.value -ne "" -and $bl.value -cnotmatch '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z') -or $bl.value.Length -gt 60) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a blindReason that is not one lower-case word")) }
+        $blindReason = [string]$bl.value
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -667,7 +681,7 @@ function Get-HordeWakeState {
     # nudge typed into somebody's text.
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt; blindReason = $blindReason }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {

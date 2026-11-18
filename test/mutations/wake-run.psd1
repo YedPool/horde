@@ -75,8 +75,8 @@
            Find = '$Run.duplicate = $dupNow.seen'
            Replace = '$Run.duplicate = @{}' }
         @{ Name = "the-heartbeat-does-not-say-the-watchers-own-session"
-           Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" }'
-           Replace = ' }' }
+           Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts'
+           Replace = ' -Counts' }
         @{ Name = "the-line-names-no-session"
            Find = 'if ($Self -cne "") { return ("this watcher holds session " + $Self + " as its own'
            Replace = 'if ($false) { return ("this watcher holds session " + $Self + " as its own' }
