@@ -162,6 +162,20 @@ $a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"exit":0}', "")
 Check ($a.code -eq 0) "trailing blank lines are skipped when finding the last line"
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"red":["test-host-names"],"first":"22222222"}')
 Check ($a.code -eq 1 -and $a.state -ceq "RED" -and $a.text -like "*test-host-names*") "process 1, json exit 1: red, with the line kept as text"
+# A WALK THAT STOPPED AT ITS BUDGET (T-0347 round 3) reaches the notice even when the line is cut: two reds and a long report path push the stop note
+# of the second red past character 700, so only the field near the front of the line can carry it.
+$longPath = "C:\very\long\horde\home\merge\nightly\" + ("deep-folder-name\" * 12) + "2026-11-20-yedpool-horde.txt"
+$stopNote = "the merge is named by the open record; this run: not walked past the merge of YedPool/horde#200: this guard's share of the walk's budget (8 of 16 guard runs) is used up (8 runs)"
+$redOne = '{"kind":"red","guard":"test\\test-host-names.ps1","shells":["Windows PowerShell 5.1","PowerShell 7"],"merge":{"pr":"YedPool/horde#100","task":"T-0247","by":"F","mergeSha":"1111111111111111111111111111111111111111"},"note":"the merge is named by the open record, which holds this guard red since 2026-11-18T03:00:00Z","base":"main","walkStopped":"","open":true,"since":"2026-11-18T03:00:00Z"}'
+$redTwo = '{"kind":"red","guard":"test\\test-mutation-specs.ps1","shells":["Windows PowerShell 5.1","PowerShell 7"],"merge":{"pr":"YedPool/horde#100","task":"T-0247","by":"F","mergeSha":"1111111111111111111111111111111111111111"},"note":"' + $stopNote + '","base":"main","walkStopped":"not walked past the merge of YedPool/horde#200","open":true,"since":"2026-11-18T03:00:00Z"}'
+$stopLine = '{"exit":1,"walkStopped":1,"date":"2026-11-20","repos":[{"repo":"yedpool/horde","status":"red","merges":3,"checked":1,"skipped":[],"reds":[' + $redOne + ',' + $redTwo + '],"report":"' + $longPath.Replace("\", "\\") + '","why":""}]}'
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @("report lines", $stopLine)
+Check ($stopLine.Length -gt 1200 -and $stopLine.IndexOf("not walked past") -gt 700) "the stop note of the second red lies past character 700 of the -Json line (index $($stopLine.IndexOf('not walked past')) of $($stopLine.Length))"
+Check ($a.code -eq 1 -and $a.state -ceq "RED" -and $a.text -like "A GUARD WALK STOPPED AT ITS BUDGET in 1 red(s): the merge named may no longer be the cause*") "two reds and a long report path: the notice text still says the walk stopped, from the parsed field"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"walkStopped":0,"date":"2026-11-20","repos":[]}')
+Check ($a.code -eq 1 -and $a.text -notlike "*WALK STOPPED*") "walkStopped 0: no word of a stop"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"walkStopped":"1","date":"2026-11-20"}')
+Check ($a.code -eq 1 -and $a.text -notlike "*WALK STOPPED*") "a walkStopped that is not a number is not read as a stop"
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":2,"why":"no clone"}')
 Check ($a.code -eq 2 -and $a.state -ceq "could not run") "process 1 and json exit 2: could not run (not red)"
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 2 -Lines @('{"exit":0}')

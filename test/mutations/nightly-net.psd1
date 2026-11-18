@@ -223,5 +223,11 @@
         @{ Name = "holders-not-read"
            Find = '$out += [pscustomobject]@{ name = $m.Groups[1].Value;'
            Replace = 'if ($false) { } $null = [pscustomobject]@{ name = $m.Groups[1].Value;' }
+        @{ Name = "guards-walk-stop-left-out-of-the-notice"
+           Find = '-and $o.walkStopped -gt 0) {'
+           Replace = '-and $false) {' }
+        @{ Name = "guards-walk-stop-read-from-the-cut-line"
+           Find = '$text = ("A GUARD WALK STOPPED AT ITS BUDGET in "'
+           Replace = '$null = ("A GUARD WALK STOPPED AT ITS BUDGET in "' }
     )
 }

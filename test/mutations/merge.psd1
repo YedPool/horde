@@ -505,10 +505,10 @@
            Find = 'if (-not $dbl.red) { $item.fresh = $true }'
            Replace = '' }
         @{ Name = "walk-budget-not-checked-before-push"
-           Find = 'if ($walkRuns + $stepCost -gt $script:HordeMergeWalkRunBudget) { $stopped = $true; break } # before the push commit'
+           Find = 'if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the push commit'
            Replace = 'if ($false) { $stopped = $true; break } # before the push commit' }
         @{ Name = "walk-budget-not-checked-before-merge"
-           Find = 'if ($walkRuns + $stepCost -gt $script:HordeMergeWalkRunBudget) { $stopped = $true; break } # before the merge'
+           Find = 'if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the merge'
            Replace = 'if ($false) { $stopped = $true; break } # before the merge' }
         @{ Name = "walk-budget-step-cost-one-try"
            Find = '$stepCost = 2 * $stepShells'
@@ -519,9 +519,6 @@
         @{ Name = "walk-budget-forgets-the-merge-runs"
            Find = '$walkRuns += $later.runs'
            Replace = '' }
-        @{ Name = "walk-budget-not-shared-by-guards"
-           Find = '$lastLooked = "the baseline " + $baseline.Substring(0, 8)'
-           Replace = '$lastLooked = "the baseline " + $baseline.Substring(0, 8); $walkRuns = 0' }
         @{ Name = "walk-stop-does-not-say-where"
            Find = '$lastLooked = "the merge of " + $e.pr'
            Replace = '' }
@@ -546,5 +543,29 @@
         @{ Name = "walk-merge-runs-every-shell"
            Find = '$later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys'
            Replace = '$later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g' }
+        @{ Name = "walk-budget-share-not-divided"
+           Find = '[Math]::Floor($script:HordeMergeWalkRunBudget / [Math]::Max(1, @($OpenGuards).Count))'
+           Replace = '$script:HordeMergeWalkRunBudget' }
+        @{ Name = "walk-budget-share-below-one-merge"
+           Find = ', 2 * @(Get-HordeGuardShells).Count)'
+           Replace = ', 0)' }
+        @{ Name = "walk-stop-marks-every-merge-checked"
+           Find = 'checked = @($walk | Select-Object -First $walkReach)'
+           Replace = 'checked = @($walk)' }
+        @{ Name = "walk-stop-reach-never-lowered"
+           Find = '$walkReach = [Math]::Min($walkReach, $looked)'
+           Replace = '$walkReach = $walkReach' }
+        @{ Name = "walk-stop-reach-is-the-last-stop-not-the-earliest"
+           Find = '$walkReach = [Math]::Min($walkReach, $looked)'
+           Replace = '$walkReach = $looked' }
+        @{ Name = "walk-stop-looked-not-counted"
+           Find = '$looked++'
+           Replace = '' }
+        @{ Name = "walk-stop-report-says-all-checked"
+           Find = 'if ($stoppedWalks -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "walk-stop-count-left-out-of-the-json"
+           Find = 'walkStopped = $nStopped;'
+           Replace = 'walkStopped = 0;' }
     )
 }

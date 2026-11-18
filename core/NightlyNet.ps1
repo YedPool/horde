@@ -374,6 +374,12 @@ function Get-HordeNightlyGuardsAnswer {
     $o = $null
     if ($last -ne "") { try { $o = ConvertFrom-HordeJson $last } catch { $o = $null } }
     if ($null -eq $o -or $o -isnot [pscustomobject] -or -not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = "no -Json last line to read" } }
+    # A WALK THAT STOPPED AT ITS BUDGET (T-0347 round 3) is said FIRST, from the parsed field, never from the cut line: the stop note sits deep in
+    # repos[].reds[].note, and with two reds or a long report path the 700 characters kept below end before it, so the notice read as a plain
+    # STILL RED on a merge that may no longer be the cause. The field is a count near the front of the line (cli/Merge.ps1, $finish).
+    if ($o.PSObject.Properties["walkStopped"] -and ($o.walkStopped -is [int] -or $o.walkStopped -is [long]) -and $o.walkStopped -gt 0) {
+        $text = ("A GUARD WALK STOPPED AT ITS BUDGET in " + $o.walkStopped + " red(s): the merge named may no longer be the cause, and the later merges stay owed to the next night (see the nightly report); " + $text)
+    }
     $e = $o.exit
     if ($e -isnot [int] -and $e -isnot [long]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is not a number: " + $text) } }
     if ($e -eq 0) { return [pscustomobject]@{ code = 0; state = "green"; text = $text } }
