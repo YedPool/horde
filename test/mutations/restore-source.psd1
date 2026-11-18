@@ -232,5 +232,8 @@
         @{ Name = "stale-duplicate-counted"
            Find = '$d.allStale -eq $true) { continue }'
            Replace = '$d.allStale -eq $false) { continue }' }
+        @{ Name = "duplicate-naming-no-agent-not-counted"
+           Find = '$counted = ($agents.Count -eq 0)'
+           Replace = '$counted = $false' }
     )
 }

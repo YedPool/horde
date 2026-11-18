@@ -574,6 +574,14 @@ $mixedIdentity = New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionI
 Check (@((Get-HordeRestoreSessions -Identity $mixedIdentity -Registry $dupRegistry).duplicates).Count -eq 1) "a tie where one file cannot be checked is still counted"
 Check (@((Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @($oneDup)) -Registry $dupRegistry).duplicates).Count -eq 1) "an identity that does not say allStale is counted as before"
 
+# A DUPLICATE THAT NAMES NO AGENT cannot be shown to be in a left-out agent, so it is counted: never choose between two
+# that cannot be checked. core/Identity.ps1 always names at least one agent today (so no real listing reaches this), but
+# the pass reads the identity as a contract, the way it reads allStale above, and the safe default is the one that can
+# only lower the share and hold the stall notice (T-0116, PR 472 follow-up).
+$noAgentsEmpty = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); agents = @(); sources = @("a", "b") })) -Registry $dupRegistry
+Check ($noAgentsEmpty.state -ceq "known" -and @($noAgentsEmpty.duplicates).Count -eq 1) "a duplicate whose agents list is empty is counted: nothing shows it is out already"
+$noAgentsMissing = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); sources = @("a", "b") })) -Registry $dupRegistry
+Check ($noAgentsMissing.state -ceq "known" -and @($noAgentsMissing.duplicates).Count -eq 1) "and so is one from an identity that does not say agents at all"
 # A DUPLICATE ONLY IN A LEFT-OUT AGENT is already out of the count: it is not named as a cost.
 $leftOutDup = Get-HordeRestoreSessions -Identity (New-DupIdentity $dupRecords -Dups @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-two"); sources = @("a", "b") })) -Registry $dupRegistry
 Check ($leftOutDup.state -ceq "known" -and @($leftOutDup.duplicates).Count -eq 0) "a duplicate that lives only in a left-out agent is not counted: that agent's sessions are all out already"
