@@ -405,6 +405,25 @@ $bp3 = Invoke-HordeWakeTellPass -Conditions (@($many[0..2]) + @($gaveUp)) -Warch
 Check (@($bp3.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "awaiting" -and $_.reason.StartsWith("resume-untaken") }).Count -eq 2 -and @($bp3.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 1 -and @($bp3.entries | Where-Object { $_.kind -ceq "tell" -and $_.reason.StartsWith("gave-up") }).Count -eq 1) "and they have a limit of their own: over it a resume-untaken tell is suppressed, and the gave-up tell still goes out"
 
 Write-Host ""
+Write-Host "--- round 4: a suppressed tell is tried again once its hour has passed ---" -ForegroundColor Cyan
+Reset-HordeMemoryMessenger
+$h = New-Home
+$thirtyOne = @(1..31 | ForEach-Object { New-HordeWakeTellCondition -Kind "resume-untaken" -Subject (Sid (100 + $_)) -Instance ("0d000000-0000-4000-8000-" + $_.ToString("000000000199")) -Text "m" })
+$late = $thirtyOne[30]
+$lateId = Get-HordeWakeTellMessageId -Condition $late
+$a0 = Invoke-HordeWakeTellPass -Conditions $thirtyOne -Warchief (Sid 1) -Now (At 0) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $inProcess -HordeHome $h -Now (At 0) }
+Check (@($a0.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "awaiting" }).Count -eq 30 -and @($a0.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 1 -and $a0.told[$lateId].state -ceq "suppressed") "CONTROL: thirty-one untaken resume mails in one hour: thirty are told, the thirty-first is suppressed"
+$a1 = Invoke-HordeWakeTellPass -Conditions $thirtyOne -Warchief (Sid 1) -Now (At 1800) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $inProcess -HordeHome $h -Now (At 1800) } -Told $a0.told
+Check (@($a1.entries).Count -eq 0) "within the hour nothing is said or sent again"
+$a2 = Invoke-HordeWakeTellPass -Conditions $thirtyOne -Warchief (Sid 1) -Now (At 3700) -Settings $ts -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $ts -Messenger $inProcess -HordeHome $h -Now (At 3700) } -Told $a1.told
+Check (@($a2.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "awaiting" -and $_.messageId -ceq $lateId }).Count -eq 1 -and @($a2.entries).Count -eq 1 -and $a2.told[$lateId].state -ceq "awaiting") "an hour on, with the mail still alarmed, the suppressed tell is told - and it is the only thing said"
+$cap1 = Get-HordeWakeTellSettings -Overrides @{ maxUntakenTellsPerHour = 1 }
+$three = @($thirtyOne[0..2])
+$b0 = Invoke-HordeWakeTellPass -Conditions $three -Warchief (Sid 1) -Now (At 0) -Settings $cap1 -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $cap1 -Messenger $inProcess -HordeHome $h -Now (At 0) }
+$b1 = Invoke-HordeWakeTellPass -Conditions $three -Warchief (Sid 1) -Now (At 3700) -Settings $cap1 -Post { param($m) Send-HordeWakeTell -Mail $m -Settings $cap1 -Messenger $inProcess -HordeHome $h -Now (At 3700) } -Told $b0.told
+Check (@($b0.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 2 -and @($b1.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "awaiting" }).Count -eq 1 -and @($b1.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 1) "the retry counts against that hour's cap like any other tell: one more is told, the rest are suppressed again for another hour"
+
+Write-Host ""
 Write-Host "--- shadow writes no mark and posts nothing ---" -ForegroundColor Cyan
 Reset-HordeMemoryMessenger
 $h = New-Home

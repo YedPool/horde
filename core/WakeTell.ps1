@@ -21,8 +21,9 @@
 # since when - and the mail's id is made from it (core/TextUuid.ps1), so the same condition met on a
 # thousand passes is one message, and a post of it is idempotent. AND AT MOST maxTellsPerHour OF THEM:
 # a fleet in trouble raises many conditions at once, and a warchief buried in automated mail reads none
-# of it. What is over the limit is journaled as suppressed, once, and is not sent later: it is in the
-# journal, and the mails that were sent say to look there.
+# of it. What is over the limit is journaled as suppressed and not sent in that hour: it is in the journal,
+# and the mails that were sent say to look there. A suppressed tell whose condition is still there an
+# hour later is tried again, against that hour's cap (a mail still alarmed must not stay unwarned for a week).
 #
 # EVERY TEXT BEGINS "AUTOMATED, from the wake watcher:", so no session takes a machine's line for a
 # person's instruction. The mail wears the label WW, reserved so no session can (core/ReservedLabels.ps1).
@@ -97,8 +98,8 @@ function Get-HordeWakeTellMessageId {
 }
 
 function Get-HordeWakeTellClass {
-    # Which of the two budgets a told mark counts against: fleet or session. A mark saved before the
-    # classes existed says neither, and is a session's.
+    # Which of the three budgets a told mark counts against: fleet, untaken (the resume-untaken tells, T-0391 slice 9) or
+    # session. A mark saved before the classes existed says none, and is a session's.
     param($Mark)
     if ($null -eq $Mark) { return "session" }
     $p = $Mark.PSObject.Properties["class"]
@@ -130,9 +131,10 @@ function Invoke-HordeWakeTellPass {
     # A NOTICE ABOUT THE WHOLE FLEET IS NEVER CROWDED OUT BY NOTICES ABOUT SESSIONS. With six sessions or
     # more given up on, their six tells used up the hour, and the ONE tell that explained them all -
     # the fleet is silent, the fleet cannot be read - was the one suppressed (safety review of PR
-    # 220). So the two are counted apart: a fleet's notice (no session is its subject) is sent first
-    # and counts only against other fleet notices; a session's counts only against other sessions'.
-    # Each class has maxTellsPerHour, and there are three kinds of fleet notice, each once per instance.
+    # 220). So they are counted apart: a fleet's notice (no session is its subject) is sent first
+    # and counts only against other fleet notices; a session's counts only against other sessions'; the resume-untaken
+    # tells (one a mail id) have a class of their own, maxUntakenTellsPerHour. The fleet and session classes have
+    # maxTellsPerHour, and there are three kinds of fleet notice, each once per instance.
     $ordered = @(@($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -ceq "" }) + @($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -cne "" }))
     foreach ($c in $ordered) {
         if ($null -eq $c) { continue }
@@ -145,8 +147,14 @@ function Invoke-HordeWakeTellPass {
         $cap = [int]$Settings.maxTellsPerHour
         if ($c.kind -ceq "resume-untaken") { $class = "untaken"; $cap = [int]$Settings.maxUntakenTellsPerHour }
         if ($next.ContainsKey($id)) {
-            # HANDLED ALREADY, unless it is a post that could not say and its retry is due.
-            if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }
+            # HANDLED ALREADY, unless it is a post that could not say and its retry is due, or a tell SUPPRESSED by the hour's cap whose
+            # hour has passed: it was never sent, and silencing it for keepSeconds (a week) would leave a warchief unwarned of a mail that
+            # is still alarmed. It is tried again like any other tell: it counts against the cap of the hour it is sent in, and is
+            # suppressed again (and journaled again) if that hour is full too.
+            $was = $next[$id]
+            $retryDue = ("$($was.state)" -ceq "failed" -and ($Now - $was.at).TotalSeconds -ge $Settings.retrySeconds)
+            $suppressedHourPassed = ("$($was.state)" -ceq "suppressed" -and ($Now - $was.at).TotalSeconds -ge 3600)
+            if (-not ($retryDue -or $suppressedHourPassed)) { continue }
         }
         $body = "$($Settings.prefix)" + $c.text
         $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "awaiting" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count

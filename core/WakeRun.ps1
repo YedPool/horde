@@ -260,8 +260,9 @@ function Get-HordeWakeSenderFile {
 
 function Update-HordeWakeTaken {
     # Look at both senders' awaiting lists once and return the journal entries (kind mail-taken: outcome taken, alarm or undelivered).
-    # A restore mail that left its list is marked posted (counted done) - TAKEN, or given up, so it is not planned again; a tell that
-    # left it is "told" on a TAKEN and "undelivered" on a give-up. Nothing else counts a mail as delivered.
+    # A restore mail that left its list is marked handled in the posted table (not planned again) whether it was TAKEN or given up; the
+    # table says nothing of delivery, the journal does (taken, or undelivered). A tell that left its list is "told" on a TAKEN and
+    # "undelivered" on a give-up. Only a TAKEN is a delivery.
     param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Now, $Messenger = $null, [Parameter(Mandatory = $true)][string]$HordeHome)
     $entries = New-Object System.Collections.ArrayList
     $lineEntries = {
@@ -357,7 +358,7 @@ function Invoke-HordeWakeTick {
                     $awaitingIds = @(Get-HordeWakeMailAwaitingIds -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)
                     # A MAIL ALARMED AS NOT TAKEN IS POSTED ONCE MORE under its own id (the messenger keeps one copy, so a post that did land is
                     # a no-op): an unknown post result, or a crash between the mark and the post, otherwise leaves a mail that is in no mailbox
-                    # and is never posted. Once, not every pass: the alarm and the tell to the warchief are what follow. It is never counted done.
+                    # and is never posted. Once, not every pass: the alarm and the tell to the warchief are what follow. It is never marked handled by this.
                     $retryIds = @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome | ForEach-Object { $_.id } | Where-Object { -not $Run.retried.ContainsKey("$_") })
                 }
                 $dupList = @()
@@ -588,7 +589,7 @@ function Invoke-HordeWakeTick {
         # one lost to a restart is made again; the same id keeps it one mail. Live senders only: shadow has no list.
         if (-not (Test-HordeWakeSendersShadow -Run $Run)) {
             foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {
-                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source sent the mail " + $al.id + " to the session " + $al.session + "; it may not have arrived, and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It is sent once more and watched until it is taken or given up. Look at that session.")) }
+                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source sent the mail " + $al.id + " to the session " + $al.session + "; it may not have arrived, and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It may be sent once more (once in a run) and is watched until it is taken or given up. Look at that session.")) }
             }
         }
         if ($null -ne $silence.condition) { & $make { (New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text) } }

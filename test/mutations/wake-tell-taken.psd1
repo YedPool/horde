@@ -47,5 +47,13 @@
         @{ Name = "tell-already-held-called-accepted"
            Find = 'if ($took.awaiting.alreadyHeld) {'
            Replace = 'if ($false) {' }
+        # A suppressed tell is never tried again (silenced for keepSeconds).
+        @{ Name = "tell-suppressed-never-retried"
+           Find = '$suppressedHourPassed = ("$($was.state)" -ceq "suppressed" -and ($Now - $was.at).TotalSeconds -ge 3600)'
+           Replace = '$suppressedHourPassed = $false' }
+        # A suppressed tell is tried again on every pass, not once its hour has passed.
+        @{ Name = "tell-suppressed-retried-every-pass"
+           Find = '$suppressedHourPassed = ("$($was.state)" -ceq "suppressed" -and ($Now - $was.at).TotalSeconds -ge 3600)'
+           Replace = '$suppressedHourPassed = ("$($was.state)" -ceq "suppressed")' }
     )
 }

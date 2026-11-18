@@ -328,8 +328,10 @@ function Invoke-HordeRestoreSourcePass {
     #   -Awaiting  the ids on the restore source's awaiting list: posted, not yet taken, so not planned again (T-0391 slice 9)
     #   -Retry     the awaiting ids whose alarm was said and which are posted ONCE MORE, under the same id (the messenger keeps one copy):
     #              a post that came back unknown, or a crash between the mark and the post, leaves a mail that may be in no mailbox. They
-    #              are never counted done by this: only the session's own TAKEN does that.
-    #   -Posted    messageId -> when it was posted, for the mails already posted, from the last pass
+    #              are never marked handled by this: only the session's own TAKEN, or a give-up, does that.
+    #   -Posted    messageId -> when it was handled, from the last pass: a mail a poster said the session took, one the messenger already
+    #              held, or one that left the awaiting list (TAKEN, or given up after seven days). It is the table of what is NOT PLANNED
+    #              AGAIN and nothing more: being in it is not delivery. The journal says which (mail-taken taken or undelivered).
     #   -Known     the restores already found, each { restoreId; windowStart; windowEnd; members }, from the last
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
@@ -379,9 +381,9 @@ function Invoke-HordeRestoreSourcePass {
             $nextPosted[$mail.messageId] = $Now
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "already-posted" -Reason ("restore " + $finding.value.restoreId + ": the messenger already held a copy of it from an earlier post; it is not counted as delivered") -MessageId $mail.messageId))
         } elseif (Test-HordeWakeMailAwaiting $took) {
-            # POSTED, NOT DELIVERED. The restore is NOT counted done here: the mail is not in the posted table, so the pass would plan it
-            # again, but the awaiting list holds it (-Awaiting), so it is not posted again either. It is counted done on its TAKEN, by the
-            # tick (core/WakeRun.ps1), which journals that.
+            # POSTED, NOT DELIVERED. The mail is NOT marked handled here: it is not in the posted table, so the pass would plan it
+            # again, but the awaiting list holds it (-Awaiting), so it is not posted again either. It is marked handled when it leaves the
+            # list, by the tick (core/WakeRun.ps1), which journals whether it was TAKEN or given up.
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "awaiting" -Reason ("restore " + $finding.value.restoreId + $(if ($took.awaiting.alreadyHeld) { ": the messenger said it was already posted earlier (" } else { ": the messenger accepted it (" }) + $took.awaiting.stage + "); it is not counted as delivered until the session's own TAKEN") -MessageId $mail.messageId))
         } else {
             $why = "the post answered with something that is not an answer"
