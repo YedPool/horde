@@ -92,7 +92,7 @@ try {
     New-Item -ItemType Directory -Path $fx | Out-Null
     # Every file tools\Mutate.ps1 loads: MutateShells.ps1 and the SetupStore.ps1 it reads the MSI path
     # from came with the Shells option (T-0422).
-    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "tools\MutateShells.ps1", "cli\SetupStore.ps1", "test\lib\SuiteFiles.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
+    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "tools\MutateShells.ps1", "tools\MutateInstalled.ps1", "cli\SetupStore.ps1", "test\lib\SuiteFiles.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $fx $rel)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $rel) -Destination (Join-Path $fx $rel)
     }
