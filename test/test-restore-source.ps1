@@ -408,6 +408,48 @@ Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved rest
 Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
 
 Write-Host ""
+Write-Host "--- a shadow tick writes only its own state file and reads only its own (T-0494) ---" -ForegroundColor Cyan
+
+# THE REAL PATH, NOT A DIRECT CALL. Get-HordeWakeModeWord ignores -Shadow and defaults an empty -Mode to
+# shadow, so dropping -Shadow from a direct Save-HordeRestoreState call changes nothing: a check that
+# calls it with -Shadow cannot see the shadow write the live file. The tick passes the mode through
+# Get-HordeWakeSenderFile, and that is where a shadow run could reach restore-live.json.
+. (Join-Path $root "core\WakeRun.ps1")
+. (Join-Path $root "wakers\memory\Waker.ps1")
+$tkWaker = Get-HordeWaker -Name "memory"
+function New-TickHome { $x = Join-Path $pinned.home ("tick-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $x | Out-Null; return $x }
+$tkSessions = @(1..6 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 10 - 400)); lastChangeAt = (At ($_ * 10 - 398)); status = "idle"; firstSeenAt = (At -90000) } })
+$tkRead = { $a = New-HordeKnown -Value $tkSessions; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
+function Invoke-ShadowTicks {
+    param([string]$HordeHome)
+    Reset-HordeMemoryWaker
+    $tkRun = New-HordeWakeRun -HordeHome $HordeHome
+    foreach ($i in 0..3) {
+        Set-HordeMemoryWakerClock (At ($i * 3))
+        [void](Invoke-HordeWakeTick -Run $tkRun -Now (At ($i * 3)) -Waker $tkWaker -ReadSessions $tkRead -TickSeconds 3 -ProcessId 4246 -HordeHome $HordeHome)
+    }
+    return $tkRun
+}
+
+$tkClean = New-TickHome
+$null = Invoke-ShadowTicks -HordeHome $tkClean
+$tkLive = Get-HordeWakeStateFile -Name "restore" -Mode "live" -HordeHome $tkClean
+$tkShadow = Get-HordeWakeStateFile -Name "restore" -Mode "shadow" -HordeHome $tkClean
+Check (Test-Path -LiteralPath $tkShadow -PathType Leaf) "CONTROL: a shadow tick over a restore that plans mail wrote its restore state file"
+Check (-not (Test-Path -LiteralPath $tkLive)) "and the live restore state file, which a live run reads, does not exist after it"
+
+$tkHome = New-TickHome
+$tkLivePath = Get-HordeWakeStateFile -Name "restore" -Mode "live" -HordeHome $tkHome
+New-Item -ItemType Directory -Path (Split-Path -Parent $tkLivePath) -Force | Out-Null
+$tkLeak = '{"schemaVersion":1,"posted":[{"id":"live-leak-id","at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}'
+[System.IO.File]::WriteAllText($tkLivePath, $tkLeak)
+$tkRun = Invoke-ShadowTicks -HordeHome $tkHome
+Check ([System.IO.File]::ReadAllText($tkLivePath) -ceq $tkLeak) "a live restore state file that is already there is left as it was by a shadow tick"
+Check (-not $tkRun.posted.ContainsKey("live-leak-id")) "a shadow tick does not read the live file: a mail marked posted there is not marked in the shadow run"
+$tkShadowText = [System.IO.File]::ReadAllText((Get-HordeWakeStateFile -Name "restore" -Mode "shadow" -HordeHome $tkHome))
+Check (-not $tkShadowText.Contains("live-leak-id") -and $tkRun.posted.Count -eq 6) "and what the shadow tick saved holds its own six mails and nothing from the live file"
+
+Write-Host ""
 Write-Host "--- the running sessions, from the two stores handed in ---" -ForegroundColor Cyan
 
 function New-Record {
