@@ -108,6 +108,8 @@ function New-HordeServiceLaunch {
         if ($LogFile -ne "" -and -not [System.IO.Path]::IsPathRooted($LogFile)) { throw "a launch's log file is an absolute path" }
     } else {
         if (-not [System.IO.Path]::IsPathRooted($Program)) { throw "a program launch names the absolute path of a program" }
+        # The program is the first token of the command line, which cannot carry a quote (T-0449).
+        if ($Program -match '"') { throw "a program launch's path cannot hold a quote" }
         # A batch file's arguments are read again by the command interpreter, as commands
         # (core/Services.ps1 refuses one in a definition; refused here too, for any other caller).
         if ($Program -match '\.(cmd|bat)\s*\z') { throw "a program launch cannot be a batch file: the command interpreter would read its arguments again" }
@@ -139,6 +141,20 @@ function ConvertTo-HordeServiceArgument {
     if ($slashes -gt 0) { [void]$sb.Append([char]92, (2 * $slashes)) }
     [void]$sb.Append('"')
     return $sb.ToString()
+}
+
+function ConvertTo-HordeServiceProgram {
+    # The program, the FIRST token of a command line, which is read by another rule than the arguments
+    # after it (T-0449): Windows takes it as everything up to the next quote when it opens with one, or
+    # up to the first space or tab when it does not, and a backslash is never an escape there. So the
+    # argument rule above is wrong for it: 'C:\a b\' would come out '"C:\a b\\"' and name another
+    # path, and a quote cannot be carried at all. A quote is refused (no Windows path holds one), and a
+    # path with a space or tab is put in plain quotes, its backslashes as they are.
+    param([AllowEmptyString()][string]$Text)
+    if ($Text -match '"') { throw "a program's path cannot hold a quote: the first token of a command line has no way to carry one" }
+    if ($Text.Length -eq 0) { throw "a program's path cannot be empty" }
+    if ($Text -notmatch '\s') { return $Text }
+    return ('"' + $Text + '"')
 }
 
 function Invoke-HordeServiceHostBlock {

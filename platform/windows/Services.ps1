@@ -34,7 +34,8 @@
 # decoded at run time, so no quote, &, %, $ or backtick in a path can end a string or start a command.
 # The only texts written into the command as they are, are parameter and environment names, and those
 # are letters, digits and underscores by the port's own check, made again here. A program launch is
-# the program and its arguments joined by the port's one quoting function (ConvertTo-HordeServiceArgument).
+# the program, quoted by the port's first-token rule (ConvertTo-HordeServiceProgram, T-0449), and its
+# arguments, each quoted by the port's argument rule (ConvertTo-HordeServiceArgument).
 #
 # WHAT A HORDE SERVICE PRINTS IS KEPT, in the launch's log file: each line it writes to the host or
 # to its output, with the time in front, and what horde itself writes to the process's error stream
@@ -165,10 +166,10 @@ function ConvertTo-HordeWindowsServiceCommandLine {
     # The whole command line of a launch, of either kind.
     param([Parameter(Mandatory = $true)]$Launch)
     if ($Launch.kind -ceq "program") {
-        return ((@($Launch.program) + @($Launch.arguments) | ForEach-Object { ConvertTo-HordeServiceArgument -Text ("" + $_) }) -join " ")
+        return ((@((ConvertTo-HordeServiceProgram -Text ("" + $Launch.program))) + @($Launch.arguments | ForEach-Object { ConvertTo-HordeServiceArgument -Text ("" + $_) })) -join " ")
     }
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes((ConvertTo-HordeWindowsServiceScript -Launch $Launch)))
-    return ((ConvertTo-HordeServiceArgument -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded)
+    return ((ConvertTo-HordeServiceProgram -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded)
 }
 
 function Start-HordeWindowsService {
@@ -222,7 +223,7 @@ function ConvertTo-HordeWindowsWatcherScript {
 function ConvertTo-HordeWindowsWatcherCommandLine {
     param([Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][datetime]$StartedAt, [Parameter(Mandatory = $true)][string]$ExitFile)
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes((ConvertTo-HordeWindowsWatcherScript -ProcessId $ProcessId -StartedAt $StartedAt -ExitFile $ExitFile)))
-    return ((ConvertTo-HordeServiceArgument -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded)
+    return ((ConvertTo-HordeServiceProgram -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded)
 }
 
 function Get-HordeWindowsCloseSource { return @"

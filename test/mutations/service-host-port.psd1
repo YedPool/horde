@@ -71,5 +71,21 @@
         @{ Name = "desktop-block-dropped"
            Find = 'closeWindow = $CloseWindow; desktop = $Desktop })'
            Replace = 'closeWindow = $CloseWindow; desktop = $null })' }
+        # --- the program is the first token, read by its own rule (T-0449) ---
+        @{ Name = "program-quote-taken"
+           Find = '    if ($Text -match ''"'') { throw "a program''s path cannot hold a quote'
+           Replace = '    if ($false) { throw "a program''s path cannot hold a quote' }
+        @{ Name = "program-empty-taken"
+           Find = '    if ($Text.Length -eq 0) { throw "a program''s path cannot be empty" }'
+           Replace = '' }
+        @{ Name = "program-spaces-not-quoted"
+           Find = '    if ($Text -notmatch ''\s'') { return $Text }'
+           Replace = '    return $Text' }
+        @{ Name = "program-backslashes-doubled"
+           Find = '    return (''"'' + $Text + ''"'')'
+           Replace = '    return (ConvertTo-HordeServiceArgument -Text $Text)' }
+        @{ Name = "launch-program-quote-taken"
+           Find = '        if ($Program -match ''"'') { throw'
+           Replace = '        if ($false) { throw' }
     )
 }

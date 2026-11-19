@@ -31,8 +31,22 @@
            Find = '    if ([int]$SessionId -eq 0) { return "this process is in session 0, where no person types" }'
            Replace = '' }
         @{ Name = "program-arguments-unquoted"
-           Find = 'return ((@($Launch.program) + @($Launch.arguments) | ForEach-Object { ConvertTo-HordeServiceArgument -Text ("" + $_) }) -join " ")'
+           Find = 'return ((@((ConvertTo-HordeServiceProgram -Text ("" + $Launch.program))) + @($Launch.arguments | ForEach-Object { ConvertTo-HordeServiceArgument -Text ("" + $_) })) -join " ")'
            Replace = 'return ((@($Launch.program) + @($Launch.arguments)) -join " ")' }
+        # --- the program is the first token, read by its own rule (T-0449) ---
+        @{ Name = "program-by-the-argument-rule"
+           Find = 'return ((@((ConvertTo-HordeServiceProgram -Text ("" + $Launch.program))) +'
+           Replace = 'return ((@((ConvertTo-HordeServiceArgument -Text ("" + $Launch.program))) +' }
+        @{ Name = "service-shell-by-the-argument-rule"
+           Find = '    return ((ConvertTo-HordeServiceProgram -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -ExecutionPolicy Bypass'
+           Replace = '    return ((ConvertTo-HordeServiceArgument -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -ExecutionPolicy Bypass'
+           Expect = "survives"
+           Reason = "the system's own shell path holds no space, quote or trailing backslash, so both rules write it the same; the rule itself is pinned by program-by-the-argument-rule and the service-host-port program mutants" }
+        @{ Name = "watcher-shell-by-the-argument-rule"
+           Find = '    return ((ConvertTo-HordeServiceProgram -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -NonInteractive'
+           Replace = '    return ((ConvertTo-HordeServiceArgument -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -NonInteractive'
+           Expect = "survives"
+           Reason = "as service-shell-by-the-argument-rule: the system's own shell path is written the same by both rules" }
         @{ Name = "ended-process-reported-started"
            Find = '    } catch { return (New-HordeUnknown -Reason ("process " + $processId + " was created and had ended before it could be looked at")) }'
            Replace = '    } catch { return (New-HordeKnown -Value ([pscustomobject]@{ pid = $processId; startedAt = [datetime]::UtcNow })) }'
