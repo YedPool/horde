@@ -61,6 +61,12 @@
         @{ Name = "tip-not-checked-first"
            Find = '    if (-not $r) { return [pscustomobject]@{ state = "flaky"'
            Replace = '    if ($false) { return [pscustomobject]@{ state = "flaky"' }
+        @{ Name = "slot-lost-128-not-retried"
+           Find = 'return ($c -eq 125 -or $c -eq 128)'
+           Replace = 'return ($c -eq 125)' }
+        @{ Name = "slot-lost-timeout-retried"
+           Find = 'if ($null -eq $Run -or $Run.timedOut) { return $false }'
+           Replace = 'if ($null -eq $Run) { return $false }' }
         @{ Name = "base-red-taken-as-green"
            Find = 'if ($r) { return [pscustomobject]@{ state = "base-red"'
            Replace = 'if ($false) { return [pscustomobject]@{ state = "base-red"' }
