@@ -914,7 +914,7 @@ function Get-WrapperAnswer {
     [System.IO.File]::WriteAllText((Join-Path $dir "horde.ps1"), ("[Console]::Out.WriteLine('stand-in horde'); [Console]::Out.WriteLine([System.IO.File]::ReadAllText((Join-Path `$PSScriptRoot 'said.json')).Trim()); exit " + $procExit), $utf8)
     $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $o = @(& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $dir "horde.ps1") -Repo "YedPool/horde")
-    return [pscustomobject]@{ code = $LASTEXITCODE; state = (Get-NetState -WrapExit $LASTEXITCODE); last = ("" + $o[-1]) }
+    return [pscustomobject]@{ code = $LASTEXITCODE; state = (Get-NetState -WrapExit $LASTEXITCODE); last = ("" + $o[-1]); out = @($o) }
 }
 $c = New-Case
 Check ((Add-QueuedMerges $c @(@("1", "F"), @("4", "K"))) -ceq "merged,merged") "two PRs are merged and queued, the second turning a guard red"
@@ -1524,6 +1524,9 @@ $rec = @(Get-RedRecord $h.c)
 $recG1 = @($rec[0].guards | Where-Object { $_.guard -ceq $g1 })
 $recG2 = @($rec[0].guards | Where-Object { $_.guard -ceq $g2 })
 Check ($run.exit -eq 1 -and (Said ("RED " + $g2 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*(this run: *not walked past the commit * pushed before the merge of YedPool/horde#300: this guard's share of the walk's budget (8 of 16 guard runs) is used up (6 runs); the 2 merge(s) after it stay owed to a later night*")) -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*(this run: *not walked past the commit * pushed before the merge of YedPool/horde#300: this guard's share of the walk's budget (8 of 16 guard runs) is used up (6 runs)*")) -and -not (Said "*first red at the merge of YedPool/horde#300*") -and -not (Said "*first red at the merge of YedPool/horde#400*")) ("W3 two open guards divide the budget: each walks what its share allows, says where it stopped and names no merge (exit " + $run.exit + ")")
+$w = Get-WrapperAnswer -Case $h.c -Run $run
+$wNotice = Get-HordeNightlyGuardsNoticeText -Output (@($w.out) -join "`n")
+Check ($w.code -eq 1 -and $w.last -ceq "guards-wrap: RED" -and $wNotice -clike "*A GUARD WALK STOPPED AT ITS BUDGET in 2 red(s)*guards-wrap: RED") ("W3 the real guards-wrap.ps1 on this run's -Json prints the stop line, and the net's notice text keeps it: " + $wNotice.Substring([Math]::Max(0, $wNotice.Length - 260)))
 Check (@(Read-CheckedLines $h.c).Count -eq 2 -and (Said "(1 merges were walked; the other 2 stay owed to a later night, because 2 walk(s) stopped at their budget)") -and $recG1.Count -eq 1 -and $recG2.Count -eq 1 -and $recG1[0].merge.pr -ceq "YedPool/horde#100" -and $recG2[0].since -ceq $st1) "  only #100 and #200 are marked checked, #300 and #400 stay owed, and the record keeps #100 and night 1"
 $run = Invoke-OwedRun -Case $h.c -Now $n3
 $rec = @(Get-RedRecord $h.c)
@@ -1608,6 +1611,30 @@ Check ($run.exit -eq 1 -and @(Read-CheckedLines $h.c).Count -eq 3 -and (Said "*n
 $run = Invoke-OwedRun -Case $h.c -Now $n4
 $script:HordeMergeWalkRunBudget = $budgetWas
 Check ($run.exit -eq 1 -and @(Read-CheckedLines $h.c).Count -eq 4 -and -not (Said "*not walked past*") -and (Said ("RED " + $g1 + " in *: STILL RED since " + $st1 + ": first red at the merge of YedPool/horde#100*")) -and @(Get-RedRecord $h.c)[0].guards[0].merge.mergeSha -ceq $m1) "W8 night 4 looks at #400, the walk is finished: all checked, no stop, the red is the same one and #100 stays named"
+
+# W9: EIGHT OPEN REDS AT ONCE (round 4). 16 / 8 is 2, below the 4 runs of one merge in two shells, so each guard gets 4: the total passes the 16 (32, said
+# in the comment on the budget) but every night still moves on by a merge, which a cap that starved the later guards would not do.
+$g8Body = @'
+$flag = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "..\guard.txt"))
+if ($flag -match "allred") { Write-Output "  [FAIL] stand-in: red"; Write-Output ""; Write-Output "==== 1 FAILURE(S) ===="; exit 1 }
+Write-Output "  [PASS] stand-in"
+Write-Output "==== stand-in green ===="
+exit 0
+'@
+$g8Files = @{ "guard.txt" = "allred hostnames-red specs-red"; "test\guards.txt" = ($guardsText + "test/test-g3.ps1`ntest/test-g4.ps1`ntest/test-g5.ps1`ntest/test-g6.ps1`ntest/test-g7.ps1`ntest/test-g8.ps1`n") }
+foreach ($gi in 3..8) { $g8Files[("test\test-g" + $gi + ".ps1")] = $g8Body }
+$h8 = New-HandCase -Steps @(,@{ f = $g8Files; by = "F" })
+$null = Invoke-OwedRun -Case $h8.c -Now $n1
+Check (@(Get-RedRecord $h8.c)[0].guards.Count -eq 8) "W9 night 1: eight guards are red and recorded"
+foreach ($mw in @(@(200, "a.txt"), @(300, "b.txt"), @(400, "c.txt"), @(500, "d.txt"), @(600, "e.txt"))) { $null = Add-HandMerge -Case $h8.c -Files @{ $mw[1] = "x" } -By "J" -Number $mw[0] }
+$tip8 = Get-Main $h8.c
+$run = Invoke-OwedRun -Case $h8.c -Now $n2
+$walkRuns8 = @($script:guardRuns | Where-Object { $_.commit -cne $tip8 -and $_.commit -cne $h8.shas[0] }).Count
+Check ($run.exit -eq 1 -and @($script:said | Where-Object { $_ -clike "*: not walked past the merge of YedPool/horde#200: this guard's share of the walk's budget (4 of 16 guard runs) is used up (4 runs); the 4 merge(s) after it stay owed to a later night*" }).Count -eq 8) ("W9 eight open reds: each is given 4 runs, looks at #200 and says the other 4 merges stay owed (exit " + $run.exit + ")")
+Check ($walkRuns8 -eq 32) ("  the walk started 32 runs in all, past the 16 (the comment on the budget says so): " + $walkRuns8)
+Check (@(Read-CheckedLines $h8.c).Count -eq 2) "  and the night moved on: #100 and #200 are checked, #300 to #600 stay owed"
+$run = Invoke-OwedRun -Case $h8.c -Now $n3
+Check ($run.exit -eq 1 -and @(Read-CheckedLines $h8.c).Count -eq 3) "  night 3 moves on by one more merge: #300 is checked"
 
 Write-Host "== T-0347 round 3: when the whole repo fails, every open red is still named"
 $h = New-HandCase -Steps @(,@{ f = @{ "guard.txt" = "specs-red" }; by = "F" })

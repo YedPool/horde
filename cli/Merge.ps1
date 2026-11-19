@@ -476,7 +476,11 @@ $script:HordeMergeIntentStaleMinutes = 60
 # guards of test\guards.txt one after the other): 16 runs cost 5 minutes on average and 19 at the slowest guard, inside the cap. It is enough
 # for the walk of the smallest case that can name a merge (a red merge, the fixing push, the red merge again: 10 runs with both shells red).
 # EACH GUARD WITH AN OPEN RED GETS AN EQUAL SHARE (the budget divided by their number, never less than one merge's worst case, 2 tries in every
-# shell), so that every guard can look at one merge at least: a walk that stops leaves the merges after the last one it looked at OWED, and
+# shell), so that every guard can look at one merge at least. THE TOTAL CAN THEREFORE PASS THE BUDGET once more than 4 guards have an open red
+# (16 / 5 is below the 4 runs of one merge in 2 shells): at most 4 runs for each open red, 32 for the 8 guards of test\guards.txt, about 11 minutes
+# at the 21 s average guard run and 39 at the slowest. That is accepted on purpose: a cap that gave the guards past the fourth no share would
+# leave the earliest stop of all guards at the baseline, no merge would ever be marked checked, and the walk would never finish; a rotation of
+# the guards would be more machinery than a case that needs 5 guards red at once, with the baseline red, deserves. What is not walked stays owed: a walk that stops leaves the merges after the last one it looked at OWED, and
 # the next night starts there, so each night moves on and the walk finishes. A step is started only when its worst case (2 tries in each
 # shell that is red at the tip) still fits in the guard's share, so the share is never passed.
 $script:HordeMergeWalkRunBudget = 16
