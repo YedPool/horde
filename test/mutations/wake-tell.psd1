@@ -20,14 +20,14 @@
            Find = 'state = "$($Told[$_].state)"; class = (Get-HordeWakeTellClass $Told[$_]) } })'
            Replace = 'state = "$($Told[$_].state)" } })' }
         @{ Name = "told-again-every-pass"
-           Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
+           Find = 'if (-not ($retryDue -or $suppressedHourPassed)) { continue }'
            Replace = '' }
         @{ Name = "failed-post-never-tried-again"
-           Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
-           Replace = 'continue' }
+           Find = 'if (-not ($retryDue -or $suppressedHourPassed)) { continue }'
+           Replace = 'if (-not $suppressedHourPassed) { continue }' }
         @{ Name = "failed-post-tried-again-at-once"
-           Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
-           Replace = 'if ($next[$id].state -cne "failed") { continue }' }
+           Find = '$retryDue = ("$($was.state)" -ceq "failed" -and ($Now - $was.at).TotalSeconds -ge $Settings.retrySeconds)'
+           Replace = '$retryDue = ("$($was.state)" -ceq "failed")' }
         @{ Name = "no-rate-limit"
            Find = 'if ($sentLately -ge $cap) {'
            Replace = 'if ($false) {' }
