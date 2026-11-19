@@ -402,6 +402,19 @@ function Get-HordeNightlyVerdict {
     return "red"
 }
 
+function Test-HordeNightlySlotLost {
+    # Did the gate run NOTHING: 125 (the slot or the memory was not had in the wait) or 128 (not idle and not night)?
+    # Such a unit goes back on the end of the night's queue once (T-0491): on 2026-11-16 a review batch held the slot
+    # from 21:56, Universal pytest-all gave up at 22:16 and was never tried again, so 14 merges got no pytest at all.
+    # A run that timed out, or any other exit (124 past its limit, 127 the gate's own error, 71), did run or may have:
+    # it is never retried.
+    param($Run)
+    if ($null -eq $Run -or $Run.timedOut) { return $false }
+    if ($null -eq $Run.code -or "" + $Run.code -eq "") { return $false }
+    $c = [int]$Run.code
+    return ($c -eq 125 -or $c -eq 128)
+}
+
 function Get-HordeNightlyStoredVerdict {
     # The verdict to keep in state.json for a unit: -Verdict is tonight's, -Previous is what is stored ("" for none).
     # green, red and hung replace; anything else (unrun, absent) changes nothing. Returns "" for no change.
