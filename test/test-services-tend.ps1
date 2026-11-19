@@ -531,6 +531,16 @@ try {
     Check ($line -match '\A\S*powershell\.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z' -and $line.StartsWith(([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe") + " "))) "the command line is the system's own shell, fixed switches and base64"
     $pl = ConvertTo-HordeWindowsServiceCommandLine -Launch (New-HordeServiceLaunch -Kind "program" -Program "C:\Program Files\t\t.exe" -Arguments @("-q", "a b", 'c"d'))
     Check ($pl -ceq '"C:\Program Files\t\t.exe" -q "a b" "c\"d"') "a program launch is the program and its arguments, each quoted by the one rule"
+    # The program is the first token, read by another rule than its arguments (T-0449).
+    $p = { param([string]$Text) return (ConvertTo-HordeServiceProgram -Text $Text) }
+    Check ((& $p 'C:\plain\t.exe') -ceq 'C:\plain\t.exe' -and (& $p 'C:\a b\t.exe') -ceq '"C:\a b\t.exe"') "a program's path stands as it is, or in plain quotes when it holds a space"
+    Check ((& $p 'C:\dir with space\') -ceq '"C:\dir with space\"' -and (& $p "C:\tab`there\x.exe") -ceq ("`"C:\tab`there\x.exe`"")) "a program's backslashes are never doubled, not even before the closing quote: the first token has no escapes (the argument rule would name another path)"
+    $refused = { param([string]$Text) try { $null = & $p $Text; return "" } catch { return "" + $_.Exception.Message } }
+    Check ((& $refused 'C:\a"b\t.exe') -like "*cannot hold a quote*" -and (& $refused '') -like "*cannot be empty*") "a program's path with a quote, or none at all, is refused: the first token cannot carry it"
+    $launchRefused = ""; try { $null = New-HordeServiceLaunch -Kind "program" -Program 'C:\a"b\t.exe' } catch { $launchRefused = "" + $_.Exception.Message }
+    Check ($launchRefused -like "*cannot hold a quote*") "and a program launch naming one is refused where it is made, for every adapter"
+    $tl = ConvertTo-HordeWindowsServiceCommandLine -Launch (New-HordeServiceLaunch -Kind "program" -Program "C:\dir with space\" -Arguments @('C:\dir with space\'))
+    Check ($tl -ceq '"C:\dir with space\" "C:\dir with space\\"') "the command line quotes the program by the first-token rule and its arguments by the argument rule"
     Check ((Get-HordeWindowsSessionSeesPerson -Interactive $false -SessionId 1) -like "*not interactive*" -and (Get-HordeWindowsSessionSeesPerson -Interactive $true -SessionId 0) -like "*session 0*" -and (Get-HordeWindowsSessionSeesPerson -Interactive $true -SessionId 2) -eq "") "a process outside the person's own session cannot see their input, and says why"
     Check ((Get-HordeWindowsServiceDesktop -Interactive $false -SessionId 0).state -ceq "unknown" -and (Get-HordeWindowsServiceDesktop -Interactive $false -SessionId 0).reason -like "*not interactive*" -and (Get-HordeWindowsServiceDesktop -Interactive $true -SessionId 0).reason -like "*session 0*" -and (Get-HordeWindowsServiceDesktop -Interactive $true -SessionId 2).value -ceq "here") "nor show them a window: a scheduled job that runs whether or not anyone is signed in (session 0, not interactive) cannot reach the desktop, and says why"
     $winHost = @($script:HordeServiceHosts | Where-Object { $_.name -ceq "windows" })
@@ -897,7 +907,7 @@ try {
     Check ($null -ne $recorded -and $recorded.code -eq 11 -and $recorded.pid -eq $prog.value.pid -and (Test-HordeHeartbeatSameStart -One (ConvertFrom-HordeHeartbeatTimeText $recorded.startedAt) -Other $prog.value.startedAt)) "the watcher beside it recorded the code it ended with, and whose code it is: the same pid and the same start"
     $watcherText = ConvertTo-HordeWindowsWatcherScript -ProcessId 4321 -StartedAt $t0 -ExitFile "C:\it's & 50% `$(x)\exit.json"
     Check (-not $watcherText.Contains("it's") -and -not $watcherText.Contains("50%") -and $watcherText.Contains("GetProcessById(4321)") -and $watcherText.Contains('$null = $p.Handle') -and $watcherText.IndexOf('$null = $p.Handle') -lt $watcherText.IndexOf("StartTime")) "the watcher's command holds no path as text, and takes the process's handle BEFORE it checks whose process it is"
-    Check ((ConvertTo-HordeWindowsServiceCommandLine -Launch $pl) -ceq ((@((Get-HordeWindowsServiceShell)) + $given | ForEach-Object { ConvertTo-HordeServiceArgument -Text $_ }) -join " ")) "CONTROL: asking for an exit file changes nothing of the service's own command line"
+    Check ((ConvertTo-HordeWindowsServiceCommandLine -Launch $pl) -ceq ((@((ConvertTo-HordeServiceProgram -Text (Get-HordeWindowsServiceShell))) + @($given | ForEach-Object { ConvertTo-HordeServiceArgument -Text $_ })) -join " ")) "CONTROL: asking for an exit file changes nothing of the service's own command line"
     # A start asks for the exit record only of a service whose definition lists deliberate exit codes,
     # and clears the record of the run before. Through a stand-in adapter: nothing is started.
     $script:HordeServiceHosts.Clear()
