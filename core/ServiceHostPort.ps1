@@ -107,9 +107,11 @@ function New-HordeServiceLaunch {
         if (-not [System.IO.Path]::IsPathRooted($Script) -or @($Words).Count -lt 1) { throw "a horde launch names the absolute path of a horde entry point and at least one word" }
         if ($LogFile -ne "" -and -not [System.IO.Path]::IsPathRooted($LogFile)) { throw "a launch's log file is an absolute path" }
     } else {
-        if (-not [System.IO.Path]::IsPathRooted($Program)) { throw "a program launch names the absolute path of a program" }
-        # The program is the first token of the command line, which cannot carry a quote (T-0449).
+        # The program is the first token of the command line, which cannot carry a quote (T-0449). Checked
+        # BEFORE IsPathRooted: under Windows PowerShell 5.1 that throws "Illegal characters in path." on a
+        # quote (measured 2026-11-18), and the refusal would not say why.
         if ($Program -match '"') { throw "a program launch's path cannot hold a quote" }
+        if (-not [System.IO.Path]::IsPathRooted($Program)) { throw "a program launch names the absolute path of a program" }
         # A batch file's arguments are read again by the command interpreter, as commands
         # (core/Services.ps1 refuses one in a definition; refused here too, for any other caller).
         if ($Program -match '\.(cmd|bat)\s*\z') { throw "a program launch cannot be a batch file: the command interpreter would read its arguments again" }
@@ -149,7 +151,8 @@ function ConvertTo-HordeServiceProgram {
     # up to the first space or tab when it does not, and a backslash is never an escape there. So the
     # argument rule above is wrong for it: 'C:\a b\' would come out '"C:\a b\\"' and name another
     # path, and a quote cannot be carried at all. A quote is refused (no Windows path holds one), and a
-    # path with a space or tab is put in plain quotes, its backslashes as they are.
+    # path with any whitespace is put in plain quotes, its backslashes as they are (Windows ends the token
+    # only at a space or tab; quoting on other whitespace too only quotes more than it must).
     param([AllowEmptyString()][string]$Text)
     if ($Text -match '"') { throw "a program's path cannot hold a quote: the first token of a command line has no way to carry one" }
     if ($Text.Length -eq 0) { throw "a program's path cannot be empty" }
