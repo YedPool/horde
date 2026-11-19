@@ -80,8 +80,8 @@
            Find = '        if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)'
            Replace = '        if ($false) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)' }
         @{ Name = "run-cap-ignored"
-           Find = '        if ($runs -ge $MaxRuns) { return'
-           Replace = '        if ($false) { return' }
+           Find = '        if ($runs -ge $MaxRuns) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)'
+           Replace = '        if ($false) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)' }
         @{ Name = "culprit-off-by-one"
            Find = 'return [pscustomobject]@{ state = "found"; sha = $m[$hi]'
            Replace = 'return [pscustomobject]@{ state = "found"; sha = $m[[math]::Max(0, $hi - 1)]' }
