@@ -49,11 +49,11 @@ function Get-HordeMutateInstalledRefusal {
         }
     }
     if ($why -eq "") {
-        $profileDir = "" + $ProfileDir
-        if ($profileDir.Trim() -eq "") { $profileDir = "" + $env:USERPROFILE }
-        if ($profileDir.Trim() -eq "") { try { $profileDir = [System.Environment]::GetFolderPath("UserProfile") } catch { $profileDir = "" } }
-        if ($profileDir.Trim() -ne "") {
-            $default = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($profileDir, "bin", "horde")).TrimEnd('\', '/')
+        $prof = "" + $ProfileDir
+        if ($prof.Trim() -eq "") { $prof = "" + $env:USERPROFILE }
+        if ($prof.Trim() -eq "") { try { $prof = [System.Environment]::GetFolderPath("UserProfile") } catch { $prof = "" } }
+        if ($prof.Trim() -ne "") {
+            $default = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($prof, "bin", "horde")).TrimEnd('\', '/')
             if ($default -ieq $full) { $why = "it is the bin\horde folder under the profile" }
         }
     }

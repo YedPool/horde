@@ -164,7 +164,7 @@ try {
     $ri = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $inst "tools\Mutate.ps1") -RunTag $runTag -Spec "test\fixtures\mutate\spec-honest.psd1" | ForEach-Object { "$_" })
     $riCode = $LASTEXITCODE
     Check ($riCode -eq 2) ("the copy a horde.cmd shim launches is refused with a non-zero exit (" + $riCode + ": " + (@($ri | Select-Object -Last 2) -join " | ") + ")")
-    Check (@($ri | Where-Object { $_ -match 'will not run from the installed Horde' -and $_ -match [regex]::Escape($inst) -and $_ -match 'your own clone' }).Count -eq 1) "and the refusal names the path and says to run the clone's own tools\Mutate.ps1"
+    Check (@($ri | Where-Object { $_ -match 'will not run from the installed Horde' -and $_ -match [regex]::Escape("installed Horde, " + $inst + " (") -and $_ -match 'your own clone' }).Count -eq 1) "and the refusal names the path and says to run the clone's own tools\Mutate.ps1"
     Check (@($ri | Where-Object { $_ -match '\[OK\]|\[BAD\]|^mutations:|give -Spec' }).Count -eq 0) "and no mutant is run or reported"
     Check ((Get-InstFxTree -Dir $p1) -eq $treeBefore) "and nothing is written into the installed copy"
     Check (@(Get-OwnLeftovers).Count -eq 0) "and no throwaway copy is made"
@@ -196,6 +196,7 @@ try {
     $why5 = Get-HordeMutateInstalledRefusal -Repo $bin -ProfileDir $p5
     Check ($why5 -ne "" -and $why5 -match 'bin\\horde folder under the profile') "bin\horde under the profile is refused even with no shim"
     Check ((Get-HordeMutateInstalledRefusal -Repo $bin.ToUpper() -ProfileDir $p5) -ne "") "and the default place is matched whatever the case"
+    Check ((Get-HordeMutateInstalledRefusal -Repo ($bin + "\") -ProfileDir $p5) -ne "") "and the default place is matched with a trailing slash"
     Check ((Get-HordeMutateInstalledRefusal -Repo $bin -ProfileDir (Join-Path $instRoot "elsewhere")) -eq "") "CONTROL: the same folder under another profile is not the default place"
     Check ((Get-HordeMutateInstalledRefusal -Repo (New-InstFx -Parent (Join-Path $p5 "bin") -Leaf "horde2") -ProfileDir $p5) -eq "") "CONTROL: a sibling of bin\horde is not refused"
 } finally {

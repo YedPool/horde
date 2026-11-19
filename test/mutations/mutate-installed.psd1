@@ -32,11 +32,11 @@
            Find = 'if ($default -ieq $full) {'
            Replace = 'if ($default -ceq $full) {' }
         @{ Name = "default-place-ignores-given-profile"
-           Find = '$profileDir = "" + $ProfileDir'
-           Replace = '$profileDir = ""' }
+           Find = '$prof = "" + $ProfileDir'
+           Replace = '$prof = ""' }
         @{ Name = "default-place-any-bin-folder"
-           Find = '[System.IO.Path]::Combine($profileDir, "bin", "horde")'
-           Replace = '[System.IO.Path]::Combine($profileDir, "bin", $leaf)' }
+           Find = '[System.IO.Path]::Combine($prof, "bin", "horde")'
+           Replace = '[System.IO.Path]::Combine($prof, "bin", $leaf)' }
         @{ Name = "refusal-without-the-path"
            Find = 'installed Horde, " + $full + " (" + $why'
            Replace = 'installed Horde (" + $why' }
