@@ -64,10 +64,8 @@
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode "live" -HordeHome $HordeHome) -Text' }
         @{ Name = "shadow-state-read-from-where-live-writes"
-           Find = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome
-    if (-not (Test-Path'
-           Replace = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode "live" -HordeHome $HordeHome
-    if (-not (Test-Path' }
+           Find = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome'
+           Replace = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode "live" -HordeHome $HordeHome' }
         @{ Name = "posted-ids-never-dropped"
            Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
            Replace = '$nextPosted["$k"] = $when' }

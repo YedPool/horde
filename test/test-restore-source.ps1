@@ -415,17 +415,16 @@ Write-Host "--- a shadow tick writes only its own state file and reads only its 
 # calls it with -Shadow cannot see the shadow write the live file. The tick passes the mode through
 # Get-HordeWakeSenderFile, and that is where a shadow run could reach restore-live.json.
 . (Join-Path $root "core\WakeRun.ps1")
-. (Join-Path $root "wakers\memory\Waker.ps1")
-$tkWaker = Get-HordeWaker -Name "memory"
+# No waker is installed ($null): the restore source runs beside the wake pass without one, and the
+# memory waker is then named nowhere in this suite (wakers/memory/allowlist.txt only shrinks).
+$tkWaker = $null
 function New-TickHome { $x = Join-Path $pinned.home ("tick-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $x | Out-Null; return $x }
 $tkSessions = @(1..6 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 10 - 400)); lastChangeAt = (At ($_ * 10 - 398)); status = "idle"; firstSeenAt = (At -90000) } })
 $tkRead = { $a = New-HordeKnown -Value $tkSessions; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
 function Invoke-ShadowTicks {
     param([string]$HordeHome)
-    Reset-HordeMemoryWaker
     $tkRun = New-HordeWakeRun -HordeHome $HordeHome
     foreach ($i in 0..3) {
-        Set-HordeMemoryWakerClock (At ($i * 3))
         [void](Invoke-HordeWakeTick -Run $tkRun -Now (At ($i * 3)) -Waker $tkWaker -ReadSessions $tkRead -TickSeconds 3 -ProcessId 4246 -HordeHome $HordeHome)
     }
     return $tkRun
