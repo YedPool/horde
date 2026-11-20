@@ -342,7 +342,7 @@ try {
     $through = { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -Messenger $inProcess -HordeHome $pinned.home }
     $sent = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 10)) -Settings $settings -Post $through -Posted @{}
     $sentIds = @($sent.entries | ForEach-Object { $_.messageId })
-    Check ((Kinds $sent) -ceq "post,post,post" -and @($sent.entries | Where-Object { $_.outcome -cne "posted" }).Count -eq 0 -and $sent.posted.Count -eq 3) "a live pass posts the three orcs their resume mail through the messenger port, and marks each posted"
+    Check ((Kinds $sent) -ceq "post,post,post" -and @($sent.entries | Where-Object { $_.outcome -cne "awaiting" }).Count -eq 0 -and $sent.posted.Count -eq 0) "a live pass posts the three orcs their resume mail through the messenger port, journals each as awaiting its TAKEN (T-0391: accepted is not delivered), and marks none posted"
     $seen = @($sentIds | ForEach-Object { & $watch.Observe $box $_ })
     Check (@($seen | Where-Object { $_.records -ne 1 -or "$(@($_.bodies)[0])" -cne $settings.resumeText -or @($_.typed).Count -ne 0 }).Count -eq 0) "each is one record in the messenger's store, holding the resume text, and nothing was typed"
     $where = @($sentIds | ForEach-Object { Get-HordeMessengerStatus -Messenger $inProcess -MessageId $_ })
@@ -351,7 +351,7 @@ try {
     $seen = @($sentIds | ForEach-Object { & $watch.Observe $box $_ })
     Check ((@($lost.entries | ForEach-Object { $_.messageId } | Sort-Object) -join ",") -ceq (@($sentIds | Sort-Object) -join ",") -and @($seen | Where-Object { $_.records -ne 1 }).Count -eq 0) "a pass that lost what it had posted posts the same ids again, and the messenger keeps each as the one message it has"
     $one = Send-HordeRestoreMail -Mail ([pscustomobject]@{ kind = "resume"; to = (Sid 2); messageId = "0d000000-0000-4000-8000-0000000000aa"; body = $settings.resumeText }) -Settings $settings -Messenger $inProcess -HordeHome $pinned.home
-    Check ($one.state -ceq "known" -and $one.value.messageId -ceq "0d000000-0000-4000-8000-0000000000aa" -and $one.value.stage -ceq "accepted" -and $one.value.messenger -ceq "memory") "one mail's answer says which message, how far it got, and through which messenger"
+    Check ($one.state -ceq "unknown" -and (Test-HordeWakeMailAwaiting $one) -and $one.awaiting.messageId -ceq "0d000000-0000-4000-8000-0000000000aa" -and $one.awaiting.stage -ceq "accepted" -and $one.awaiting.messenger -ceq "memory") "one mail's answer says which message, how far it got, and through which messenger"
     # NO MESSENGER THAT MAY BE PICKED: only the in-process one is loaded, and it declines what the
     # source requires, so the port finds none - which is what keeps it out of a production run.
     $unsent = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 50)) -Settings $settings -Post { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -HordeHome $pinned.home } -Posted @{}
