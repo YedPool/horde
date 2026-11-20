@@ -128,6 +128,29 @@ $r = Run-Bisect -N 8 -Break 3 -NullAt "m8"
 Check ($r.state -ceq "inconclusive") "a tip that could not be run is inconclusive"
 $r = Run-Bisect -N 8 -Break 3 -NullAt "m4"
 Check ($r.state -ceq "inconclusive" -and "" + $r.between[1] -ceq "m8") "a middle run that did not happen stops the search, saying how far it got"
+# T-0491: A GATE THAT RAN NOTHING (125 slot or memory, 128 not idle nor night) puts the unit back on the queue; nothing else does.
+foreach ($c in @(125, 128)) { Check (Test-HordeNightlySlotLost ([pscustomobject]@{ code = $c; timedOut = $false })) ("T-0491: exit " + $c + " ran nothing, so the unit is tried again") }
+foreach ($c in @(0, 1, 3, 71, 124, 126, 127)) { Check (-not (Test-HordeNightlySlotLost ([pscustomobject]@{ code = $c; timedOut = $false }))) ("T-0491: exit " + $c + " is not tried again") }
+Check (-not (Test-HordeNightlySlotLost ([pscustomobject]@{ code = 125; timedOut = $true }))) "T-0491: a run cut off by its time limit is not tried again"
+Check (-not (Test-HordeNightlySlotLost ([pscustomobject]@{ code = $null; timedOut = $false }))) "T-0491: a run with no exit code is not tried again"
+Check (-not (Test-HordeNightlySlotLost $null)) "T-0491: no run at all is not tried again"
+# T-0465: RED AT LAST NIGHT'S TIP TOO names no merge. 2026-11-11: test-fleet-liveness went red because the box's
+# sessions turned elevated, red at every commit; the bisect took last night's tip as green and named the first
+# merge (PR 494). Last night's tip (-Base) is run again after the tip, and red there means no merge of the day did it.
+$t8 = @(1..8 | ForEach-Object { "m" + $_ })
+$script:asked = @()
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) $script:asked += $sha; return $true } -Base "m0"
+Check ($r.state -ceq "base-red" -and $r.sha -ceq "" -and $r.runs -eq 2) ("T-0465: red at last night's tip too names no merge (" + $r.state + " " + $r.sha + " in " + $r.runs + ")")
+Check (($script:asked -join ",") -ceq "m8,m0") ("T-0465: the tip is run first, then last night's tip (" + ($script:asked -join ",") + ")")
+Check ("" + $r.between[0] -ceq "m0") "T-0465: and it says which tip was red"
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) if ($sha -ceq "m0") { return $null } return $true } -Base "m0"
+Check ($r.state -ceq "inconclusive") ("T-0465: last night's tip that could not be run is inconclusive, no merge named (" + $r.state + ")")
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return ($sha -cne "m0" -and [int]($sha.Substring(1)) -ge 3) } -Base "m0"
+Check ($r.state -ceq "found" -and $r.sha -ceq "m3") ("T-0465: green at last night's tip, the bisect goes on and names the merge (" + $r.state + " " + $r.sha + ")")
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return $false } -Base "m0"
+Check ($r.state -ceq "flaky" -and $r.runs -eq 1) "T-0465: a tip that is not red is still flaky, last night's tip not run"
+$r = Find-HordeNightlyCulprit -Merges $t8 -IsRed { param($sha) return $true } -Base "m0" -MaxRuns 1
+Check ($r.state -ceq "capped") ("T-0465: a cap that leaves no run for last night's tip ends capped, never a merge named (" + $r.state + ")")
 $r = Run-Bisect -N 16 -Break 7 -Max 2
 Check ($r.state -ceq "capped") "the run cap stops it, saying so"
 
@@ -321,6 +344,11 @@ foreach ($st in @("capped", "inconclusive", "flaky")) {
 $fr = $okRow.PSObject.Copy(); $fr.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "found"; sha = $merge.sha; merge = $merge; runs = 3; between = @("", $merge.sha) })
 $h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($fr)) -split "`n" | Select-Object -First 1
 Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") "R5: a bisect that named its merge leaves the night COMPLETE"
+$br = $okRow.PSObject.Copy(); $br.culprits = @([pscustomobject]@{ unit = "u|ps51"; state = "base-red"; sha = ""; merge = $null; runs = 2; between = @("abcdef0123", "") })
+$bl = @(Get-HordeNightlyFindingLines -Row $br)
+Check (@($bl | Where-Object { $_ -like "RED u|ps51 was red at last night's tip abcdef01 too*no merge named*" }).Count -eq 1) ("T-0465: the report says red at last night's tip, no merge named (" + ($bl -join " | ") + ")")
+$h = (New-HordeNightlyReport -Date "2026-10-22" -Repos @($br)) -split "`n" | Select-Object -First 1
+Check ($h -like "*COMPLETE.*" -and $h -notlike "*INCOMPLETE*") ("T-0465: a red at last night's tip is an answer, so the night stays COMPLETE (" + $h + ")")
 
 Write-Host ""
 Write-Host "--- R2: the state is always saved, and what M was not told stays pending until a tell gets through ---" -ForegroundColor Cyan
@@ -556,7 +584,7 @@ $calls = Join-Path $PSScriptRoot "calls.txt"
 $n = 1; if (Test-Path -LiteralPath $calls) { $n = @(Get-Content -LiteralPath $calls).Count + 1 }
 Add-Content -LiteralPath $calls -Value ($Script + "|" + $MinFreeGB + "|" + $MinCommitHeadroomGB + "|" + $WaitSeconds)
 [System.IO.File]::WriteAllText($Out, "")
-if ($n -eq 3) { Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0 }
+if ($Script -ceq "guards-wrap.ps1") { Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0 }
 Write-Output ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now 1.1); nothing was run")
 Write-Output "heavy-slot: memory held by alpha, 41 processes, 9.80 GB"
 Write-Output "heavy-slot: memory held by beta, 12 processes, 7.04 GB"
@@ -582,19 +610,19 @@ exit 125
     $callsFile = Join-Path $hn "calls.txt"
     $calls = @(); if (Test-Path -LiteralPath $callsFile) { $calls = @(Get-Content -LiteralPath $callsFile) }
     Check ($nc -eq 0) ("the night ends exit 0 (" + $nc + ")")
-    Check ($calls.Count -eq 7) ("every unit and the guards went to the gate: 2 + 1 + 4 (" + $calls.Count + ")")
+    Check ($calls.Count -eq 13) ("every unit went to the gate twice (T-0491: a gate that ran nothing puts it back on the queue once) and the guards once: 2x2 + 1 + 4x2 (" + $calls.Count + ")")
     $scripts = @($calls | ForEach-Object { ($_ -split '\|')[0] })
-    Check ($calls.Count -ge 3 -and $scripts[0] -ceq "pytest-wrap.ps1" -and $scripts[1] -ceq "pytest-wrap.ps1" -and $scripts[2] -ceq "guards-wrap.ps1") ("the 2-unit repo ran first, though given second (" + ($scripts -join ", ") + ")")
+    Check ($calls.Count -ge 5 -and @($scripts[0..3] | Where-Object { $_ -cne "pytest-wrap.ps1" }).Count -eq 0 -and $scripts[4] -ceq "guards-wrap.ps1") ("the 2-unit repo ran first, though given second (" + ($scripts -join ", ") + ")")
     # 23:00 is night: the night floors of each kind (core Get-HordeNightlyNightFloors), not -MinFreeGB.
-    Check ($calls.Count -eq 7 -and @($calls[0..1] | Where-Object { ($_ -split '\|')[1] -cne "2.5" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the pytest gates were given the pytest night floor, 2.5 GB free and 1 GB commit headroom"
-    Check ($calls.Count -eq 7 -and @($calls[2..6] | Where-Object { ($_ -split '\|')[1] -cne "1" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the guards and the horde units were given 1 GB free and 1 GB commit headroom"
+    Check ($calls.Count -eq 13 -and @($calls[0..3] | Where-Object { ($_ -split '\|')[1] -cne "2.5" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the pytest gates were given the pytest night floor, 2.5 GB free and 1 GB commit headroom"
+    Check ($calls.Count -eq 13 -and @($calls[4..12] | Where-Object { ($_ -split '\|')[1] -cne "1" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the guards and the horde units were given 1 GB free and 1 GB commit headroom"
     $waits = @($calls | ForEach-Object { ($_ -split '\|')[3] }) -join ","
-    Check ($waits -ceq "900,120,120,900,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
+    Check ($waits -ceq "900,120,120,120,120,900,120,120,120,120,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
     $rf = Join-Path $hwr ("reports\" + $night.ToString("yyyy-MM-dd") + ".txt")
     $rtext = $(if (Test-Path -LiteralPath $rf) { [System.IO.File]::ReadAllText($rf) } else { "" })
     Check ($rtext -like "*REPO Fix/Hord*units run: 0, not run (slot, memory or night ran out): 4*") "the horde repo, every unit given up, reports 0 units run"
     Check ($rtext -like "*REPO Fix/Py*units run: 0,*") "and so does the pytest repo"
-    Check ($rtext -like "*MEMORY: 6 slot waits gave up on memory (floor pytest 2.5, horde 1 GB free, 1 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") "the report counts the give-ups and names the top 3 holders"
+    Check ($rtext -like "*MEMORY: 12 slot waits gave up on memory (floor pytest 2.5, horde 1 GB free, 1 GB commit headroom). Held by: alpha 41 processes 9.8 GB, beta 12 processes 7.0 GB, gamma 3 processes 1.3 GB.*") "the report counts the give-ups and names the top 3 holders"
     Check ($rtext -like "*guards: green*") "the guards that got their memory ran"
     Check ($rtext -like "*APPS: nothing closed (a suite run*") "a suite run never closes an app, and the report says so"
     $nlog = Join-Path $hwr "nightly.log"
@@ -756,6 +784,11 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     $bTail = $bLog.Substring([Math]::Max(0, $bLast))
     $jBisect = $bTail.IndexOf(" bisect test/test-a.ps1|ps51 -> "); $jReport = $bTail.IndexOf("report written: "); $jGone = $bTail.IndexOf("first claim on the heavy slot released")
     Check ($jBisect -gt 0 -and $jReport -gt $jBisect -and $jGone -gt $jReport) ("T-0447: the log says bisect, then report written, then released (" + $jBisect + " " + $jReport + " " + $jGone + ")")
+    # T-0465, through the real net: the stub is red at every commit, last night's tip included (a box change, as
+    # on 2026-11-11), so the bisect names no merge.
+    Check ($bTail -like "* bisect test/test-a.ps1|ps51 -> base-red *") ("T-0465: the net finds the unit red at last night's tip too (" + (@($bTail -split "`n" | Where-Object { $_ -like "* bisect *" }) -join " | ") + ")")
+    $bRep = @(Get-ChildItem -LiteralPath $bwr -Recurse -Filter "*.txt" | Where-Object { $_.Name -like "20*-*.txt" } | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
+    Check ($bRep -like "*red at last night's tip*" -and $bRep -notlike "*first red at merge*") "T-0465: and its report names no merge"
     $probe = $null
     Check (-not [System.Threading.Mutex]::TryOpenExisting($bClaim, [ref]$probe)) "T-0447: and no claim is left once the net has ended"
     # A plan, and a suite run that names no claim, take none of the machine's.
@@ -763,6 +796,64 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     if (-not [System.Threading.Mutex]::TryOpenExisting($machineClaim, [ref]$probe)) {
         Check ($netSource -like '*if ($NetClaimName -eq "" -and $AtTime -eq "" -and $HeavySlotScript -eq "") { $NetClaimName = "Global\HordeHeavySlot-NetClaim" }*') "a real run takes the machine's claim, a suite run never does"
     } else { $probe.Dispose(); Check ($true) "(the real net is running now: the machine's claim stands, not this suite's)" }
+
+    # T-0491: A UNIT WHOSE SLOT WAIT GAVE UP GOES BACK ON THE END OF THE QUEUE, through the real tool. 2026-11-16: a review
+    # batch held the slot from 21:56, Universal pytest-all gave up at 22:16 (125) and was never tried again. This gate
+    # gives up (125) the FIRST time it is asked for each run, then runs it green; the guards always run.
+    $qn = Join-Path $work "requeue"; [void][System.IO.Directory]::CreateDirectory($qn)
+    $qGate = Join-Path $qn "gate.ps1"
+    [System.IO.File]::WriteAllText($qGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = @(); if ($ArgsFile -ne "") { $j = [System.IO.File]::ReadAllText($ArgsFile) | ConvertFrom-Json; foreach ($x in $j) { $a += ("" + $x) } }
+$key = $Script + " " + ($a -join " ")
+$seenF = Join-Path $PSScriptRoot "seen.txt"
+$seen = @(); if (Test-Path -LiteralPath $seenF) { $seen = @(Get-Content -LiteralPath $seenF) }
+Add-Content -LiteralPath $seenF -Value $key
+[System.IO.File]::WriteAllText($Out, "")
+if ($Script -cne "guards-wrap.ps1" -and -not ($seen -ccontains $key)) { Write-Output "heavy-slot: gave up after 1 s waiting for the slot; nothing was run"; Write-Output "heavy-slot: released exit=125"; exit 125 }
+$i = [array]::IndexOf($a, "-NodesFile"); if ($i -ge 0) { [System.IO.File]::WriteAllText($a[$i + 1], "") }
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0
+'@)
+    $qorigin = Join-Path $qn "horigin"; [void][System.IO.Directory]::CreateDirectory((Join-Path $qorigin "test\lib"))
+    [void](Git $qorigin @("init", "-q", "-b", "main"))
+    [System.IO.File]::WriteAllText((Join-Path $qorigin "test\lib\SuiteFiles.ps1"), "function Get-HordeSuiteFiles { param([string]`$Root) return @(Get-ChildItem -LiteralPath (Join-Path `$Root 'test') -Filter 'test-*.ps1' | Sort-Object Name) }`r`nfunction Get-HordeMachineBoundSuites { return @() }`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $qorigin "test\test-a.ps1"), "exit 0`r`n")
+    [void](Git $qorigin @("add", "-A")); [void](Git $qorigin @("commit", "-q", "-m", "base"))
+    $qwr = Join-Path $qn "wr"
+    & git.exe clone -q $qorigin (Join-Path $qwr "Fix__Hq\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    & git.exe clone -q $origin (Join-Path $qwr "Fix__Pq\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $qNight = (Get-Date).Date.AddHours(23)
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $qNight.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $qwr -HeavySlotScript $qGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Hq:horde:main,Fix/Pq:pytest:main")
+    $qc = $LASTEXITCODE
+    $qSeen = @(); if (Test-Path -LiteralPath (Join-Path $qn "seen.txt")) { $qSeen = @(Get-Content -LiteralPath (Join-Path $qn "seen.txt")) }
+    $qScripts = @($qSeen | ForEach-Object { ($_ -split ' ', 2)[0] })
+    $qrf = Join-Path $qwr ("reports\" + $qNight.ToString("yyyy-MM-dd") + ".txt")
+    $qr = $(if (Test-Path -LiteralPath $qrf) { [System.IO.File]::ReadAllText($qrf) } else { "" })
+    $ql = $(if (Test-Path -LiteralPath (Join-Path $qwr "nightly.log")) { [System.IO.File]::ReadAllText((Join-Path $qwr "nightly.log")) } else { "" })
+    Check ($qc -eq 0) ("T-0491: the night ends exit 0 (" + $qc + ")")
+    $pyAll = @(for ($k = 0; $k -lt $qSeen.Count; $k++) { if ($qSeen[$k] -like "pytest-wrap.ps1 *-Mode all*") { $k } })
+    $flake = @(for ($k = 0; $k -lt $qSeen.Count; $k++) { if ($qSeen[$k] -like "pytest-wrap.ps1 *-Mode flake8*") { $k } })
+    Check ($pyAll.Count -eq 2 -and $flake.Count -eq 2) ("T-0491: pytest-all and flake8 that gave up were each tried again, once (" + $pyAll.Count + ", " + $flake.Count + ")")
+    Check ($pyAll.Count -eq 2 -and $flake.Count -ge 1 -and $pyAll[1] -gt $flake[0]) ("T-0491: pytest-all's second try comes after the rest of the queue, not at once (" + ($qScripts -join ", ") + ")")
+    Check ($ql -like "*Fix/Pq pytest-all gave up waiting for the slot (exit 125): back on the end of the night's queue*") "T-0491: the log says pytest-all went back on the queue"
+    Check ($ql -like "*Fix/Hq test/test-a.ps1|ps51 gave up waiting for the slot (exit 125): back on the end of the night's queue*") "T-0491: and so for a suite"
+    Check ($qr -like "*REPO Fix/Pq*not run (slot, memory or night ran out): 0*" -and $qr -like "*REPO Fix/Hq*not run (slot, memory or night ran out): 0*") "T-0491: every unit ran on its second try, so none is reported not run"
+    Check ($qr -notlike "*the pytest run did not complete*") "T-0491: and the pytest run is not reported incomplete"
+    # Sent back, but the queue ends (a STOP, made by this gate in the net's work folder, its working directory) before
+    # pytest-all's second try: it is counted NOT RUN, never dropped from the count.
+    $sGate = Join-Path $qn "stop-gate.ps1"
+    [System.IO.File]::WriteAllText($sGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+[System.IO.File]::WriteAllText($Out, "")
+[System.IO.File]::WriteAllText((Join-Path (Get-Location).Path "STOP"), "")
+Write-Output "heavy-slot: gave up after 1 s waiting for the slot; nothing was run"; Write-Output "heavy-slot: released exit=125"; exit 125
+'@)
+    $swr = Join-Path $qn "wr-stop"
+    & git.exe clone -q $origin (Join-Path $swr "Fix__Ps\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $qNight.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $swr -HeavySlotScript $sGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Ps:pytest:main")
+    $srf = Join-Path $swr ("reports\" + $qNight.ToString("yyyy-MM-dd") + ".txt")
+    $sr = $(if (Test-Path -LiteralPath $srf) { [System.IO.File]::ReadAllText($srf) } else { "" })
+    Check ($sr -like "*REPO Fix/Ps*not run (slot, memory or night ran out): 2*") ("T-0491: pytest-all sent back whose second try never came is counted not run, with flake8 (" + (@($sr -split "`n" | Where-Object { $_ -like "*not run*" }) -join " | ") + ")")
 
     # ONLY PYTEST'S SUMMARY NAMES A FAILED TEST (2026-11-05: the night's report listed a captured log line,
     # "ERROR    root:web_reader_dialog.py:2953 ...", as a newly red test). A fake python replays that shape.

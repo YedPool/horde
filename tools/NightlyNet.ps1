@@ -336,7 +336,10 @@ function Invoke-NightlySlot {
     }
     if ($script:MemoryShort -and -not $wasShort) { Write-NightlyNetLine ($Tag + " gave up on memory: slot waits are " + (Get-NightlySlotWait) + " s until a gate gets its memory") }
     elseif ($wasShort -and -not $script:MemoryShort) { Write-NightlyNetLine ($Tag + " got its memory: slot waits are " + (Get-NightlySlotWait) + " s again") }
-    return [pscustomobject]@{ code = $code; timedOut = $timedOut; gate = $gate; out = $out }
+    $run = [pscustomobject]@{ code = $code; timedOut = $timedOut; gate = $gate; out = $out }
+    # The suite phase reads the last run of a unit to tell a gate that ran nothing from a red (T-0491).
+    $script:LastSlotRun = $run
+    return $run
 }
 
 function Get-NightlyVerdict {
@@ -473,7 +476,14 @@ function Invoke-NightlyPhaseOne {
     } else { $Ctx.guards = [pscustomobject]@{ state = "no repo-wide guard list (flake8 critical is a unit below)"; text = "" } }
     $units = Get-NightlyUnits $Ctx
     $Ctx.units = @($units)
-    foreach ($u in $units) {
+    # A QUEUE, not a list (T-0491): a unit whose gate ran nothing (core Test-HordeNightlySlotLost: 125 or 128) goes back
+    # on the end of it ONCE, so a slot held by another lane early in the night costs a later try, not the unit.
+    $queue = [System.Collections.Generic.List[string]]::new()
+    foreach ($x in @($units)) { $queue.Add($x) }
+    $requeued = @{}
+    $pytestDecided = $false
+    for ($qi = 0; $qi -lt $queue.Count; $qi++) {
+        $u = $queue[$qi]
         if (Test-Path -LiteralPath $StopFile) { $Ctx.incomplete = "STOP file seen"; break }
         # A unit whose declared need the night lacks is SKIPPED with the reason: not run, not red, never green.
         if ($Ctx.kind -ceq "horde") {
@@ -489,6 +499,8 @@ function Invoke-NightlyPhaseOne {
             $nf = Join-Path $RunDir ($tag + "-nodes.txt")
             if (Test-Path -LiteralPath $nf) { Remove-Item -LiteralPath $nf -Force }
             $r = Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $Ctx.tree, "-Mode", "all", "-NodesFile", $nf) -Tag ($tag + "-pytest-all") -Seconds $LongRunSeconds
+            if ((Test-HordeNightlySlotLost $r) -and -not $requeued.ContainsKey($u)) { $requeued[$u] = $true; $queue.Add($u); Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $r.code + "): back on the end of the night's queue"); continue }
+            $pytestDecided = $true
             $nodes = @()
             if (Test-Path -LiteralPath $nf) { $nodes = @(Get-Content -LiteralPath $nf | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) }
             # Only a run that finished as pytest does (exit 0, or 1 with the failing nodes it named) is a verdict. A timeout,
@@ -501,7 +513,9 @@ function Invoke-NightlyPhaseOne {
         }
         # Each unit's time, gate wait included, is logged: the measured night is tomorrow's time budget.
         $uclock = [System.Diagnostics.Stopwatch]::StartNew()
+        $script:LastSlotRun = $null
         $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip -Seconds $secs
+        if ($v -ceq "unrun" -and (Test-HordeNightlySlotLost $script:LastSlotRun) -and -not $requeued.ContainsKey($u)) { $requeued[$u] = $true; $queue.Add($u); Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $script:LastSlotRun.code + "): back on the end of the night's queue"); continue }
         # Past a limit cut short by the end of the night is not a hang: it is unrun, and runs again tomorrow.
         if ($v -ceq "hung" -and $secs -lt $need) { $v = "unrun" }
         Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> " + $v + " in " + [int]$uclock.Elapsed.TotalSeconds + " s")
@@ -510,6 +524,8 @@ function Invoke-NightlyPhaseOne {
         if ($v -ceq "unrun") { $Ctx.unrun++ }
     }
     $Ctx.unrun += @($units | Where-Object { -not $Ctx.verdicts.ContainsKey($_) -and $_ -cne "pytest-all" }).Count
+    # pytest-all sent back on the queue whose second try never came (the night or a STOP ended the queue first): unrun.
+    if ($requeued.ContainsKey("pytest-all") -and -not $pytestDecided) { $Ctx.unrun++; if ($Ctx.incomplete -eq "") { $Ctx.incomplete = "the pytest run did not complete" } }
 }
 
 function Complete-NightlyCompare {
@@ -550,7 +566,7 @@ function Invoke-NightlyBisect {
             $memo[$key] = $res
             return $res
         }
-        $found = Find-HordeNightlyCulprit -Merges $shas -IsRed $isRed -MaxRuns $budget
+        $found = Find-HordeNightlyCulprit -Merges $shas -IsRed $isRed -MaxRuns $budget -Base $Ctx.state.lastTip
         $merge = $null
         if ($found.state -ceq "found") { $merge = @($Ctx.merges | Where-Object { $_.sha -ceq $found.sha })[0] }
         $Ctx.culprits += [pscustomobject]@{ unit = $u; state = $found.state; sha = $found.sha; merge = $merge; runs = $found.runs; between = $found.between }

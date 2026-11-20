@@ -255,7 +255,7 @@
            Find = '$script:HordeWakeSendersPost = $false'
            Replace = '$script:HordeWakeSendersPost = $true' }
         @{ Name = "restore-source-never-shadow"
-           Find = 'return ($script:HordeWakeSendersPost -ne $true)'
+           Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
            Replace = 'return $false' }
         @{ Name = "a-run-is-live-by-default"
            Find = 'live = ($word -cne "shadow"); ledger'
@@ -362,6 +362,9 @@
         @{ Name = "duplicates-not-handed-to-the-restore-pass"
            Find = '-UncountedDuplicates $dupCount'
            Replace = '-UncountedDuplicates 0' }
+        @{ Name = "senders-switch-on-for-anything-truthy"
+           Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
+           Replace = 'return ($script:HordeWakeSendersPost -ne $true)' }
         @{ Name = "duplicate-names-not-handed-to-the-bound-notice"
            Find = '-DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })'
            Replace = '-DuplicateNames @()' }
