@@ -415,8 +415,8 @@
            Find = '    if ($next.silent) {'
            Replace = '    if ($false) {' }
         @{ Name = "a-killed-nudge-is-not-seen"
-           Find = 'if ($null -eq $e -or @("nudge", "nudge-killed") -cnotcontains "$($e.kind)") { continue }'
-           Replace = 'if ($null -eq $e -or @("nudge") -cnotcontains "$($e.kind)") { continue }' }
+           Find = 'if ($null -eq $e -or @("nudge", "nudge-killed", "would-nudge") -cnotcontains "$($e.kind)") { continue }'
+           Replace = 'if ($null -eq $e -or @("nudge", "would-nudge") -cnotcontains "$($e.kind)") { continue }' }
         @{ Name = "a-silent-fleet-is-asked-at-any-step"
            Find = 'if ($last -is [datetime] -and ($Now - $last).TotalSeconds -lt $longest) { return'
            Replace = 'if ($false) { return' }
