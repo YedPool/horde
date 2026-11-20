@@ -483,5 +483,89 @@
         @{ Name = "json-note-contradicts-the-merge-it-names"
            Find = 'note = $(if ($null -ne $mj -and $null -eq $d.entry) {'
            Replace = 'note = $(if ($false) {' }
+        @{ Name = "clearred-no-usable-list-clears"
+           Find = '    if ($null -eq $list.guards) { return (& $cannot ($Base + " " + $t.out.Substring(0, 8) + " has no usable guard list ('
+           Replace = '    if ($false) { return (& $cannot ($Base + " " + $t.out.Substring(0, 8) + " has no usable guard list (' }
+        @{ Name = "open-guard-dup-red"
+           Find = 'if (@($reds | Where-Object { $_.guard -ceq $og }).Count -gt 0) { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "intent-line-repo-case-kept"
+           Find = 'repo = ($Request.owner + "/" + $Request.repo).ToLowerInvariant(); owner = $Request.owner;'
+           Replace = 'repo = ($Request.owner + "/" + $Request.repo); owner = $Request.owner;' }
+        @{ Name = "red-after-last-merge-keeps-old-blame"
+           Find = 'if (-not $found) { $item.fresh = $true }'
+           Replace = '' }
+        @{ Name = "red-between-merges-keeps-old-blame"
+           Find = 'if ($ended) { $item.entry = $e;'
+           Replace = 'if ($false) { $item.entry = $e;' }
+        @{ Name = "red-between-merges-ignores-the-fixing-push"
+           Find = 'if (-not $pre.red) { $ended = $true }'
+           Replace = '' }
+        @{ Name = "dropped-after-fix-keeps-old-blame"
+           Find = 'if (-not $dbl.red) { $item.fresh = $true }'
+           Replace = '' }
+        @{ Name = "walk-budget-not-checked-before-push"
+           Find = 'if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the push commit'
+           Replace = 'if ($false) { $stopped = $true; break } # before the push commit' }
+        @{ Name = "walk-budget-not-checked-before-merge"
+           Find = 'if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the merge'
+           Replace = 'if ($false) { $stopped = $true; break } # before the merge' }
+        @{ Name = "walk-budget-step-cost-one-try"
+           Find = '$stepCost = 2 * $stepShells'
+           Replace = '$stepCost = $stepShells' }
+        @{ Name = "walk-budget-forgets-the-push-runs"
+           Find = '$walkRuns += $pre.runs'
+           Replace = '' }
+        @{ Name = "walk-budget-forgets-the-merge-runs"
+           Find = '$walkRuns += $later.runs'
+           Replace = '' }
+        @{ Name = "walk-stop-does-not-say-where"
+           Find = '$lastLooked = "the merge of " + $e.pr'
+           Replace = '' }
+        @{ Name = "walk-stop-hides-that-the-red-had-ended"
+           Find = 'if ($ended) { $item.walkStopped +='
+           Replace = 'if ($false) { $item.walkStopped +=' }
+        @{ Name = "walk-stop-note-left-out-of-the-report"
+           Find = '$item.note += $item.walkStopped'
+           Replace = '' }
+        @{ Name = "walk-stop-left-out-of-the-json"
+           Find = '$(if ($d.walkStopped -ne "") { "; this run: " + $d.walkStopped } else { "" })'
+           Replace = '""' }
+        @{ Name = "walk-push-checkout-failure-is-a-pass"
+           Find = 'if (-not $pre.ok) { return (& $err $pre.why) }'
+           Replace = 'if ($false) { return (& $err $pre.why) }' }
+        @{ Name = "walk-merge-checkout-failure-is-a-pass"
+           Find = 'if (-not $later.ok) { return (& $err $later.why) }'
+           Replace = 'if ($false) { return (& $err $later.why) }' }
+        @{ Name = "walk-push-runs-every-shell"
+           Find = '-Commit $e.firstParent -Guard $g -ShellKeys $tipKeys'
+           Replace = '-Commit $e.firstParent -Guard $g' }
+        @{ Name = "walk-merge-runs-every-shell"
+           Find = '$later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys'
+           Replace = '$later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g' }
+        @{ Name = "walk-budget-share-not-divided"
+           Find = '[Math]::Floor($script:HordeMergeWalkRunBudget / [Math]::Max(1, @($OpenGuards).Count))'
+           Replace = '$script:HordeMergeWalkRunBudget' }
+        @{ Name = "walk-budget-share-below-one-merge"
+           Find = ', 2 * @(Get-HordeGuardShells).Count)'
+           Replace = ', 0)' }
+        @{ Name = "walk-stop-marks-every-merge-checked"
+           Find = 'checked = @($walk | Select-Object -First $walkReach)'
+           Replace = 'checked = @($walk)' }
+        @{ Name = "walk-stop-reach-never-lowered"
+           Find = '$walkReach = [Math]::Min($walkReach, $looked)'
+           Replace = '$walkReach = $walkReach' }
+        @{ Name = "walk-stop-reach-is-the-last-stop-not-the-earliest"
+           Find = '$walkReach = [Math]::Min($walkReach, $looked)'
+           Replace = '$walkReach = $looked' }
+        @{ Name = "walk-stop-looked-not-counted"
+           Find = '$looked++'
+           Replace = '' }
+        @{ Name = "walk-stop-report-says-all-checked"
+           Find = 'if ($stoppedWalks -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "walk-stop-count-left-out-of-the-json"
+           Find = 'walkStopped = $nStopped;'
+           Replace = 'walkStopped = 0;' }
     )
 }
