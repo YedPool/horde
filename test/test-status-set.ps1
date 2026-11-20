@@ -25,7 +25,8 @@ $script:n = 0
 # Every run of the real command gets a Horde home and a profile of its own: status set also makes the card its fleet.db row, and an environment that named the real home would reach the real database.
 $fakeProfile = Join-Path $work "profile"
 $homeDir = Join-Path $work "home"
-New-Item -ItemType Directory -Path $fakeProfile, $homeDir | Out-Null
+New-Item -ItemType Directory -Path $homeDir | Out-Null
+[void](New-HordeTestProfile $fakeProfile)
 $cliEnv = @{ HORDE_HOME = $homeDir; USERPROFILE = $fakeProfile }
 
 function New-Lane {

@@ -75,8 +75,8 @@
            Find = '$Run.duplicate = $dupNow.seen'
            Replace = '$Run.duplicate = @{}' }
         @{ Name = "the-heartbeat-does-not-say-the-watchers-own-session"
-           Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" }'
-           Replace = ' }' }
+           Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts'
+           Replace = ' -Counts' }
         @{ Name = "the-line-names-no-session"
            Find = 'if ($Self -cne "") { return ("this watcher holds session " + $Self + " as its own'
            Replace = 'if ($false) { return ("this watcher holds session " + $Self + " as its own' }
@@ -255,7 +255,7 @@
            Find = '$script:HordeWakeSendersPost = $false'
            Replace = '$script:HordeWakeSendersPost = $true' }
         @{ Name = "restore-source-never-shadow"
-           Find = 'return ($script:HordeWakeSendersPost -ne $true)'
+           Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
            Replace = 'return $false' }
         @{ Name = "a-run-is-live-by-default"
            Find = 'live = ($word -cne "shadow"); ledger'
@@ -383,5 +383,11 @@
         @{ Name = "duplicate-gone-wait-ahead-of-clock-kept"
            Find = ' -or $Run.duplicateGone["$id"] -gt $Now) { $Run.duplicateGone["$id"] = $Now }'
            Replace = ') { $Run.duplicateGone["$id"] = $Now }' }
+        @{ Name = "senders-switch-on-for-anything-truthy"
+           Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
+           Replace = 'return ($script:HordeWakeSendersPost -ne $true)' }
+        @{ Name = "duplicate-names-not-handed-to-the-bound-notice"
+           Find = '-DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })'
+           Replace = '-DuplicateNames @()' }
     )
 }

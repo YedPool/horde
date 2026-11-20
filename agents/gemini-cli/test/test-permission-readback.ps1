@@ -40,7 +40,7 @@ function Get-RealCount { if (Test-Path -LiteralPath $realDir) { return @(Get-Chi
 $before = Get-RealCount
 $work = Join-Path $env:TEMP ("horde-readback-gm-" + [guid]::NewGuid().ToString("N"))
 $fakeHome = Join-Path $work "home"
-New-Item -ItemType Directory -Path $fakeHome -Force | Out-Null
+[void](New-HordeTestProfile $fakeHome)
 $override = 'Approval mode overridden to "default" because the current folder is not trusted'
 
 function Read-Lines {
