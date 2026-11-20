@@ -264,8 +264,8 @@
            Find = 'live = ($word -cne "shadow"); ledger'
            Replace = 'live = $false; ledger' }
         @{ Name = "anything-in-live-is-live"
-           Find = 'if ($Run.live -ne $true) { return "shadow" }'
-           Replace = 'if (-not $Run.live) { return "shadow" }' }
+           Find = 'if ($null -eq $liveWord -or $liveWord.Value -isnot [bool] -or $liveWord.Value -ne $true) { return "shadow" }'
+           Replace = 'if ($null -eq $liveWord -or -not $liveWord.Value) { return "shadow" }' }
         @{ Name = "ledger-saved-as-the-other-mode"
            Find = '$Run.ledger = $result.ledger'
            Replace = '$Run.ledger = $result.ledger; $mode = $(if ($mode -ceq "shadow") { "live" } else { "shadow" })' }
