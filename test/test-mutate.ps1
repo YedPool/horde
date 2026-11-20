@@ -263,7 +263,8 @@ try {
         $script:HordeMutateProfileProbe = { "" }
         Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -ne "") "when the machine gives nothing, the USERPROFILE variable is used"
         $script:HordeMutateProfileProbe = { throw "no profile" }
-        Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -ne "") "and when asking the machine fails, too"
+        $failOut = try { Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "" } catch { "THREW: " + $_.Exception.Message }
+        Check ($failOut -ne "" -and $failOut -notmatch '^THREW') ("and when asking the machine fails, too, and nothing is thrown (" + $failOut + ")")
         $env:USERPROFILE = ""
         Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -eq "") "CONTROL: with neither, nothing is refused and nothing throws"
     } finally { $script:HordeMutateProfileProbe = $savedProbe; $env:USERPROFILE = $savedUp }
