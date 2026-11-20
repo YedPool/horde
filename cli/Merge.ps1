@@ -468,6 +468,22 @@ function Invoke-HordeMergeCheck {
 
 $script:HordeMergeIntentFileName = "guards-intent.jsonl"
 $script:HordeMergeIntentStaleMinutes = 60
+# THE RUN BUDGET OF THE WALK FOR A RED THAT MAY HAVE ENDED AND BEGUN AGAIN (T-0347 rounds 2 and 3): the most guard runs (one shell, one try; a red
+# shell is run twice) that this walk may start on one branch. It covers ONLY that walk: the runs at the tip, at the baseline and the walk of a
+# guard whose baseline is green come on top. A red that simply goes on every night used to run its guard at every queued merge and at every
+# commit a merge was made on: up to 2 shells x 2 tries per step, every night, inside the 30-minute heavy-run cap (HeavySlot) and the net's
+# 05:00-06:30 window. 16 because a guard run took 4 to 73 s, 21 s on average, in Windows PowerShell 5.1 on this fleet's box (2026-11-17, the 8
+# guards of test\guards.txt one after the other): 16 runs cost 5 minutes on average and 19 at the slowest guard, inside the cap. It is enough
+# for the walk of the smallest case that can name a merge (a red merge, the fixing push, the red merge again: 10 runs with both shells red).
+# EACH GUARD WITH AN OPEN RED GETS AN EQUAL SHARE (the budget divided by their number, never less than one merge's worst case, 2 tries in every
+# shell), so that every guard can look at one merge at least. THE TOTAL CAN THEREFORE PASS THE BUDGET once more than 4 guards have an open red
+# (16 / 5 is below the 4 runs of one merge in 2 shells): at most 4 runs for each open red, 32 for the 8 guards of test\guards.txt, about 11 minutes
+# at the 21 s average guard run and 39 at the slowest. That is accepted on purpose: a cap that gave the guards past the fourth no share would
+# leave the earliest stop of all guards at the baseline, no merge would ever be marked checked, and the walk would never finish; a rotation of
+# the guards would be more machinery than a case that needs 5 guards red at once, with the baseline red, deserves. What is not walked stays owed: a walk that stops leaves the merges after the last one it looked at OWED, and
+# the next night starts there, so each night moves on and the walk finishes. A step is started only when its worst case (2 tries in each
+# shell that is red at the tip) still fits in the guard's share, so the share is never passed.
+$script:HordeMergeWalkRunBudget = 16
 
 function Format-HordeMergeIntentLine {
     # PURE. The line a daytime merge writes BEFORE it asks GitHub to merge (T-0347): a crash between the merge and the
@@ -908,19 +924,23 @@ function Invoke-HordeMergeGuardAt {
     #   absent: the guard is not in that commit's tree.
     #   red: a shell ran it and it failed, twice: a red is run once more before it is believed, and a guard
     #     that passes the second time is said and counted green (a starved or flaky run must not name a merge).
+    #   runs: how many times a shell was started (a red shell counts 2), for the walk's budget.
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Scratch, [Parameter(Mandatory = $true)][string]$Commit, [Parameter(Mandatory = $true)][string]$Guard, [string[]]$ShellKeys = @())
-    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; red = $false; absent = $false; shells = @(); shellKeys = @(); lines = @(); why = $Why } }
+    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; red = $false; absent = $false; shells = @(); shellKeys = @(); lines = @(); runs = 0; why = $Why } }
     $r = Invoke-HordeMergeGit -Tools $Tools -What ("checking out " + $Commit.Substring(0, 8)) -Arguments @("-C", $Scratch, "-c", "core.longpaths=true", "checkout", "--detach", "--force", "--quiet", $Commit)
     if (-not $r.ok) { return (& $no $r.why) }
-    if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($Scratch, $Guard))) { return [pscustomobject]@{ ok = $true; red = $false; absent = $true; shells = @(); shellKeys = @(); lines = @(); why = "" } }
+    if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($Scratch, $Guard))) { return [pscustomobject]@{ ok = $true; red = $false; absent = $true; shells = @(); shellKeys = @(); lines = @(); runs = 0; why = "" } }
+    $runs = 0
     $shells = @()
     $keys = @()
     $lines = @()
     foreach ($sh in @(Get-HordeGuardShells)) {
         if (@($ShellKeys).Count -gt 0 -and @($ShellKeys) -cnotcontains $sh.key) { continue }
         $run = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($Scratch, $Guard, $sh.key)
+        $runs++
         $read = Read-HordeMergeGuardResult -Run $run
         if (-not $read.ok -and $read.ran) {
+            $runs++
             $again = Invoke-HordeMergeTool -Tools $Tools -Name "Guard" -With @($Scratch, $Guard, $sh.key)
             $run = $again
             $read = Read-HordeMergeGuardResult -Run $again
@@ -929,7 +949,7 @@ function Invoke-HordeMergeGuardAt {
         if (-not $read.ok -and -not $read.ran) { return (& $no ("the guard " + $Guard + " could not be run in " + $sh.label + " at " + $Commit.Substring(0, 8) + ", so nothing is said about it: " + (Get-HordeMergeFirstLine ("" + $run.err + "`n" + $run.out)))) }
         if (-not $read.ok) { $shells += $sh.label; $keys += $sh.key; if ($lines.Count -eq 0) { $lines = @($read.lines) } }
     }
-    return [pscustomobject]@{ ok = $true; red = ($shells.Count -gt 0); absent = $false; shells = @($shells); shellKeys = @($keys); lines = @($lines); why = "" }
+    return [pscustomobject]@{ ok = $true; red = ($shells.Count -gt 0); absent = $false; shells = @($shells); shellKeys = @($keys); lines = @($lines); runs = $runs; why = "" }
 }
 
 function Get-HordeMergeGuardListAt {
@@ -1037,11 +1057,18 @@ function Invoke-HordeMergeRunOwedBase {
         & $say ($Repo + " " + $Base + ": " + $walk.Count + " merge(s) owed" + $(if ($noWalk) { " (a red is open here: the tip is run again)" } else { "" }) + "; the guards of " + $tip.Substring(0, 8) + ": " + ($tipGuards -join ", "))
         foreach ($g in $baseGuards) {
             if ($tipGuards -ccontains $g) { continue }
-            $item = [pscustomobject]@{ kind = "dropped"; guard = $g; shells = @("the guard list"); entry = $null; fresh = $false; note = ("it was listed at " + $baseline.Substring(0, 8) + " and is not in the list at the tip " + $tip.Substring(0, 8) + "; NOT RUN, no queued merge is named, the list changed outside them"); lines = @(); base = $Base }
+            $item = [pscustomobject]@{ kind = "dropped"; guard = $g; shells = @("the guard list"); entry = $null; fresh = $false; walkStopped = ""; note = ("it was listed at " + $baseline.Substring(0, 8) + " and is not in the list at the tip " + $tip.Substring(0, 8) + "; NOT RUN, no queued merge is named, the list changed outside them"); lines = @(); base = $Base }
             foreach ($e in $walk) {
                 $li = Get-HordeMergeGuardListAt -Tools $Tools -Cache $Cache -Commit $e.mergeSha
                 if (-not $li.ok) { return (& $err $li.why) }
                 if ($null -eq $li.guards -or $li.guards -cnotcontains $g) { $item.entry = $e; break }
+            }
+            # A GUARD DROPPED WHILE ITS OLD RED WAS OPEN (follow-up of T-0347): if it was green at the baseline the old red had ended
+            # (fixed outside the queue), and the drop is a new red behind the merge named above, not the old one continuing.
+            if ($null -ne $item.entry -and (@($OpenGuards) -ccontains $g)) {
+                $dbl = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $baseline -Guard $g
+                if (-not $dbl.ok) { return (& $err $dbl.why) }
+                if (-not $dbl.red) { $item.fresh = $true }
             }
             & $say ($g + " was dropped from " + (Get-HordeGuardListPath) + ": RED")
             [void]$reds.Add($item)
@@ -1054,15 +1081,18 @@ function Invoke-HordeMergeRunOwedBase {
         foreach ($og in @($OpenGuards)) {
             if ($tipGuards -ccontains $og) { continue }
             if (@($reds | Where-Object { $_.guard -ceq $og }).Count -gt 0) { continue }
-            [void]$reds.Add([pscustomobject]@{ kind = "dropped"; guard = $og; shells = @("the guard list"); entry = $null; fresh = $false; note = ("NOT RUN: it is red in the open record and is not in the guard list at the tip " + $tip.Substring(0, 8) + ", so nothing can say it is green; it clears when it is back on the list and green, or when a person clears it on purpose: horde merge -ClearRed -Repo " + $Repo + " -Base " + $Base + " -Guard " + $og + " -Reason <why>"); lines = @(); base = $Base })
+            [void]$reds.Add([pscustomobject]@{ kind = "dropped"; guard = $og; shells = @("the guard list"); entry = $null; fresh = $false; walkStopped = ""; note = ("NOT RUN: it is red in the open record and is not in the guard list at the tip " + $tip.Substring(0, 8) + ", so nothing can say it is green; it clears when it is back on the list and green, or when a person clears it on purpose: horde merge -ClearRed -Repo " + $Repo + " -Base " + $Base + " -Guard " + $og + " -Reason <why>"); lines = @(); base = $Base })
             & $say ($og + " is red in the open record and is not in the guard list at the tip: still RED, not run")
         }
+        # How many of the walk's merges every guard has looked at (a guard whose walk stopped lowers it; the rest stay owed), and a guard's share.
+        $walkReach = $walk.Count
+        $allowRuns = [Math]::Max([int][Math]::Floor($script:HordeMergeWalkRunBudget / [Math]::Max(1, @($OpenGuards).Count)), 2 * @(Get-HordeGuardShells).Count)
         foreach ($g in $tipGuards) {
             & $say ("running " + $g + " on the tip " + $tip.Substring(0, 8))
             $at = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $tip -Guard $g
             if (-not $at.ok) { return (& $err $at.why) }
             if (-not $at.red -and -not $at.absent) { & $say ($g + " is green at the tip"); continue }
-            $item = [pscustomobject]@{ kind = "red"; guard = $g; shells = @($at.shells); entry = $null; fresh = $false; note = ""; lines = @($at.lines); base = $Base }
+            $item = [pscustomobject]@{ kind = "red"; guard = $g; shells = @($at.shells); entry = $null; fresh = $false; walkStopped = ""; note = ""; lines = @($at.lines); base = $Base }
             $tipKeys = @($at.shellKeys)
             if ($at.absent) {
                 $item.kind = "missing"; $item.shells = @("the tree"); $item.lines = @("the guard script is not in the tree of " + $tip.Substring(0, 8))
@@ -1085,15 +1115,68 @@ function Invoke-HordeMergeRunOwedBase {
                     if ($step.absent -and $present) { $item.entry = $e; $item.shells = @("the tree"); $item.lines = @("the guard script is not in the tree of this merge"); $item.fresh = $true; $found = $true; break }
                     $present = (-not $step.absent)
                 }
+                # A GREEN BASELINE ENDS AN OPEN RED WHETHER OR NOT A QUEUED MERGE IS NAMED (follow-up of T-0347): a red that came after the last
+                # queued merge is new, and the record must not blame the old merge for it.
+                if (-not $found) { $item.fresh = $true }
                 if (-not $found -and $at.absent) { $item.note = "the guard script is in no queued merge's tree; it was never added, or was removed outside the queued merges; no merge is named" }
                 elseif (-not $found) { $item.note = "green at every queued merge and red at the tip " + $tip.Substring(0, 8) + ": it broke after the last queued merge (a push or a merge not made by horde merge); no merge is named" }
+            }
+            # A RED THAT ENDED BETWEEN THE QUEUED MERGES AND BEGAN AGAIN (follow-up of T-0347): the baseline is red, so the open red may
+            # simply go on, unless the guard is green at some point after it (fixed by a push outside the queue: the commit each merge
+            # was made on is looked at too, as that push is not a queued merge) and red again later. Only a guard with an open red is
+            # walked here: that is the one whose blame can be wrong.
+            if ($bl.red -and (@($OpenGuards) -ccontains $g)) {
+                $ended = $false
+                $prevSha = $baseline
+                $lastLooked = "the baseline " + $baseline.Substring(0, 8)
+                $walkRuns = 0
+                $looked = 0
+                $stopped = $false
+                # THE BUDGET (T-0347 round 2): a step starts only when its worst case, 2 tries in each shell red at the tip, fits in what is left.
+                $stepShells = @($tipKeys).Count
+                if ($stepShells -eq 0) { $stepShells = @(Get-HordeGuardShells).Count }
+                $stepCost = 2 * $stepShells
+                foreach ($e in $walk) {
+                    if ($e.firstParent -ne "" -and $e.firstParent -cne $prevSha) {
+                        if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the push commit
+                        $pre = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.firstParent -Guard $g -ShellKeys $tipKeys
+                        if (-not $pre.ok) { return (& $err $pre.why) }
+                        $walkRuns += $pre.runs
+                        $lastLooked = "the commit " + $e.firstParent.Substring(0, 8) + " pushed before the merge of " + $e.pr
+                        if (-not $pre.red) { $ended = $true }
+                    }
+                    if ($walkRuns + $stepCost -gt $allowRuns) { $stopped = $true; break } # before the merge
+                    $later = Invoke-HordeMergeGuardAt -Tools $Tools -Scratch $scratch -Commit $e.mergeSha -Guard $g -ShellKeys $tipKeys
+                    if (-not $later.ok) { return (& $err $later.why) }
+                    $walkRuns += $later.runs
+                    $prevSha = $e.mergeSha
+                    $lastLooked = "the merge of " + $e.pr
+                    $looked++
+                    if (-not $later.red) { $ended = $true; continue }
+                    if ($ended) { $item.entry = $e; $item.shells = @($later.shells); $item.lines = @($later.lines); $item.note = ""; $item.fresh = $true; break }
+                }
+                # THE WALK STOPS, SAYS SO, AND GUESSES NOTHING: the old blame stays in the record, with this note beside it. The
+                # merges after the last point looked at were not run, so none is named and the red is not dated anew. THEY STAY OWED
+                # (T-0347 round 3): marked checked they would never be looked at, and the merge that broke the guard again could be one of
+                # them; the next night's baseline is the parent of the first of them. The earliest stop of all the guards decides.
+                if ($stopped) {
+                    $walkReach = [Math]::Min($walkReach, $looked)
+                    $item.walkStopped = "not walked past " + $lastLooked + ": this guard's share of the walk's budget (" + $allowRuns + " of " + $script:HordeMergeWalkRunBudget + " guard runs) is used up (" + $walkRuns + " runs); the " + ($walk.Count - $looked) + " merge(s) after it stay owed to a later night, which walks them, so none is blamed yet"
+                    if ($ended) { $item.walkStopped += "; the guard was green at a point the walk did reach, so the merge the record names may no longer be the cause of this red" }
+                    if ($item.note -ne "") { $item.note += "; " }
+                    $item.note += $item.walkStopped
+                    & $say ($g + ": " + $item.walkStopped)
+                    [void]$reds.Add($item)
+                    continue
+                }
+                if ($ended -and $null -eq $item.entry) { $item.fresh = $true; $item.note = "red before today's first queued merge, green after it, and red again at the tip " + $tip.Substring(0, 8) + ": it broke after the last queued merge it was green at (a push or a merge not made by horde merge); no merge is named" }
             }
             [void]$reds.Add($item)
         }
     } finally { Remove-HordeMergeFolder -Path $scratch -Tools $Tools }
     $status = "green"
     if ($reds.Count -gt 0) { $status = "red" }
-    return [pscustomobject]@{ status = $status; reds = @($reds); skipped = @($skipped); checked = @($walk); why = "" }
+    return [pscustomobject]@{ status = $status; reds = @($reds); skipped = @($skipped); checked = @($walk | Select-Object -First $walkReach); why = "" }
 }
 
 function Invoke-HordeMergeRunOwedRepo {
@@ -1177,7 +1260,11 @@ function Invoke-HordeMergeRunOwed {
     $summary = New-Object System.Collections.ArrayList
     $finish = {
         param([int]$Code)
-        $obj = [ordered]@{ exit = $Code; date = $date; repos = @($summary) }
+        # walkStopped (T-0347 round 3): how many reds had their walk stopped at the budget. It sits before repos, near the front of the line, so a
+        # reader that keeps only the first part of the line (the net's notice) still has it.
+        $nStopped = 0
+        foreach ($sr in @($summary)) { foreach ($rd in @($sr.reds)) { if ("" + $rd.walkStopped -ne "") { $nStopped++ } } }
+        $obj = [ordered]@{ exit = $Code; walkStopped = $nStopped; date = $date; repos = @($summary) }
         return [pscustomobject]@{ exit = $Code; json = (ConvertTo-Json -InputObject $obj -Compress -Depth 8); repos = @($summary) }
     }
     if ($Repo -ne "" -and -not (Test-HordeMergeOwedRepo -Repo $Repo)) { & $say ("'" + $Repo + "' is not a repository: OWNER/REPO"); return (& $finish 2) }
@@ -1306,13 +1393,19 @@ function Invoke-HordeMergeRunOwed {
             }
             # A dropped guard is never run: every line about it says so (round 3).
             if ($d.kind -ceq "dropped" -and $who -cnotlike "*NOT RUN*") { $who += " (NOT RUN: the guard is not on the guard list at the tip)" }
-            if ($null -ne $replaced) { $who += " (an earlier red of this guard, since " + $replaced.since + ", had ended: green at the baseline; the record now names this merge)" }
+            if ($null -ne $replaced) {
+                $dated = "the record now dates this red from this run and names no merge"
+                if ($null -ne $d.entry) { $dated = "the record now names this merge" }
+                $who += " (an earlier red of this guard, since " + $replaced.since + ", had ended: it was green after that; " + $dated + ")"
+            }
             if ($d.kind -ceq "dropped") { [void]$text.Add("RED " + $d.guard + " dropped from " + (Get-HordeGuardListPath) + ": " + $who) }
             else { [void]$text.Add("RED " + $d.guard + " in " + ($d.shells -join " and ") + ": " + $who) }
             foreach ($l in @($d.lines | Select-Object -First 10)) { [void]$text.Add("    " + $l) }
-            $redJson += , ([ordered]@{ kind = $d.kind; guard = $d.guard; shells = @($d.shells); merge = $mj; note = $(if ($null -ne $mj -and $null -eq $d.entry) { "the merge is named by the open record, which holds this guard red since " + $rec.since } else { $d.note }); base = $d.base; open = ($null -ne $rec); since = $(if ($null -ne $rec) { $rec.since } else { $stamp }) })
+            $redJson += , ([ordered]@{ kind = $d.kind; guard = $d.guard; shells = @($d.shells); merge = $mj; note = $(if ($null -ne $mj -and $null -eq $d.entry) { "the merge is named by the open record, which holds this guard red since " + $rec.since + $(if ($d.walkStopped -ne "") { "; this run: " + $d.walkStopped } else { "" }) } else { $d.note }); base = $d.base; walkStopped = $d.walkStopped; open = ($null -ne $rec); since = $(if ($null -ne $rec) { $rec.since } else { $stamp }) })
         }
-        if (@($res.reds).Count -gt 0) { [void]$text.Add("(" + $nChecked + " merges were walked; all are now checked)") }
+        $stoppedWalks = @(@($res.reds) | Where-Object { $_.walkStopped -ne "" }).Count
+        if ($stoppedWalks -gt 0) { [void]$text.Add("(" + $nChecked + " merges were walked; the other " + ($entries.Count - $nChecked - @($res.skipped).Count) + " stay owed to a later night, because " + $stoppedWalks + " walk(s) stopped at their budget)") }
+        elseif (@($res.reds).Count -gt 0) { [void]$text.Add("(" + $nChecked + " merges were walked; all are now checked)") }
         $reportPath = [System.IO.Path]::Combine($Folder, "nightly", ($date + "-" + $r.Replace("/", "-") + ".txt"))
         # THE REPORT IS WRITTEN BEFORE ANY MERGE IS MARKED CHECKED, and a report that could not be written marks
         # none: a marked merge is never run again, and the finding would then live only in this run's output (S6).
