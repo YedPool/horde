@@ -242,7 +242,8 @@ function Test-HordeWakeSendersShadow {
     # one while THE ONE SWITCH is off (the top of this file).
     param([Parameter(Mandatory = $true)]$Run)
     if ((Get-HordeWakeRunMode -Run $Run) -cne "live") { return $true }
-    return ($script:HordeWakeSendersPost -ne $true)
+    # Only a real boolean true turns the senders on: 1, "True" or any other truthy value is still shadow.
+    return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))
 }
 
 function Get-HordeWakeSenderFile {
@@ -288,6 +289,10 @@ function Invoke-HordeWakeTick {
     # ONLY A RUN MADE LIVE IS LIVE: anything else in that member - nothing, a word, a number - is shadow.
     $mode = Get-HordeWakeRunMode -Run $Run
     $shadow = ($mode -ceq "shadow")
+    # A SHADOW TICK IS HANDED A WAKER WITH NO NUDGE (T-0116, wakers/Port.ps1 Get-HordeWakerReadOnly): its
+    # state reads are the real waker's, and nudging through it is refused by the port. The would-nudge
+    # branch in core/Wake.ps1 is then the second guard, not the only one. Proof and live get the real waker.
+    if ($shadow) { $Waker = Get-HordeWakerReadOnly -Waker $Waker }
     $Run.pass = [long]$Run.pass + 1
     # A run made before the blind-look members existed gets them here (T-0116).
     if ($null -eq $Run.PSObject.Properties["blind"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "blind" -Value @{} }

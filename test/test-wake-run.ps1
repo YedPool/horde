@@ -924,6 +924,13 @@ $beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
 $switchWas = $script:HordeWakeSendersPost
 try { $script:HordeWakeSendersPost = $true; Check ((Test-HordeWakeSendersShadow -Run $proof) -eq $true -and (Test-HordeWakeSendersShadow -Run (New-HordeWakeRun -Mode "live" -HordeHome $h)) -eq $false) "with the senders' switch on, a live run posts and a proof run still does not" } finally { $script:HordeWakeSendersPost = $switchWas }
+$liveRun = New-HordeWakeRun -Mode "live" -HordeHome $h
+try {
+    foreach ($notTrue in @(1, "True", "yes", 2, @($true), $null)) {
+        $script:HordeWakeSendersPost = $notTrue
+        Check ((Test-HordeWakeSendersShadow -Run $liveRun) -eq $true) ("with the senders' switch at something that is not a boolean true (" + (ConvertTo-Json -InputObject $notTrue -Compress) + "), a live run still posts nothing")
+    }
+} finally { $script:HordeWakeSendersPost = $switchWas }
 $threw = $false; try { $null = New-HordeWakeRun -Mode "LIVE" -HordeHome $h } catch { $threw = $true }
 Check $threw "a run cannot be made in a mode that is no mode"
 $lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
