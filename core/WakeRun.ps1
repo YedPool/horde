@@ -230,7 +230,10 @@ function Get-HordeWakeRunMode {
     # ANYTHING: whatever its live member holds that is not true - nothing, a word, a number - is shadow,
     # and of the runs that send, only one that says proof is proof.
     param([Parameter(Mandatory = $true)]$Run)
-    if ($Run.live -ne $true) { return "shadow" }
+    # STRICT, as Test-HordeWakeSendersShadow below: -ne casts its right side to the left's type, so 1 or "True" read as true
+    # (T-0116). A missing member is shadow too, and not an error under strict mode.
+    $liveWord = $Run.PSObject.Properties["live"]
+    if ($null -eq $liveWord -or $liveWord.Value -isnot [bool] -or $liveWord.Value -ne $true) { return "shadow" }
     $p = $Run.PSObject.Properties["mode"]
     if ($null -ne $p -and "$($p.Value)" -ceq "proof") { return "proof" }
     return "live"
@@ -438,7 +441,7 @@ function Invoke-HordeWakeTick {
         $Run.ledger = $result.ledger
         foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
         if ($ledgerChanged) {
-            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome } # the pass ledger, in its own mode's file
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }
         # BLIND LOOKS (T-0116): counted, and kept as spells that are journaled once and backed off from. A look the terminal did

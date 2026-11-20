@@ -995,8 +995,14 @@ function Update-HordeWakeSilence {
     foreach ($n in @($before.nudges)) { if ($null -ne $n -and ($Now - $n.at).TotalSeconds -lt $window) { [void]$nudges.Add($n) } }
     $quietSince = $before.quietSince
     foreach ($e in @($Entries)) {
-        if ($null -eq $e -or @("nudge", "nudge-killed") -cnotcontains "$($e.kind)") { continue }
-        [void]$nudges.Add([pscustomobject]@{ id = "$($e.id)"; at = $Now; outcome = "$($e.outcome)" })
+        if ($null -eq $e -or @("nudge", "nudge-killed", "would-nudge") -cnotcontains "$($e.kind)") { continue }
+        # A WOULD-NUDGE STANDS FOR A NUDGE ANSWERED WOKEN (T-0116): a session that is idle, has unread mail and an empty box is
+        # one a waker rings and reads woken; whether its mail is then taken is what the silence is about. Read as nothing
+        # else, a shadow run never found a silent fleet that a live run finds at five minutes, and its back-off,
+        # probes and give-up drifted from the live pace it exists to show.
+        $said = "$($e.outcome)"
+        if ("$($e.kind)" -ceq "would-nudge") { $said = "woken" }
+        [void]$nudges.Add([pscustomobject]@{ id = "$($e.id)"; at = $Now; outcome = $said })
         if ($quietSince -isnot [datetime]) { $quietSince = $Now }
     }
     $sent = 0
@@ -1005,7 +1011,7 @@ function Update-HordeWakeSilence {
     $next = [pscustomobject]@{ silent = ($before.silent -eq $true); quietSince = $quietSince; nudges = $nudges.ToArray(); acks = $acksNow; probes = 0; probeAt = $null; rose = $rose }
     if ($next.silent) {
         $most = [int]$Settings.maxSilentProbes
-        $probedNow = @($Entries | Where-Object { $null -ne $_ -and @("nudge", "nudge-killed") -ccontains "$($_.kind)" }).Count
+        $probedNow = @($Entries | Where-Object { $null -ne $_ -and @("nudge", "nudge-killed", "would-nudge") -ccontains "$($_.kind)" }).Count
         $next.probes = $sent + $probedNow
         $lastProbe = Get-HordeWakeEntryValue $before "probeAt"
         if ($probedNow -gt 0) { $lastProbe = $Now }
