@@ -81,8 +81,9 @@ function Get-HordeMutateInstalledRefusal {
     }
     $prof = ("" + $ProfileDir).Trim()
     if ($prof -eq "") { $prof = Get-HordeMutateProfileDir }
-    $parent = Split-Path -Parent $full
-    $leaf = Split-Path -Leaf $full
+    # .NET, not Split-Path: Split-Path -Parent throws for a drive root ("C:"), which has no parent.
+    $parent = [System.IO.Path]::GetDirectoryName($full)
+    $leaf = [System.IO.Path]::GetFileName($full)
     $why = ""
     if ($parent -and $leaf) {
         $text = Get-HordeMutateInstalledShimText -Parent $parent
