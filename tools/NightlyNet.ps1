@@ -467,8 +467,7 @@ function Invoke-NightlyPhaseOne {
         if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $LongRunSeconds -RunCutoff $RunCutoff)) { $Ctx.guards = [pscustomobject]@{ state = "not run"; text = "the night ran out before the guards could start" } }
         else {
             $g = Invoke-NightlySlot -Script "guards-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Horde", $HordeScript, "-Repo", $Ctx.repo) -Tag ($tag + "-guards") -Seconds $LongRunSeconds
-            $text = ((Read-NightlyLog $g.out) -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 10) -join " | "
-            if ($text.Length -gt 700) { $text = $text.Substring($text.Length - 700) }
+            $text = Get-HordeNightlyGuardsNoticeText -Output (Read-NightlyLog $g.out)
             $st = "could not run"
             if (-not $g.timedOut) { if ($g.code -eq 0) { $st = "green" } elseif ($g.code -eq 1) { $st = "RED" } elseif ($g.code -eq 125 -or $g.code -eq 128) { $st = "not run (no slot or no night)"; $text = "" } }
             $Ctx.guards = [pscustomobject]@{ state = $st; text = $text }
