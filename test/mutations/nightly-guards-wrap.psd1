@@ -9,9 +9,7 @@
            Find = 'if ($stopLine -ne "") { Write-Output ("guards-wrap: " + $stopLine) }'
            Replace = '' }
         @{ Name = "wrapper-prints-the-stop-line-after-the-state"
-           Find = 'if ($stopLine -ne "") { Write-Output ("guards-wrap: " + $stopLine) }
-Write-Output ("guards-wrap: " + $answer.state)'
-           Replace = 'Write-Output ("guards-wrap: " + $answer.state)
-if ($stopLine -ne "") { Write-Output ("guards-wrap: " + $stopLine) }' }
+           Find = 'exit $answer.code'
+           Replace = 'if ($stopLine -ne "") { Write-Output ("guards-wrap: " + $stopLine) }; exit $answer.code' }
     )
 }
