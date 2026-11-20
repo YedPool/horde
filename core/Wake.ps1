@@ -1000,7 +1000,9 @@ function Update-HordeWakeSilence {
         # one a waker rings and reads woken; whether its mail is then taken is what the silence is about. Read as nothing
         # else, a shadow run never found a silent fleet that a live run finds at five minutes, and its back-off,
         # probes and give-up drifted from the live pace it exists to show.
-        $said = "$($e.outcome)"
+        # A live nudge can still come back busy when the session started work in the gap before typing, so a shadow's
+        # 48 h read can show slightly more silence than live would have found.
+        $said ="$($e.outcome)"
         if ("$($e.kind)" -ceq "would-nudge") { $said = "woken" }
         [void]$nudges.Add([pscustomobject]@{ id = "$($e.id)"; at = $Now; outcome = $said })
         if ($quietSince -isnot [datetime]) { $quietSince = $Now }
@@ -1485,11 +1487,17 @@ function Save-HordeWakeDuplicate {
     # when it began and the line it was said by. Kept so a watcher that is started again does not say the line
     # again, and - the episode's start being the tell's instance - does not tell the warchief again either
     # (core/WakeTell.ps1: a restarted watcher does not repeat itself).
-    param($Text, $At, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    # -Gone and -Not are the two waits that end an episode (session id -> since when it has been missing from a good
+    # listing, or read as no longer a duplicate; core/WakeRun.ps1, duplicateGoneSeconds). They are saved with the
+    # episode so a restart neither starts the wait again nor, by that, holds an episode that is due to end (T-0116).
+    param($Text, $At, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome), $Gone = @{}, $Not = @{})
     $eps = [ordered]@{}
     foreach ($id in @($Text.Keys | Sort-Object)) {
         if (-not $At.ContainsKey("$id")) { continue }
-        $eps["$id"] = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At["$id"]); text = "$($Text[$id])" }
+        $ep = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At["$id"]); text = "$($Text[$id])" }
+        if ($null -ne $Gone -and $Gone.ContainsKey("$id")) { $ep["goneAt"] = (ConvertTo-HordeWakeTimeText $Gone["$id"]) }
+        if ($null -ne $Not -and $Not.ContainsKey("$id")) { $ep["notAt"] = (ConvertTo-HordeWakeTimeText $Not["$id"]) }
+        $eps["$id"] = $ep
     }
     $doc = [ordered]@{ schemaVersion = 1; episodes = $eps }
     Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "duplicate" -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
@@ -1518,23 +1526,40 @@ function Read-HordeWakeCounts {
 }
 
 function Read-HordeWakeDuplicate {
-    # What Save-HordeWakeDuplicate wrote: known { text; at } (two tables by session id), absent when there is
-    # none, unknown when it cannot be read - the caller then starts with no episode, and says so.
+    # What Save-HordeWakeDuplicate wrote: known { text; at; gone; not } (tables by session id), absent when there is
+    # none, unknown when it cannot be read - the caller then starts with no episode, and says so. A wait (gone, not)
+    # that is missing, from a file written before they were kept, or cannot be read is left out: that wait starts
+    # again, and the episode is kept meanwhile - never ended on a time that is not known.
     param([string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $path = Get-HordeWakeStateFile -Name "duplicate" -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no episode of a duplicated session was saved in this home") }
     try { $j = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $path) }
     catch { return (New-HordeUnknown -Reason "what was saved of duplicated sessions could not be read" -ErrorRecord $_) }
     if ($null -eq $j -or $null -eq $j.PSObject.Properties["episodes"] -or $null -eq $j.episodes) { return (New-HordeUnknown -Reason "what was saved of duplicated sessions has no episodes") }
-    $text = @{}; $at = @{}
+    $text = @{}; $at = @{}; $gone = @{}; $notDup = @{}
     foreach ($p in @($j.episodes.PSObject.Properties)) {
         $when = $null
         if ($null -ne $p.Value -and $null -ne $p.Value.PSObject.Properties["at"]) { $when = ConvertFrom-HordeWakeTimeText $p.Value.at }
         if ($null -eq $when -or $null -eq $p.Value.PSObject.Properties["text"] -or $p.Value.text -isnot [string]) { return (New-HordeUnknown -Reason "what was saved of duplicated sessions holds an episode that is not one") }
         $text["$($p.Name)"] = [string]$p.Value.text
         $at["$($p.Name)"] = $when
+        foreach ($w in @(@{ field = "goneAt"; into = $gone }, @{ field = "notAt"; into = $notDup })) {
+            if ($null -eq $p.Value.PSObject.Properties[$w.field]) { continue }
+            $since = ConvertFrom-HordeWakeTimeText $p.Value.($w.field)
+            if ($null -ne $since) { $w.into["$($p.Name)"] = $since }
+        }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ text = $text; at = $at }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ text = $text; at = $at; gone = $gone; not = $notDup }))
+}
+
+function Get-HordeWakeDuplicateMark {
+    # What the saved file would say, as one text (core/WakeRun.ps1 saves when it changes); "" for no episode. The waits
+    # are in it, so one that starts or ends is saved too.
+    param($Text, $At, $Gone, $Not)
+    if ($null -eq $Text -or $Text.Count -eq 0) { return "" }
+    $g = @(); if ($null -ne $Gone) { $g = @($Gone.Keys | Sort-Object | ForEach-Object { "$_=" + (ConvertTo-HordeWakeTimeText $Gone["$_"]) }) }
+    $n = @(); if ($null -ne $Not) { $n = @($Not.Keys | Sort-Object | ForEach-Object { "$_=" + (ConvertTo-HordeWakeTimeText $Not["$_"]) }) }
+    return (ConvertTo-Json -InputObject ([ordered]@{ t = $Text; a = @($At.Keys | Sort-Object); g = $g; n = $n }) -Compress -Depth 4)
 }
 
 function Read-HordeWakeSilence {
