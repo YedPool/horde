@@ -162,6 +162,39 @@ $a = Get-HordeNightlyGuardsAnswer -ProcessExit 0 -Lines @('{"exit":0}', "")
 Check ($a.code -eq 0) "trailing blank lines are skipped when finding the last line"
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"red":["test-host-names"],"first":"22222222"}')
 Check ($a.code -eq 1 -and $a.state -ceq "RED" -and $a.text -like "*test-host-names*") "process 1, json exit 1: red, with the line kept as text"
+# A WALK THAT STOPPED AT ITS BUDGET (T-0347 round 3) reaches the notice even when the line is cut: two reds and a long report path push the stop note
+# of the second red past character 700, so only the field near the front of the line can carry it.
+$longPath = "C:\very\long\horde\home\merge\nightly\" + ("deep-folder-name\" * 12) + "2026-11-20-yedpool-horde.txt"
+$stopNote = "the merge is named by the open record; this run: not walked past the merge of YedPool/horde#200: this guard's share of the walk's budget (8 of 16 guard runs) is used up (8 runs)"
+$redOne = '{"kind":"red","guard":"test\\test-host-names.ps1","shells":["Windows PowerShell 5.1","PowerShell 7"],"merge":{"pr":"YedPool/horde#100","task":"T-0247","by":"F","mergeSha":"1111111111111111111111111111111111111111"},"note":"the merge is named by the open record, which holds this guard red since 2026-11-18T03:00:00Z","base":"main","walkStopped":"","open":true,"since":"2026-11-18T03:00:00Z"}'
+$redTwo = '{"kind":"red","guard":"test\\test-mutation-specs.ps1","shells":["Windows PowerShell 5.1","PowerShell 7"],"merge":{"pr":"YedPool/horde#100","task":"T-0247","by":"F","mergeSha":"1111111111111111111111111111111111111111"},"note":"' + $stopNote + '","base":"main","walkStopped":"not walked past the merge of YedPool/horde#200","open":true,"since":"2026-11-18T03:00:00Z"}'
+$stopLine = '{"exit":1,"walkStopped":1,"date":"2026-11-20","repos":[{"repo":"yedpool/horde","status":"red","merges":3,"checked":1,"skipped":[],"reds":[' + $redOne + ',' + $redTwo + '],"report":"' + $longPath.Replace("\", "\\") + '","why":""}]}'
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @("report lines", $stopLine)
+Check ($stopLine.Length -gt 1200 -and $stopLine.IndexOf("not walked past") -gt 700) "the stop note of the second red lies past character 700 of the -Json line (index $($stopLine.IndexOf('not walked past')) of $($stopLine.Length))"
+Check ($a.code -eq 1 -and $a.state -ceq "RED" -and $a.text -like "A GUARD WALK STOPPED AT ITS BUDGET in 1 red(s): the merge named may no longer be the cause*") "two reds and a long report path: the notice text still says the walk stopped, from the parsed field"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"walkStopped":0,"date":"2026-11-20","repos":[]}')
+Check ($a.code -eq 1 -and $a.text -notlike "*WALK STOPPED*") "walkStopped 0: no word of a stop"
+$a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":1,"walkStopped":"1","date":"2026-11-20"}')
+Check ($a.code -eq 1 -and $a.text -notlike "*WALK STOPPED*") "a walkStopped that is not a number is not read as a stop"
+# THROUGH THE REAL WRAPPER (round 4): the real tools\nightly\guards-wrap.ps1 under 5.1 with a stand-in horde that prints the two-red, long-path line above, and the net's own text
+# builder on what the wrapper printed. In round 3 the prefix was only in the answer's .text, which the wrapper never printed, and the net keeps the
+# last 10 lines cut to their last 700 characters, so the notice read as a plain red.
+$wrapDir = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-wrapcheck-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+[void][System.IO.Directory]::CreateDirectory($wrapDir)
+$wrapUtf8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $wrapDir "said.json"), $stopLine, $wrapUtf8)
+[System.IO.File]::WriteAllText((Join-Path $wrapDir "horde.ps1"), "[Console]::Out.WriteLine('stand-in horde'); [Console]::Out.WriteLine([System.IO.File]::ReadAllText((Join-Path `$PSScriptRoot 'said.json')).Trim()); exit 1", $wrapUtf8)
+$wrapPs = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$wrapOut = @(& $wrapPs -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $wrapDir "horde.ps1") -Repo "YedPool/horde")
+$wrapExit = $LASTEXITCODE
+$wrapNotice = Get-HordeNightlyGuardsNoticeText -Output ($wrapOut -join "`n")
+Check ($wrapExit -eq 1 -and ("" + $wrapOut[-1]) -ceq "guards-wrap: RED") ("the real wrapper still ends on its state line and exits 1 (" + $wrapExit + ")")
+Check (@($wrapOut | Where-Object { ("" + $_) -clike "guards-wrap: A GUARD WALK STOPPED AT ITS BUDGET in 1 red(s): *" }).Count -eq 1) "the real wrapper prints the stop line as a line of its own"
+Check ($wrapNotice -clike "*A GUARD WALK STOPPED AT ITS BUDGET in 1 red(s)*guards-wrap: RED" -and $wrapNotice.Length -le 700) ("the net's notice text keeps the stop line beside the state, though the -Json line is cut: " + $wrapNotice.Length + " characters")
+[System.IO.File]::WriteAllText((Join-Path $wrapDir "said.json"), '{"exit":1,"walkStopped":0,"date":"2026-11-20","repos":[]}', $wrapUtf8)
+$wrapOut2 = @(& $wrapPs -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root "tools\nightly\guards-wrap.ps1") -Horde (Join-Path $wrapDir "horde.ps1") -Repo "YedPool/horde")
+Check (@($wrapOut2 | Where-Object { ("" + $_) -clike "*WALK STOPPED*" }).Count -eq 0) "no stop: the wrapper prints no stop line"
+try { Remove-Item -LiteralPath $wrapDir -Recurse -Force -ErrorAction Stop } catch { }
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 1 -Lines @('{"exit":2,"why":"no clone"}')
 Check ($a.code -eq 2 -and $a.state -ceq "could not run") "process 1 and json exit 2: could not run (not red)"
 $a = Get-HordeNightlyGuardsAnswer -ProcessExit 2 -Lines @('{"exit":0}')
