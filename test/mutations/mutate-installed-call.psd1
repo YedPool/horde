@@ -7,6 +7,15 @@
         @{ Name = "installed-refusal-never-asked"
            Find = 'if ($installedRefusal -ne "") {'
            Replace = 'if ($false) {' }
+        @{ Name = "installed-refusal-skipped-for-changed"
+           Find = 'if ($installedRefusal -ne "") {'
+           Replace = 'if ($installedRefusal -ne "" -and -not $Changed) {' }
+        @{ Name = "installed-refusal-skipped-for-plan"
+           Find = 'if ($installedRefusal -ne "") {'
+           Replace = 'if ($installedRefusal -ne "" -and -not $Plan) {' }
+        @{ Name = "installed-refusal-skipped-for-no-arguments"
+           Find = 'if ($installedRefusal -ne "") {'
+           Replace = 'if ($installedRefusal -ne "" -and ($Spec -or $Changed)) {' }
         @{ Name = "installed-refusal-does-not-stop"
            Find = 'Write-Host ("  " + $installedRefusal) -ForegroundColor Red; exit 2 }'
            Replace = 'Write-Host ("  " + $installedRefusal) -ForegroundColor Red }' }

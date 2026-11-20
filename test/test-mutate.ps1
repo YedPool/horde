@@ -168,6 +168,19 @@ try {
     Check (@($ri | Where-Object { $_ -match '\[OK\]|\[BAD\]|^mutations:|give -Spec' }).Count -eq 0) "and no mutant is run or reported"
     Check ((Get-InstFxTree -Dir $p1) -eq $treeBefore) "and nothing is written into the installed copy"
     Check (@(Get-OwnLeftovers).Count -eq 0) "and no throwaway copy is made"
+    # EVERY CALL FORM IS REFUSED, not only -Spec (round 3 of PR 507: a refusal skipped for -Changed passed
+    # every check above). -Changed, -Changed -Plan, and no arguments at all each give the same refusal,
+    # exit 2, and leave the tree as it was.
+    foreach ($form in @(@("-Changed", "origin/main"), @("-Changed", "origin/main", "-Plan"), @())) {
+        $formName = $(if ($form.Count -eq 0) { "no arguments" } else { $form -join " " })
+        $rf = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $inst "tools\Mutate.ps1") @form | ForEach-Object { "$_" })
+        $rfCode = $LASTEXITCODE
+        Check ($rfCode -eq 2) ("the installed copy run with " + $formName + " exits 2 (" + $rfCode + ": " + (@($rf | Select-Object -Last 2) -join " | ") + ")")
+        Check (@($rf | Where-Object { $_ -match 'will not run from the installed Horde' -and $_ -match [regex]::Escape("installed Horde, " + $inst + " (") -and $_ -match 'your own clone' }).Count -eq 1) ("and with " + $formName + " it gives the refusal, naming the path")
+        Check (@($rf | Where-Object { $_ -match '\[OK\]|\[BAD\]|\[SELECT\]|\[SKIP\]|^mutations:|^changed:|give -Spec|-Plan only|-Changed:' }).Count -eq 0) ("and with " + $formName + " nothing else is said or run")
+        Check ((Get-InstFxTree -Dir $p1) -eq $treeBefore) ("and with " + $formName + " nothing is written into the installed copy")
+    }
+    Check (@(Get-OwnLeftovers).Count -eq 0) "and no call form makes a throwaway copy"
     # A CLONE: the same files, in a folder no shim launches, run as before. With no spec it reaches
     # the tool's own usage line - the line the refusal came before.
     $p2 = Join-Path $instRoot "p2"; New-Item -ItemType Directory -Path $p2 | Out-Null

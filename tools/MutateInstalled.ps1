@@ -27,6 +27,11 @@
 # before.
 #
 # NOT COVERED, stated so a reader can disagree:
+#   - FAILS OPEN when the profile cannot be read and no shim names the folder: with neither the machine
+#     nor USERPROFILE giving a profile, the default place cannot be worked out, so nothing is refused
+#     (test-mutate checks this as a CONTROL). That is deliberate: refusing would stop every ordinary
+#     clone on a machine with no profile. Closing it would take a fixed record of where the install is
+#     (for instance a marker file the install writes), which this tool does not have.
 #   - A clone reached through a junction or a symbolic link: its path is compared as given. Covering it
 #     would take the real path, which is a P/Invoke (GetFinalPathNameByHandle) this tool does not carry.
 #   - The setting installedCliFolder (<HORDE_HOME>\settings\services.json): it is not read. Covering it
