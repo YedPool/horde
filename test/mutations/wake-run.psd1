@@ -42,8 +42,8 @@
            Find = ' -or $Run.duplicateNot.ContainsKey("$dupId")) { continue }'
            Replace = ') { continue }' }
         @{ Name = "a-retired-duplicate-waits-for-the-grace"
-           Find = ' -or "$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot'
-           Replace = ') { $Run.duplicateNot' }
+           Find = '"$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot.Remove($id); $dupEnded'
+           Replace = '"$(Get-HordeWakeEntryValue $row "retired")" -ceq "never") { $Run.duplicateNot.Remove($id); $dupEnded' }
         @{ Name = "shadow-saves-the-episode-in-the-live-file"
            Find = 'Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode (Get-HordeWakeSendWord -Mode $mode)'
            Replace = 'Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode "live"' }
@@ -362,6 +362,27 @@
         @{ Name = "duplicates-not-handed-to-the-restore-pass"
            Find = '-UncountedDuplicates $dupCount'
            Replace = '-UncountedDuplicates 0' }
+        @{ Name = "duplicate-waits-not-saved"
+           Find = '-Gone $Run.duplicateGone -Not $Run.duplicateNot; $Run.duplicateMark'
+           Replace = '; $Run.duplicateMark' }
+        @{ Name = "duplicate-waits-not-loaded"
+           Find = '$run.duplicateGone = $savedDup.value.gone; $run.duplicateNot = $savedDup.value.not; '
+           Replace = '' }
+        @{ Name = "duplicate-ended-not-removed"
+           Find = 'foreach ($id in @($dupEnded.Keys)) { $Run.duplicate.Remove("$id") }'
+           Replace = '' }
+        @{ Name = "duplicate-retired-not-ended-on-its-own"
+           Find = '{ $Run.duplicateNot.Remove($id); $dupEnded[$id] = $true; continue }'
+           Replace = '{ $Run.duplicateNot.Remove($id); continue }' }
+        @{ Name = "duplicate-wait-up-not-ended-on-its-own"
+           Find = '{ $dupHeld[$id] = $true } else { $dupEnded[$id] = $true }'
+           Replace = '{ $dupHeld[$id] = $true }' }
+        @{ Name = "duplicate-not-wait-ahead-of-clock-kept"
+           Find = ' -or $Run.duplicateNot[$id] -gt $Now) { $Run.duplicateNot[$id] = $Now }'
+           Replace = ') { $Run.duplicateNot[$id] = $Now }' }
+        @{ Name = "duplicate-gone-wait-ahead-of-clock-kept"
+           Find = ' -or $Run.duplicateGone["$id"] -gt $Now) { $Run.duplicateGone["$id"] = $Now }'
+           Replace = ') { $Run.duplicateGone["$id"] = $Now }' }
         @{ Name = "senders-switch-on-for-anything-truthy"
            Find = 'return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))'
            Replace = 'return ($script:HordeWakeSendersPost -ne $true)' }
