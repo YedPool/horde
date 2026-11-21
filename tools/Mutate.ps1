@@ -73,6 +73,10 @@ $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Platform.ps1")
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "MutateShells.ps1")
+. (Join-Path $PSScriptRoot "MutateInstalled.ps1")
+# THE INSTALLED HORDE IS NEVER MUTATED (T-0466): refused before any work, with nothing written.
+$installedRefusal = Get-HordeMutateInstalledRefusal -Repo $repo
+if ($installedRefusal -ne "") { Write-Host ("  " + $installedRefusal) -ForegroundColor Red; exit 2 }
 if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
 if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
 if ($Changed) {

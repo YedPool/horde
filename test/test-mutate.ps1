@@ -137,6 +137,155 @@ if ($pwshHere) {
 }
 Check ([System.IO.File]::ReadAllText($shellsTarget) -eq $shellsBefore) "the working tree's copy of the shells target is never modified"
 
+# THE INSTALLED HORDE IS NEVER MUTATED (T-0466). Run from the copy every session runs `horde` from, the
+# tool would break that very code, one mutant at a time. It must say no, before any work, and say it
+# in a way a clone's run does not. The installed copy is recognised by the horde.cmd shim beside it, or
+# by being bin\horde under the profile (tools\MutateInstalled.ps1).
+$instRoot = Join-Path $env:TEMP ("horde-instfx-" + [guid]::NewGuid().ToString("N"))
+try {
+    $loaded = @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "tools\MutateShells.ps1", "tools\MutateInstalled.ps1", "cli\SetupStore.ps1", "test\lib\SuiteFiles.ps1", "core\Platform.ps1", "core\Tristate.ps1")
+    function New-InstFx {
+        # A copy of what the tool loads under <Parent>\<Leaf>; returns its folder.
+        param([string]$Parent, [string]$Leaf)
+        $dir = Join-Path $Parent $Leaf
+        foreach ($rel in $loaded) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $dir $rel)) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $root $rel) -Destination (Join-Path $dir $rel)
+        }
+        return $dir
+    }
+    function Get-InstFxTree { param([string]$Dir) return (@(Get-ChildItem -LiteralPath $Dir -Recurse -Force | ForEach-Object { $_.FullName + "|" + $_.Length }) -join "`n") }
+    $shimText = '"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0horde\horde.ps1" %*'
+    # Installed, by its shim: <p1>\horde.cmd launches <p1>\horde\horde.ps1.
+    $p1 = Join-Path $instRoot "p1"; New-Item -ItemType Directory -Path $p1 | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $p1 "horde.cmd"), $shimText)
+    $inst = New-InstFx -Parent $p1 -Leaf "horde"
+    $treeBefore = Get-InstFxTree -Dir $p1
+    $ri = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $inst "tools\Mutate.ps1") -RunTag $runTag -Spec "test\fixtures\mutate\spec-honest.psd1" | ForEach-Object { "$_" })
+    $riCode = $LASTEXITCODE
+    Check ($riCode -eq 2) ("the copy a horde.cmd shim launches is refused with a non-zero exit (" + $riCode + ": " + (@($ri | Select-Object -Last 2) -join " | ") + ")")
+    Check (@($ri | Where-Object { $_ -match 'will not run from the installed Horde' -and $_ -match [regex]::Escape("installed Horde, " + $inst + " (") -and $_ -match 'your own clone' }).Count -eq 1) "and the refusal names the path and says to run the clone's own tools\Mutate.ps1"
+    Check (@($ri | Where-Object { $_ -match '\[OK\]|\[BAD\]|^mutations:|give -Spec' }).Count -eq 0) "and no mutant is run or reported"
+    Check ((Get-InstFxTree -Dir $p1) -eq $treeBefore) "and nothing is written into the installed copy"
+    Check (@(Get-OwnLeftovers).Count -eq 0) "and no throwaway copy is made"
+    # EVERY CALL FORM IS REFUSED, not only -Spec (round 3 of PR 507: a refusal skipped for -Changed passed
+    # every check above). -Changed, -Changed -Plan, and no arguments at all each give the same refusal,
+    # exit 2, and leave the tree as it was. The exit-2 check alone cannot tell a skipped refusal from the
+    # fixture's own no-git exit 2 for -Changed, which is why the refusal-text and nothing-else checks are here.
+    foreach ($form in @(@("-Changed", "origin/main"), @("-Changed", "origin/main", "-Plan"), @())) {
+        $formName = $(if ($form.Count -eq 0) { "no arguments" } else { $form -join " " })
+        $rf = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $inst "tools\Mutate.ps1") @form | ForEach-Object { "$_" })
+        $rfCode = $LASTEXITCODE
+        Check ($rfCode -eq 2) ("the installed copy run with " + $formName + " exits 2 (" + $rfCode + ": " + (@($rf | Select-Object -Last 2) -join " | ") + ")")
+        Check (@($rf | Where-Object { $_ -match 'will not run from the installed Horde' -and $_ -match [regex]::Escape("installed Horde, " + $inst + " (") -and $_ -match 'your own clone' }).Count -eq 1) ("and with " + $formName + " it gives the refusal, naming the path")
+        Check (@($rf | Where-Object { $_ -match '\[OK\]|\[BAD\]|\[SELECT\]|\[SKIP\]|^mutations:|^changed:|give -Spec|-Plan only|-Changed:' }).Count -eq 0) ("and with " + $formName + " nothing else is said or run")
+        Check ((Get-InstFxTree -Dir $p1) -eq $treeBefore) ("and with " + $formName + " nothing is written into the installed copy")
+    }
+    Check (@(Get-OwnLeftovers).Count -eq 0) "and no call form makes a throwaway copy"
+    # A CLONE: the same files, in a folder no shim launches, run as before. With no spec it reaches
+    # the tool's own usage line - the line the refusal came before.
+    $p2 = Join-Path $instRoot "p2"; New-Item -ItemType Directory -Path $p2 | Out-Null
+    $clone = New-InstFx -Parent $p2 -Leaf "horde"
+    $rc = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $clone "tools\Mutate.ps1") | ForEach-Object { "$_" })
+    Check ($LASTEXITCODE -eq 2 -and @($rc | Where-Object { $_ -match 'give -Spec' }).Count -eq 1 -and @($rc | Where-Object { $_ -match 'installed Horde' }).Count -eq 0) "a clone, even one named horde, is not refused: it reaches the tool's own usage line"
+    # The unit: every branch of the rule.
+    . (Join-Path $root "tools\MutateInstalled.ps1")
+    Check ((Get-HordeMutateInstalledRefusal -Repo $inst -ProfileDir (Join-Path $instRoot "nobody")) -ne "") "the shim signal refuses a folder its horde.cmd launches"
+    Check ((Get-HordeMutateInstalledRefusal -Repo ($inst.ToUpper()) -ProfileDir (Join-Path $instRoot "nobody")) -ne "") "and the folder's case does not matter"
+    Check ((Get-HordeMutateInstalledRefusal -Repo ($inst + "\") -ProfileDir (Join-Path $instRoot "nobody")) -ne "") "and a trailing slash does not matter"
+    Check ((Get-HordeMutateInstalledRefusal -Repo $clone -ProfileDir (Join-Path $instRoot "nobody")) -eq "") "CONTROL: a folder with no shim beside it is not refused"
+    # A shim that names ANOTHER folder does not make this one the install.
+    $p3 = Join-Path $instRoot "p3"; New-Item -ItemType Directory -Path $p3 | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $p3 "horde.cmd"), $shimText)
+    $other = New-InstFx -Parent $p3 -Leaf "other"
+    Check ((Get-HordeMutateInstalledRefusal -Repo $other -ProfileDir (Join-Path $instRoot "nobody")) -eq "") "a horde.cmd that launches a different folder does not make this one the install"
+    # A shim that names the folder by its absolute path.
+    $p4 = Join-Path $instRoot "p4"; New-Item -ItemType Directory -Path $p4 | Out-Null
+    $abs = New-InstFx -Parent $p4 -Leaf "cli-copy"
+    [System.IO.File]::WriteAllText((Join-Path $p4 "horde.cmd"), ('"powershell.exe" -File "' + $abs + '\horde.ps1" %*'))
+    Check ((Get-HordeMutateInstalledRefusal -Repo $abs -ProfileDir (Join-Path $instRoot "nobody")) -ne "") "a shim that names the folder by absolute path counts too"
+    # The default place: <profile>\bin\horde, with no shim at all.
+    $p5 = Join-Path $instRoot "p5"
+    $bin = New-InstFx -Parent (Join-Path $p5 "bin") -Leaf "horde"
+    $why5 = Get-HordeMutateInstalledRefusal -Repo $bin -ProfileDir $p5
+    Check ($why5 -ne "" -and $why5 -match 'bin\\horde folder under the profile') "bin\horde under the profile is refused even with no shim"
+    Check ((Get-HordeMutateInstalledRefusal -Repo $bin.ToUpper() -ProfileDir $p5) -ne "") "and the default place is matched whatever the case"
+    Check ((Get-HordeMutateInstalledRefusal -Repo ($bin + "\") -ProfileDir $p5) -ne "") "and the default place is matched with a trailing slash"
+    Check ((Get-HordeMutateInstalledRefusal -Repo $bin -ProfileDir (Join-Path $instRoot "elsewhere")) -eq "") "CONTROL: the same folder under another profile is not the default place"
+    Check ((Get-HordeMutateInstalledRefusal -Repo (New-InstFx -Parent (Join-Path $p5 "bin") -Leaf "horde2") -ProfileDir $p5) -eq "") "CONTROL: a sibling of bin\horde is not refused"
+    # ROUND 2 (PR 507 review). Plain folders: only the rule is run, so nothing is copied.
+    function New-ShimFx {
+        # <Name>\horde.cmd with -Lines, and <Name>\<Leaf> as an empty folder; returns the folder.
+        param([string]$Name, [string[]]$Lines, [string]$Leaf = "horde")
+        $p = Join-Path $instRoot $Name; New-Item -ItemType Directory -Path $p | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $p "horde.cmd"), ($Lines -join "`r`n"))
+        $d = Join-Path $p $Leaf; New-Item -ItemType Directory -Path $d | Out-Null
+        return $d
+    }
+    $nobody = Join-Path $instRoot "nobody"
+    # A MENTION IS NOT A LAUNCH: a horde.cmd that only names the clone, in a comment or a cd, must not
+    # make the clone the install.
+    $cm = New-ShimFx -Name "q1" -Lines @('@echo off')
+    [System.IO.File]::WriteAllText((Join-Path (Split-Path -Parent $cm) "horde.cmd"), ("rem -File ""$cm\horde.ps1""`r`n:: -File ""%~dp0horde\horde.ps1""`r`n  REM -File ""%~dp0horde\horde.ps1""`r`ncd /d ""$cm""`r`necho $cm\horde.ps1`r`n""powershell.exe"" -File ""$cm\other.ps1"" %*`r`n"))
+    Check ((Get-HordeMutateInstalledRefusal -Repo $cm -ProfileDir $nobody) -eq "") "CONTROL: a horde.cmd that only mentions the folder (rem, ::, cd, echo, another script) does not make it the install"
+    $sx = New-ShimFx -Name "q2" -Lines @('powershell.exe -File "%~dp0horde\horde.ps1x" %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo $sx -ProfileDir $nobody) -eq "") "CONTROL: a launch of horde.ps1x is not a launch of horde.ps1"
+    $sp = New-ShimFx -Name "q2b" -Lines @('powershell.exe -File "%~dp0horde\horde.ps1" %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo $sp -ProfileDir $nobody) -ne "") "a launch line after nothing else is read as a launch"
+    # SPELLINGS OF THE SAME LAUNCH.
+    $fs = New-ShimFx -Name "q3" -Lines @('powershell.exe -File "%~dp0horde/horde.ps1" %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo $fs -ProfileDir $nobody) -ne "") "a forward slash in the shim is read as a backslash"
+    $fa = New-ShimFx -Name "q4" -Lines @('x')
+    [System.IO.File]::WriteAllText((Join-Path (Split-Path -Parent $fa) "horde.cmd"), ('powershell.exe -File "' + ($fa -replace '\\', '/') + '/horde.ps1" %*'))
+    Check ((Get-HordeMutateInstalledRefusal -Repo $fa -ProfileDir $nobody) -ne "") "an absolute path written with forward slashes is read too"
+    $dd = New-ShimFx -Name "q5" -Lines @('powershell.exe -File "%~dp0.\horde\horde.ps1" %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo $dd -ProfileDir $nobody) -ne "") "%~dp0.\ is accepted"
+    $dm = New-ShimFx -Name "q5b" -Lines @('powershell.exe -file %~dp0horde\horde.ps1 %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo $dm -ProfileDir $nobody) -ne "") "an unquoted path and -file in lower case are read too"
+    $mvShim = Join-Path $instRoot "q7"; New-Item -ItemType Directory -Path (Join-Path $mvShim "y") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $mvShim "horde.cmd"), 'powershell.exe -File "%UserProfile%\q7\y\horde.ps1" %*')
+    Check ((Get-HordeMutateInstalledRefusal -Repo (Join-Path $mvShim "y") -ProfileDir $instRoot) -ne "") "a %USERPROFILE% in the shim is read as the profile folder (a moved install)"
+    Check ((Get-HordeMutateInstalledRefusal -Repo (Join-Path $mvShim "y") -ProfileDir $nobody) -eq "") "CONTROL: and under another profile it names another folder"
+    # THE SIZE CAP: a horde.cmd over 64 KB is not a shim, whatever it says.
+    $big = New-ShimFx -Name "q8" -Lines @('powershell.exe -File "%~dp0horde\horde.ps1" %*', ("rem " + ("x" * 70000)))
+    Check ((Get-HordeMutateInstalledRefusal -Repo $big -ProfileDir $nobody) -eq "") "a horde.cmd over 64 KB is not read as a shim"
+    # NO PARENT: the root of a drive has none, and the rule must say no, not fail.
+    $rootOut = try { Get-HordeMutateInstalledRefusal -Repo ([System.IO.Path]::GetPathRoot($env:TEMP)) -ProfileDir $nobody } catch { "THREW: " + $_.Exception.Message }
+    Check ($rootOut -eq "") ("a drive root, which has no parent folder, is not refused and does not throw (" + $rootOut + ")")
+    # A FOLDER NAMED horde.cmd is not a shim (and does not throw).
+    $dirShim = New-ShimFx -Name "q9" -Lines @('x')
+    Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $dirShim) "horde.cmd")
+    New-Item -ItemType Directory -Path (Join-Path (Split-Path -Parent $dirShim) "horde.cmd") | Out-Null
+    $dirOut = try { Get-HordeMutateInstalledRefusal -Repo $dirShim -ProfileDir $nobody } catch { "THREW: " + $_.Exception.Message }
+    Check ($dirOut -eq "") ("a folder named horde.cmd beside it is not a shim (" + $dirOut + ")")
+    # A PATH .NET CANNOT RESOLVE says why and refuses; it does not crash the tool.
+    $badOut = try { Get-HordeMutateInstalledRefusal -Repo ("C:\x" + [char]0 + "y") -ProfileDir $nobody } catch { "THREW: " + $_.Exception.Message }
+    Check ($badOut -match 'cannot tell whether' -and $badOut -match 'will not run') ("a path that cannot be resolved is refused with the reason, not thrown (" + $badOut + ")")
+    # THE PROFILE IS ASKED OF THE MACHINE FIRST, the variable only when the machine gives nothing. The
+    # machine's answer is replaced here, so this box's real profile is never asked.
+    $savedProbe = $script:HordeMutateProfileProbe
+    $savedUp = $env:USERPROFILE
+    $mach = Join-Path $instRoot "machine-profile"
+    $envp = Join-Path $instRoot "env-profile"
+    $machBin = New-InstFx -Parent (Join-Path $mach "bin") -Leaf "horde"
+    $envBin = New-InstFx -Parent (Join-Path $envp "bin") -Leaf "horde"
+    try {
+        $env:USERPROFILE = $envp
+        $script:HordeMutateProfileProbe = { $mach }.GetNewClosure()
+        Check ((Get-HordeMutateInstalledRefusal -Repo $machBin -ProfileDir "") -ne "") "with no -ProfileDir, the machine's profile is used"
+        Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -eq "") "and the USERPROFILE variable is NOT used while the machine gives one"
+        $script:HordeMutateProfileProbe = { "" }
+        Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -ne "") "when the machine gives nothing, the USERPROFILE variable is used"
+        $script:HordeMutateProfileProbe = { throw "no profile" }
+        $failOut = try { Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "" } catch { "THREW: " + $_.Exception.Message }
+        Check ($failOut -ne "" -and $failOut -notmatch '^THREW') ("and when asking the machine fails, too, and nothing is thrown (" + $failOut + ")")
+        $env:USERPROFILE = ""
+        Check ((Get-HordeMutateInstalledRefusal -Repo $envBin -ProfileDir "") -eq "") "CONTROL: with neither, nothing is refused and nothing throws"
+    } finally { $script:HordeMutateProfileProbe = $savedProbe; $env:USERPROFILE = $savedUp }
+} finally {
+    if (Test-Path -LiteralPath $instRoot) { Remove-Item -LiteralPath $instRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
 $left = @(Get-OwnLeftovers)
 Check ($left.Count -eq 0) "and no throwaway copy is left behind"
