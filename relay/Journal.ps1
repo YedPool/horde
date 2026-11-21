@@ -623,8 +623,8 @@ function Add-HordeRelayJournalFailure {
         $text = '{"v":1,"seq":' + $Seq + ',"failure":' + $n + '}'
         try { $moved = Write-HordeRelayJournalFile -Dir $dir -Name ($Seq.ToString("D16", [System.Globalization.CultureInfo]::InvariantCulture) + ".fail" + $n) -Text $text }
         catch { return (New-HordeUnknown -Reason ("the failure mark of " + $r.meta.key + " could not be written") -ErrorRecord $_) }
-        if ($moved -ceq "moved") { return (New-HordeKnown -Value ([pscustomobject]@{ key = $r.meta.key; failures = $n }) -ObservedAt ([datetime]::UtcNow)) }
-        return (New-HordeUnknown -Reason ("the failure mark of " + $r.meta.key + " was not made durably (" + $moved + ")"))
+        if ($moved -cne "moved") { return (New-HordeUnknown -Reason ("the failure mark of " + $r.meta.key + " was not made durably (" + $moved + ")")) }
+        return (New-HordeKnown -Value ([pscustomobject]@{ key = $r.meta.key; failures = $n }) -ObservedAt ([datetime]::UtcNow))
     } finally { $lock.held.Dispose() }
 }
 
