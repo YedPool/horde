@@ -170,7 +170,8 @@ try {
     Check (@(Get-OwnLeftovers).Count -eq 0) "and no throwaway copy is made"
     # EVERY CALL FORM IS REFUSED, not only -Spec (round 3 of PR 507: a refusal skipped for -Changed passed
     # every check above). -Changed, -Changed -Plan, and no arguments at all each give the same refusal,
-    # exit 2, and leave the tree as it was.
+    # exit 2, and leave the tree as it was. The exit-2 check alone cannot tell a skipped refusal from the
+    # fixture's own no-git exit 2 for -Changed, which is why the refusal-text and nothing-else checks are here.
     foreach ($form in @(@("-Changed", "origin/main"), @("-Changed", "origin/main", "-Plan"), @())) {
         $formName = $(if ($form.Count -eq 0) { "no arguments" } else { $form -join " " })
         $rf = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $inst "tools\Mutate.ps1") @form | ForEach-Object { "$_" })

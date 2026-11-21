@@ -32,6 +32,10 @@
 #     (test-mutate checks this as a CONTROL). That is deliberate: refusing would stop every ordinary
 #     clone on a machine with no profile. Closing it would take a fixed record of where the install is
 #     (for instance a marker file the install writes), which this tool does not have.
+#   - A NON-default install (not <profile>\bin\horde) whose horde.cmd shim cannot be read - locked,
+#     missing, or over the 64 KB cap - is not refused: the default-place signal covers bin\horde only,
+#     and without the shim nothing else names the folder. Closing it would take the same fixed record
+#     of where the install is.
 #   - A clone reached through a junction or a symbolic link: its path is compared as given. Covering it
 #     would take the real path, which is a P/Invoke (GetFinalPathNameByHandle) this tool does not carry.
 #   - The setting installedCliFolder (<HORDE_HOME>\settings\services.json): it is not read. Covering it
