@@ -9,6 +9,12 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-command-does-not-hand-its-process-start-to-the-tick"
+           Find = '-ProcessId $PID -ProcessStartedAt $selfBeat.startedAt)'
+           Replace = '-ProcessId $PID)' }
+        @{ Name = "the-command-hands-the-tick-now-as-its-process-start"
+           Find = '-ProcessStartedAt $selfBeat.startedAt)'
+           Replace = '-ProcessStartedAt ([datetime]::UtcNow))' }
         @{ Name = "the-banner-does-not-say-which-session-is-the-watchers-own"
            Find = 'Write-Output ("wake: " + (Get-HordeWakeSelfLine -Self "$($run.self)"))'
            Replace = '' }

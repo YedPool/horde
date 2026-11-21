@@ -23,6 +23,21 @@
         @{ Name = "proof-files-are-the-live-ones"
            Find = 'if ($Mode -ceq "") { return "shadow" }'
            Replace = 'if ($Mode -ceq "") { return "shadow" }; if ($Mode -ceq "proof") { return "live" }' }
+        @{ Name = "the-heartbeat-drops-the-process-start"
+           Find = 'if ($ProcessStartedAt -is [datetime]) { $beat["startedAt"] = ConvertTo-HordeWakeTimeText $ProcessStartedAt }'
+           Replace = '' }
+        @{ Name = "the-heartbeat-process-start-is-the-counts-start"
+           Find = 'if ($ProcessStartedAt -is [datetime]) { $beat["startedAt"] = ConvertTo-HordeWakeTimeText $ProcessStartedAt }'
+           Replace = 'if ($ProcessStartedAt -is [datetime] -and $null -ne $Counts) { $beat["startedAt"] = ConvertTo-HordeWakeTimeText $Counts.startedAt }' }
+        @{ Name = "the-heartbeat-process-start-is-now"
+           Find = 'if ($ProcessStartedAt -is [datetime]) { $beat["startedAt"] = ConvertTo-HordeWakeTimeText $ProcessStartedAt }'
+           Replace = 'if ($ProcessStartedAt -is [datetime]) { $beat["startedAt"] = ConvertTo-HordeWakeTimeText $At }' }
+        @{ Name = "the-heartbeat-process-start-is-local-time-with-no-zone"
+           Find = '$beat["startedAt"] = ConvertTo-HordeWakeTimeText $ProcessStartedAt'
+           Replace = '$beat["startedAt"] = $ProcessStartedAt.ToLocalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffffff")' }
+        @{ Name = "the-heartbeat-read-ignores-the-process-start"
+           Find = '$ps = ConvertFrom-HordeWakeTimeText $j.startedAt'
+           Replace = '$ps = $null' }
         @{ Name = "heartbeat-does-not-say-its-mode"
            Find = 'shadow = ($word -ceq "shadow"); mode = $word;'
            Replace = 'shadow = ($word -ceq "shadow"); mode = "";' }

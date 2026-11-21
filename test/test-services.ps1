@@ -14,6 +14,9 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "core\Services.ps1")
 . (Join-Path $root "core\ServicesFiles.ps1")
+# The wake watcher's heartbeat writer, for the one cross-module check below (T-0502): the writer and the supervisor's
+# reader were each tested alone and agreed with themselves, and disagreed with each other.
+. (Join-Path $root "core\WakeFiles.ps1")
 
 $work = Join-Path $env:TEMP ("horde-services-" + [guid]::NewGuid().ToString("N"))
 $hh = Join-Path $work "home"
@@ -173,6 +176,40 @@ try {
     Check ($unread.alive -ceq "unknown" -and $unread.why -ceq "its heartbeat could not be read: held") "a heartbeat that cannot be read is unknown, and says that it is the heartbeat"
     Check ((& $live $plain $held (Obs -Running $run)).alive -ceq "yes" -and (& $live $plain $held (Obs)).alive -ceq "no") "a service with no heartbeat is alive exactly while its process is"
 
+    Write-Host ""
+    Write-Host "--- the wake watcher's own heartbeat counts it alive (T-0502: writer and supervisor together) ---" -ForegroundColor Cyan
+    # The real Write-HordeWakeHeartbeat (core/WakeFiles.ps1), read by the real Read-HordeHeartbeat and judged by the real
+    # Get-HordeServiceLiveness. Live evidence 2026-11-21: "its process 19648 started 100 s ago and has not written a
+    # heartbeat of its own yet" while heartbeat-shadow.json was 23 s old: the wake heartbeat had no top-level startedAt.
+    $wakeHome = Join-Path $work "wake-home"
+    [void][System.IO.Directory]::CreateDirectory($wakeHome)
+    $wakeDef = One ($base + ', "alive": { "heartbeat": "wake\\heartbeat-shadow.json", "tickSeconds": 30 }, "confirmSeconds": 300')
+    $wakeBorn = $t0.AddSeconds(-100)
+    $wakeProc = Proc 19648 $wakeBorn
+    $wakeHeld = Copy-HordeServiceState -State $st; $wakeHeld.started = [pscustomobject]@{ pid = 19648; startedAt = $wakeBorn; at = $wakeBorn }
+    # counts.startedAt is when the COUNTING began, days before this process: it must never stand in for the process start.
+    $wakeCounts = [pscustomobject]@{ since = $t0.AddDays(-2); startedAt = $t0.AddDays(-2); passes = [long]5; looks = [long]5; blindLooks = [long]0; blindPasses = [long]0 }
+    $wakeFile = { param([string]$Word) return (Join-Path $wakeHome ("wake\heartbeat-" + $Word + ".json")) }
+    $wakeSeen = { param([string]$Word) return (Obs -Running $wakeProc -Beat (Read-HordeHeartbeat -Path (& $wakeFile $Word))) }
+    Write-HordeWakeHeartbeat -At $t0.AddSeconds(-23) -ProcessId 19648 -Pass 7 -Shadow -TickSeconds 30 -HordeHome $wakeHome -Counts $wakeCounts -ProcessStartedAt $wakeBorn
+    $wakeRead = Read-HordeHeartbeat -Path (& $wakeFile "shadow")
+    Check ($wakeRead.state -ceq "known" -and $wakeRead.value.pid -eq 19648 -and (Test-HordeHeartbeatSameStart -One $wakeRead.value.startedAt -Other $wakeBorn)) "the supervisor's reader finds the wake heartbeat's pid and the process start it was given"
+    $wakeVerdict = & $live $wakeDef $wakeHeld (& $wakeSeen "shadow")
+    Check ($wakeVerdict.alive -ceq "yes" -and $wakeVerdict.why -like "*heartbeat 23 s ago*") "a shadow watcher 100 s old with a heartbeat of its own 23 s ago is ALIVE, not starting (confirmSeconds 300)"
+    $wakeBody = [System.IO.File]::ReadAllText((& $wakeFile "shadow"))
+    Check ($wakeBody -like '*"startedAt":"' + $wakeBorn.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) + '","pass"*' -and $wakeBody -like '*"counts":{"since":*') "the top-level startedAt is the process start in UTC text, and the counts keep their own"
+    $wakeReborn = & $live $wakeDef $wakeHeld (Obs -Running (Proc 19648 $wakeBorn.AddHours(-5)) -Beat $wakeRead)
+    Check ($wakeReborn.alive -cne "yes") "the same pid started at another time (a reused pid) is not alive on that heartbeat"
+    Write-HordeWakeHeartbeat -At $t0.AddSeconds(-23) -ProcessId 19648 -Pass 7 -Shadow -TickSeconds 30 -HordeHome $wakeHome -Counts $wakeCounts -ProcessStartedAt $wakeBorn.AddHours(-5)
+    Check ((& $live $wakeDef $wakeHeld (& $wakeSeen "shadow")).alive -cne "yes") "a heartbeat that names another start for the process is not that process's own"
+    Write-HordeWakeHeartbeat -At $t0.AddSeconds(-23) -ProcessId 19648 -Pass 7 -Shadow -TickSeconds 30 -HordeHome $wakeHome -Counts $wakeCounts
+    $wakeBare = Read-HordeHeartbeat -Path (& $wakeFile "shadow")
+    Check ($wakeBare.state -ceq "known" -and $null -eq $wakeBare.value.startedAt -and (& $live $wakeDef $wakeHeld (& $wakeSeen "shadow")).alive -ceq "starting") "a start that could not be read is written as null and never counts the watcher alive (the pid alone would be deciding)"
+    foreach ($word in @("proof", "live")) {
+        Write-HordeWakeHeartbeat -At $t0.AddSeconds(-23) -ProcessId 19648 -Pass 7 -Mode $word -TickSeconds 30 -HordeHome $wakeHome -Counts $wakeCounts -ProcessStartedAt $wakeBorn
+        $modeDef = One ($base + ', "alive": { "heartbeat": "wake\\heartbeat-' + $word + '.json", "tickSeconds": 30 }, "confirmSeconds": 300')
+        Check ((& $live $modeDef $wakeHeld (& $wakeSeen $word)).alive -ceq "yes") ("the " + $word + " heartbeat carries the process start too: alive")
+    }
     Write-Host ""
     Write-Host "--- start what is not running; never guess ---" -ForegroundColor Cyan
     $s = New-HordeServiceState -Name "svc"

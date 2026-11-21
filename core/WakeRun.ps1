@@ -315,6 +315,8 @@ function Invoke-HordeWakeTick {
     #   -ReadSessions  () -> Get-HordeRestoreSessions' answer; a test hands in its own, and the default
     #                  reads the two stores of this machine
     #   -TickSeconds   the loop's tick, written into the heartbeat so a reader knows what stale is
+    #   -ProcessStartedAt  when -ProcessId started (UTC), written into the heartbeat so the services supervisor can tie it
+    #                  to the process (T-0502); the caller passes it as it passes -ProcessId, $null when it cannot say
     #   -ReadAsleep    () -> Get-HordeFleetAsleep's answer: the sessions asleep in a hibernation, which the
     #                  pass skips. A test hands in its own; the default reads this home's records. Read on
     #                  every tick: a hibernation ends sessions minutes apart, and a watcher started before
@@ -331,6 +333,7 @@ function Invoke-HordeWakeTick {
         [scriptblock]$ReadAsleep = $null,
         [int]$TickSeconds = 3,
         [int]$ProcessId = 0,
+        $ProcessStartedAt = $null,
         $Messenger = $null,
         [string]$HordeHome = (Get-HordeHome)
     )
@@ -634,7 +637,7 @@ function Invoke-HordeWakeTick {
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
     try {
         # The counts file failing is its own line (id counts), said once while it lasts, and the heartbeat was written all the same.
-        $countsFailed = Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts
+        $countsFailed = Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts -ProcessStartedAt $ProcessStartedAt
         if ($countsFailed -is [string]) { [void]$failed.Add([pscustomobject]@{ id = "counts"; reason = $countsFailed }) }
     }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }

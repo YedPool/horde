@@ -62,6 +62,7 @@ $HordeCommand = @{
         # it registers (wakers/Port.ps1, Get-HordeWakerFiles).
         $root = Get-HordeRoot
         . (Join-Path $root "core\WakeRun.ps1")
+        . (Join-Path $root "core\Heartbeat.ps1")
         foreach ($w in @(Get-HordeWakerFiles)) { . $w }
         # The fleet's adapters, for the one question the watcher asks of them: is a session a hibernation
         # record calls asleep running after all (fleet/Asleep.ps1)? Loaded here, in the command's own scope, for
@@ -135,9 +136,12 @@ $HordeCommand = @{
             # be read) is refused here, before its first tick.
             if ("$($run.refused)" -cne "") { throw ("the " + $plan.mode + " wake run has not started: " + $run.refused) }
             foreach ($line in @($run.said)) { Write-Output ("wake: " + $line) }
+            # THIS PROCESS'S OWN START, once: every heartbeat names it so the services supervisor counts the watcher alive
+            # (T-0502: without it, "started 100 s ago and has not written a heartbeat of its own yet" at a heartbeat 23 s old).
+            $selfBeat = Get-HordeHeartbeatSelf
             $modeWord = $(if ($plan.mode -ceq "shadow") { "shadow" } else { $plan.mode.ToUpperInvariant() })
             while ($true) {
-                $entries = @(Invoke-HordeWakeTick -Run $run -Now ([datetime]::UtcNow) -Waker $waker -TickSeconds $TickSeconds -ProcessId $PID)
+                $entries = @(Invoke-HordeWakeTick -Run $run -Now ([datetime]::UtcNow) -Waker $waker -TickSeconds $TickSeconds -ProcessId $PID -ProcessStartedAt $selfBeat.startedAt)
                 foreach ($e in $entries) { Write-Output ("wake: " + $e.kind + " " + $e.id + " " + $e.outcome + " - " + $e.reason) }
                 # ONE PASS, for -Once - and for a proof run whatever else is true: the plan refused a
                 # proof without -Once, and this is the loop's own word for the same thing.

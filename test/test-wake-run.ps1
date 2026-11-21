@@ -62,6 +62,15 @@ Check ($beat.state -ceq "known" -and $beat.value.pass -eq 20 -and $beat.value.sh
 Check ($script:reads -eq 2) ("the restore source ran beside the wake pass every 30 s, not every tick: twice in 57 s (" + $script:reads + ")")
 $again = New-HordeWakeRun -HordeHome $h
 Check ($again.ledger.Count -eq 6 -and $again.posted.Count -eq 7 -and @($again.restores).Count -eq 1) "a run that starts again reads back the shadow run's ledger, what it would have posted, and the restore it found"
+# T-0502: A TICK HANDS THE PROCESS'S START (as it hands the pid) TO THE HEARTBEAT it writes, whatever mode it beats in. Live
+# 2026-11-21: the wake service read "started 100 s ago and has not written a heartbeat of its own yet" at a heartbeat 23 s old.
+$hStart = New-Home
+$runStart = New-HordeWakeRun -HordeHome $hStart
+$null = Invoke-HordeWakeTick -Run $runStart -Now (At 60) -Waker $memory -ReadSessions $readRestored -TickSeconds 3 -ProcessId 4242 -ProcessStartedAt (At -3600) -HordeHome $hStart
+$startBeat = Read-HordeWakeHeartbeat -Shadow -HordeHome $hStart
+Check ($startBeat.state -ceq "known" -and $startBeat.value.startedAt -eq (At -3600) -and $startBeat.value.pid -eq 4242) "a tick given the process's start writes it into the heartbeat beside the pid"
+$null = Invoke-HordeWakeTick -Run $runStart -Now (At 63) -Waker $memory -ReadSessions $readRestored -TickSeconds 3 -ProcessId 4242 -HordeHome $hStart
+Check ($null -eq (Read-HordeWakeHeartbeat -Shadow -HordeHome $hStart).value.startedAt) "a tick that is not given one writes none, and does not make one up"
 
 
 # T-0116: A DUPLICATED SESSION IS NAMED IN THE JOURNAL, and holds the stall notice back (said once).

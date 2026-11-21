@@ -1470,6 +1470,26 @@ Write-HordeWakeHeartbeat -Mode "live" -At (At 9) -ProcessId 4242 -Pass 9 -TickSe
 Check ((Read-HordeWakeHeartbeat -Mode "live").value.tickSeconds -eq 60) "the heartbeat carries the tick, so a reader knows what stale is for this watcher"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
 Check ((Read-HordeWakeHeartbeat -Mode "live").value.tickSeconds -eq 0) "a heartbeat written before it carried one reads as no tick, which is the 120 s floor"
+# T-0502: THE HEARTBEAT CARRIES THE WRITING PROCESS'S OWN START (UTC), beside the counts' start, which is when the counting began.
+# The services supervisor counts a heartbeat as its service's only when pid AND start match (test-services.ps1 holds that
+# end to end); here is the writer and the reader of this file.
+$iso = [System.Globalization.CultureInfo]::InvariantCulture
+$sinceCounts = [pscustomobject]@{ since = (At -86400); startedAt = (At -86400); passes = [long]1; looks = [long]1; blindLooks = [long]0; blindPasses = [long]0 }
+foreach ($word in @("shadow", "proof", "live")) {
+    Write-HordeWakeHeartbeat -Mode $word -At (At 9) -ProcessId 4242 -Pass 11 -TickSeconds 30 -Counts $sinceCounts -ProcessStartedAt (At -3600)
+    $raw = [System.IO.File]::ReadAllText((Join-Path $wakeDir ("heartbeat-" + $word + ".json")))
+    $got = Read-HordeWakeHeartbeat -Mode $word
+    Check ($got.state -ceq "known" -and $got.value.startedAt -eq (At -3600) -and $got.value.startedAt.Kind -eq [System.DateTimeKind]::Utc -and $raw -like ('*"pid":4242,"startedAt":"' + (At -3600).ToString("o", $iso) + '","pass":11*')) ("the " + $word + " heartbeat holds the process's start as UTC text, and reads back as that instant")
+    Check ($raw -like ('*"counts":{"since":"' + (At -86400).ToString("o", $iso) + '","startedAt":"' + (At -86400).ToString("o", $iso) + '"*')) ("and the counts of the " + $word + " heartbeat keep their own startedAt, when the counting began: the two are never one")
+}
+Write-HordeWakeHeartbeat -Mode "live" -At (At 9) -ProcessId 4242 -Pass 12 -Counts $sinceCounts
+$bare = Read-HordeWakeHeartbeat -Mode "live"
+Check ($bare.state -ceq "known" -and $null -eq $bare.value.startedAt -and [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-live.json")) -like '*"pid":4242,"startedAt":null,"pass":12*') "a start the caller cannot give is written as null, never as the counts' start or now, and reads back as none"
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
+$oldBeat = Read-HordeWakeHeartbeat -Mode "live"
+Check ($oldBeat.state -ceq "known" -and $oldBeat.value.pid -eq 1 -and $null -eq $oldBeat.value.startedAt) "a heartbeat written before it carried the process's start still reads, with no start"
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"startedAt":"2026-10-12 07:00:00","pass":2}')
+Check ($null -eq (Read-HordeWakeHeartbeat -Mode "live").value.startedAt) "a start with no zone is no start: it cannot be placed"
 
 # THE JOURNAL IS BOUNDED: at the cap it is set aside, once, and the tail still reads across the two.
 $small = Join-Path $pinned.home "rotate"
