@@ -130,7 +130,7 @@ $asked = @(Read-FakeLog "argv.log" | ForEach-Object { @($_.argv) -join " " })
 Check (@($asked | Where-Object { $_ -clike "mail nudge*" }).Count -eq 0 -and @($asked | Where-Object { $_ -ceq "mail state -Json" }).Count -eq 1) ("and the fleet's command was never asked to nudge: it was asked for the fleet's state once (" + ($asked -join " | ") + ")")
 Check (@($asked | Where-Object { $_ -clike ("mail state -To " + $idle + " *") }).Count -eq 1 -and @($asked | Where-Object { $_ -clike ("mail state -To " + $busy + " *") }).Count -eq 0) "a pane was read for the one candidate, and not for the session that is not idle"
 $names = @(Get-ChildItem -LiteralPath $wakeDir | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")# T-0502: THE REAL COMMAND'S HEARTBEAT NAMES ITS OWN PROCESS'S START. The process has ended, so it cannot be compared with
+Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock,silence-shadow.json") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")# T-0502: THE REAL COMMAND'S HEARTBEAT NAMES ITS OWN PROCESS'S START. The process has ended, so it cannot be compared with
 # the table; it must be a time in UTC, before the beat itself (the process started, loaded, then ticked) and not long before.
 $beatText = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-shadow.json"))
 $startedText = [regex]::Match($beatText, '"startedAt":"([^"]+)","pass"')
