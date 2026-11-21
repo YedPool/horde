@@ -54,5 +54,36 @@
         @{ Name = "tick-asks-for-a-turn-and-is-not-heard"
            Find = 'if ($null -ne $ask -and $ask.Value -is [int] -and $ask.Value -gt 0 -and ($again -eq 0 -or $ask.Value -lt $again)) { $again = [int]$ask.Value }'
            Replace = 'if ($false) { $again = [int]$ask.Value }' }
+        # --- T-0467: a channel that fails on a record is counted, and refused for good at the cap ---
+        @{ Name = "failure-cap-never-reached"
+           Find = '                if ($times -lt $script:HordeRelayChannelFailureCap) {'
+           Replace = '                if ($true) {' }
+        @{ Name = "failure-cap-one-too-many"
+           Find = '                if ($times -lt $script:HordeRelayChannelFailureCap) {'
+           Replace = '                if ($times -le $script:HordeRelayChannelFailureCap) {' }
+        @{ Name = "failure-count-always-one"
+           Find = '                $times = [int]$counted.value.failures'
+           Replace = '                $times = 1' }
+        @{ Name = "throw-is-not-the-channels-fault"
+           Find = 'reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $true;'
+           Replace = 'reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $false;' }
+        @{ Name = "bad-answer-is-not-the-channels-fault"
+           Find = 'refused or retry"); channelFault = $true;'
+           Replace = 'refused or retry"); channelFault = $false;' }
+        @{ Name = "asked-retry-counted"
+           Find = 'reason = $why; channelFault = $false;'
+           Replace = 'reason = $why; channelFault = $true;' }
+        @{ Name = "trust-store-retry-counted"
+           Find = 'if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason; channelFault = $false;'
+           Replace = 'if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason; channelFault = $true;' }
+        @{ Name = "capped-record-left-a-retry"
+           Find = '$outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed on this record "'
+           Replace = '$outcome = [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $name + " failed on this record "' }
+        @{ Name = "capped-refusal-forgets-the-last-error"
+           Find = ' times and is not asked again; the last: " + $outcome.detail)'
+           Replace = ' times and is not asked again; the last: ")' }
+        @{ Name = "capped-refusal-forgets-the-channel"
+           Find = '                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed'
+           Replace = '                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + "x" + " failed' }
     )
 }

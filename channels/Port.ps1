@@ -133,6 +133,17 @@
 if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayChannels = [ordered]@{} }
 $script:HordeRelayChannelSenders = @("founder", "horde")
 $script:HordeRelayChannelOutcomes = @("done", "refused", "retry")
+# HOW MANY TIMES A CHANNEL MAY FAIL ON ONE RECORD (T-0467). A channel's Accept that throws, or answers with
+# something that is not done, refused or retry, is a retry that is the channel's own fault; a fault that
+# comes every time (a strict-mode error: a missing member, a mistyped variable) was handed the record again
+# on every turn for ever, and nobody was told. Past this many failures the record is refused for good, by
+# a line that names the channel, the count and the last error. FIVE: a transient fault (a file another
+# process holds, a store busy for a moment) mends within a turn or two, and each failure is a whole turn of
+# the runner, so five is a fault that has outlasted five turns and its backoffs; a smaller number would
+# refuse a founder's answer over a blip, a larger one repeats the same line for longer before anyone sees
+# it. A retry the channel ASKS for ("retry" with a reason, the decisions list busy) and the box's own
+# faults (the trust store, the journal) are not counted: they are not the record's fault.
+$script:HordeRelayChannelFailureCap = 5
 $script:HordeRelayChannelWordPattern = '\A[a-z][a-z0-9-]{0,31}\z'
 if ($null -eq (Get-Variable -Name HordeRelayDataKinds -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayDataKinds = [ordered]@{} }
 $script:HordeRelayDataKindPattern = '\A\{"v":1,"kind":"([a-z][a-z0-9-]{0,31})",'
@@ -675,6 +686,8 @@ function Invoke-HordeRelayUnfinished {
     # Step 6 of THE PATH IN: every journaled record of every registered channel that no channel has
     # finished, opened and handed to its channel. Known { done; refused; retry } - lines, one per record.
     # Unknown never: a channel whose journal cannot be read is a retry line, and the others go on.
+    # A channel that fails on a record (throws, or answers with nothing it may) is counted, and refused
+    # for good at HordeRelayChannelFailureCap failures (T-0467); every other retry is uncounted.
     param([Parameter(Mandatory = $true)]$Context, $Now = $null)
     $done = New-Object System.Collections.ArrayList
     $refused = New-Object System.Collections.ArrayList
@@ -688,6 +701,17 @@ function Invoke-HordeRelayUnfinished {
         foreach ($u in @($list.value)) {
             $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache -Now $Now
             $line = $u.key + ": " + $outcome.reason
+            if ($outcome.outcome -ceq "retry" -and $outcome.channelFault) {
+                # The channel's own fault: count it beside the record, so the count outlives the runner. THE
+                # REFUSAL BELOW IS THE LINE A PERSON SEES: it goes out as "refused <key>: ..." in the run's
+                # log (cli/RelayRun.ps1, Get-HordeRelayRunLines), the line the runner says on every turn.
+                $counted = Add-HordeRelayJournalFailure -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome
+                if ($counted.state -cne "known") { [void]$retry.Add($line + "; its failure could not be counted (" + $counted.reason + "), so it comes again"); continue }
+                $times = [int]$counted.value.failures
+                if ($times -lt $script:HordeRelayChannelFailureCap) { [void]$retry.Add($line + " (failure " + $times + " of " + $script:HordeRelayChannelFailureCap + ")"); continue }
+                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed on this record " + $times + " times and is not asked again; the last: " + $outcome.detail); channelFault = $false; detail = "" }
+                $line = $u.key + ": " + $outcome.reason
+            }
             if ($outcome.outcome -ceq "retry") { [void]$retry.Add($line); continue }
             $mark = Complete-HordeRelayJournalReceived -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome -Now $Now
             if ($mark.state -cne "known") { [void]$retry.Add($line + "; but it could not be marked done (" + $mark.reason + "), so it comes again"); continue }
@@ -740,17 +764,17 @@ function Invoke-HordeRelayChannelRecord {
     # journaled, it opens nothing.
     param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
     $o = Open-HordeRelayChannelRecord -Context $Context -Channel $Channel -Record $Record -Cache $Cache -Now $Now
-    if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason } }
+    if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason; channelFault = $false; detail = "" } }
     $item = $o.item
     $got = $null
     try { $got = & $Channel.accept $Context $item }
-    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }
+    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $true; detail = $_.Exception.Message } }
     $got = @($got) | Select-Object -Last 1
     if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayChannelOutcomes -cnotcontains "$($got.outcome)") {
-        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry") }
+        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry"); channelFault = $true; detail = "it answered with something that is not done, refused or retry" }
     }
     $why = $(if ($null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
-    return [pscustomobject]@{ outcome = "$($got.outcome)"; reason = $why }
+    return [pscustomobject]@{ outcome = "$($got.outcome)"; reason = $why; channelFault = $false; detail = "" }
 }
 
 function Invoke-HordeRelayChannelTicks {

@@ -129,6 +129,18 @@
 # The honest limit above holds here too: whoever can delete a done mark makes its record unfinished
 # again, and its channel's idempotency is then the only thing that keeps it from acting twice.
 #
+# FAILURE MARKS (T-0467). A channel whose Accept throws, or answers with something that is not done,
+# refused or retry, is handed the same record again on every turn (channels/Port.ps1, Invoke-HordeRelayChannelRecord),
+# and a fault that comes every time (a strict-mode error in the channel) made that for ever. Each such turn
+# now writes <seq>.fail<n> beside the record - n the number of this failure, 1 up - write-once like a
+# done mark, so two writers make one mark and the count is the number of marks. WHY FILES AND NOT A
+# NUMBER IN THE RECORD: a record is never rewritten (its hash is the founder's evidence), and a counter
+# file that is rewritten can tear; a mark that is only ever added cannot. The count survives a restart of the
+# runner because it is on disk. A mark names a record of its stream or the stream is damaged, exactly as a
+# done mark does. Get-HordeRelayJournalUnfinished says each record's count (failures); channels/Port.ps1
+# decides when it is enough. A journal this code wrote reads as damaged to code from before T-0467, which
+# knows no such file: the same rule as for any file the journal never writes.
+#
 # THE PLATFORM IS NOT HERE. The durable move is core/FileAtomic.ps1's, which today has Windows' only
 # and refuses elsewhere in words ("never falls back to a move that is not durable"). On any other system
 # this file loads, reads, judges and answers - and every record it is asked to make is unknown with
@@ -165,6 +177,7 @@ $script:HordeRelayJournalMarkerPattern = '\A\{"v":1,"kind":"horde-relay-journal"
 $script:HordeRelayJournalRecordPattern = '\A([0-9]{16})\.rec\z'
 $script:HordeRelayJournalTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 $script:HordeRelayJournalDonePattern = '\A([0-9]{16})\.done\z'
+$script:HordeRelayJournalFailPattern = '\A([0-9]{16})\.fail([1-9][0-9]{0,5})\z'
 $script:HordeRelayJournalSenderDirPattern = '\As-([0-9a-f]{32})\z'
 $script:HordeRelayJournalLockName = "lock"
 $script:HordeRelayJournalMetaPattern = ('\A\{"v":1,"direction":"(in|out)","key":"([0-9a-z/-]{1,128})","from":"([0-9a-f]{32})","channel":"([a-z][a-z0-9-]{0,31})",' +
@@ -286,6 +299,7 @@ function Get-HordeRelayJournalStream {
     param([string]$Dir, [string]$Direction, [string]$From, [string]$Channel, [bool]$MustExist = $false)
     $seqs = @{}
     $dones = @{}
+    $fails = @{}
     $temps = New-Object System.Collections.ArrayList
     $last = [long]-1
     $limit = (Get-HordeRelayEnvelopeLimits).maxInteger
@@ -298,7 +312,7 @@ function Get-HordeRelayJournalStream {
         while ($null -ne $cause.InnerException) { $cause = $cause.InnerException }
         if ($cause -is [System.IO.DirectoryNotFoundException]) {
             if ($MustExist) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " was just made and is not found: the system will not show this folder, so its records cannot be read"); last = $last; seqs = $seqs; temps = @() } }
-            return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @(); dones = $dones }
+            return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @(); dones = $dones; fails = $fails }
         }
         return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " could not be listed: " + $cause.Message); last = $last; seqs = $seqs; temps = @() }
     }
@@ -310,6 +324,7 @@ function Get-HordeRelayJournalStream {
         if ($nm -ceq $script:HordeRelayJournalLockName) { continue }
         if ($nm -cmatch $script:HordeRelayJournalTempPattern) { [void]$temps.Add($e.path); continue }
         if ($Direction -ceq "in" -and $nm -cmatch $script:HordeRelayJournalDonePattern) { $dones["" + [long]$Matches[1]] = $true; continue }
+        if ($Direction -ceq "in" -and $nm -cmatch $script:HordeRelayJournalFailPattern) { $fk = "" + [long]$Matches[1]; if ($fails.ContainsKey($fk)) { $fails[$fk] = [int]$fails[$fk] + 1 } else { $fails[$fk] = 1 }; continue }
         if ($nm -cnotmatch $script:HordeRelayJournalRecordPattern) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", a file the journal never writes"); last = $last; seqs = $seqs; temps = @() } }
         $s = [long]$Matches[1]
         if ($s -gt $limit) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", past the largest sequence number an envelope can carry"); last = $last; seqs = $seqs; temps = @() } }
@@ -324,7 +339,10 @@ function Get-HordeRelayJournalStream {
     foreach ($d in @($dones.Keys)) {
         if (-not $seqs.ContainsKey($d)) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a done mark for seq " + $d + ", which it never recorded"); last = $last; seqs = $seqs; temps = @() } }
     }
-    return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @($temps); dones = $dones }
+    foreach ($d in @($fails.Keys)) {
+        if (-not $seqs.ContainsKey($d)) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a failure mark for seq " + $d + ", which it never recorded"); last = $last; seqs = $seqs; temps = @() } }
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @($temps); dones = $dones; fails = $fails }
 }
 
 function Enter-HordeRelayJournalLock {
@@ -581,11 +599,41 @@ function Complete-HordeRelayJournalReceived {
     return (New-HordeUnknown -Reason ("the done mark of " + $r.meta.key + " has its name, but the flush after the move failed, so nothing says it is on disk"))
 }
 
+function Add-HordeRelayJournalFailure {
+    # A channel failed on a received record (FAILURE MARKS, in the header): write the next mark, <seq>.fail<n>,
+    # beside it. Known { key; failures } - failures the count with this one in it; unknown when the record is
+    # not there or damaged, or the mark could not be made durable (the caller then has no count and treats the
+    # turn as a plain retry). The count is read and the mark made under the stream's lock, so two runners
+    # cannot both make mark n and lose one.
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][long]$Seq, [string]$HordeHome = "")
+    $why = Test-HordeRelayJournalStreamName -From $From -Channel $Channel
+    if ($why -cne "") { return (New-HordeUnknown -Reason $why) }
+    $ctx = Get-HordeRelayJournalContext -HordeHome $HordeHome
+    if (-not $ctx.ok) { return (New-HordeUnknown -Reason ($ctx.reason + "; no failure was marked")) }
+    $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "in" -From $From -Channel $Channel
+    $lock = Enter-HordeRelayJournalLock -Dir $dir -WaitMs ([int]$ctx.settings.lockWaitMs)
+    if (-not $lock.ok) { return (New-HordeUnknown -Reason ($lock.reason + "; no failure was marked")) }
+    try {
+        $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "in" -From $From -Channel $Channel -Seq $Seq
+        if (-not $r.ok) { return (New-HordeUnknown -Reason ($r.reason + "; a failure mark is only ever written beside its record")) }
+        $st = Get-HordeRelayJournalStream -Dir $dir -Direction "in" -From $From -Channel $Channel
+        if (-not $st.ok) { return (New-HordeUnknown -Reason $st.reason) }
+        $n = 1
+        if ($st.fails.ContainsKey("" + $Seq)) { $n = [int]$st.fails["" + $Seq] + 1 }
+        $text = '{"v":1,"seq":' + $Seq + ',"failure":' + $n + '}'
+        try { $moved = Write-HordeRelayJournalFile -Dir $dir -Name ($Seq.ToString("D16", [System.Globalization.CultureInfo]::InvariantCulture) + ".fail" + $n) -Text $text }
+        catch { return (New-HordeUnknown -Reason ("the failure mark of " + $r.meta.key + " could not be written") -ErrorRecord $_) }
+        if ($moved -ceq "moved") { return (New-HordeKnown -Value ([pscustomobject]@{ key = $r.meta.key; failures = $n }) -ObservedAt ([datetime]::UtcNow)) }
+        return (New-HordeUnknown -Reason ("the failure mark of " + $r.meta.key + " was not made durably (" + $moved + ")"))
+    } finally { $lock.held.Dispose() }
+}
+
 function Get-HordeRelayJournalUnfinished {
     # Every RECEIVED record on -Channel that has no done mark (FINISHED AND UNFINISHED, in the header), in
     # order of sender and then seq: known list of { from; channel; kind; seq; key; text; evidence;
     # verdict }, where text is the envelope's wire text exactly as recorded, evidence its record's hash
-    # and verdict what Unprotect-HordeRelayEnvelope takes as -Replay. Unknown when the journal cannot say
+    # and verdict what Unprotect-HordeRelayEnvelope takes as -Replay, and failures how many times its channel
+    # has failed on it (FAILURE MARKS). Unknown when the journal cannot say
     # or any stream of the channel is damaged: a damaged stream is never skipped, because what it hides
     # may be exactly the unfinished record.
     param([Parameter(Mandatory = $true)][string]$Channel, [string]$HordeHome = "")
@@ -622,7 +670,9 @@ function Get-HordeRelayJournalUnfinished {
             $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "in" -From $from -Channel $Channel -Seq ([long]$seqText)
             if (-not $r.ok) { return (New-HordeUnknown -Reason ($r.reason + ". The journal is damaged; nothing is resumed until a person repairs it")) }
             $verdict = New-HordeKnown -Value ([pscustomobject]@{ key = $r.meta.key; fresh = $true; why = ""; gapBefore = [long]0; direction = "in"; resumed = $true }) -ObservedAt ([datetime]::UtcNow)
-            [void]$out.Add([pscustomobject]@{ from = $from; channel = $Channel; kind = $r.meta.kind; seq = [long]$seqText; key = $r.meta.key; text = $r.envelope
+            $failed = 0
+            if ($st.fails.ContainsKey($seqText)) { $failed = [int]$st.fails[$seqText] }
+            [void]$out.Add([pscustomobject]@{ from = $from; channel = $Channel; kind = $r.meta.kind; seq = [long]$seqText; key = $r.meta.key; text = $r.envelope; failures = $failed
                 evidence = (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $r.whole))); verdict = $verdict })
         }
     }
