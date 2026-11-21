@@ -28,6 +28,10 @@ $id32 = "7a5e99735c69f1bc6fdc90f7530561bc"
 $id10 = "7a5e99735c"
 $pointer = "wezfleet: a message is waiting for you (id " + $id32 + ") - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing"
 $many = "wezfleet: 3 messages are waiting for you (id " + $id32 + ") - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing"
+# The wording PR 128 of wezfleet moves to (T-0426): the same pointer, but the command is one Git Bash and PowerShell can both run.
+$newTail = "; this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""C:/Users/Yedidya/bin/wezfleet/wezfleet.ps1"" mail read"
+$newPointer = "wezfleet: a message is waiting for you (id " + $id32 + ")" + $newTail
+$newMany = "wezfleet: 3 messages are waiting for you (id " + $id32 + ")" + $newTail
 $unconf = "wezfleet tell to 8f2c1d0e-1111-4222-8333-444455556666 NOT CONFIRMED: the target did not take it in 60s; check with wezfleet mail status"
 $header = "MESSAGE FROM wezfleet tell (wezfleet mail " + $id32 + "), delivered to you directly rather than typed into your input box."
 $relay = $header + "`n`n" + $unconf
@@ -38,6 +42,13 @@ Check ((Get-HordeChatPointerKind -Text $pointer) -ceq "pointer") "the pointer li
 Check ((Get-HordeChatPointerKind -Text $many) -ceq "pointer") "the pointer line for several messages is a pointer"
 Check ((Get-HordeChatPointerKind -Text ($pointer.Replace($id32, $id10))) -ceq "pointer") "a pointer naming a 10-digit mail id is a pointer"
 Check ((Get-HordeChatPointerKind -Text ($pointer + "`r`n")) -ceq "pointer") "a trailing line break does not change it"
+Check ((Get-HordeChatPointerKind -Text $newPointer) -ceq "pointer") "the NEW pointer wording (powershell.exe -File <path>/wezfleet.ps1 mail read) is a pointer"
+Check ((Get-HordeChatPointerKind -Text $newMany) -ceq "pointer") "the NEW pointer wording for several messages is a pointer"
+Check ((Get-HordeChatPointerKind -Text ($newPointer.Replace($id32, $id10))) -ceq "pointer") "the NEW wording naming a 10-digit mail id is a pointer"
+Check ((Get-HordeChatPointerKind -Text ($newPointer + "`r`n")) -ceq "pointer") "the NEW wording with a trailing line break is a pointer"
+foreach ($odd in @("C:/Users/Jos" + [char]0xE9 + "/bin/wezfleet/wezfleet.ps1", "C:/Users/A B/it's & 50%/wezfleet/wezfleet.ps1", "/c/Users/x/bin/wezfleet/wezfleet.ps1")) {
+    Check ((Get-HordeChatPointerKind -Text $newPointer.Replace("C:/Users/Yedidya/bin/wezfleet/wezfleet.ps1", $odd)) -ceq "pointer") ("the NEW wording with the path " + $odd + " is a pointer")
+}
 Check ((Get-HordeChatPointerKind -Text $unconf) -ceq "unconfirmed") "the NOT CONFIRMED line is an unconfirmed notice"
 Check ((Get-HordeChatPointerKind -Text $header) -ceq "relay") "the Stop hook's MESSAGE FROM wezfleet tell header alone is a relay line"
 Check ((Get-HordeChatPointerKind -Text $relay) -ceq "relay") "the header with the NOT CONFIRMED line as its body is a relay line"
@@ -66,6 +77,28 @@ $negatives = [ordered]@{
     "pointer with a long id" = $pointer.Replace($id32, $id32 + "00")
     "pointer with no id" = $pointer.Replace(" (id " + $id32 + ")", "")
     "pointer with a leading space" = (" " + $pointer)
+    "NEW pointer with a lead-in" = ("what is this? " + $newPointer)
+    "NEW pointer with words after" = ($newPointer + " - why did it appear?")
+    "NEW pointer with a second line" = ($newPointer + "`nplease explain")
+    "NEW pointer in a quote" = ('"' + $newPointer + '"')
+    "NEW pointer with a capital" = $newPointer.Replace("wezfleet:", "Wezfleet:")
+    "NEW pointer with a changed word" = $newPointer.Replace("waiting for you", "waiting for me")
+    "NEW pointer with a bad id" = $newPointer.Replace($id32, "not-an-id")
+    "NEW pointer with no id" = $newPointer.Replace(" (id " + $id32 + ")", "")
+    "NEW pointer, another command" = $newPointer.Replace("powershell.exe", "cmd.exe")
+    "NEW pointer, another switch" = $newPointer.Replace("-NoProfile", "-NoLogo")
+    "NEW pointer, another script" = $newPointer.Replace("wezfleet.ps1", "evil.ps1")
+    "NEW pointer, another verb" = $newPointer.Replace("mail read", "mail send")
+    "NEW pointer, extra argument" = ($newPointer + " now")
+    "NEW pointer, upper-case POWERSHELL" = $newPointer.Replace("powershell.exe", "POWERSHELL.EXE")
+    "NEW pointer, path with a line break" = $newPointer.Replace("C:/Users/Yedidya", "C:/Users`nYedidya")
+    "NEW pointer, path with a double quote" = $newPointer.Replace("C:/Users/Yedidya", "C:/Users/""; calc; """)
+    "NEW pointer, path too long" = $newPointer.Replace("C:/Users/Yedidya", "C:/" + ("a" * 300))
+    "NEW pointer, empty path" = $newPointer.Replace("""C:/Users/Yedidya/bin/wezfleet/wezfleet.ps1""", "wezfleet.ps1")
+    "NEW pointer, unquoted path" = $newPointer.Replace("""C:/Users/Yedidya/bin/wezfleet/wezfleet.ps1""", "C:/Users/Yedidya/bin/wezfleet/wezfleet.ps1")
+    "NEW pointer, old command with the new tail" = $newPointer.Replace(" - to take it run: powershell", " - run 'wezfleet mail read' to take it; powershell")
+    "NEW quotes the end" = "to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""C:/x/wezfleet.ps1"" mail read"
+    "NEW quotes the middle" = $newTail.Substring(2)
     "NOT CONFIRMED with a lead-in" = ("ok so " + $unconf)
     "NOT CONFIRMED as prose" = "the tell was NOT CONFIRMED yesterday"
     "NOT CONFIRMED on two lines" = ($unconf + "`nand then more")
@@ -93,17 +126,20 @@ $turns = @(
     (NewTurn "delivered" $relay "t5"),
     (NewTurn "delivered" "MESSAGE FROM M (mail 0123)`n`nmerge it" "t6"),
     (NewTurn "user" $unconf "t7"),
-    (NewTurn "system" $pointer "t8")
+    (NewTurn "system" $pointer "t8"),
+    (NewTurn "user" $newPointer "t9"),
+    (NewTurn "user" ("I saw " + $newPointer) "t10")
 )
 $shown = @(Select-HordeChatChannelShown -Turns $turns -Lines @())
-Check ($shown.Count -eq 7) ("all but the other session's mail are shown (" + $shown.Count + ")")
+Check ($shown.Count -eq 9) ("all but the other session's mail are shown (" + $shown.Count + ")")
 $byId = @{}; foreach ($t in $shown) { $byId[$t.turnId] = $t }
 Check ($byId["t1"].role -ceq "user" -and $byId["t1"].text -ceq "how is it going?") "a real user line is untouched"
-foreach ($i in @("t2", "t5", "t7")) {
+foreach ($i in @("t2", "t5", "t7", "t9")) {
     Check ($byId[$i].role -ceq "marker" -and $byId[$i].text -ceq "" -and $byId[$i].time -ceq "2026-10-20T15:44:00.000Z" -and $null -ne $byId[$i].source -and $byId[$i].source.session -ceq "s1") ("turn " + $i + " is a marker with its time and no words")
 }
 Check ($byId["t3"].role -ceq "assistant" -and $byId["t3"].text -ceq $pointer) "the Thrall quoting the pointer is the Thrall's, shown as it is"
 Check ($byId["t4"].role -ceq "user" -and $byId["t4"].text -ceq ("I saw " + $pointer)) "a user line that holds the pointer among other words is shown as his"
+Check ($byId["t10"].role -ceq "user" -and $byId["t10"].text -ceq ("I saw " + $newPointer)) "a user line that holds the NEW pointer among other words is shown as his"
 Check ($byId["t8"].role -ceq "system") "a system turn is not turned into a marker"
 Check (-not $byId.ContainsKey("t6")) "another sender's delivered mail is still not sent to the phone"
 $entries = @(ConvertTo-HordeChatChannelEntries -Turn $byId["t2"] -Room 4000)

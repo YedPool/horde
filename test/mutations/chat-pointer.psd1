@@ -11,8 +11,20 @@
            Find = '''\Awezfleet: (?:a message is|'
            Replace = '''wezfleet: (?:a message is|' }
         @{ Name = "pointer-end-not-anchored"
-           Find = 'changes nothing\z'''
-           Replace = 'changes nothing''' }
+           Find = ' + '')\z'''
+           Replace = ' + '')''' }
+        @{ Name = "new-tail-path-unbounded"
+           Find = '[^\r\n"]{0,240}/wezfleet'
+           Replace = '[^\r\n"]*/wezfleet' }
+        @{ Name = "new-tail-path-takes-a-quote"
+           Find = '[^\r\n"]{0,240}/wezfleet'
+           Replace = '[^\r\n]{0,240}/wezfleet' }
+        @{ Name = "new-tail-any-script"
+           Find = '/wezfleet\.ps1" mail read'
+           Replace = '/[^\r\n]*" mail read' }
+        @{ Name = "new-tail-any-verb"
+           Find = '" mail read'''
+           Replace = '" mail [a-z]+''' }
         @{ Name = "pointer-id-any-text"
            Find = '$script:HordeChatPointerId = ''(?:[0-9a-f]{32}|[0-9a-f]{10})'''
            Replace = '$script:HordeChatPointerId = ''(?:.*)''' }

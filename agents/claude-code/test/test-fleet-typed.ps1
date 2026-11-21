@@ -31,7 +31,7 @@ Section "what counts as typed by a person"
 $lines = @(
     (Human 50 "an old prompt, before the window")
     (Human 20 "please look at the failing test")
-    (Human 15 "wezfleet: a message is waiting for you (id 0123456789) - run 'wezfleet mail read' to take it" "queued")
+    (Human 15 "wezfleet: a message is waiting for you (id 0123456789); this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"C:/Users/Fake/bin/wezfleet/wezfleet.ps1`" mail read" "queued")
     (Line @{ type = "user"; timestamp = (Stamp 14); isMeta = $true; message = @{ role = "user"; content = "Stop hook feedback:`nMESSAGE FROM M (wezfleet mail 0123)`n`ngo on" } })
     (Line @{ type = "user"; timestamp = (Stamp 13); origin = @{ kind = "task-notification" }; promptSource = "system"; message = @{ role = "user"; content = "<task-notification>done</task-notification>" } })
     (Line @{ type = "user"; timestamp = (Stamp 12); message = @{ role = "user"; content = @(@{ type = "tool_result"; tool_use_id = "x"; content = "ok" }) } })

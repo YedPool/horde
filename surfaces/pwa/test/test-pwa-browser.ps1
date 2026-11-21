@@ -169,7 +169,7 @@ try {
     $chatFixtures = @(Get-HordeTestChatFixtureFiles | ForEach-Object { . $_ -Root $root })
     $thrall = New-HordeTestChatThrall -Fixtures $chatFixtures
     Check ($null -ne $thrall -and (New-HordeTestFleetMessenger -HordeHome $hh -Folder $fake) -cne "") "CONTROL: a synthetic Thrall and a messenger stand-in are ready for the chat"
-    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) }, @{ role = "user"; text = "wezfleet: a message is waiting for you (id 7a5e99735c69f1bc6fdc90f7530561bc) - run 'wezfleet mail read' to take it; this line is a pointer, not the message, and re-reading it changes nothing" })
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) }, @{ role = "user"; text = "wezfleet: a message is waiting for you (id 7a5e99735c69f1bc6fdc90f7530561bc); this line is a pointer, not the message, and re-reading it changes nothing - to take it run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"C:/Users/Fake/bin/wezfleet/wezfleet.ps1`" mail read" })
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
     Check ($id.state -ceq "known") "CONTROL: the machine has its relay identity"
     $keysMade = @(@{ n = $id.value.sign.name; s = $id.value.scope }, @{ n = $id.value.agree.name; s = $id.value.scope })
