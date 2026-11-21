@@ -96,8 +96,9 @@ try {
     $t1 = Get-Times "ctl1"; $t2 = Get-Times "ctl2"
     Check ($t1.start -lt $t2.end -and $t2.start -lt $t1.end) "CONTROL: started directly, the two runs overlap"
     $slot = New-Slot
-    $g1 = Start-Gate -Slot $slot -Tag "one" -Seconds 3
-    $g2 = Start-Gate -Slot $slot -Tag "two" -Seconds 3
+    # A bounded wait: two waiters that each hold the other back (a line broken, T-0471) give up in words, not in 2 hours.
+    $g1 = Start-Gate -Slot $slot -Tag "one" -Seconds 3 -More @("-WaitSeconds", "30")
+    $g2 = Start-Gate -Slot $slot -Tag "two" -Seconds 3 -More @("-WaitSeconds", "30")
     $g1.WaitForExit(); $g2.WaitForExit()
     $t1 = Get-Times "one"; $t2 = Get-Times "two"
     Check ($t1.end -gt 0 -and $t2.end -gt 0) "through the gate, both runs ran to their end"
