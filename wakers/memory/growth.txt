@@ -14,3 +14,4 @@ test/test-wake-run.ps1 | 248 -> 250 | 2026-11-17 | the tick's suite seats sessio
 test/test-wake-shadow-nudge.ps1 | 0 -> 14 | 2026-11-08 | a new suite seats sessions in the memory waker to show a shadow tick reaches no nudge (T-0116)
 test/test-wake-taken.ps1 | 0 -> 20 | 2026-11-09 | T-0391 slice 9 round 2: the awaiting-list suite seats the warchief in the memory waker so the wake pass hands the tell sender a warchief
 test/test-wake-run.ps1 | 250 -> 266 | 2026-11-20 | the tick's suite seats sessions in the memory waker for the duplicate-episode wait checks (T-0116: waits saved over a restart, mail state unreadable)
+test/test-wake-run.ps1 | 266 -> 273 | 2026-11-20 | the tick's suite seats sessions in the memory waker to run one scene through a live and a shadow tick and compare their looks and nudges (T-0116, the shadow keeps the live pace)
