@@ -140,6 +140,13 @@
 # done mark does. Get-HordeRelayJournalUnfinished says each record's count (failures); channels/Port.ps1
 # decides when it is enough. A journal this code wrote reads as damaged to code from before T-0467, which
 # knows no such file: the same rule as for any file the journal never writes.
+# BEFORE ROLLING BACK past this change, remove every *.fail* file under the journal's in\s-*\c-* stream
+# folders (<home>\relay\journal\in\s-<sender>\c-<channel>\<seq>.fail<n>): older code reads one as damage
+# and stops resuming every sender's records on that channel. Removing them only resets the counts; no record,
+# done mark or evidence is touched. PowerShell: Get-ChildItem -Path <home>\relay\journal\in -Recurse -File
+# -Filter "*.fail*" | Remove-Item
+# THE COUNT IS THE HIGHEST MARK'S n (see Add-HordeRelayJournalFailure), so a gap left by a deleted mark neither
+# makes the next mark one that exists nor delays the cap.
 #
 # THE PLATFORM IS NOT HERE. The durable move is core/FileAtomic.ps1's, which today has Windows' only
 # and refuses elsewhere in words ("never falls back to a move that is not durable"). On any other system
@@ -324,7 +331,7 @@ function Get-HordeRelayJournalStream {
         if ($nm -ceq $script:HordeRelayJournalLockName) { continue }
         if ($nm -cmatch $script:HordeRelayJournalTempPattern) { [void]$temps.Add($e.path); continue }
         if ($Direction -ceq "in" -and $nm -cmatch $script:HordeRelayJournalDonePattern) { $dones["" + [long]$Matches[1]] = $true; continue }
-        if ($Direction -ceq "in" -and $nm -cmatch $script:HordeRelayJournalFailPattern) { $fk = "" + [long]$Matches[1]; if ($fails.ContainsKey($fk)) { $fails[$fk] = [int]$fails[$fk] + 1 } else { $fails[$fk] = 1 }; continue }
+        if ($Direction -ceq "in" -and $nm -cmatch $script:HordeRelayJournalFailPattern) { $fk = "" + [long]$Matches[1]; $fnum = [int]$Matches[2]; if (-not $fails.ContainsKey($fk) -or $fnum -gt [int]$fails[$fk]) { $fails[$fk] = $fnum }; continue }
         if ($nm -cnotmatch $script:HordeRelayJournalRecordPattern) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", a file the journal never writes"); last = $last; seqs = $seqs; temps = @() } }
         $s = [long]$Matches[1]
         if ($s -gt $limit) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", past the largest sequence number an envelope can carry"); last = $last; seqs = $seqs; temps = @() } }
@@ -619,6 +626,10 @@ function Add-HordeRelayJournalFailure {
         $st = Get-HordeRelayJournalStream -Dir $dir -Direction "in" -From $From -Channel $Channel
         if (-not $st.ok) { return (New-HordeUnknown -Reason $st.reason) }
         $n = 1
+        # The HIGHEST mark's n, not how many marks there are: a mark deleted from outside leaves a gap (fail1 and
+        # fail3: two marks, highest 3), and count + 1 would be 3, a mark that exists, so the write would say
+        # "exists" for ever and the cap would never be reached - the bug this fixes, back again. The cap is
+        # compared with this same highest n, the larger of the two: a deletion can then make the cap come no later.
         if ($st.fails.ContainsKey("" + $Seq)) { $n = [int]$st.fails["" + $Seq] + 1 }
         $text = '{"v":1,"seq":' + $Seq + ',"failure":' + $n + '}'
         try { $moved = Write-HordeRelayJournalFile -Dir $dir -Name ($Seq.ToString("D16", [System.Globalization.CultureInfo]::InvariantCulture) + ".fail" + $n) -Text $text }

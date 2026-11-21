@@ -1434,6 +1434,28 @@ try {
         $refusedLines = @($log8 | Where-Object { $_.StartsWith("refused " + $e8.header.from + "/decisions/") -and $_.Contains("the channel decisions failed on this record 5 times") -and $_.Contains("the last: always") })
         $retryLines = @($log8 | Where-Object { $_.StartsWith("retry ") -and $_.Contains("(failure ") })
         Check ($refusedLines.Count -eq 1 -and $retryLines.Count -eq ($capN - 1)) ("the runner's log carries each failure as a retry line and the refusal once, as 'refused <key>: ...' (" + $refusedLines.Count + " refused, " + $retryLines.Count + " retry)")
+        # (8b) NO SILENT LOSS: the founder's phone is told, once, through the machine's own notices (the log is not read by him).
+        $n8 = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
+        $mine8 = @($n8 | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("decisions") -and $_.text.Contains($e8.header.from + "/decisions/") -and $_.text.Contains("after 5 failures") -and $_.text.Contains("Last error: always") })
+        $null = Invoke-Turn $W8
+        $null = Invoke-Turn $W8
+        $n8b = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
+        Check ($mine8.Count -eq 1 -and $n8b.Count -eq $n8.Count) ("a refusal by the cap sends the founder ONE notice naming the channel, the key and the last error, and later turns send no more (" + $mine8.Count + " of " + $n8.Count + " notices; " + $n8b.Count + " after two more turns)")
+        # (9) A GAP IN THE MARKS DOES NOT MAKE THE CAP UNREACHABLE: fail1 and fail3 with fail2 deleted from outside.
+        $W9 = New-World
+        $decCh.accept = { param($Context, $Item) throw "gap" }
+        $e9 = Get-Answer $W9
+        [void](Send-ToMachine $W9 $e9.text)
+        for ($i = 1; $i -le 3; $i++) { $null = Invoke-Turn $W9 }
+        $dir9 = Split-Path -Parent (Get-RecordFile -World $W9 -Header $e9.header)
+        $mark2 = Join-Path $dir9 (([long]$e9.header.seq).ToString("D16") + ".fail2")
+        $had2 = Test-Path -LiteralPath $mark2
+        if ($had2) { [System.IO.File]::Delete($mark2) }
+        $g4 = Invoke-Turn $W9
+        $g5 = Invoke-Turn $W9
+        Check ($had2 -and (Has $g4 "(failure 4 of 5)") -and -not (Has $g4 "could not be counted") -and (Has $g5 "refused ") -and (Has $g5 "failed on this record 5 times")) ("with fail1 and fail3 and fail2 gone, the next mark is fail4 and the cap is still reached (" + $g4.text + " / " + $g5.text + ")")
+        $gone9 = @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W9.home).value).Count
+        Check ($gone9 -eq 0) "and the record is finished"
     } finally { $decCh.accept = $realAccept }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin

@@ -82,6 +82,9 @@
         @{ Name = "capped-refusal-forgets-the-last-error"
            Find = ' times and is not asked again; the last: " + $outcome.detail)'
            Replace = ' times and is not asked again; the last: ")' }
+        @{ Name = "capped-refusal-tells-nobody"
+           Find = '                $told = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $Now -Text ("A record of the relay'
+           Replace = '                $told = [pscustomobject]@{ outcome = "sent"; reason = "" }; $null = ("A record of the relay' }
         @{ Name = "capped-refusal-forgets-the-channel"
            Find = '                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed'
            Replace = '                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + "x" + " failed' }

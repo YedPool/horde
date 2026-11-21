@@ -129,6 +129,9 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Journal.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Join.ps1")
 . (Join-Path $PSScriptRoot "Sessions.ps1")
+# The founder's phone is told of a refused record through the notices the machine already sends for its own
+# events (Submit-HordeSystemNotice); channels/join loads the same file.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Decide.ps1")
 
 if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayChannels = [ordered]@{} }
 $script:HordeRelayChannelSenders = @("founder", "horde")
@@ -701,6 +704,7 @@ function Invoke-HordeRelayUnfinished {
         foreach ($u in @($list.value)) {
             $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache -Now $Now
             $line = $u.key + ": " + $outcome.reason
+            $capped = $null
             if ($outcome.outcome -ceq "retry" -and $outcome.channelFault) {
                 # The channel's own fault: count it beside the record, so the count outlives the runner. THE
                 # REFUSAL BELOW IS THE LINE A PERSON SEES: it goes out as "refused <key>: ..." in the run's
@@ -709,13 +713,27 @@ function Invoke-HordeRelayUnfinished {
                 if ($counted.state -cne "known") { [void]$retry.Add($line + "; its failure could not be counted (" + $counted.reason + "), so it comes again"); continue }
                 $times = [int]$counted.value.failures
                 if ($times -lt $script:HordeRelayChannelFailureCap) { [void]$retry.Add($line + " (failure " + $times + " of " + $script:HordeRelayChannelFailureCap + ")"); continue }
+                $capped = [pscustomobject]@{ times = $times; detail = $outcome.detail }
                 $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed on this record " + $times + " times and is not asked again; the last: " + $outcome.detail); channelFault = $false; detail = "" }
                 $line = $u.key + ": " + $outcome.reason
             }
             if ($outcome.outcome -ceq "retry") { [void]$retry.Add($line); continue }
             $mark = Complete-HordeRelayJournalReceived -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome -Now $Now
             if ($mark.state -cne "known") { [void]$retry.Add($line + "; but it could not be marked done (" + $mark.reason + "), so it comes again"); continue }
-            if ($outcome.outcome -ceq "done") { [void]$done.Add($line) } else { [void]$refused.Add($line) }
+            if ($outcome.outcome -ceq "done") { [void]$done.Add($line); continue }
+            # A RECORD REFUSED BY THE CAP IS USUALLY A FOUNDER'S ANSWER, SO HIS PHONE IS TOLD, ONCE (T-0467, no
+            # silent loss). It is sent only AFTER the done mark was made: a done mark that could not be made
+            # leaves the record unfinished, it comes again, and the notice would then be sent again; here it is
+            # sent once, by the turn that finished the record. The notice names the channel, the record's key
+            # (a sender, a channel, a number and a nonce) and a bounded last error - never the record's content;
+            # Submit-HordeSystemNotice refuses anything that looks like a secret.
+            if ($null -ne $capped) {
+                $err = ([regex]::Replace("" + $capped.detail, '\p{Cc}', ' ')).Trim()
+                if ($err.Length -gt 120) { $err = $err.Substring(0, 117) + "..." }
+                $told = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $Now -Text ("A record of the relay's " + $name + " channel was refused after " + $capped.times + " failures: " + $u.key + ". Last error: " + $err)
+                if ($told.outcome -ceq "failed") { $line = $line + "; the founder could not be told (" + $told.reason + ")" }
+            }
+            [void]$refused.Add($line)
         }
     }
     return (New-HordeKnown -Value ([pscustomobject]@{ done = @($done.ToArray()); refused = @($refused.ToArray()); retry = @($retry.ToArray()) }))
