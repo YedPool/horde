@@ -15,6 +15,10 @@
 # slot between the net's units, and 10 of the net's 476 Horde units ran. While -GetNetClaim answers true the gate does not
 # take the slot, holds nothing, and checks again after any take, so a net that starts in between still goes first. The
 # gate of the net itself passes no -GetNetClaim. Blocker "claim".
+# FIRST COME FIRST SERVED (T-0471, -GetTurn, optional): on the night of 2026-11-19 a 900 s waiter gave up five times
+# running while short runs that waited 235 s each took the slot 15 times in 30 minutes: the slot went to whoever asked
+# right after a release. With every floor met, the gate asks -GetTurn before it tries the slot, and does not try it while
+# an earlier waiter, ready to run, is ahead. Blocker "turn".
 # COMMIT HEADROOM (2026-10-24, optional): with -MinCommitHeadroomGB above 0 the gate also waits until the commit
 # limit less the commit charge (Win32_OperatingSystem FreeVirtualMemory) is at least that much. On the night of
 # 2026-10-23 the commit charge was 52.3 of 54.8 GB: a run started there can fail to allocate however much physical
@@ -29,13 +33,15 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 function Invoke-HordeHeavySlotAcquire {
-    # { state = "held" | "timeout"; blocker = "" | "idle" | "claim" | "memory" | "commit" | "slot" }. "held" means the slot
+    # { state = "held" | "timeout"; blocker = "" | "idle" | "claim" | "memory" | "commit" | "turn" | "slot" }. "held" means the slot
     # is held NOW and idle-or-night, the memory floor and the commit floor were true when it was taken.
     #   -GetIdle    returns a Get-HordeIdleState answer (needs .allowed, .idleSeconds, .needSeconds, .time, .why)
     #   -GetFreeGB  returns the free memory in GB
     #   -GetCommitHeadroomGB returns the commit limit less the commit charge in GB; asked only when
     #               -MinCommitHeadroomGB is above 0, and then required
     #   -GetNetClaim returns $true while the nightly net has first claim on the slot; not given, there is no claim
+    #   -GetTurn    returns $true when no earlier waiter ready to run is ahead (T-0471); asked only once every floor
+    #               holds, so the caller may take the asking as "this waiter is ready now"; not given, no line is kept
     #   -TrySlot    param($ms): waits at most $ms for the slot, returns $true when it is now held
     #   -ReleaseSlot gives the slot back
     #   -Elapsed    seconds since the whole wait began;  -Sleep  param($ms);  -Say  param($line)
@@ -50,6 +56,7 @@ function Invoke-HordeHeavySlotAcquire {
         [double]$MinFreeGB = 3,
         [scriptblock]$GetCommitHeadroomGB = $null,
         [scriptblock]$GetNetClaim = $null,
+        [scriptblock]$GetTurn = $null,
         [double]$MinCommitHeadroomGB = 0,
         [int]$WaitSeconds = 7200,
         [int]$SliceMs = 500
@@ -60,10 +67,12 @@ function Invoke-HordeHeavySlotAcquire {
     $saidMemory = $false
     $saidCommit = $false
     $saidClaim = $false
+    $saidTurn = $false
     while ($true) {
         $left = $WaitSeconds - [double](& $Elapsed)
         $blocker = ""
         $pause = $false
+        $inLine = $false
         $idle = & $GetIdle
         if (-not $idle.allowed) {
             $blocker = "idle"
@@ -95,6 +104,15 @@ function Invoke-HordeHeavySlotAcquire {
                     $saidCommit = $true
                     & $Say ("heavy-slot: not taking the slot yet: waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + $commit + ")")
                 }
+            } elseif ($null -ne $GetTurn -and -not (& $GetTurn)) {
+                # Asked only here, with every floor met: a waiter under its own floor never stands in line, so it
+                # holds back nobody whose floor is met. In line, it looks again each slice, not each 5 s.
+                $blocker = "turn"
+                $inLine = $true
+                if (-not $saidTurn) {
+                    $saidTurn = $true
+                    & $Say "heavy-slot: not taking the slot yet: an earlier waiter, ready to run, goes first"
+                }
             } elseif (& $TrySlot ([int][math]::Min($SliceMs, [math]::Max(0, $left * 1000)))) {
                 # Held. The conditions again, now that nobody else can start: the person may have sat
                 # down, or another program may have taken the memory, since the checks above.
@@ -117,6 +135,7 @@ function Invoke-HordeHeavySlotAcquire {
         }
         if (($WaitSeconds - [double](& $Elapsed)) -le 0) { return [pscustomobject]@{ state = "timeout"; blocker = $blocker } }
         if ($pause) { & $Sleep ([int][math]::Min(5000, [math]::Max(200, ($WaitSeconds - [double](& $Elapsed)) * 1000))) }
+        elseif ($inLine) { & $Sleep ([int][math]::Min($SliceMs, [math]::Max(1, ($WaitSeconds - [double](& $Elapsed)) * 1000))) }
     }
 }
 
