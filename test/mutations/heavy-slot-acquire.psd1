@@ -49,6 +49,18 @@
         @{ Name = "memory-wait-said-every-poll"
            Find = '                if (-not $saidMemory) {'
            Replace = '                if ($true) {' }
+        @{ Name = "turn-not-asked"
+           Find = '} elseif ($null -ne $GetTurn -and -not (& $GetTurn)) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "in-line-looks-again-every-5-s"
+           Find = 'elseif ($inLine) { & $Sleep ([int][math]::Min($SliceMs,'
+           Replace = 'elseif ($inLine) { & $Sleep ([int][math]::Min(5000,' }
+        @{ Name = "turn-said-every-slice"
+           Find = '                if (-not $saidTurn) {'
+           Replace = '                if ($true) {' }
+        @{ Name = "turn-asked-under-the-memory-floor"
+           Find = '            if ($free -lt $MinFreeGB) {'
+           Replace = '            if ($null -ne $GetTurn) { $null = & $GetTurn }; if ($free -lt $MinFreeGB) {' }
         @{ Name = "no-look-at-wait-zero"
            Find = '    while ($true) {'
            Replace = '    while ($WaitSeconds -gt 0) {' }

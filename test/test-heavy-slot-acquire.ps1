@@ -24,9 +24,9 @@ function New-World {
 }
 function Run-Acquire {
     # -CommitFloor 0 (the default) is every existing caller: the commit getter is passed but must never be asked.
-    param([double]$Floor = 4, [int]$Wait = 7200, [double]$CommitFloor = 0, [scriptblock]$NetClaim = $null)
+    param([double]$Floor = 4, [int]$Wait = 7200, [double]$CommitFloor = 0, [scriptblock]$NetClaim = $null, [scriptblock]$Turn = $null)
     $script:commitFloor = $CommitFloor
-    return (Invoke-HordeHeavySlotAcquire -MinFreeGB $Floor -MinCommitHeadroomGB $CommitFloor -WaitSeconds $Wait -SliceMs 500 -GetNetClaim $NetClaim `
+    return (Invoke-HordeHeavySlotAcquire -MinFreeGB $Floor -MinCommitHeadroomGB $CommitFloor -WaitSeconds $Wait -SliceMs 500 -GetNetClaim $NetClaim -GetTurn $Turn `
         -GetCommitHeadroomGB { $script:world.commitAsks++; return [double](& $script:world.commit $script:world.t $script:world.commitAsks) } `
         -GetIdle {
             $script:world.idleAsks++
@@ -186,6 +186,30 @@ $r = Run-Acquire -CommitFloor 2
 Check ($r.state -ceq "held" -and $script:world.releases -eq 1 -and $script:world.takes -eq 2) ("headroom that fell after the take: released once, then held (" + $script:world.releases + " releases)")
 Check (@($script:world.said | Where-Object { $_ -like "*commit headroom fell to 1 GB*released it*" }).Count -eq 1) "and said so"
 Check (Throws { Invoke-HordeHeavySlotAcquire -MinCommitHeadroomGB 2 -GetIdle { } -GetFreeGB { 9 } -TrySlot { $true } -ReleaseSlot { } -Elapsed { 0 } -Sleep { } -Say { } } "needs -GetCommitHeadroomGB") "a commit floor with no way to read the headroom is an error, not a floor that always passes"
+
+Write-Host ""
+Write-Host "--- first come first served (T-0471): the slot is not even tried while an earlier ready waiter is ahead ---" -ForegroundColor Cyan
+# Night 11-19: a 900 s waiter lost the slot five times running to short runs that each waited 235 s, because the slot
+# went to whoever asked right after a release. -GetTurn answers whether no earlier waiter, ready to run, is still ahead.
+New-World
+$r = Run-Acquire -Wait 60 -Turn { $false }
+Check ($r.state -ceq "timeout" -and $r.blocker -ceq "turn") ("an earlier waiter ahead for the whole wait: a timeout naming the turn (" + $r.state + ", " + $r.blocker + ")")
+Check ($script:world.takes -eq 0 -and -not $script:world.held) "and the slot was never taken, not even tried"
+Check (@($script:world.said | Where-Object { $_ -like "*earlier waiter*" }).Count -eq 1) "it says so once, not once a slice"
+New-World
+$r = Run-Acquire -Wait 60 -Turn { $script:world.t -ge 20.2 }
+Check ($r.state -ceq "held" -and $script:world.takes -eq 1) ("its turn come, the slot is taken (" + $r.state + ", " + $script:world.takes + " takes)")
+Check ($script:world.t -lt 21) ("and at once: a waiter in line looks again every slice, not every 5 s (t=" + $script:world.t + ")")
+# Only a waiter ready to run stands in line: one under its memory floor must not hold back one whose floor is met.
+New-World -Memory { param($t) if ($t -lt 10) { 1 } else { 100 } }
+$script:turnAsks = 0; $script:turnAsksLow = 0
+$r = Run-Acquire -Wait 60 -Turn { $script:turnAsks++; if ($script:world.t -lt 10) { $script:turnAsksLow++ }; $true }
+Check ($r.state -ceq "held" -and $script:turnAsks -ge 1) ("asked once its floors hold (" + $script:turnAsks + " asks)")
+Check ($script:turnAsksLow -eq 0) ("never asked while under its memory floor, so it never stands in line then (" + $script:turnAsksLow + ")")
+New-World
+$script:turnAsks = 0; $script:turnAsksLow = 0
+$r = Run-Acquire -Wait 60 -NetClaim { $script:world.t -lt 10 } -Turn { $script:turnAsks++; if ($script:world.t -lt 10) { $script:turnAsksLow++ }; $true }
+Check ($r.state -ceq "held" -and $script:turnAsks -ge 1 -and $script:turnAsksLow -eq 0) ("nor while the net's first claim stands (" + $script:turnAsksLow + " asks under the claim)")
 
 Write-Host ""
 Write-Host "--- who holds the memory: the top process groups by working set ---" -ForegroundColor Cyan

@@ -37,6 +37,11 @@
 #      adds a third floor, commit limit less commit charge (2026-10-23: 52.3 of 54.8 GB committed all night).
 #      A wait that gives up on memory or commit lists the 8 largest process groups by working set, so the
 #      log names who holds the memory;
+#      FIRST COME FIRST SERVED (T-0471): with every floor met, a waiter keeps a ticket in <holder>.queue (its arrival,
+#      its id and start ticks, touched while it is ready) and tries the mutex only when no earlier ticket is live and
+#      fresh. Night 2026-11-19: a 900 s waiter gave up five times while 235 s pollers took the slot 15 times. A waiter
+#      under its own floor stops touching its ticket, so it holds back nobody; a dead waiter's ticket is removed;
+#      a give-up behind earlier waiters is 125, in its own words;
 #   2. A HOLDER THAT WAS KILLED leaves the mutex abandoned, and Windows hands it to the next waiter. Its run
 #      dies with it (step 4's job), but a run of an older gate, or one started some other way, may not. So
 #      the holder keeps a record (-HolderFile: the run's process id, start time and script), and a later
@@ -228,6 +233,47 @@ function Test-HordeHeavySlotNetClaim {
     catch { return $false }
 }
 
+function Test-HordeHeavySlotTurn {
+    # FIRST COME FIRST SERVED (T-0471). Asked only while every floor of this gate holds (core/HeavySlotAcquire.ps1), so
+    # asking is being ready: this gate's ticket is written, or touched, first. Then: is any EARLIER ticket live and fresh?
+    #   name   <arrival ticks, 19 digits>-<gate pid>.ticket, so names sort by arrival; the pid breaks a tie;
+    #   body   the gate's pid and its process start ticks, so a reused id is not taken for a waiter still alive;
+    #   fresh  touched in the last -FreshSeconds: a waiter under its own floor stops touching it and holds nobody back.
+    # A ticket whose gate is gone is removed. Never fatal: on any error the answer is "your turn", as before T-0471;
+    # refusing on it would block every run for ever.
+    param([string]$Dir, [string]$Mine, [long]$Arrival, [int]$FreshSeconds = 15)
+    try {
+        [void][System.IO.Directory]::CreateDirectory($Dir)
+        $own = Join-Path $Dir $Mine
+        if (Test-Path -LiteralPath $own -PathType Leaf) { [System.IO.File]::SetLastWriteTimeUtc($own, [DateTime]::UtcNow) }
+        else { [System.IO.File]::WriteAllText($own, ("" + $PID + "`n" + (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks + "`n")) }
+        $now = [DateTime]::UtcNow
+        foreach ($t in @(Get-ChildItem -LiteralPath $Dir -Filter "*.ticket" -File -ErrorAction SilentlyContinue)) {
+            if ($t.Name -ceq $Mine) { continue }
+            if ($t.Name -notmatch '^(\d{19})-(\d+)\.ticket$') { continue }
+            $theirs = [long]$Matches[1]; $theirPid = [int]$Matches[2]
+            if ($theirs -gt $Arrival -or ($theirs -eq $Arrival -and $theirPid -ge $PID)) { continue }
+            if (($now - $t.LastWriteTimeUtc).TotalSeconds -gt $FreshSeconds) { continue }
+            $alive = $false
+            try {
+                $body = [System.IO.File]::ReadAllText($t.FullName) -split "`n"
+                $p = Get-Process -Id ([int]$body[0].Trim()) -ErrorAction SilentlyContinue
+                $alive = ($null -ne $p -and $p.StartTime.ToUniversalTime().Ticks -eq [long]$body[1].Trim())
+            } catch { $alive = $false }
+            if (-not $alive) { Remove-Item -LiteralPath $t.FullName -Force -ErrorAction SilentlyContinue; continue }
+            return $false
+        }
+        return $true
+    } catch { return $true }
+}
+
+function Remove-HordeHeavySlotTicket {
+    # This gate's own ticket, once it holds the slot or stops waiting. Never fatal: a ticket left behind goes stale in
+    # -FreshSeconds and is removed by the next gate once this process is gone.
+    param([string]$Dir, [string]$Mine)
+    try { $f = Join-Path $Dir $Mine; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } } catch { }
+}
+
 function ConvertTo-HordeHeavySlotArg { param([string]$A) if ($A -match '\s') { return ('"' + $A + '"') } return $A }
 
 if ($Worktree -eq "") { $Worktree = (Get-Location).Path }
@@ -265,6 +311,10 @@ $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
 if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }
 # The slot log sits beside the record, so a suite's own -HolderFile gives it its own log too.
 $script:slotLog = [System.IO.Path]::ChangeExtension($HolderFile, ".log")
+# The waiters' line (T-0471) sits beside it too: <holder>.queue, one ticket per waiter ready to run.
+$script:queueDir = [System.IO.Path]::ChangeExtension($HolderFile, ".queue")
+$script:arrival = [DateTime]::UtcNow.Ticks
+$script:ticket = ("{0:D19}" -f $script:arrival) + "-" + $PID + ".ticket"
 $path = Join-Path $Worktree $Script
 if ($Out -eq "") { $Out = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-heavy-slot-" + [System.IO.Path]::GetFileNameWithoutExtension($Script) + ".txt") }
 
@@ -295,7 +345,8 @@ $main = {
     # WaitOne cannot be broken.
     $claimName = $SlotName + "-NetClaim"
     $claimCheck = $(if ($NetRun) { $null } else { { Test-HordeHeavySlotNetClaim -Name $claimName } })
-    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice -GetNetClaim $claimCheck `
+    $turnCheck = { Test-HordeHeavySlotTurn -Dir $script:queueDir -Mine $script:ticket -Arrival $script:arrival }
+    $got = Invoke-HordeHeavySlotAcquire -MinFreeGB $MinFreeGB -MinCommitHeadroomGB $MinCommitHeadroomGB -WaitSeconds $WaitSeconds -SliceMs $slice -GetNetClaim $claimCheck -GetTurn $turnCheck `
         -GetIdle { Get-HordeIdleState -Config $idleCfg } `
         -GetFreeGB { Get-HordeHeavySlotFreeGB } `
         -GetCommitHeadroomGB { Get-HordeHeavySlotCommitHeadroomGB } `
@@ -319,10 +370,12 @@ $main = {
         if ($got.blocker -ceq "claim") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s: the nightly net has first claim on the slot until its report is written, at the latest about 06:30; nothing was run. Try again after that."); return }
         if ($got.blocker -ceq "memory") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
         if ($got.blocker -ceq "commit") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinCommitHeadroomGB + " GB of commit headroom (now " + (Get-HordeHeavySlotCommitHeadroomGB) + "); nothing was run"); Write-HordeHeavySlotHolders; return }
+        if ($got.blocker -ceq "turn") { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot: earlier waiters ready to run went first; nothing was run"); return }
         Write-HordeHeavySlotLine ("heavy-slot: the slot is held by " + (Get-HordeHeavySlotHolderText -Path $HolderFile))
         Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run")
         return
     }
+    Remove-HordeHeavySlotTicket -Dir $script:queueDir -Mine $script:ticket  # held now: out of the line, so nobody waits behind a run as if behind a waiter
     $script:everHeld = $true
     $script:waited = [int]$clock.Elapsed.TotalSeconds
     $script:takenAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -379,6 +432,7 @@ catch {
     Write-HordeHeavySlotLine ("heavy-slot: ERROR - " + $_.Exception.Message)
 }
 finally {
+    Remove-HordeHeavySlotTicket -Mine $script:ticket -Dir $script:queueDir
     if ($null -ne $job) {
         # The whole job, always: a run past its time, and whatever a finished run left behind.
         $null = [HordeHeavySlotJobV1]::Terminate($job.job)

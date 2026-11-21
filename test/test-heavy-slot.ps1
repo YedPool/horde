@@ -96,8 +96,9 @@ try {
     $t1 = Get-Times "ctl1"; $t2 = Get-Times "ctl2"
     Check ($t1.start -lt $t2.end -and $t2.start -lt $t1.end) "CONTROL: started directly, the two runs overlap"
     $slot = New-Slot
-    $g1 = Start-Gate -Slot $slot -Tag "one" -Seconds 3
-    $g2 = Start-Gate -Slot $slot -Tag "two" -Seconds 3
+    # A bounded wait: two waiters that each hold the other back (a line broken, T-0471) give up in words, not in 2 hours.
+    $g1 = Start-Gate -Slot $slot -Tag "one" -Seconds 3 -More @("-WaitSeconds", "30")
+    $g2 = Start-Gate -Slot $slot -Tag "two" -Seconds 3 -More @("-WaitSeconds", "30")
     $g1.WaitForExit(); $g2.WaitForExit()
     $t1 = Get-Times "one"; $t2 = Get-Times "two"
     Check ($t1.end -gt 0 -and $t2.end -gt 0) "through the gate, both runs ran to their end"
@@ -192,7 +193,8 @@ try {
     $w.WaitForExit()
     Check ($w.ExitCode -eq 125) ("a run that cannot have the slot in 2 s ends with 125 (" + $w.ExitCode + ")")
     Check ($clock.Elapsed.TotalSeconds -lt 7) ("within its wait, not the holder's run (" + [int]$clock.Elapsed.TotalSeconds + " s)")
-    Check ((Get-GateText "waiter") -match "gave up after 2 s waiting for the slot") "it says it gave up waiting for the slot"
+    Check ((Get-GateText "waiter") -match "gave up after 2 s waiting for the slot; nothing was run") "it says it gave up waiting for the slot"
+    Check ((Get-GateText "waiter") -notmatch "earlier waiters") "behind a run, not behind waiters: the holder left the line when it took the slot (T-0471)"
     Check ((Get-Times "waiter").start -eq 0) "and its run never started"
     $h1.WaitForExit()
     $m = Start-Gate -Slot $slot -Tag "memory" -Seconds 0 -MinFreeGB "1000000" -More @("-WaitSeconds", "2")
@@ -253,6 +255,71 @@ try {
     $n = Start-Gate -Slot $slot -Tag "next" -Seconds 0 -More @("-WaitSeconds", "5")
     $n.WaitForExit()
     Check ($n.ExitCode -eq 0) "the slot was released after the memory refusal: the next run had it"
+
+    Write-Host ""
+    Write-Host "--- first come first served (T-0471): an earlier waiter ready to run goes first ---" -ForegroundColor Cyan
+    # Night 11-19: a 900 s waiter gave up five times running while short runs that waited 235 s each took the slot 15
+    # times, because the slot went to whoever asked right after a release. A waiter whose floors hold keeps a ticket
+    # (<holder>.queue\<arrival ticks>-<pid>.ticket: its id and start ticks, touched while it is ready), and a gate tries
+    # the slot only when no earlier ticket is live and fresh.
+    function New-Ticket {
+        # A ticket as a waiter writes it: -Arrival ticks, process -Id with start ticks -Start, last touched -AgeSeconds ago.
+        param([string]$Slot, [long]$Arrival, [int]$Id, [long]$Start, [int]$AgeSeconds = 0)
+        $q = Join-Path $work ($Slot.Substring(6) + ".queue")
+        [void][System.IO.Directory]::CreateDirectory($q)
+        $f = Join-Path $q (("{0:D19}" -f $Arrival) + "-" + $Id + ".ticket")
+        [System.IO.File]::WriteAllText($f, ("" + $Id + "`n" + $Start + "`n"))
+        [System.IO.File]::SetLastWriteTimeUtc($f, [DateTime]::UtcNow.AddSeconds(-$AgeSeconds))
+        return $f
+    }
+    $me = Get-Process -Id $PID
+    $myStart = $me.StartTime.ToUniversalTime().Ticks
+    $early = [DateTime]::UtcNow.AddMinutes(-5).Ticks
+    $slot = New-Slot
+    $tk = New-Ticket -Slot $slot -Arrival $early -Id $PID -Start $myStart
+    $w = Start-Gate -Slot $slot -Tag "inline" -Seconds 0 -More @("-WaitSeconds", "3")
+    $w.WaitForExit()
+    Check ($w.ExitCode -eq 125) ("a live, ready, earlier waiter holds back a later gate, which gives up with 125 (" + $w.ExitCode + ")")
+    Check ((Get-GateText "inline") -match "gave up after 3 s waiting for the slot: earlier waiters ready to run went first; nothing was run") ("it says so (" + ((Get-GateText "inline") -replace "`r?`n", " | ") + ")")
+    Check ((Get-Times "inline").start -eq 0) "and its run never started"
+    Check ((Get-LastLine "inline") -ceq "heavy-slot: released exit=125") "and it still ends with its closing line"
+    Check (@(Get-ChildItem -LiteralPath (Split-Path -Parent $tk) -Filter "*.ticket" | Where-Object { $_.FullName -ne $tk }).Count -eq 0) "it leaves no ticket of its own behind"
+    [System.IO.File]::SetLastWriteTimeUtc($tk, [DateTime]::UtcNow.AddSeconds(-60))
+    $w = Start-Gate -Slot $slot -Tag "notready" -Seconds 0 -More @("-WaitSeconds", "10")
+    $w.WaitForExit()
+    Check ($w.ExitCode -eq 0) ("an earlier waiter not ready to run (its ticket untouched for 60 s: under its own floor) holds nobody back (" + $w.ExitCode + ")")
+    Remove-Item -LiteralPath $tk -Force
+    $slot = New-Slot
+    $dead = Start-Process -FilePath $shell -ArgumentList @("-NoProfile", "-Command", "exit 0") -NoNewWindow -PassThru
+    $null = $dead.Handle; $dead.WaitForExit()
+    $deadStart = $dead.StartTime.ToUniversalTime().Ticks
+    $dt = New-Ticket -Slot $slot -Arrival $early -Id $dead.Id -Start $deadStart
+    $w = Start-Gate -Slot $slot -Tag "deadticket" -Seconds 0 -More @("-WaitSeconds", "10")
+    $w.WaitForExit()
+    Check ($w.ExitCode -eq 0) ("a fresh ticket of a waiter that died holds nobody back (" + $w.ExitCode + ")")
+    Check (-not (Test-Path -LiteralPath $dt)) "and it is cleared away"
+    $rt = New-Ticket -Slot $slot -Arrival $early -Id $PID -Start ($myStart + 1)
+    $w = Start-Gate -Slot $slot -Tag "reusedticket" -Seconds 0 -More @("-WaitSeconds", "10")
+    $w.WaitForExit()
+    Check ($w.ExitCode -eq 0) ("a ticket naming a live id with another start time (the id was reused) holds nobody back (" + $w.ExitCode + ")")
+    Remove-Item -LiteralPath $rt -Force -ErrorAction SilentlyContinue
+    # THE INCIDENT, in small: a long waiter arrives while the slot is held, then four short pollers arrive after it.
+    $slot = New-Slot
+    $queue = Join-Path $work ($slot.Substring(6) + ".queue")
+    $h = Start-Gate -Slot $slot -Tag "fifo-holder" -Seconds 5
+    Check (Wait-For { (Get-Times "fifo-holder").start -gt 0 }) "a run holds the slot"
+    $long = Start-Gate -Slot $slot -Tag "fifo-long" -Seconds 0 -More @("-WaitSeconds", "60")
+    Check (Wait-For { @(Get-ChildItem -LiteralPath $queue -Filter "*.ticket" -ErrorAction SilentlyContinue).Count -ge 1 }) "the long waiter, ready to run, keeps a ticket while it waits"
+    $shorts = @()
+    foreach ($i in 1..4) { $shorts += Start-Gate -Slot $slot -Tag ("fifo-short" + $i) -Seconds 0 -More @("-WaitSeconds", "40"); Start-Sleep -Milliseconds 200 }
+    $h.WaitForExit(); $long.WaitForExit(); foreach ($s in $shorts) { $s.WaitForExit() }
+    $lt = Get-Times "fifo-long"
+    $firstShort = [long]::MaxValue
+    foreach ($i in 1..4) { $st = (Get-Times ("fifo-short" + $i)).start; if ($st -gt 0 -and $st -lt $firstShort) { $firstShort = $st } }
+    Check ($long.ExitCode -eq 0 -and $lt.start -gt 0) ("the long waiter ran (" + $long.ExitCode + ")")
+    Check ($lt.start -lt $firstShort) "and it ran before every short poller that came after it"
+    Check (@($shorts | Where-Object { $_.ExitCode -ne 0 }).Count -eq 0) "and the short pollers all ran too, after it"
+    Check (@(Get-ChildItem -LiteralPath $queue -Filter "*.ticket" -ErrorAction SilentlyContinue).Count -eq 0) "and no ticket is left once every gate is done"
 
     Write-Host ""
     Write-Host ""
