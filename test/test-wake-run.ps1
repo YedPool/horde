@@ -55,7 +55,7 @@ for ($i = 0; $i -lt 20; $i++) {
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) "twenty ticks over six sessions that qualify ask the waker for no nudge at all"
 Check (@($kinds | Where-Object { $_ -cnotlike "would-*" }).Count -eq 0 -and @($kinds | Where-Object { $_ -ceq "would-nudge" }).Count -ge 6 -and @($kinds | Where-Object { $_ -ceq "would-post" }).Count -eq 6 -and @($kinds | Where-Object { $_ -ceq "would-stall" }).Count -eq 1) ("every entry says would: a would-nudge for each session, one would-post for each restored orc, one would-stall (" + (@($kinds | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger and restore state, and no file of a live run (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json,silence-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger, silence and restore state, and no file of a live run (" + ($names -join ",") + ")")
 Check (@(Read-Lines $h).Count -eq $kinds.Count) "what a tick returns is what it journaled"
 $beat = Read-HordeWakeHeartbeat -Shadow -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.pass -eq 20 -and $beat.value.shadow -eq $true -and $beat.value.tickSeconds -eq 3 -and $beat.value.pid -eq 4242 -and $beat.value.at -eq (At 57)) "the heartbeat is the last tick's: its pass, its time, shadow, the tick and the process"
@@ -1117,6 +1117,93 @@ New-Item -ItemType Directory -Path (Join-Path $h "wake\run-shadow.lock") -Force 
 $took = "nothing"
 try { $took = Enter-HordeWakeLock -Shadow -ProcessId 4246 -HordeHome $h; if ($null -eq $took) { $took = "refused as held" } } catch { $took = "threw: " + $_.Exception.Message }
 Check ("$took".StartsWith("threw: ")) ("a lock that cannot be opened for another reason - a folder stands where it belongs - is thrown as what it is, never answered as 'already running' (" + $took + ")")
+
+Write-Host ""
+Write-Host "--- a shadow run backs off, gives up and finds a silent fleet exactly as a live run does, on a ledger of its own (T-0116) ---" -ForegroundColor Cyan
+
+# THE SCENES: sessions with unread mail that never take it, on a waker whose state is cheap (the box and the turn are
+# unknown until a LOOK, so every nudge needs one), a tick every 3 s for half an hour. A live run asks the waker and is
+# answered woken; a shadow run asks nobody. WHAT THE SHADOW LOOKS AT AND JOURNALS MUST BE WHAT THE LIVE RUN LOOKS AT AND
+# ASKS - the same seconds, the same sessions - or its 48 hours are no picture of the live pace, and every look is about four
+# terminal calls (Smart App Control blocked the terminal once, 11-16).
+# A would-nudge stands for a nudge answered woken: a counted attempt (back-off, caps, give-up) and a nudge the silence reads.
+$noSessions = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
+function Invoke-BackoffScene {
+    param([string]$Mode, [string]$HordeHome, [int]$Sessions, [int]$Horizon = 1800)
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerCheap -On $true
+    foreach ($n in 1..$Sessions) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
+    $run = New-HordeWakeRun -Mode $Mode -Self "" -HordeHome $HordeHome
+    $nudged = New-Object System.Collections.ArrayList
+    $looked = New-Object System.Collections.ArrayList
+    $said = New-Object System.Collections.ArrayList
+    $seenLooks = 0
+    for ($s = 0; $s -le $Horizon; $s += 3) {
+        Set-HordeMemoryWakerClock (At $s)
+        foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $noSessions -TickSeconds 3 -ProcessId 4242 -HordeHome $HordeHome)) {
+            if (@("nudge", "would-nudge") -ccontains "$($e.kind)") { [void]$nudged.Add("" + $s + ":" + $e.id) }
+            if (@("fleet-silent", "fleet-moving", "silent-probes-ended", "gave-up") -ccontains "$($e.kind)") { [void]$said.Add("" + $s + ":" + $e.kind) }
+        }
+        $now = @(Get-HordeMemoryWakerLooks).Count
+        for ($k = $seenLooks; $k -lt $now; $k++) { [void]$looked.Add("" + $s) }
+        $seenLooks = $now
+    }
+    Set-HordeMemoryWakerCheap -On $false
+    return [pscustomobject]@{ nudged = @($nudged); looked = @($looked); said = @($said); asks = @(Get-HordeMemoryWakerAsks).Count; run = $run }
+}
+function Show-Pace { param($List) return (@($List | ForEach-Object { $p = "$_" -split ":"; $p[0] + $(if ($p.Count -gt 1) { "/" + $p[1].Substring($p[1].Length - [System.Math]::Min(1, $p[1].Length)) } else { "" }) }) -join ",") }
+$liveLedgerText = '{"schemaVersion":1,"sessions":[{"id":"0a000000-0000-4000-8000-000000000099","attempts":2,"lastAttemptAt":"2026-10-12T07:00:00.0000000Z","lastOutcome":"woken"}]}'
+
+foreach ($count in @(3, 2)) {
+    $label = $(if ($count -ge [int](Get-HordeWakeSettings).fleetSilentSessions) { "a fleet that goes silent (" + $count + " sessions)" } else { "a fleet that does not (" + $count + " sessions)" })
+    $liveHome = New-Home
+    $liveScene = Invoke-BackoffScene -Mode "live" -HordeHome $liveHome -Sessions $count
+    $shadowHome = New-Home
+    # A live ledger already on the shadow run's home, which a shadow run must leave as it is, byte for byte.
+    New-Item -ItemType Directory -Path (Join-Path $shadowHome "wake") -Force | Out-Null
+    $liveLedgerPath = Join-Path $shadowHome "wake\ledger-live.json"
+    [System.IO.File]::WriteAllText($liveLedgerPath, $liveLedgerText)
+    $liveBytes = [System.IO.File]::ReadAllBytes($liveLedgerPath)
+    $liveStamp = (Get-Item -LiteralPath $liveLedgerPath).LastWriteTimeUtc
+    $shadowScene = Invoke-BackoffScene -Mode "shadow" -HordeHome $shadowHome -Sessions $count
+    Check ($liveScene.asks -ge $count -and $liveScene.nudged.Count -eq $liveScene.asks -and $liveScene.asks -lt 6 * $count + 20 -and $liveScene.looked.Count -ge $liveScene.asks) ("CONTROL, " + $label + ": the live run asked the waker " + $liveScene.asks + " times, looking " + $liveScene.looked.Count + " times first: never one a pass")
+    Check ($shadowScene.asks -eq 0) ("CONTROL, " + $label + ": the shadow run asked the waker for no nudge")
+    Check ($shadowScene.nudged.Count -eq $liveScene.nudged.Count) ($label + ": the shadow run journals as many would-nudges as the live run asked (" + $shadowScene.nudged.Count + " and " + $liveScene.nudged.Count + ")")
+    Check ((@($shadowScene.nudged) -join ",") -ceq (@($liveScene.nudged) -join ",")) ($label + ": at the very same seconds, for the very same sessions (shadow " + (Show-Pace $shadowScene.nudged) + "; live " + (Show-Pace $liveScene.nudged) + ")")
+    Check ((@($shadowScene.looked) -join ",") -ceq (@($liveScene.looked) -join ",")) ($label + ": and looks at the very same seconds (shadow " + (Show-Pace $shadowScene.looked) + "; live " + (Show-Pace $liveScene.looked) + ")")
+    Check ((@($shadowScene.said) -join ",") -ceq (@($liveScene.said) -join ",")) ($label + ": and says the same of the fleet at the same seconds: silent, given up (shadow " + (Show-Pace $shadowScene.said) + "; live " + (Show-Pace $liveScene.said) + ")")
+    $shadowLedger = Read-HordeWakeLedger -Mode "shadow" -HordeHome $shadowHome
+    $liveLedger = Read-HordeWakeLedger -Mode "live" -HordeHome $liveHome
+    Check ($shadowLedger.state -ceq "known" -and $liveLedger.state -ceq "known" -and (@(1..$count | ForEach-Object { $e = $shadowLedger.value.ledger[(Sid $_)]; $l = $liveLedger.value.ledger[(Sid $_)]; "" + $e.attempts + "/" + (Get-HordeWakeEntryValue $e "gaveUp") }) -join ",") -ceq (@(1..$count | ForEach-Object { $e = $liveLedger.value.ledger[(Sid $_)]; "" + $e.attempts + "/" + (Get-HordeWakeEntryValue $e "gaveUp") }) -join ",")) ($label + ": the shadow run's own ledger ends where the live run's does, attempts and give-ups alike")
+    Check ([System.Linq.Enumerable]::SequenceEqual([byte[]]$liveBytes, [byte[]][System.IO.File]::ReadAllBytes($liveLedgerPath)) -and (Get-Item -LiteralPath $liveLedgerPath).LastWriteTimeUtc -eq $liveStamp) ($label + ": the live ledger on the shadow run's home is the same bytes, and was not written, after the whole shadow run")
+    $namesShadow = @(Get-ChildItem -LiteralPath (Join-Path $shadowHome "wake") | ForEach-Object { $_.Name } | Sort-Object)
+    Check (@($namesShadow | Where-Object { $_ -clike "*-live*" -and $_ -cne "ledger-live.json" }).Count -eq 0 -and $namesShadow -ccontains "ledger-shadow.json") ($label + ": the shadow run wrote the shadow ledger and no other file of a live run (" + ($namesShadow -join ",") + ")")
+    if ($count -lt [int](Get-HordeWakeSettings).fleetSilentSessions) {
+        # THE GIVE-UP ITSELF: two sessions are never a silent fleet, so each is nudged six times and then left alone.
+        $late = @($shadowScene.nudged + $shadowScene.looked | Where-Object { [int](($_ -split ":")[0]) -gt 900 })
+        Check ($shadowScene.nudged.Count -eq 6 * $count -and $late.Count -eq 0) ($label + ": six would-nudges a session, then neither a look nor a would-nudge after the give-up (" + $shadowScene.nudged.Count + " nudges, " + $late.Count + " late)")
+        Check (@(1..$count | Where-Object { $e = $shadowLedger.value.ledger[(Sid $_)]; $null -ne $e -and [int]$e.attempts -eq 6 -and (Get-HordeWakeEntryValue $e "gaveUp") -eq $true }).Count -eq $count) ($label + ": and every session is given up on in the shadow run's own ledger")
+    }
+    else {
+        Check (@($shadowScene.said | Where-Object { $_ -clike "*:fleet-silent" }).Count -eq 1) ($label + ": the shadow run finds the fleet silent, once, as the live run does")
+    }
+}
+
+Write-Host ""
+Write-Host "--- only a real boolean true makes a run send (T-0116) ---" -ForegroundColor Cyan
+
+foreach ($odd in @(1, "True", "true", "yes", "1", 2, $null)) {
+    $shown = $(if ($null -eq $odd) { "null" } else { "" + $odd.GetType().Name + " " + $odd })
+    $fake = [pscustomobject]@{ mode = "live"; live = $odd }
+    Check ((Get-HordeWakeRunMode -Run $fake) -ceq "shadow") ("a run whose live member is " + $shown + " is shadow")
+}
+$fake = [pscustomobject]@{ mode = "live" }
+$gotMode = "threw"
+try { $gotMode = Get-HordeWakeRunMode -Run $fake } catch { $gotMode = "threw" }
+Check ($gotMode -ceq "shadow") "a run with no live member at all is shadow, not an error"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "live"; live = $true })) -ceq "live") "CONTROL: a real true with mode live is live"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "proof"; live = $true })) -ceq "proof") "CONTROL: a real true with mode proof is proof"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "proof"; live = 1 })) -ceq "shadow") "and a proof run whose live member is the number 1 is shadow"
 
 } finally {
     Reset-HordeMemoryWaker
