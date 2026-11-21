@@ -55,7 +55,8 @@ function Invoke-HordeTestRun {
 }
 
 try {
-    New-Item -ItemType Directory -Path $homeDir, $profileDir, $clone, (Join-Path $homeDir "node") -Force | Out-Null
+    New-Item -ItemType Directory -Path $homeDir, $clone, (Join-Path $homeDir "node") -Force | Out-Null
+    [void](New-HordeTestProfile $profileDir)
     $policy = '{ "schemaVersion": 1, "repos": [ { "repoId": "github.com/example/app", "path": "' + $clone.Replace([string][char]92, ([string][char]92) * 2) + '" } ], "profiles": ["alpha"], "dailySpawnCap": 0 }'
     [System.IO.File]::WriteAllText((Join-Path $homeDir "node\policy.json"), $policy)
     $env:HORDE_HOME = $homeDir

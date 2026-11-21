@@ -324,9 +324,13 @@ function Find-HordeNightlyCulprit {
     # could not be told (the run did not happen). The last night's tip (before the first merge) was green and the tip
     # (the last merge) is red, and that is CHECKED first: a tip that is not red now is "flaky". A bisect that gets
     # an unreadable answer ends "inconclusive" with what it knew. -MaxRuns caps the runs (the tip check counts).
-    # { state = "found" | "flaky" | "inconclusive" | "capped" | "none"; sha; runs; between }
-    #   between: when not found, the pair (last known green sha or "" , first known red sha) the search had narrowed to.
-    param([string[]]$Merges, [scriptblock]$IsRed, [int]$MaxRuns = 40)
+    # -Base, last night's tip, is then RUN AGAIN rather than taken as green (T-0465): on 2026-11-11 the box's sessions
+    # turned elevated, a unit went red at every commit, and the first merge of the day (PR 494) was named. Red there
+    # too is "base-red": none of the day's merges did it. An empty -Base (no last tip known) keeps the old assumption.
+    # { state = "found" | "flaky" | "base-red" | "inconclusive" | "capped" | "none"; sha; runs; between }
+    #   between: when not found, the pair (last known green sha or "" , first known red sha) the search had narrowed to;
+    #   for base-red, (the base, "").
+    param([string[]]$Merges, [scriptblock]$IsRed, [int]$MaxRuns = 40, [string]$Base = "")
     $m = @($Merges)
     $runs = 0
     if ($m.Count -eq 0) { return [pscustomobject]@{ state = "none"; sha = ""; runs = 0; between = @("", "") } }
@@ -335,7 +339,14 @@ function Find-HordeNightlyCulprit {
     $r = & $IsRed $tip
     if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }
     if (-not $r) { return [pscustomobject]@{ state = "flaky"; sha = ""; runs = $runs; between = @("", $tip) } }
-    $lo = -1                   # index of the last merge known green (-1: the last night's tip)
+    if ($Base -ne "") {
+        if ($runs -ge $MaxRuns) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @("", $tip) } }
+        $runs++
+        $r = & $IsRed $Base
+        if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }
+        if ($r) { return [pscustomobject]@{ state = "base-red"; sha = ""; runs = $runs; between = @($Base, "") } }
+    }
+    $lo = -1                  # index of the last merge known green (-1: the last night's tip)
     $hi = $m.Count - 1         # index of the first merge known red
     while ($hi - $lo -gt 1) {
         $mid = [int][math]::Floor(($lo + $hi) / 2)
@@ -346,6 +357,31 @@ function Find-HordeNightlyCulprit {
         if ($r) { $hi = $mid } else { $lo = $mid }
     }
     return [pscustomobject]@{ state = "found"; sha = $m[$hi]; runs = $runs; between = @($(if ($lo -ge 0) { $m[$lo] } else { "" }), $m[$hi]) }
+}
+
+function Get-HordeNightlyGuardsStopLine {
+    # T-0347 round 4: the ONE SHORT LINE that says a guard walk stopped at its budget, from the -Json last line's walkStopped count; "" when none
+    # did or the line cannot be read. guards-wrap.ps1 PRINTS it as a line of its own just before its state line: the notice the net builds keeps
+    # only the last 10 lines of the wrapper's output cut to their last 700 characters, so what is only in the answer's .text, or near the front of
+    # the long -Json line, never reached it (round 3). Short on purpose: it must fit in what the cut leaves beside the state line.
+    param([string[]]$Lines)
+    $non = @(@($Lines) | Where-Object { "" + $_ -ne "" -and ("" + $_).Trim() -ne "" })
+    if ($non.Count -eq 0) { return "" }
+    $o = $null
+    try { $o = ConvertFrom-HordeJson ("" + $non[$non.Count - 1]).Trim() } catch { $o = $null }
+    if ($null -eq $o -or $o -isnot [pscustomobject]) { return "" }
+    if (-not $o.PSObject.Properties["walkStopped"]) { return "" }
+    if (($o.walkStopped -isnot [int] -and $o.walkStopped -isnot [long]) -or $o.walkStopped -le 0) { return "" }
+    return ("A GUARD WALK STOPPED AT ITS BUDGET in " + $o.walkStopped + " red(s): the merge named may no longer be the cause, and the later merges stay owed to the next night (see the nightly report)")
+}
+
+function Get-HordeNightlyGuardsNoticeText {
+    # The text the net keeps of the guards wrapper's output: its last 10 non-empty lines joined with " | ", cut to the last 700 characters
+    # (tools/NightlyNet.ps1; moved here in T-0347 round 4 so a test can run the real builder).
+    param([string]$Output)
+    $text = (("" + $Output) -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 10) -join " | "
+    if ($text.Length -gt 700) { $text = $text.Substring($text.Length - 700) }
+    return $text
 }
 
 function Get-HordeNightlyGuardsAnswer {
@@ -363,6 +399,11 @@ function Get-HordeNightlyGuardsAnswer {
     $o = $null
     if ($last -ne "") { try { $o = ConvertFrom-HordeJson $last } catch { $o = $null } }
     if ($null -eq $o -or $o -isnot [pscustomobject] -or -not $o.PSObject.Properties["exit"]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = "no -Json last line to read" } }
+    # A WALK THAT STOPPED AT ITS BUDGET (T-0347 round 3) is said FIRST, from the parsed field, never from the cut line: the stop note sits deep in
+    # repos[].reds[].note, and with two reds or a long report path the 700 characters kept below end before it, so the notice read as a plain
+    # STILL RED on a merge that may no longer be the cause. The field is a count near the front of the line (cli/Merge.ps1, $finish).
+    $stopLine = Get-HordeNightlyGuardsStopLine -Lines @($last)
+    if ($stopLine -ne "") { $text = ($stopLine + "; " + $text) }
     $e = $o.exit
     if ($e -isnot [int] -and $e -isnot [long]) { return [pscustomobject]@{ code = 2; state = "could not run"; text = ("the -Json exit field is not a number: " + $text) } }
     if ($e -eq 0) { return [pscustomobject]@{ code = 0; state = "green"; text = $text } }
@@ -389,6 +430,19 @@ function Get-HordeNightlyVerdict {
     if ($c -eq 124) { if ($AtTip) { return "hung" } return "unrun" }
     if ($c -eq 125 -or $c -eq 127 -or $c -eq 128 -or $c -eq 71) { return "unrun" }
     return "red"
+}
+
+function Test-HordeNightlySlotLost {
+    # Did the gate run NOTHING: 125 (the slot or the memory was not had in the wait) or 128 (not idle and not night)?
+    # Such a unit goes back on the end of the night's queue once (T-0491): on 2026-11-16 a review batch held the slot
+    # from 21:56, Universal pytest-all gave up at 22:16 and was never tried again, so 14 merges got no pytest at all.
+    # A run that timed out, or any other exit (124 past its limit, 127 the gate's own error, 71), did run or may have:
+    # it is never retried.
+    param($Run)
+    if ($null -eq $Run -or $Run.timedOut) { return $false }
+    if ($null -eq $Run.code -or "" + $Run.code -eq "") { return $false }
+    $c = [int]$Run.code
+    return ($c -eq 125 -or $c -eq 128)
 }
 
 function Get-HordeNightlyStoredVerdict {
@@ -493,6 +547,7 @@ function Get-HordeNightlyFindingLines {
     foreach ($k in @($Row.culprits)) {
         if ($k.state -ceq "found") { $lines += ("RED " + $k.unit + " first red at merge " + (Format-HordeNightlyMerge -Merge $k.merge) + " (" + $k.runs + " runs)") }
         elseif ($k.state -ceq "flaky") { $lines += ("RED " + $k.unit + " was not red when run again at the tip: flaky, no merge named") }
+        elseif ($k.state -ceq "base-red") { $lines += ("RED " + $k.unit + " was red at last night's tip " + (Format-HordeNightlySha $k.between[0]) + " too: not the day's merges (the box or a need changed?), no merge named") }
         elseif ($k.state -ceq "capped") { $lines += ("RED " + $k.unit + " not bisected to one merge (run cap): after " + $(if ("" + $k.between[0] -eq "") { "last night" } else { (Format-HordeNightlySha $k.between[0]) }) + " up to " + (Format-HordeNightlySha $k.between[1])) }
         elseif ($k.state -ceq "none") { $lines += ("RED " + $k.unit + " has no merge since last night to name") }
         else { $lines += ("RED " + $k.unit + " bisect inconclusive (a run did not happen): " + $k.state) }

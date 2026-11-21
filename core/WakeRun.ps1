@@ -87,7 +87,14 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; duplicate = @{}; duplicateAt = @{}; duplicateGone = @{}; duplicateNot = @{}; duplicateMark = ""; self = $own; silence = $null; restoreAt = [datetime]::MinValue; takenAt = [datetime]::MinValue; takenAsked = @{}; takenTrouble = @{}; retried = @{}; pass = [long]0; said = @(); blind = @{}; counts = $null }
+    # THE RUN-LONG COUNTS (T-0116) go on from the mode's counts file, so a restart does not forget how many passes and
+    # looks there were: since is when the counting began, startedAt when this process did.
+    $startedAt = [datetime]::UtcNow
+    $run.counts = [pscustomobject]@{ since = $startedAt; startedAt = $startedAt; passes = [long]0; looks = [long]0; blindLooks = [long]0; blindPasses = [long]0 }
+    $savedCounts = Read-HordeWakeCounts -Mode $word -HordeHome $HordeHome
+    if ($savedCounts.state -ceq "known") { $run.counts = [pscustomobject]@{ since = $savedCounts.value.since; startedAt = $startedAt; passes = $savedCounts.value.passes; looks = $savedCounts.value.looks; blindLooks = $savedCounts.value.blindLooks; blindPasses = $savedCounts.value.blindPasses } }
+    elseif ($savedCounts.state -ceq "unknown") { $run.said = @($run.said) + ("counting passes and looks from nothing - " + $savedCounts.reason) }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -116,7 +123,7 @@ function New-HordeWakeRun {
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
     $savedDup = Read-HordeWakeDuplicate -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
-    if ($savedDup.state -ceq "known") { $run.duplicate = $savedDup.value.text; $run.duplicateAt = $savedDup.value.at; $run.duplicateMark = (ConvertTo-Json -InputObject ([ordered]@{ t = $savedDup.value.text; a = @($savedDup.value.at.Keys | Sort-Object) }) -Compress -Depth 4) }
+    if ($savedDup.state -ceq "known") { $run.duplicate = $savedDup.value.text; $run.duplicateAt = $savedDup.value.at; $run.duplicateGone = $savedDup.value.gone; $run.duplicateNot = $savedDup.value.not; $run.duplicateMark = (Get-HordeWakeDuplicateMark -Text $savedDup.value.text -At $savedDup.value.at -Gone $savedDup.value.gone -Not $savedDup.value.not) }
     elseif ($savedDup.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no duplicated session known - " + $savedDup.reason) }
     $place = Get-HordeWakeSenderFile -Run $run -Stem "tells"
     $savedTells = Read-HordeWakeTellState -Name $place.name -Mode $place.mode -HordeHome $HordeHome
@@ -223,7 +230,10 @@ function Get-HordeWakeRunMode {
     # ANYTHING: whatever its live member holds that is not true - nothing, a word, a number - is shadow,
     # and of the runs that send, only one that says proof is proof.
     param([Parameter(Mandatory = $true)]$Run)
-    if ($Run.live -ne $true) { return "shadow" }
+    # STRICT, as Test-HordeWakeSendersShadow below: -ne casts its right side to the left's type, so 1 or "True" read as true
+    # (T-0116). A missing member is shadow too, and not an error under strict mode.
+    $liveWord = $Run.PSObject.Properties["live"]
+    if ($null -eq $liveWord -or $liveWord.Value -isnot [bool] -or $liveWord.Value -ne $true) { return "shadow" }
     $p = $Run.PSObject.Properties["mode"]
     if ($null -ne $p -and "$($p.Value)" -ceq "proof") { return "proof" }
     return "live"
@@ -235,7 +245,8 @@ function Test-HordeWakeSendersShadow {
     # one while THE ONE SWITCH is off (the top of this file).
     param([Parameter(Mandatory = $true)]$Run)
     if ((Get-HordeWakeRunMode -Run $Run) -cne "live") { return $true }
-    return ($script:HordeWakeSendersPost -ne $true)
+    # Only a real boolean true turns the senders on: 1, "True" or any other truthy value is still shadow.
+    return (-not ($script:HordeWakeSendersPost -is [bool] -and $script:HordeWakeSendersPost -eq $true))
 }
 
 function Get-HordeWakeSenderFile {
@@ -249,6 +260,51 @@ function Get-HordeWakeSenderFile {
     if ($mode -ceq "shadow") { return [pscustomobject]@{ name = $Stem; mode = "shadow" } }
     if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }
     return [pscustomobject]@{ name = $Stem; mode = "live" }
+}
+
+function Update-HordeWakeTaken {
+    # Look at both senders' awaiting lists once and return the journal entries (kind mail-taken: outcome taken, alarm or undelivered).
+    # A restore mail that left its list is marked handled in the posted table (not planned again) whether it was TAKEN or given up; the
+    # table says nothing of delivery, the journal does (taken, or undelivered). A tell that left its list is "told" on a TAKEN and
+    # "undelivered" on a give-up. Only a TAKEN is a delivery.
+    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Now, $Messenger = $null, [Parameter(Mandatory = $true)][string]$HordeHome)
+    $entries = New-Object System.Collections.ArrayList
+    $lineEntries = {
+        param($Lines, [string]$Stem)
+        $trouble = ""
+        foreach ($l in @($Lines)) {
+            # TAKEN, the one ALARM, the give-up (NOT DELIVERED): each is said once by the engine. Anything else is TROUBLE with the list (it
+            # cannot be read or written) and repeats on every look while it lasts, so it is journaled when it starts or changes, not every
+            # 15 s, and is not an alarm (nobody was not-taken).
+            if ("$l".StartsWith("TAKEN:")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "taken" -Reason "$l")) }
+            elseif ("$l".StartsWith("ALARM:") -and "$l".Contains("NOT DELIVERED")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "undelivered" -Reason "$l")) }
+            elseif ("$l".StartsWith("ALARM:")) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "alarm" -Reason "$l")) }
+            else {
+                $trouble = "$l"
+                if (-not $Run.takenTrouble.ContainsKey($Stem) -or "$($Run.takenTrouble[$Stem])" -cne $trouble) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "mail-taken" -Id $Stem -Outcome "list-trouble" -Reason $trouble)) }
+            }
+        }
+        if ($trouble -ceq "") { [void]$Run.takenTrouble.Remove($Stem) } else { $Run.takenTrouble[$Stem] = $trouble }
+    }
+    $restored = Invoke-HordeWakeMailTakenTick -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome -Now $Now -Messenger $Messenger -Memory $Run.takenAsked
+    & $lineEntries $restored.lines "restore"
+    if (@($restored.left).Count -gt 0) {
+        foreach ($x in @($restored.left)) { $Run.posted["$($x.id)"] = $Now }
+        $file = Get-HordeWakeSenderFile -Run $Run -Stem "restore"
+        Save-HordeRestoreState -Posted $Run.posted -Known $Run.restores -Name $file.name -Mode $file.mode -HordeHome $HordeHome
+    }
+    $told = Invoke-HordeWakeMailTakenTick -Kind $script:HordeWakeTellTakenKind -HordeHome $HordeHome -Now $Now -Messenger $Messenger -Memory $Run.takenAsked
+    & $lineEntries $told.lines "tells"
+    if (@($told.left).Count -gt 0) {
+        foreach ($x in @($told.left)) {
+            if (-not $Run.told.ContainsKey("$($x.id)")) { continue }
+            $was = $Run.told["$($x.id)"]
+            $Run.told["$($x.id)"] = [pscustomobject]@{ at = $was.at; state = $(if ($x.delivered) { "told" } else { "undelivered" }); class = (Get-HordeWakeTellClass $was) }
+        }
+        $place = Get-HordeWakeSenderFile -Run $Run -Stem "tells"
+        Save-HordeWakeTellState -Told $Run.told -Name $place.name -Mode $place.mode -HordeHome $HordeHome
+    }
+    return $entries.ToArray()
 }
 
 function Invoke-HordeWakeTick {
@@ -281,7 +337,15 @@ function Invoke-HordeWakeTick {
     # ONLY A RUN MADE LIVE IS LIVE: anything else in that member - nothing, a word, a number - is shadow.
     $mode = Get-HordeWakeRunMode -Run $Run
     $shadow = ($mode -ceq "shadow")
+    # A SHADOW TICK IS HANDED A WAKER WITH NO NUDGE (T-0116, wakers/Port.ps1 Get-HordeWakerReadOnly): its
+    # state reads are the real waker's, and nudging through it is refused by the port. The would-nudge
+    # branch in core/Wake.ps1 is then the second guard, not the only one. Proof and live get the real waker.
+    if ($shadow) { $Waker = Get-HordeWakerReadOnly -Waker $Waker }
     $Run.pass = [long]$Run.pass + 1
+    # A run made before the blind-look members existed gets them here (T-0116).
+    if ($null -eq $Run.PSObject.Properties["blind"]) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "blind" -Value @{} }
+    if ($null -eq $Run.PSObject.Properties["counts"] -or $null -eq $Run.counts) { Add-Member -InputObject $Run -MemberType NoteProperty -Name "counts" -Value ([pscustomobject]@{ since = $Now; startedAt = $Now; passes = [long]0; looks = [long]0; blindLooks = [long]0; blindPasses = [long]0 }) -Force }
+    $Run.counts.passes = [long]$Run.counts.passes + 1
     $entries = New-Object System.Collections.ArrayList
     $failed = New-Object System.Collections.ArrayList
     # THE RESTORE SOURCE, every restoreEverySeconds, and SHADOW IN BOTH MODES (the header). What it could
@@ -294,12 +358,26 @@ function Invoke-HordeWakeTick {
             if ((Test-HordeAnswer $read) -and $read.state -ceq "known") {
                 $sourceShadow = Test-HordeWakeSendersShadow -Run $Run
                 $sourcePoster = $null
-                if (-not $sourceShadow) { $sourcePoster = { param($m) Send-HordeRestoreMail -Mail $m -Settings $RestoreSettings -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
+                if (-not $sourceShadow) { $sourcePoster = { param($m) Send-HordeRestoreMail -Mail $m -Settings $RestoreSettings -Messenger $Messenger -HordeHome $HordeHome -Now $Now }.GetNewClosure() }
+                # T-0391 slice 9: what is on the awaiting list is posted and waiting for its TAKEN. Shadow has no list and reads none.
+                $awaitingIds = @()
+                $retryIds = @()
+                if (-not $sourceShadow) {
+                    $awaitingIds = @(Get-HordeWakeMailAwaitingIds -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)
+                    # A MAIL ALARMED AS NOT TAKEN IS POSTED ONCE MORE under its own id (the messenger keeps one copy, so a post that did land is
+                    # a no-op): an unknown post result, or a crash between the mark and the post, otherwise leaves a mail that is in no mailbox
+                    # and is never posted. Once, not every pass: the alarm and the tell to the warchief are what follow. It is never marked handled by this.
+                    $retryIds = @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome | ForEach-Object { $_.id } | Where-Object { -not $Run.retried.ContainsKey("$_") })
+                }
                 $dupList = @()
                 $dp = $read.PSObject.Properties["duplicates"]
                 if ($null -ne $dp) { $dupList = @($dp.Value) }
                 $dupCount = $dupList.Count
-                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" })
+                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores -UncountedDuplicates $dupCount -DuplicateNames @($dupList | ForEach-Object { "$($_.sessionId)" }) -Awaiting $awaitingIds -Retry $retryIds
+                # THE ONE REPOST IS SPENT ONLY BY A REAL POST: a mail the plan did not contain (the restore finding lapsed) was not posted, and
+                # marking it would use up the repost it has not had.
+                $postedNow = @($sourced.entries | Where-Object { "$($_.messageId)" -cne "" -and "$($_.outcome)" -cne "unposted" } | ForEach-Object { "$($_.messageId)" })
+                foreach ($rid in $retryIds) { if ($postedNow -ccontains "$rid") { $Run.retried["$rid"] = $Now } }
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted
@@ -350,7 +428,7 @@ function Invoke-HordeWakeTick {
             elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }
             else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
         } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence -Asleep $asleep -AsleepUnknown $asleepUnknown -Blind $Run.blind
         if ($asleepUnknown -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("nobody is knocked while which sessions are asleep in a hibernation cannot be told: " + $asleepUnknown))) }
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
@@ -363,9 +441,24 @@ function Invoke-HordeWakeTick {
         $Run.ledger = $result.ledger
         foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
         if ($ledgerChanged) {
-            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome } # the pass ledger, in its own mode's file
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }
+        # BLIND LOOKS (T-0116): counted, and kept as spells that are journaled once and backed off from. A look the terminal did
+        # not answer says nothing of the session (core/Wake.ps1, Update-HordeWakeBlind). AFTER THE LEDGER IS KEPT AND SAVED, and
+        # in a try of its own: this is new code beside the one thing that must not be lost, and what it cannot do is said once.
+        # THE COUNTS: looks and blindLooks are looks of this pass; blindPasses is every pass that ENDS with a blind spell open -
+        # a session blind for hours, looked at once in five minutes by its back-off, is a blind pass on all hundred of them.
+        try {
+            $Run.counts.looks = [long]$Run.counts.looks + [long]$result.looks
+            $Run.counts.blindLooks = [long]$Run.counts.blindLooks + [long]$result.blindLooks.Count
+            $listedForBlind = $null
+            if ($null -ne $result.listing -and "$($result.listing.state)" -cmatch '\Aknown\z') { $listedForBlind = @($result.listing.value | ForEach-Object { "$($_.id)" }) }
+            $blindNow = Update-HordeWakeBlind -Seen $Run.blind -BlindLooks $result.blindLooks -SeenLooks $result.seenLooks -Listed $listedForBlind -Candidates $result.candidates -Now $Now -Settings $Settings
+            $Run.blind = $blindNow.seen
+            foreach ($e in @($blindNow.entries)) { [void]$entries.Add($e) }
+            if ($Run.blind.Count -gt 0) { $Run.counts.blindPasses = [long]$Run.counts.blindPasses + 1 }
+        } catch { [void]$failed.Add([pscustomobject]@{ id = "blind"; reason = ("the blind looks could not be kept: " + $_.Exception.Message) }) }
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).
@@ -403,11 +496,11 @@ function Invoke-HordeWakeTick {
             $listedHere = @($result.listing.value | ForEach-Object { "$($_.id)" })
             # A SESSION MISSING FROM A GOOD LISTING IS FORGOTTEN ONLY AFTER duplicateGoneSeconds (T-0116 P15): a
             # one-tick flap of its row ended the episode, and the next tick began a second one. How long it has been
-            # missing is kept in duplicateGone (not saved: a restart counts from the first listing without it).
+            # missing is kept in duplicateGone, and saved with the episode: a restart neither starts the count again nor holds the episode longer.
             # While it is missing no tell is made for it (below), so none is retried for a session that is gone.
             foreach ($id in @($Run.duplicate.Keys)) {
                 if ($listedHere -ccontains "$id") { $Run.duplicateGone.Remove("$id"); continue }
-                if (-not $Run.duplicateGone.ContainsKey("$id")) { $Run.duplicateGone["$id"] = $Now }
+                if (-not $Run.duplicateGone.ContainsKey("$id") -or $Run.duplicateGone["$id"] -gt $Now) { $Run.duplicateGone["$id"] = $Now }
                 if (($Now - $Run.duplicateGone["$id"]).TotalSeconds -ge [double]$Settings.duplicateGoneSeconds) { $Run.duplicate.Remove("$id"); $Run.duplicateGone.Remove("$id") }
             }
             foreach ($id in @($Run.duplicateGone.Keys)) { if (-not $Run.duplicate.ContainsKey("$id")) { $Run.duplicateGone.Remove("$id") } }
@@ -416,15 +509,21 @@ function Invoke-HordeWakeTick {
         # going yes -> no for one tick (the port also carries an unreadable word as no) ended the episode and the next tick
         # began a second one. Retired yes ends it at once (core/Wake.ps1); copies that really closed end it when the
         # time is up, so the session is not held for ever, and a return after that is a new episode. Held on the pass
-        # (duplicateNot, not saved) it is said nothing new of and no tell is retried for it.
+        # (duplicateNot, saved with the episode) it is said nothing new of and no tell is retried for it.
+        # THE END IS MADE HERE, NOT LEFT TO THE SAID-ONCE FORGETTING BELOW (T-0116): that forgets only a session whose mail
+        # was read this pass, so a session whose mail state cannot be read (and keeps being in the listing) was held past
+        # its time, or past its retirement, and a tell not yet taken was retried for a retired one. $dupEnded is every
+        # session whose episode is over on the listing and the clock alone.
         $dupHeld = @{}
+        $dupEnded = @{}
         if ($null -ne $listedHere) {
             foreach ($row in @($result.listing.value)) {
                 $id = "$($row.id)"
                 if (-not $Run.duplicate.ContainsKey($id)) { continue }
-                if ("$(Get-HordeWakeEntryValue $row "duplicate")" -ceq "yes" -or "$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot.Remove($id); continue }
-                if (-not $Run.duplicateNot.ContainsKey($id)) { $Run.duplicateNot[$id] = $Now }
-                if (($Now - $Run.duplicateNot[$id]).TotalSeconds -lt [double]$Settings.duplicateGoneSeconds) { $dupHeld[$id] = $true }
+                if ("$(Get-HordeWakeEntryValue $row "retired")" -ceq "yes") { $Run.duplicateNot.Remove($id); $dupEnded[$id] = $true; continue }
+                if ("$(Get-HordeWakeEntryValue $row "duplicate")" -ceq "yes") { $Run.duplicateNot.Remove($id); continue }
+                if (-not $Run.duplicateNot.ContainsKey($id) -or $Run.duplicateNot[$id] -gt $Now) { $Run.duplicateNot[$id] = $Now }
+                if (($Now - $Run.duplicateNot[$id]).TotalSeconds -lt [double]$Settings.duplicateGoneSeconds) { $dupHeld[$id] = $true } else { $dupEnded[$id] = $true }
             }
         }
         $dupSaid = @{}
@@ -435,16 +534,16 @@ function Invoke-HordeWakeTick {
         foreach ($id in @($dupHeld.Keys)) { if (-not $dupSaid.ContainsKey("$id")) { $dupSaid["$id"] = $Run.duplicate["$id"] } }
         $dupNow = Update-HordeWakeSaidOnce -Seen $Run.duplicate -Said $dupSaid -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.duplicate = $dupNow.seen
+        foreach ($id in @($dupEnded.Keys)) { $Run.duplicate.Remove("$id") }
         foreach ($id in @($Run.duplicateNot.Keys)) { if (-not $Run.duplicate.ContainsKey("$id")) { $Run.duplicateNot.Remove("$id") } }
         foreach ($e in @($dupNow.entries)) { [void]$entries.Add($e) }
         $dupAt = @{}
         foreach ($id in @($Run.duplicate.Keys)) { if ($Run.duplicateAt.ContainsKey("$id")) { $dupAt["$id"] = $Run.duplicateAt["$id"] } }
         foreach ($e in @($dupNow.entries)) { $dupAt["$($e.id)"] = $Now }
         $Run.duplicateAt = $dupAt
-        $dupMark = ""
-        if ($Run.duplicate.Count -gt 0) { $dupMark = ConvertTo-Json -InputObject ([ordered]@{ t = $Run.duplicate; a = @($Run.duplicateAt.Keys | Sort-Object) }) -Compress -Depth 4 }
+        $dupMark = Get-HordeWakeDuplicateMark -Text $Run.duplicate -At $Run.duplicateAt -Gone $Run.duplicateGone -Not $Run.duplicateNot
         if ($dupMark -cne "$($Run.duplicateMark)") {
-            try { Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome; $Run.duplicateMark = $dupMark }
+            try { Save-HordeWakeDuplicate -Text $Run.duplicate -At $Run.duplicateAt -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome -Gone $Run.duplicateGone -Not $Run.duplicateNot; $Run.duplicateMark = $dupMark }
             catch { [void]$failed.Add([pscustomobject]@{ id = "duplicate"; reason = ("what is known of duplicated sessions could not be saved: " + $_.Exception.Message) }) }
         }
         $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
@@ -499,13 +598,21 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($bad.entries)) {
             & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }
         }
+        # A RESUME MAIL ALARMED AS NOT TAKEN reaches the warchief (T-0391 slice 9): the alarm is a journal line, and a journal line is read by
+        # nobody. Made on every pass while the mark is alarmed, like the duplicate-copies tell, so a tell that could not be posted is retried and
+        # one lost to a restart is made again; the same id keeps it one mail. Live senders only: shadow has no list.
+        if (-not (Test-HordeWakeSendersShadow -Run $Run)) {
+            foreach ($al in @(Get-HordeWakeMailAlarmed -Kind $script:HordeRestoreTakenKind -HordeHome $HordeHome)) {
+                & $make { (New-HordeWakeTellCondition -Kind "resume-untaken" -Subject "$($al.session)" -Instance "$($al.id)" -Text ("the restore source sent the mail " + $al.id + " to the session " + $al.session + "; it may not have arrived, and that session has not taken it within " + [int]($script:HordeWakeTakenAlarmSeconds / 60) + " minutes. It may be sent once more (once in a run) and is watched until it is taken or given up. Look at that session.")) }
+            }
+        }
         if ($null -ne $silence.condition) { & $make { (New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text) } }
         if ($null -ne $fleetRead.condition) { & $make { (New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text) } }
         if ($conditions.Count -gt 0) {
             try {
                 $sendersShadow = Test-HordeWakeSendersShadow -Run $Run
                 $poster = $null
-                if (-not $sendersShadow) { $poster = { param($m) Send-HordeWakeTell -Mail $m -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
+                if (-not $sendersShadow) { $poster = { param($m) Send-HordeWakeTell -Mail $m -Messenger $Messenger -HordeHome $HordeHome -Now $Now }.GetNewClosure() }
                 $toldNow = Invoke-HordeWakeTellPass -Conditions $conditions.ToArray() -Warchief "$($Run.warchief)" -Now $Now -Shadow:$sendersShadow -Post $poster -Told $Run.told
                 foreach ($e in @($toldNow.entries)) { [void]$entries.Add($e) }
                 $Run.told = $toldNow.told
@@ -516,8 +623,20 @@ function Invoke-HordeWakeTick {
             } catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("what was told could not be saved: " + $_.Exception.Message) }) }
         }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
+    # THE AWAITING LISTS (T-0391 slice 9): ask whether the sessions took what the two senders posted, journal TAKEN, the one ALARM and the
+    # late TAKEN or the give-up, and only on a TAKEN count the restore done / the warchief told. Live senders only: shadow writes no list.
+    try {
+        if (-not (Test-HordeWakeSendersShadow -Run $Run) -and ($Now - $Run.takenAt).TotalSeconds -ge $script:HordeWakeTakenEverySeconds) {
+            $Run.takenAt = $Now
+            foreach ($e in @(Update-HordeWakeTaken -Run $Run -Now $Now -Messenger $Messenger -HordeHome $HordeHome)) { [void]$entries.Add($e) }
+        }
+    } catch { [void]$failed.Add([pscustomobject]@{ id = "taken"; reason = ("the awaiting lists could not be looked at: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" }
+    try {
+        # The counts file failing is its own line (id counts), said once while it lasts, and the heartbeat was written all the same.
+        $countsFailed = Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" -Counts $Run.counts
+        if ($countsFailed -is [string]) { [void]$failed.Add([pscustomobject]@{ id = "counts"; reason = $countsFailed }) }
+    }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown

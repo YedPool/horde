@@ -58,9 +58,14 @@
         @{ Name = "found-restore-not-handed-back"
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }
+        # The mode word ignores -Shadow (Get-HordeWakeModeWord), so dropping -Shadow was an equivalent
+        # mutant (T-0494): the mode is what names the file, so the mutant forces the live mode.
         @{ Name = "shadow-state-written-where-live-reads"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text'
-           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -HordeHome $HordeHome) -Text' }
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode "live" -HordeHome $HordeHome) -Text' }
+        @{ Name = "shadow-state-read-from-where-live-writes"
+           Find = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome'
+           Replace = '$path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode "live" -HordeHome $HordeHome' }
         @{ Name = "posted-ids-never-dropped"
            Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
            Replace = '$nextPosted["$k"] = $when' }
@@ -232,5 +237,8 @@
         @{ Name = "stale-duplicate-counted"
            Find = '$d.allStale -eq $true) { continue }'
            Replace = '$d.allStale -eq $false) { continue }' }
+        @{ Name = "duplicate-naming-no-agent-not-counted"
+           Find = '$counted = ($agents.Count -eq 0)'
+           Replace = '$counted = $false' }
     )
 }

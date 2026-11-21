@@ -61,6 +61,24 @@
         @{ Name = "tip-not-checked-first"
            Find = '    if (-not $r) { return [pscustomobject]@{ state = "flaky"'
            Replace = '    if ($false) { return [pscustomobject]@{ state = "flaky"' }
+        @{ Name = "slot-lost-128-not-retried"
+           Find = 'return ($c -eq 125 -or $c -eq 128)'
+           Replace = 'return ($c -eq 125)' }
+        @{ Name = "slot-lost-timeout-retried"
+           Find = 'if ($null -eq $Run -or $Run.timedOut) { return $false }'
+           Replace = 'if ($null -eq $Run) { return $false }' }
+        @{ Name = "base-red-taken-as-green"
+           Find = 'if ($r) { return [pscustomobject]@{ state = "base-red"'
+           Replace = 'if ($false) { return [pscustomobject]@{ state = "base-red"' }
+        @{ Name = "base-unreadable-taken-as-green"
+           Find = '        if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }'
+           Replace = '        if ($false) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @("", $tip) } }' }
+        @{ Name = "base-run-past-the-cap"
+           Find = 'if ($runs -ge $MaxRuns) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @("", $tip) } }'
+           Replace = 'if ($false) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @("", $tip) } }' }
+        @{ Name = "base-red-not-reported"
+           Find = 'elseif ($k.state -ceq "base-red") {'
+           Replace = 'elseif ($false) {' }
         @{ Name = "bisect-picks-the-wrong-side"
            Find = '        if ($r) { $hi = $mid } else { $lo = $mid }'
            Replace = '        if ($r) { $lo = $mid } else { $hi = $mid }' }
@@ -68,8 +86,8 @@
            Find = '        if ($null -eq $r) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)'
            Replace = '        if ($false) { return [pscustomobject]@{ state = "inconclusive"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)' }
         @{ Name = "run-cap-ignored"
-           Find = '        if ($runs -ge $MaxRuns) { return'
-           Replace = '        if ($false) { return' }
+           Find = '        if ($runs -ge $MaxRuns) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)'
+           Replace = '        if ($false) { return [pscustomobject]@{ state = "capped"; sha = ""; runs = $runs; between = @($(if ($lo -ge 0)' }
         @{ Name = "culprit-off-by-one"
            Find = 'return [pscustomobject]@{ state = "found"; sha = $m[$hi]'
            Replace = 'return [pscustomobject]@{ state = "found"; sha = $m[[math]::Max(0, $hi - 1)]' }
@@ -205,5 +223,14 @@
         @{ Name = "holders-not-read"
            Find = '$out += [pscustomobject]@{ name = $m.Groups[1].Value;'
            Replace = 'if ($false) { } $null = [pscustomobject]@{ name = $m.Groups[1].Value;' }
+        @{ Name = "guards-answer-drops-the-stop-line"
+           Find = 'if ($stopLine -ne "") { $text = ($stopLine + "; " + $text) }'
+           Replace = '' }
+        @{ Name = "guards-stop-line-ignores-a-single-stop"
+           Find = '$o.walkStopped -le 0) { return "" }'
+           Replace = '$o.walkStopped -le 1) { return "" }' }
+        @{ Name = "guards-notice-keeps-the-first-700"
+           Find = '$text.Substring($text.Length - 700)'
+           Replace = '$text.Substring(0, 700)' }
     )
 }

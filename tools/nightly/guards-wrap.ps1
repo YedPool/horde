@@ -12,5 +12,9 @@ $lines = @(& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Horde
 $processExit = $LASTEXITCODE
 $lines | ForEach-Object { Write-Output $_ }
 $answer = Get-HordeNightlyGuardsAnswer -ProcessExit $processExit -Lines @($lines | ForEach-Object { "" + $_ })
+# A WALK THAT STOPPED AT ITS BUDGET (T-0347 round 4) is printed as a short line of its own, BEFORE the state line: the net keeps the last 10 lines
+# of this output cut to their last 700 characters, and the walkStopped field near the front of the long -Json line was cut away (round 3).
+$stopLine = Get-HordeNightlyGuardsStopLine -Lines @($lines | ForEach-Object { "" + $_ })
+if ($stopLine -ne "") { Write-Output ("guards-wrap: " + $stopLine) }
 Write-Output ("guards-wrap: " + $answer.state)
 exit $answer.code

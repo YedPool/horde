@@ -77,6 +77,9 @@
 #            cannot be read at all (core/Wake.ps1, Update-HordeWakeFleetRead).
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
 #            and unreadableCount when the waker can count mail it could not read, or unknown
+#            and blindReason on a Confirm answer: one lower-case hyphenated word when the box or the turn is
+#            unknown BECAUSE the look failed (the terminal did not answer), else "" or left out. A blind look
+#            is no verdict on the session (core/Wake.ps1, Update-HordeWakeBlind) - T-0116.
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the
 #            nudge, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
@@ -124,6 +127,10 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
+if ($null -eq (Get-Variable -Name HordeWakerViews -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakerViews = @{} }
+# Which registered waker each view was made from, KEPT HERE AND NEVER ON THE VIEW: a member that led back
+# to the real waker would be a way to its nudge (T-0116).
+if ($null -eq (Get-Variable -Name HordeWakerViewOrigin -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakerViewOrigin = @{} }
 $script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit", "state.between-turns")
 # What the production path requires: every one. A waker without all five is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
@@ -352,7 +359,32 @@ function Test-HordeWakerRegistered {
     if (@($Waker.PSObject.TypeNames) -notcontains "Horde.Waker") { return $false }
     $n = $Waker.PSObject.Properties["name"]
     if ($null -eq $n -or $n.Value -isnot [string] -or -not $script:HordeWakers.ContainsKey($n.Value)) { return $false }
-    return [object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)
+    if ([object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)) { return $true }
+    # The read-only view Get-HordeWakerReadOnly made of it is the registered waker's own, not a look-alike -
+    # and only while the waker it was made from is still the one registered: a view of a replaced entry is stale.
+    if (-not ($script:HordeWakerViews.ContainsKey($n.Value) -and [object]::ReferenceEquals($script:HordeWakerViews[$n.Value], $Waker))) { return $false }
+    return ($script:HordeWakerViewOrigin.ContainsKey($n.Value) -and [object]::ReferenceEquals($script:HordeWakerViewOrigin[$n.Value], $script:HordeWakers[$n.Value]))
+}
+
+function Get-HordeWakerReadOnly {
+    # THE WAKER A RUN THAT MUST NOT NUDGE IS HANDED (T-0116): the registered waker with no nudge and no exit.
+    # Its targets, state, confirm and the rest read exactly as the real one's do, because they ARE the real
+    # one's script blocks; its nudge and its exit are $null, so Send-HordeWakeNudge and Send-HordeWakeExit
+    # refuse it, and no member of the object leads back to the real waker (the origin is kept in a table here). A shadow run was handed the real waker and was kept from nudging by
+    # one runtime branch in core/Wake.ps1 alone; take that branch out and it typed into live sessions.
+    # Now the branch is a second guard. The same view is returned every time, and the port accepts it as
+    # the registered waker's own. Anything that is not a registered waker comes back as it was: the port
+    # refuses such an object for every call anyway.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return $Waker }
+    $name = [string]$Waker.name
+    if ($script:HordeWakerViews.ContainsKey($name) -and [object]::ReferenceEquals($script:HordeWakerViews[$name], $Waker)) { return $Waker }
+    if (-not $script:HordeWakerViews.ContainsKey($name) -or -not [object]::ReferenceEquals($script:HordeWakerViewOrigin[$name], $Waker)) {
+        $view = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Waker.name; folder = $Waker.folder; capabilities = $Waker.capabilities; targets = $Waker.targets; state = $Waker.state; nudge = $null; begin = $Waker.begin; confirm = $Waker.confirm; source = $Waker.source; reserved = $Waker.reserved; exit = $null }
+        $script:HordeWakerViewOrigin[$name] = $Waker
+        $script:HordeWakerViews[$name] = $view
+    }
+    return $script:HordeWakerViews[$name]
 }
 
 function Get-HordeWakerLabel {
@@ -656,6 +688,17 @@ function Get-HordeWakeState {
         $handedAt = ConvertTo-HordeWakerUtc $hoAt.value
         if ($null -eq $handedAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an oldestHandedOverAt that is not a time with a zone")) }
     }
+    # blindReason IS OPTIONAL (T-0116): on a Confirm answer, the waker's one-word reason (lower-case words
+    # joined by hyphens) that the box or the turn is unknown BECAUSE the look itself failed - the terminal did
+    # not answer - and "" for a look that read. A waker that leaves it out says "" (no look was blind). The
+    # port only carries it: that a blind look is not a dead session, and is not looked at again at once, is
+    # the watcher's to say (core/Wake.ps1).
+    $blindReason = ""
+    $bl = Get-HordeWakerMember $v "blindReason"
+    if ($bl.has -and $null -ne $bl.value) {
+        if ($bl.value -isnot [string] -or ($bl.value -ne "" -and $bl.value -cnotmatch '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z') -or $bl.value.Length -gt 60) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a blindReason that is not one lower-case word")) }
+        $blindReason = [string]$bl.value
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -667,7 +710,7 @@ function Get-HordeWakeState {
     # nudge typed into somebody's text.
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt; blindReason = $blindReason }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {
@@ -677,6 +720,8 @@ function Send-HordeWakeNudge {
     param($Waker, [string]$Id)
     if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so nobody was nudged")) }
     if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked to nudge it")) }
+    # A WAKER WITH NO NUDGE (Get-HordeWakerReadOnly) IS A REFUSAL, never a fall-back to another route.
+    if ($null -eq $Waker.nudge) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' was handed in without a nudge, so nobody was nudged")) }
     try { $a = & $Waker.nudge $Id }
     catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to nudge " + $Id) -ErrorRecord $_) }
     $first = ConvertFrom-HordeWakerAnswer -Answer $a -What ("the nudge of " + $Id) -Waker $Waker.name

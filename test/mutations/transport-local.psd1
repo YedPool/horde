@@ -13,10 +13,13 @@
 # one that skips it (review of PR #91, G1); this spec's mutants do not depend on that case.
 # image-not-checked-on-open (round 1 survivor) is caught since round 2, by a compiled probe that
 # serves the pipe at this process's own level (transports/local/test/SquatProbe.cs).
+# Shells: both (T-0422). The suite runs under Windows PowerShell 5.1 and PowerShell 7, so a mutant of
+# the branch only 7 takes - pwsh-owner-read-dropped - is caught, by 7.
 @{
     Target = "transports\local\Transport.ps1"
     Suite  = "transports\local\test\test-local.ps1"
     PassCodes = @(0, 3)
+    Shells = @("powershell", "pwsh")
     Mutations = @(
         @{ Name = "acl-not-protected"
            Find = 'D:P(D;;0x1f019f;;;NU)'
@@ -114,8 +117,15 @@
         @{ Name = "pwsh-preview-admitted"
            Find = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe")'
            Replace = '(Join-Path $script:HordeLocalProgramFiles "PowerShell\7\pwsh.exe"), (Join-Path $script:HordeLocalProgramFiles "PowerShell\7-preview\pwsh.exe")' }
-        # Not here: a mutant that drops the PipesAclExtensions branch. It changes only pwsh 7, and
-        # Mutate runs its suite under 5.1 alone (T-0422), so it would survive for that reason; the
-        # check "a dialled pipe's owner is read in this shell" catches it when test-local runs under 7.
+        # The branch only PowerShell 7 takes (the ACL read is an extension method there): with it gone
+        # no pipe's owner is read under 7 and every dial is refused. 5.1 never takes it, so the run
+        # under 7 catches it: the owner-refusal checks fail ("a pipe owned by this user is not refused",
+        # and the other-expected-owner case), and so do the dials after them. The check "a dialled pipe's owner is
+        # read in this shell" is not what fails: its read throws outside a check, the suite's trap
+        # records an [ERROR], and that check never runs (review of PR #501). Left out of this spec by
+        # PR #496 until Mutate could run a suite under 7 (T-0422).
+        @{ Name = "pwsh-owner-read-dropped"
+           Find = 'return [System.IO.Pipes.PipesAclExtensions]::GetAccessControl($Pipe)'
+           Replace = 'return $null' }
     )
 }

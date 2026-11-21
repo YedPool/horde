@@ -55,7 +55,7 @@ for ($i = 0; $i -lt 20; $i++) {
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) "twenty ticks over six sessions that qualify ask the waker for no nudge at all"
 Check (@($kinds | Where-Object { $_ -cnotlike "would-*" }).Count -eq 0 -and @($kinds | Where-Object { $_ -ceq "would-nudge" }).Count -ge 6 -and @($kinds | Where-Object { $_ -ceq "would-post" }).Count -eq 6 -and @($kinds | Where-Object { $_ -ceq "would-stall" }).Count -eq 1) ("every entry says would: a would-nudge for each session, one would-post for each restored orc, one would-stall (" + (@($kinds | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger and restore state, and no file of a live run (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,restore-shadow.json,silence-shadow.json") ("it wrote the shadow run's own journal, heartbeat, ledger, silence and restore state, and no file of a live run (" + ($names -join ",") + ")")
 Check (@(Read-Lines $h).Count -eq $kinds.Count) "what a tick returns is what it journaled"
 $beat = Read-HordeWakeHeartbeat -Shadow -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.pass -eq 20 -and $beat.value.shadow -eq $true -and $beat.value.tickSeconds -eq 3 -and $beat.value.pid -eq 4242 -and $beat.value.at -eq (At 57)) "the heartbeat is the last tick's: its pass, its time, shadow, the tick and the process"
@@ -120,7 +120,7 @@ $run = New-HordeWakeRun -Live -HordeHome $h
 Set-HordeMemoryWakerClock (At 0)
 $first = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.id })
 Check (($first -join ",") -ceq ("nudge-killed:" + (Sid 2) + ",would-tell:" + (Sid 2)) -and $run.warchief -ceq (Sid 1)) ("a nudge that had to be killed is journaled, and the warchief would be told of it - would, because the senders are shadow even in a live run (" + ($first -join ",") + ")")
-Check ((@(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,silence-live.json,tells-of-live-run-shadow.json") "and what the live run would have told is kept in a shadow file of its own - never tells-live.json, which is for what was really told, and never the shadow run's"
+Check ((@(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "counts-live.json,heartbeat-live.json,journal-live.jsonl,ledger-live.json,silence-live.json,tells-of-live-run-shadow.json") "and what the live run would have told is kept in a shadow file of its own - never tells-live.json, which is for what was really told, and never the shadow run's"
 $h = New-Home
 Reset-HordeMemoryWaker
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "busy" -OutcomeReason "mid-turn"
@@ -379,6 +379,81 @@ $c = 0; foreach ($n in 0..2) { $null = Tick-Dup $run $c $h; $c += 3 }
 Seat-Dup "yes" "yes" 2 "no"
 $null = Tick-Dup $run $c $h
 Check (-not $run.duplicate.ContainsKey((Sid 2))) "a retired session whose duplicate word reads no ends its episode at once, not after the wait"
+# T-0116 (PR 481 follow-up): THE TWO WAITS SURVIVE A RESTART. A watcher started again neither starts the wait over (the
+# episode would be held up to duplicateGoneSeconds longer, each restart) nor says or tells the episode a second time.
+# Copies read as closed (duplicateNot) ...
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Seat-Dup "no" "yes" 2 "no"
+$t0Not = 100.0
+foreach ($sec in @($t0Not, ($t0Not + 250))) { foreach ($e in (Tick-Dup $run $sec $h)) { [void]$all.Add($e) } }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($run.duplicate.ContainsKey((Sid 2)) -and $run.duplicateNot.ContainsKey((Sid 2))) "a restart keeps the episode and how long its copies have read as closed"
+foreach ($e in (Tick-Dup $run ($t0Not + 260) $h)) { [void]$all.Add($e) }
+Check ($run.duplicate.ContainsKey((Sid 2))) "and 260 s into the wait it is still held"
+foreach ($e in (Tick-Dup $run ($t0Not + $goneFor + 1) $h)) { [void]$all.Add($e) }
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("the episode ends when the ORIGINAL wait is up, not a full wait after the restart, and nothing was said or told twice (" + (Said-Dup $all) + ")")
+# ... and a session missing from a good listing (duplicateGone).
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$all = New-Object System.Collections.ArrayList; $c = 0
+foreach ($n in 0..2) { foreach ($e in (Tick-Dup $run $c $h)) { [void]$all.Add($e) }; $c += 3 }
+Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+foreach ($sec in @($t0Not, ($t0Not + 250))) { foreach ($e in (Tick-Dup $run $sec $h)) { [void]$all.Add($e) } }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($run.duplicate.ContainsKey((Sid 2)) -and $run.duplicateGone.ContainsKey((Sid 2))) "a restart keeps the episode and how long the session has been missing from the listing"
+foreach ($e in (Tick-Dup $run ($t0Not + $goneFor + 1) $h)) { [void]$all.Add($e) }
+Check (-not $run.duplicate.ContainsKey((Sid 2)) -and (Said-Dup $all) -ceq "line=1 tell=1") ("a session missing for the original wait is forgotten at that time, not a full wait after the restart (" + (Said-Dup $all) + ")")
+# A saved wait that began AFTER the clock now says (the clock went back) is not trusted: it starts again from now, so the
+# episode cannot be held for longer than one wait.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+Seat-Dup "no" "yes" 2 "no"
+$null = Tick-Dup $run 1000 $h
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$null = Tick-Dup $run 500 $h
+$null = Tick-Dup $run (500 + $goneFor + 1) $h
+Check (-not $run.duplicate.ContainsKey((Sid 2))) "a wait saved at 1000 s and read when the clock says 500 s starts from 500 and ends one wait later, not 500 s after that"
+# ... and the same for the wait of a session missing from the listing.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+Reset-HordeMemoryWaker; Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+$null = Tick-Dup $run 1000 $h
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$null = Tick-Dup $run 500 $h
+$null = Tick-Dup $run (500 + $goneFor + 1) $h
+Check (-not $run.duplicate.ContainsKey((Sid 2))) "a missing-from-the-listing wait saved at 1000 s and read when the clock says 500 s starts from 500 as well"
+# T-0116 (PR 481 follow-up): WHEN A SESSION'S MAIL CANNOT BE READ its episode still ends on the listing and the clock alone.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..2) { $null = Tick-Dup $run ($n * 3) $h }
+try {
+    Set-HordeMemoryWakerFault -Call state -Kind throw
+    Seat-Dup "no" "yes" 2 "no"
+    $null = Tick-Dup $run 100 $h
+    Check ($run.duplicate.ContainsKey((Sid 2))) "CONTROL: copies read as closed, mail unreadable: the episode is held for the wait"
+    $null = Tick-Dup $run (100 + $goneFor + 1) $h
+    Check (-not $run.duplicate.ContainsKey((Sid 2)) -and -not $run.duplicateAt.ContainsKey((Sid 2)) -and $run.duplicateNot.Count -eq 0) "and then it ends, though the mail still cannot be read: it is not held for ever"
+} finally { Set-HordeMemoryWakerFault -Call state -Kind "" }
+# ... and a RETIRED session whose mail cannot be read: the episode ends at once, and a tell not yet taken is not retried for it.
+$h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
+$postWas = $script:HordeWakeSendersPost
+try {
+    $script:HordeWakeSendersPost = $true
+    $script:retiredFlaps = 0
+    $flakyR = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) $script:retiredFlaps++; return (New-HordeUnknown -Reason "the messenger is away") } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+    foreach ($sec in @(0, 3)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flakyR -HordeHome $h }
+    Set-HordeMemoryWakerFault -Call state -Kind throw
+    Seat-Dup "yes" "yes" 2 "yes"
+    foreach ($sec in @(10, 301, 330)) { Set-HordeMemoryWakerClock (At $sec); $null = Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flakyR -HordeHome $h }
+    Check (-not $run.duplicate.ContainsKey((Sid 2))) "a retired session ends its episode though its mail cannot be read"
+    Check ($script:retiredFlaps -eq 1) ("and no tell is retried for it, in its wait or after (" + $script:retiredFlaps + " posts)")
+} finally { Set-HordeMemoryWakerFault -Call state -Kind ""; $script:HordeWakeSendersPost = $postWas; [void]$script:HordeMessengers.Remove("fixture-good") }
 # no tell is retried for a session whose copies have closed, within the wait.
 $h = New-Home; Reset-HordeMemoryWaker; Seat-Dup
 $postWas = $script:HordeWakeSendersPost
@@ -433,7 +508,7 @@ try {
     $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
     $tellKinds = New-Object System.Collections.ArrayList
     foreach ($sec in @(0, 3, 6, 100, 310, 313, 400, 700)) { if ($sec -eq 100) { Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "Scribe" -UnreadCount 6 -OldestUnreadAt (At -60) -Duplicate "yes" }; Set-HordeMemoryWakerClock (At $sec); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $sec) -Waker $memory -ReadSessions $none -Messenger $flaky -HordeHome $h)) { if ($e.kind -ceq "tell") { [void]$tellKinds.Add($e.outcome) } } }
-    Check ((@($tellKinds) -join ",") -ceq "unknown,posted" -and $script:dupPosts -eq 2) ("a first post that fails is tried again by a later pass and told, once, and not again after (" + (@($tellKinds) -join ",") + ", " + $script:dupPosts + " posts)")
+    Check ((@($tellKinds) -join ",") -ceq "unknown,awaiting" -and $script:dupPosts -eq 2) ("a first post that fails is tried again by a later pass and told, once, and not again after (" + (@($tellKinds) -join ",") + ", " + $script:dupPosts + " posts)")
     Check ($script:dupBodies.Count -eq 1 -and "$($script:dupBodies[0])".Contains("has 6 unread") -and "$($script:dupBodies[0])".Contains("Scribe") -and "$($script:dupBodies[0])".Contains((Sid 2)) -and "$($script:dupBodies[0])".Contains("Close all but one of the copies")) "and the retried mail carries the CURRENT count, names the session by its label and id, and says what to do"
 } finally { $script:HordeWakeSendersPost = $postWas }
 # THE WATCHER'S OWN SESSION AND A SENDER'S LABEL, through the tick, live: said once, never nudged.
@@ -678,7 +753,7 @@ try {
     $on = New-Object System.Collections.ArrayList
     foreach ($s in @(0, 3, 6)) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$on.Add($e) } }
     $tells = @($on | Where-Object { $_.kind -ceq "tell" })
-    Check ($tells.Count -eq 1 -and $tells[0].outcome -ceq "posted" -and @($on | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 0) "with the switch on, a live run tells the warchief for real, once"
+    Check ($tells.Count -eq 1 -and $tells[0].outcome -ceq "awaiting" -and @($on | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 0) "with the switch on, a live run posts the warchief the tell for real, once (awaiting its TAKEN, not yet told)"
     $got = & $watch.Observe $box $tells[0].messageId
     Check ($got.records -eq 1 -and "$(@($got.bodies)[0])".StartsWith("AUTOMATED, from the wake watcher: the mailbox of the session " + (Sid 2))) "the mail is in the messenger's store, one record, and says it is automated"
     Check ((Test-Path -LiteralPath (Join-Path $h "wake\tells-live.json")) -and -not (Test-Path -LiteralPath (Join-Path $h "wake\tells-of-live-run-shadow.json"))) "and what was really told is kept in the live file"
@@ -687,7 +762,7 @@ try {
     $dark = New-Object System.Collections.ArrayList
     foreach ($n in 0..11) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At (100 + $n * 3)) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$dark.Add($e) } }
     $told = @($dark | Where-Object { $_.kind -ceq "tell" })
-    Check ($told.Count -eq 1 -and $told[0].outcome -ceq "posted" -and (& $watch.Observe $box $told[0].messageId).records -eq 1) "a fleet that can no longer be read is told to the warchief the last good pass named: the pass that most needs somebody told is the one that cannot say who"
+    Check ($told.Count -eq 1 -and $told[0].outcome -ceq "awaiting" -and (& $watch.Observe $box $told[0].messageId).records -eq 1) "a fleet that can no longer be read is told to the warchief the last good pass named: the pass that most needs somebody told is the one that cannot say who"
     Set-HordeMemoryWakerFault -Call "targets" -Kind ""
     # THE RESTORE SOURCE TURNS ON WITH IT.
     $h = New-Home
@@ -695,7 +770,24 @@ try {
     $run = New-HordeWakeRun -Live -HordeHome $h
     $script:reads = 0
     $posts = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h | Where-Object { $_.kind -ceq "post" -or $_.kind -ceq "would-post" })
-    Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "posted" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted, and marked in the live file"
+    Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "awaiting" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted (awaiting their TAKEN), and the live file is kept"
+    # T-0116 (PR 472 follow-up): THE DUPLICATE'S NAME REACHES THE BODY OF THE BOUND STALL NOTICE. The restore source's
+    # own suite hands the names to the pass itself; this is the wiring in the tick (-DuplicateNames), which nothing else
+    # checked: without it a real run sends the notice with "unnamed" where the sessions belong.
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    $restoredChief = @($restored) + [pscustomobject]@{ id = (Sid 7); role = "warchief"; parent = ""; startedAt = (At -385); lastChangeAt = (At -383); status = "idle"; firstSeenAt = (At -90000) }
+    $readDupChief = { $a = New-HordeKnown -Value $restoredChief; Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "duplicates" -Value @([pscustomobject]@{ sessionId = (Sid 9); agents = @("agent-a"); sources = @("c\501.json", "c\502.json") }); $a }
+    $run = New-HordeWakeRun -Live -HordeHome $h
+    $boundLines = New-Object System.Collections.ArrayList
+    foreach ($s in @(0, 2000)) { Set-HordeMemoryWakerClock (At $s); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $readDupChief -Messenger $inProcess -HordeHome $h)) { [void]$boundLines.Add($e) } }
+    $boundStall = @($boundLines | Where-Object { $_.kind -ceq "stall" -and $_.outcome -ceq "awaiting" })
+    Check ($boundStall.Count -eq 1) ("past the bound a live run posts the bound stall notice, once (" + @($boundStall).Count + ")")
+    if ($boundStall.Count -eq 1) {
+        $boundGot = & $watch.Observe $box $boundStall[0].messageId
+        $boundBody = "$(@($boundGot.bodies)[0])"
+        Check ($boundGot.records -eq 1 -and $boundBody.Contains((Sid 9)) -and -not $boundBody.Contains("unnamed")) "and the body names the duplicated session, not 'unnamed': the tick hands the duplicates' names to the restore pass"
+    }
     # A SHADOW RUN IS SHADOW WHATEVER THE SWITCH SAYS.
     $h = New-Home
     Reset-HordeMemoryWaker
@@ -785,7 +877,7 @@ Check (@($kinds | Where-Object { $_ -clike "nudge:*:woken" }).Count -eq 2 -and @
 # THE RESTORE SOURCE IS SHADOW EVEN NOW: a restore is found and mail is planned, and none is posted.
 Check (@($kinds | Where-Object { $_ -clike "would-post:*" }).Count -eq 6 -and @($kinds | Where-Object { $_ -clike "would-stall:*" }).Count -eq 1 -and @($kinds | Where-Object { $_ -clike "post:*" -or $_ -clike "stall:*" }).Count -eq 0) ("in a live run the restore source still only journals would-post and would-stall, and posts nothing (" + (@($kinds | ForEach-Object { ($_ -split ":")[0] } | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,restore-of-live-run-shadow.json,silence-live.json") ("it wrote the live run's own journal, heartbeat and ledger, and kept what the source would have posted in a shadow file of its own - never restore-live.json, which is for mail really posted (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-live.json,heartbeat-live.json,journal-live.jsonl,ledger-live.json,restore-of-live-run-shadow.json,silence-live.json") ("it wrote the live run's own journal, heartbeat and ledger, and kept what the source would have posted in a shadow file of its own - never restore-live.json, which is for mail really posted (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.shadow -eq $false -and $beat.value.pass -eq 2 -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat is the live one, marked not shadow, and no shadow heartbeat was written"
 # A SHADOW RUN BESIDE IT, on the same home: each keeps its own heartbeat and journal.
@@ -902,11 +994,18 @@ $proved = @(Invoke-HordeWakeTick -Run $proof -Now (At 0) -Waker $memory -ReadSes
 Check ($proof.mode -ceq "proof" -and $proof.live -eq $true -and @(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($proved | Where-Object { $_ -ceq "nudge" }).Count -eq 1) "a proof run's tick sends the real nudge"
 Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq "tell" }).Count -eq 0 -and @($proved | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "and posts nothing: the senders are shadow in a proof run"
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-live.json,restore-of-proof-run-shadow.json,silence-live.json") ("it wrote the proof run's own journal and heartbeat, and counted its nudge in the ONE ledger the sending runs share - no ledger of its own (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-proof.json,heartbeat-proof.json,journal-proof.jsonl,ledger-live.json,restore-of-proof-run-shadow.json,silence-live.json") ("it wrote the proof run's own journal and heartbeat, and counted its nudge in the ONE ledger the sending runs share - no ledger of its own (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
 $switchWas = $script:HordeWakeSendersPost
 try { $script:HordeWakeSendersPost = $true; Check ((Test-HordeWakeSendersShadow -Run $proof) -eq $true -and (Test-HordeWakeSendersShadow -Run (New-HordeWakeRun -Mode "live" -HordeHome $h)) -eq $false) "with the senders' switch on, a live run posts and a proof run still does not" } finally { $script:HordeWakeSendersPost = $switchWas }
+$liveRun = New-HordeWakeRun -Mode "live" -HordeHome $h
+try {
+    foreach ($notTrue in @(1, "True", "yes", 2, @($true), $null)) {
+        $script:HordeWakeSendersPost = $notTrue
+        Check ((Test-HordeWakeSendersShadow -Run $liveRun) -eq $true) ("with the senders' switch at something that is not a boolean true (" + (ConvertTo-Json -InputObject $notTrue -Compress) + "), a live run still posts nothing")
+    }
+} finally { $script:HordeWakeSendersPost = $switchWas }
 $threw = $false; try { $null = New-HordeWakeRun -Mode "LIVE" -HordeHome $h } catch { $threw = $true }
 Check $threw "a run cannot be made in a mode that is no mode"
 $lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
@@ -1018,6 +1117,93 @@ New-Item -ItemType Directory -Path (Join-Path $h "wake\run-shadow.lock") -Force 
 $took = "nothing"
 try { $took = Enter-HordeWakeLock -Shadow -ProcessId 4246 -HordeHome $h; if ($null -eq $took) { $took = "refused as held" } } catch { $took = "threw: " + $_.Exception.Message }
 Check ("$took".StartsWith("threw: ")) ("a lock that cannot be opened for another reason - a folder stands where it belongs - is thrown as what it is, never answered as 'already running' (" + $took + ")")
+
+Write-Host ""
+Write-Host "--- a shadow run backs off, gives up and finds a silent fleet exactly as a live run does, on a ledger of its own (T-0116) ---" -ForegroundColor Cyan
+
+# THE SCENES: sessions with unread mail that never take it, on a waker whose state is cheap (the box and the turn are
+# unknown until a LOOK, so every nudge needs one), a tick every 3 s for half an hour. A live run asks the waker and is
+# answered woken; a shadow run asks nobody. WHAT THE SHADOW LOOKS AT AND JOURNALS MUST BE WHAT THE LIVE RUN LOOKS AT AND
+# ASKS - the same seconds, the same sessions - or its 48 hours are no picture of the live pace, and every look is about four
+# terminal calls (Smart App Control blocked the terminal once, 11-16).
+# A would-nudge stands for a nudge answered woken: a counted attempt (back-off, caps, give-up) and a nudge the silence reads.
+$noSessions = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
+function Invoke-BackoffScene {
+    param([string]$Mode, [string]$HordeHome, [int]$Sessions, [int]$Horizon = 1800)
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerCheap -On $true
+    foreach ($n in 1..$Sessions) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
+    $run = New-HordeWakeRun -Mode $Mode -Self "" -HordeHome $HordeHome
+    $nudged = New-Object System.Collections.ArrayList
+    $looked = New-Object System.Collections.ArrayList
+    $said = New-Object System.Collections.ArrayList
+    $seenLooks = 0
+    for ($s = 0; $s -le $Horizon; $s += 3) {
+        Set-HordeMemoryWakerClock (At $s)
+        foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $noSessions -TickSeconds 3 -ProcessId 4242 -HordeHome $HordeHome)) {
+            if (@("nudge", "would-nudge") -ccontains "$($e.kind)") { [void]$nudged.Add("" + $s + ":" + $e.id) }
+            if (@("fleet-silent", "fleet-moving", "silent-probes-ended", "gave-up") -ccontains "$($e.kind)") { [void]$said.Add("" + $s + ":" + $e.kind) }
+        }
+        $now = @(Get-HordeMemoryWakerLooks).Count
+        for ($k = $seenLooks; $k -lt $now; $k++) { [void]$looked.Add("" + $s) }
+        $seenLooks = $now
+    }
+    Set-HordeMemoryWakerCheap -On $false
+    return [pscustomobject]@{ nudged = @($nudged); looked = @($looked); said = @($said); asks = @(Get-HordeMemoryWakerAsks).Count; run = $run }
+}
+function Show-Pace { param($List) return (@($List | ForEach-Object { $p = "$_" -split ":"; $p[0] + $(if ($p.Count -gt 1) { "/" + $p[1].Substring($p[1].Length - [System.Math]::Min(1, $p[1].Length)) } else { "" }) }) -join ",") }
+$liveLedgerText = '{"schemaVersion":1,"sessions":[{"id":"0a000000-0000-4000-8000-000000000099","attempts":2,"lastAttemptAt":"2026-10-12T07:00:00.0000000Z","lastOutcome":"woken"}]}'
+
+foreach ($count in @(3, 2)) {
+    $label = $(if ($count -ge [int](Get-HordeWakeSettings).fleetSilentSessions) { "a fleet that goes silent (" + $count + " sessions)" } else { "a fleet that does not (" + $count + " sessions)" })
+    $liveHome = New-Home
+    $liveScene = Invoke-BackoffScene -Mode "live" -HordeHome $liveHome -Sessions $count
+    $shadowHome = New-Home
+    # A live ledger already on the shadow run's home, which a shadow run must leave as it is, byte for byte.
+    New-Item -ItemType Directory -Path (Join-Path $shadowHome "wake") -Force | Out-Null
+    $liveLedgerPath = Join-Path $shadowHome "wake\ledger-live.json"
+    [System.IO.File]::WriteAllText($liveLedgerPath, $liveLedgerText)
+    $liveBytes = [System.IO.File]::ReadAllBytes($liveLedgerPath)
+    $liveStamp = (Get-Item -LiteralPath $liveLedgerPath).LastWriteTimeUtc
+    $shadowScene = Invoke-BackoffScene -Mode "shadow" -HordeHome $shadowHome -Sessions $count
+    Check ($liveScene.asks -ge $count -and $liveScene.nudged.Count -eq $liveScene.asks -and $liveScene.asks -lt 6 * $count + 20 -and $liveScene.looked.Count -ge $liveScene.asks) ("CONTROL, " + $label + ": the live run asked the waker " + $liveScene.asks + " times, looking " + $liveScene.looked.Count + " times first: never one a pass")
+    Check ($shadowScene.asks -eq 0) ("CONTROL, " + $label + ": the shadow run asked the waker for no nudge")
+    Check ($shadowScene.nudged.Count -eq $liveScene.nudged.Count) ($label + ": the shadow run journals as many would-nudges as the live run asked (" + $shadowScene.nudged.Count + " and " + $liveScene.nudged.Count + ")")
+    Check ((@($shadowScene.nudged) -join ",") -ceq (@($liveScene.nudged) -join ",")) ($label + ": at the very same seconds, for the very same sessions (shadow " + (Show-Pace $shadowScene.nudged) + "; live " + (Show-Pace $liveScene.nudged) + ")")
+    Check ((@($shadowScene.looked) -join ",") -ceq (@($liveScene.looked) -join ",")) ($label + ": and looks at the very same seconds (shadow " + (Show-Pace $shadowScene.looked) + "; live " + (Show-Pace $liveScene.looked) + ")")
+    Check ((@($shadowScene.said) -join ",") -ceq (@($liveScene.said) -join ",")) ($label + ": and says the same of the fleet at the same seconds: silent, given up (shadow " + (Show-Pace $shadowScene.said) + "; live " + (Show-Pace $liveScene.said) + ")")
+    $shadowLedger = Read-HordeWakeLedger -Mode "shadow" -HordeHome $shadowHome
+    $liveLedger = Read-HordeWakeLedger -Mode "live" -HordeHome $liveHome
+    Check ($shadowLedger.state -ceq "known" -and $liveLedger.state -ceq "known" -and (@(1..$count | ForEach-Object { $e = $shadowLedger.value.ledger[(Sid $_)]; $l = $liveLedger.value.ledger[(Sid $_)]; "" + $e.attempts + "/" + (Get-HordeWakeEntryValue $e "gaveUp") }) -join ",") -ceq (@(1..$count | ForEach-Object { $e = $liveLedger.value.ledger[(Sid $_)]; "" + $e.attempts + "/" + (Get-HordeWakeEntryValue $e "gaveUp") }) -join ",")) ($label + ": the shadow run's own ledger ends where the live run's does, attempts and give-ups alike")
+    Check ([System.Linq.Enumerable]::SequenceEqual([byte[]]$liveBytes, [byte[]][System.IO.File]::ReadAllBytes($liveLedgerPath)) -and (Get-Item -LiteralPath $liveLedgerPath).LastWriteTimeUtc -eq $liveStamp) ($label + ": the live ledger on the shadow run's home is the same bytes, and was not written, after the whole shadow run")
+    $namesShadow = @(Get-ChildItem -LiteralPath (Join-Path $shadowHome "wake") | ForEach-Object { $_.Name } | Sort-Object)
+    Check (@($namesShadow | Where-Object { $_ -clike "*-live*" -and $_ -cne "ledger-live.json" }).Count -eq 0 -and $namesShadow -ccontains "ledger-shadow.json") ($label + ": the shadow run wrote the shadow ledger and no other file of a live run (" + ($namesShadow -join ",") + ")")
+    if ($count -lt [int](Get-HordeWakeSettings).fleetSilentSessions) {
+        # THE GIVE-UP ITSELF: two sessions are never a silent fleet, so each is nudged six times and then left alone.
+        $late = @($shadowScene.nudged + $shadowScene.looked | Where-Object { [int](($_ -split ":")[0]) -gt 900 })
+        Check ($shadowScene.nudged.Count -eq 6 * $count -and $late.Count -eq 0) ($label + ": six would-nudges a session, then neither a look nor a would-nudge after the give-up (" + $shadowScene.nudged.Count + " nudges, " + $late.Count + " late)")
+        Check (@(1..$count | Where-Object { $e = $shadowLedger.value.ledger[(Sid $_)]; $null -ne $e -and [int]$e.attempts -eq 6 -and (Get-HordeWakeEntryValue $e "gaveUp") -eq $true }).Count -eq $count) ($label + ": and every session is given up on in the shadow run's own ledger")
+    }
+    else {
+        Check (@($shadowScene.said | Where-Object { $_ -clike "*:fleet-silent" }).Count -eq 1) ($label + ": the shadow run finds the fleet silent, once, as the live run does")
+    }
+}
+
+Write-Host ""
+Write-Host "--- only a real boolean true makes a run send (T-0116) ---" -ForegroundColor Cyan
+
+foreach ($odd in @(1, "True", "true", "yes", "1", 2, $null)) {
+    $shown = $(if ($null -eq $odd) { "null" } else { "" + $odd.GetType().Name + " " + $odd })
+    $fake = [pscustomobject]@{ mode = "live"; live = $odd }
+    Check ((Get-HordeWakeRunMode -Run $fake) -ceq "shadow") ("a run whose live member is " + $shown + " is shadow")
+}
+$fake = [pscustomobject]@{ mode = "live" }
+$gotMode = "threw"
+try { $gotMode = Get-HordeWakeRunMode -Run $fake } catch { $gotMode = "threw" }
+Check ($gotMode -ceq "shadow") "a run with no live member at all is shadow, not an error"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "live"; live = $true })) -ceq "live") "CONTROL: a real true with mode live is live"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "proof"; live = $true })) -ceq "proof") "CONTROL: a real true with mode proof is proof"
+Check ((Get-HordeWakeRunMode -Run ([pscustomobject]@{ mode = "proof"; live = 1 })) -ceq "shadow") "and a proof run whose live member is the number 1 is shadow"
 
 } finally {
     Reset-HordeMemoryWaker

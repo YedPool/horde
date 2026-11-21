@@ -36,7 +36,7 @@ function Get-Index { $p = Get-HordeCollectIndexPath; if (-not (Test-Path -Litera
 function Set-Old { param([string]$Path, [datetime]$At) (Get-Item -LiteralPath $Path).LastWriteTimeUtc = $At }
 
 try {
-    $env:USERPROFILE = Join-Path $work "profile"
+    $env:USERPROFILE = New-HordeTestProfile (Join-Path $work "profile")
     $env:HORDE_HOME = Join-Path $work "home"
     $now = [datetime]::UtcNow
     $settledAt = $now.AddHours(-1)
