@@ -645,12 +645,15 @@ exit 125
     Check ($nc -eq 0) ("the night ends exit 0 (" + $nc + ")")
     Check ($calls.Count -eq 13) ("every unit went to the gate twice (T-0491: a gate that ran nothing puts it back on the queue once) and the guards once: 2x2 + 1 + 4x2 (" + $calls.Count + ")")
     $scripts = @($calls | ForEach-Object { ($_ -split '\|')[0] })
-    Check ($calls.Count -ge 5 -and @($scripts[0..3] | Where-Object { $_ -cne "pytest-wrap.ps1" }).Count -eq 0 -and $scripts[4] -ceq "guards-wrap.ps1") ("the 2-unit repo ran first, though given second (" + ($scripts -join ", ") + ")")
+    # The first pass of every repo, then the second tries (T-0504): the 2-unit repo's 2 first tries, the guards and the
+    # 4 horde first tries, then the pytest repo's 2 second tries, then horde's 4.
+    $pyAt = @(0, 1, 7, 8)
+    Check ($calls.Count -eq 13 -and @($pyAt | Where-Object { $scripts[$_] -cne "pytest-wrap.ps1" }).Count -eq 0 -and $scripts[2] -ceq "guards-wrap.ps1" -and @(@(3..6) + @(9..12) | Where-Object { $scripts[$_] -ceq "pytest-wrap.ps1" -or $scripts[$_] -ceq "guards-wrap.ps1" }).Count -eq 0) ("the 2-unit repo ran first, though given second, and every second try came after every repo's first pass (" + ($scripts -join ", ") + ")")
     # 23:00 is night: the night floors of each kind (core Get-HordeNightlyNightFloors), not -MinFreeGB.
-    Check ($calls.Count -eq 13 -and @($calls[0..3] | Where-Object { ($_ -split '\|')[1] -cne "2.5" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the pytest gates were given the pytest night floor, 2.5 GB free and 1 GB commit headroom"
-    Check ($calls.Count -eq 13 -and @($calls[4..12] | Where-Object { ($_ -split '\|')[1] -cne "1" -or ($_ -split '\|')[2] -cne "1" }).Count -eq 0) "the guards and the horde units were given 1 GB free and 1 GB commit headroom"
+    Check ($calls.Count -eq 13 -and @($pyAt | Where-Object { ($calls[$_] -split '\|')[1] -cne "2.5" -or ($calls[$_] -split '\|')[2] -cne "1" }).Count -eq 0) "the pytest gates were given the pytest night floor, 2.5 GB free and 1 GB commit headroom"
+    Check ($calls.Count -eq 13 -and @(@(0..12) | Where-Object { $pyAt -notcontains $_ } | Where-Object { ($calls[$_] -split '\|')[1] -cne "1" -or ($calls[$_] -split '\|')[2] -cne "1" }).Count -eq 0) "the guards and the horde units were given 1 GB free and 1 GB commit headroom"
     $waits = @($calls | ForEach-Object { ($_ -split '\|')[3] }) -join ","
-    Check ($waits -ceq "900,120,120,120,120,900,120,120,120,120,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
+    Check ($waits -ceq "900,120,120,900,120,120,120,120,120,120,120,120,120") ("the wait is short after a memory give-up and normal again after a gate got its memory (" + $waits + ")")
     $rf = Join-Path $hwr ("reports\" + $night.ToString("yyyy-MM-dd") + ".txt")
     $rtext = $(if (Test-Path -LiteralPath $rf) { [System.IO.File]::ReadAllText($rf) } else { "" })
     Check ($rtext -like "*REPO Fix/Hord*units run: 0, not run (slot, memory or night ran out): 4*") "the horde repo, every unit given up, reports 0 units run"
@@ -872,6 +875,13 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     Check ($ql -like "*Fix/Hq test/test-a.ps1|ps51 gave up waiting for the slot (exit 125): back on the end of the night's queue*") "T-0491: and so for a suite"
     Check ($qr -like "*REPO Fix/Pq*not run (slot, memory or night ran out): 0*" -and $qr -like "*REPO Fix/Hq*not run (slot, memory or night ran out): 0*") "T-0491: every unit ran on its second try, so none is reported not run"
     Check ($qr -notlike "*the pytest run did not complete*") "T-0491: and the pytest run is not reported incomplete"
+    # T-0504: THE SECOND TRY COMES AFTER EVERY REPO'S FIRST PASS, not at the end of its own repo's queue. Nights 11-20 and
+    # 11-21: Universal pytest-all gave up on memory at 22:16, was tried again 4 minutes later behind its own 1 other unit
+    # with the memory still held, and gave up again; horde's 480 units ran after it. Fix/Hq runs first here (2 units each,
+    # ties in the order given), so its suites' second tries must come after Fix/Pq's first tries.
+    $hqA = @(for ($k = 0; $k -lt $qSeen.Count; $k++) { if ($qSeen[$k] -like "*test-a.ps1*") { $k } })
+    Check ($hqA.Count -eq 4) ("T-0504: each Fix/Hq suite was asked for twice, a give-up and a second try (" + $hqA.Count + ")")
+    Check ($hqA.Count -eq 4 -and $pyAll.Count -ge 1 -and $flake.Count -ge 1 -and $hqA[2] -gt $pyAll[0] -and $hqA[2] -gt $flake[0]) ("T-0504: a suite's second try comes after the other repo's first tries, not right behind its own repo (" + ($qScripts -join ", ") + ")")
     # Sent back, but the queue ends (a STOP, made by this gate in the net's work folder, its working directory) before
     # pytest-all's second try: it is counted NOT RUN, never dropped from the count.
     $sGate = Join-Path $qn "stop-gate.ps1"
