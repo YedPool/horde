@@ -8,6 +8,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-tick-does-not-hand-the-process-start-to-the-heartbeat"
+           Find = '-Counts $Run.counts -ProcessStartedAt $ProcessStartedAt'
+           Replace = '-Counts $Run.counts' }
         @{ Name = "episode-ends-when-the-mail-is-taken"
            Find = 'foreach ($id in @($result.duplicateOn.Keys)) {'
            Replace = 'foreach ($id in @($result.duplicate.Keys)) {' }

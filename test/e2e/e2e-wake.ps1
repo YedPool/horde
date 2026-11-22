@@ -130,7 +130,22 @@ $asked = @(Read-FakeLog "argv.log" | ForEach-Object { @($_.argv) -join " " })
 Check (@($asked | Where-Object { $_ -clike "mail nudge*" }).Count -eq 0 -and @($asked | Where-Object { $_ -ceq "mail state -Json" }).Count -eq 1) ("and the fleet's command was never asked to nudge: it was asked for the fleet's state once (" + ($asked -join " | ") + ")")
 Check (@($asked | Where-Object { $_ -clike ("mail state -To " + $idle + " *") }).Count -eq 1 -and @($asked | Where-Object { $_ -clike ("mail state -To " + $busy + " *") }).Count -eq 0) "a pane was read for the one candidate, and not for the session that is not idle"
 $names = @(Get-ChildItem -LiteralPath $wakeDir | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "counts-shadow.json,heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock,silence-shadow.json") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")
+# T-0502: THE REAL COMMAND'S HEARTBEAT NAMES ITS OWN PROCESS'S START. The process has ended, so it cannot be compared with
+# the table; it must be a time in UTC, before the beat itself (the process started, loaded, then ticked) and not long before.
+# ConvertFrom-Json hands a time back as text under Windows PowerShell 5.1 and as a DateTime under PowerShell 7; both are read as an
+# instant plus whether the file said UTC.
+function Get-E2eBeatTime {
+    param($Value)
+    if ($Value -is [datetime]) { return [pscustomobject]@{ utc = ($Value.Kind -ne [System.DateTimeKind]::Unspecified); at = $Value.ToUniversalTime() } }
+    $parsed = [datetime]::MinValue
+    if ($Value -is [string] -and [datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return [pscustomobject]@{ utc = $Value.EndsWith("Z"); at = $parsed.ToUniversalTime() } }
+    return $null
+}
+$beatJson = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-shadow.json")) | ConvertFrom-Json
+$startTime = Get-E2eBeatTime $beatJson.startedAt
+$beatTime = Get-E2eBeatTime $beatJson.at
+Check ($null -ne $startTime -and $null -ne $beatTime -and $startTime.utc -and ($beatTime.at - $startTime.at).TotalSeconds -gt 0 -and ($beatTime.at - $startTime.at).TotalSeconds -lt 600) "the command's heartbeat carries its own process's start, in UTC, before the beat (so the supervisor can count the watcher alive)"
 # CALLED FROM INSIDE A SESSION THAT SETS DEFAULTS FOR PARAMETERS BY NAME, the run is still shadow: horde is
 # started here by -Command, in a PowerShell whose $PSDefaultParameterValues says every -Mode is live.
 $psi = New-Object System.Diagnostics.ProcessStartInfo
