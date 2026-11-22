@@ -1436,11 +1436,27 @@ try {
         Check ($refusedLines.Count -eq 1 -and $retryLines.Count -eq ($capN - 1)) ("the runner's log carries each failure as a retry line and the refusal once, as 'refused <key>: ...' (" + $refusedLines.Count + " refused, " + $retryLines.Count + " retry)")
         # (8b) NO SILENT LOSS: the founder's phone is told, once, through the machine's own notices (the log is not read by him).
         $n8 = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
-        $mine8 = @($n8 | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("decisions") -and $_.text.Contains($e8.header.from + "/decisions/") -and $_.text.Contains("after 5 failures") -and $_.text.Contains("Last error: always") })
+        $mine8 = @($n8 | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("decisions") -and $_.text.Contains($e8.header.from + "/decisions/") -and $_.text.Contains("after 5 failures") -and $_.text.Contains("Last error type: System.") -and -not $_.text.Contains("always") })
         $null = Invoke-Turn $W8
         $null = Invoke-Turn $W8
         $n8b = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
         Check ($mine8.Count -eq 1 -and $n8b.Count -eq $n8.Count) ("a refusal by the cap sends the founder ONE notice naming the channel, the key and the last error, and later turns send no more (" + $mine8.Count + " of " + $n8.Count + " notices; " + $n8b.Count + " after two more turns)")
+        # (8c) THE NOTICE NEVER CARRIES THE RECORD'S CONTENT: a cast error quotes the value it could not cast, so a
+        # channel that casts a field of the founder's answer throws his words. The notice names the error's TYPE; the
+        # runner's own log line keeps the whole message.
+        $marker = "MARKER-the-founders-private-words-4471"
+        $expectType = ""
+        try { $null = [int]$marker } catch { $expectType = $_.Exception.GetType().FullName }
+        $W10 = New-World
+        [System.IO.File]::WriteAllText((Join-Path $W10.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50}}', $utf8)
+        $decCh.accept = { param($Context, $Item) return ([int]"MARKER-the-founders-private-words-4471") }
+        $e10 = Get-Answer $W10
+        [void](Send-ToMachine $W10 $e10.text)
+        $said10 = New-Object System.Collections.ArrayList
+        $null = Invoke-HordeRelayRun -HordeHome $W10.home -Connection $W10.conn -MaxTurns ($capN + 1) -Say { param($Line) [void]$said10.Add($Line) }
+        $n10 = @((Read-HordeNoticeLog -Store (Join-Path $W10.home "notices")).value | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("after 5 failures") })
+        $log10 = @($said10 | Where-Object { $_.StartsWith("refused ") })
+        Check ($expectType -cne "" -and $n10.Count -eq 1 -and $n10[0].text.Contains($expectType) -and -not $n10[0].text.Contains($marker) -and $log10.Count -eq 1 -and $log10[0].Contains($marker)) ("a cast error that quotes the founder's words is named by its type in the notice (" + $expectType + "), never quoted; the runner's log keeps the message (" + $n10.Count + " notice)")
         # (9) A GAP IN THE MARKS DOES NOT MAKE THE CAP UNREACHABLE: fail1 and fail3 with fail2 deleted from outside.
         $W9 = New-World
         $decCh.accept = { param($Context, $Item) throw "gap" }

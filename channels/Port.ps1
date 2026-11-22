@@ -713,7 +713,7 @@ function Invoke-HordeRelayUnfinished {
                 if ($counted.state -cne "known") { [void]$retry.Add($line + "; its failure could not be counted (" + $counted.reason + "), so it comes again"); continue }
                 $times = [int]$counted.value.failures
                 if ($times -lt $script:HordeRelayChannelFailureCap) { [void]$retry.Add($line + " (failure " + $times + " of " + $script:HordeRelayChannelFailureCap + ")"); continue }
-                $capped = [pscustomobject]@{ times = $times; detail = $outcome.detail }
+                $capped = [pscustomobject]@{ times = $times; detail = $outcome.detail; detailType = $outcome.detailType }
                 $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed on this record " + $times + " times and is not asked again; the last: " + $outcome.detail); channelFault = $false; detail = "" }
                 $line = $u.key + ": " + $outcome.reason
             }
@@ -728,9 +728,12 @@ function Invoke-HordeRelayUnfinished {
             # (a sender, a channel, a number and a nonce) and a bounded last error - never the record's content;
             # Submit-HordeSystemNotice refuses anything that looks like a secret.
             if ($null -ne $capped) {
-                $err = ([regex]::Replace("" + $capped.detail, '\p{Cc}', ' ')).Trim()
+                # THE NOTICE NAMES THE ERROR'S TYPE, NEVER ITS MESSAGE: a cast error quotes the value it could not cast
+                # (Cannot convert value "<the founder's answer>" to type "System.Int32"), so the message can carry the
+                # record's content. The full message stays in the runner's own log line (the refusal above).
+                $err = ([regex]::Replace("" + $capped.detailType, '\p{Cc}', ' ')).Trim()
                 if ($err.Length -gt 120) { $err = $err.Substring(0, 117) + "..." }
-                $told = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $Now -Text ("A record of the relay's " + $name + " channel was refused after " + $capped.times + " failures: " + $u.key + ". Last error: " + $err)
+                $told = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $Now -Text ("A record of the relay's " + $name + " channel was refused after " + $capped.times + " failures: " + $u.key + ". Last error type: " + $err)
                 if ($told.outcome -ceq "failed") { $line = $line + "; the founder could not be told (" + $told.reason + ")" }
             }
             [void]$refused.Add($line)
@@ -786,10 +789,10 @@ function Invoke-HordeRelayChannelRecord {
     $item = $o.item
     $got = $null
     try { $got = & $Channel.accept $Context $item }
-    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $true; detail = $_.Exception.Message } }
+    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $true; detail = $_.Exception.Message; detailType = $_.Exception.GetType().FullName } }
     $got = @($got) | Select-Object -Last 1
     if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayChannelOutcomes -cnotcontains "$($got.outcome)") {
-        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry"); channelFault = $true; detail = "it answered with something that is not done, refused or retry" }
+        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry"); channelFault = $true; detail = "it answered with something that is not done, refused or retry"; detailType = "an answer that is not done, refused or retry" }
     }
     $why = $(if ($null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
     return [pscustomobject]@{ outcome = "$($got.outcome)"; reason = $why; channelFault = $false; detail = "" }
