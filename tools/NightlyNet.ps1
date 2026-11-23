@@ -489,7 +489,6 @@ function Invoke-NightlyUnitQueue {
     # Nights 2026-11-20 and 11-21: Universal pytest-all gave up on memory at 22:16; tried again at the end of its own
     # 2-unit queue it came back 4 minutes later, with the memory still held, and gave up again; 480 horde units then ran.
     param($Ctx, [string[]]$Queue, [string]$Tag, [datetime]$Cutoff, [datetime]$RunCutoff, [switch]$Retries)
-    $tag = $Tag
     foreach ($u in @($Queue)) {
         if (Test-Path -LiteralPath $StopFile) { $Ctx.incomplete = "STOP file seen"; break }
         # A unit whose declared need the night lacks is SKIPPED with the reason: not run, not red, never green.
