@@ -954,6 +954,37 @@ Write-Output "heavy-slot: gave up after 1 s waiting for the slot; nothing was ru
     $sr = $(if (Test-Path -LiteralPath $srf) { [System.IO.File]::ReadAllText($srf) } else { "" })
     Check ($sr -like "*REPO Fix/Ps*not run (slot, memory or night ran out): 2*") ("T-0491: pytest-all sent back whose second try never came is counted not run, with flake8 (" + (@($sr -split "`n" | Where-Object { $_ -like "*not run*" }) -join " | ") + ")")
 
+    # T-0514 (b): A UNIT THAT NO LONGER FITS IS SKIPPED, NOT A BREAK THAT DROPS EVERY UNIT BEHIND IT. Night 2026-11-22:
+    # Universal's pytest-all (3600 s, never fitted down) no longer fitted, and the queue's break dropped flake8-critical
+    # behind it, which would have fitted. Here the slot wait is set so about 1800 s of the night are left when the queue
+    # starts: too few for a 3600 s pytest-all, plenty for a 60 s flake8.
+    $fn = Join-Path $work "nofit"; [void][System.IO.Directory]::CreateDirectory($fn)
+    $fGate = Join-Path $fn "gate.ps1"
+    [System.IO.File]::WriteAllText($fGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = @(); if ($ArgsFile -ne "") { $j = [System.IO.File]::ReadAllText($ArgsFile) | ConvertFrom-Json; foreach ($x in $j) { $a += ("" + $x) } }
+Add-Content -LiteralPath (Join-Path $PSScriptRoot "seen.txt") -Value ($Script + " " + ($a -join " "))
+[System.IO.File]::WriteAllText($Out, "")
+$i = [array]::IndexOf($a, "-NodesFile"); if ($i -ge 0) { [System.IO.File]::WriteAllText($a[$i + 1], "") }
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0
+'@)
+    $fwr = Join-Path $fn "wr"
+    & git.exe clone -q $origin (Join-Path $fwr "Fix__Pf\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $fWait = [int][math]::Floor(((Get-HordeNightlyRunCutoff -Now $qNight) - (Get-Date)).TotalSeconds) - 1800
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $qNight.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $fwr -HeavySlotScript $fGate -SlotWaitSeconds $fWait -RunSeconds 60 -LongRunSeconds 3600 -MinFitSeconds 60 -Repos "Fix/Pf:pytest:main")
+    $fc = $LASTEXITCODE
+    $fSeen = @(); if (Test-Path -LiteralPath (Join-Path $fn "seen.txt")) { $fSeen = @(Get-Content -LiteralPath (Join-Path $fn "seen.txt")) }
+    $frf = Join-Path $fwr ("reports\" + $qNight.ToString("yyyy-MM-dd") + ".txt")
+    $fr = $(if (Test-Path -LiteralPath $frf) { [System.IO.File]::ReadAllText($frf) } else { "" })
+    $fl = $(if (Test-Path -LiteralPath (Join-Path $fwr "nightly.log")) { [System.IO.File]::ReadAllText((Join-Path $fwr "nightly.log")) } else { "" })
+    Check ($fc -eq 0) ("T-0514: the night ends exit 0 (" + $fc + ")")
+    Check (@($fSeen | Where-Object { $_ -like "pytest-wrap.ps1 *-Mode all*" }).Count -eq 0) ("T-0514: pytest-all, which no longer fits, is not started (" + ($fSeen -join " | ") + ")")
+    Check (@($fSeen | Where-Object { $_ -like "pytest-wrap.ps1 *-Mode flake8*" }).Count -eq 1) ("T-0514: flake8-critical behind it, which fits, still runs (" + ($fSeen -join " | ") + ")")
+    Check ($fl -like "*Fix/Pf pytest-all -> not tried, the night has no room for it (needs 3600 s, *") "T-0514: the log says pytest-all was not tried and why"
+    Check ($fl -like "*Fix/Pf flake8-critical -> green*") "T-0514: and flake8-critical's verdict is logged"
+    Check ($fr -like "*REPO Fix/Pf*not run (slot, memory or night ran out): 1*") ("T-0514: the pytest-all never tried is counted not run, never dropped (" + (@($fr -split "`n" | Where-Object { $_ -like "*not run*" }) -join " | ") + ")")
+    Check ($fr -like "*INCOMPLETE: the night ran out before every unit ran*") "T-0514: and the night is reported incomplete, because the night ran out"
+
     # ONLY PYTEST'S SUMMARY NAMES A FAILED TEST (2026-11-05: the night's report listed a captured log line,
     # "ERROR    root:web_reader_dialog.py:2953 ...", as a newly red test). A fake python replays that shape.
     $replay = Join-Path $work "replay"

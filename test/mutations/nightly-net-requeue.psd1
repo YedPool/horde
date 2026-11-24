@@ -13,7 +13,7 @@
            Find = 'if ((Test-HordeNightlySlotLost $r) -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u))'
            Replace = 'if ($false -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u))' }
         @{ Name = "pytest-all-sent-back-never-counted"
-           Find = 'if ($Ctx.requeued.ContainsKey("pytest-all") -and -not $Ctx.pytestDecided)'
+           Find = 'if (@($Ctx.units) -ccontains "pytest-all" -and -not $Ctx.pytestDecided)'
            Replace = 'if ($false)' }
         @{ Name = "second-try-right-behind-its-own-repo"
            Find = 'foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff }'
