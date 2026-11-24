@@ -295,7 +295,7 @@ function Invoke-NightlySlot {
     if ($Seconds -le 0) { $Seconds = $RunSeconds }
     $floor = Get-NightlyFloor $Kind
     [void][System.IO.Directory]::CreateDirectory($RunDir)
-    $safe = ($Tag -replace '[^A-Za-z0-9._-]', '_')
+    $safe = Get-HordeNightlyFileStem $Tag
     $out = Join-Path $RunDir ($safe + ".log")
     $gateOut = Join-Path $RunDir ($safe + ".gate")
     $wait = Get-NightlySlotWait
@@ -367,7 +367,7 @@ function Invoke-NightlyUnit {
         return (Get-NightlyVerdict (Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "flake8") -Tag $Tag -Seconds $Seconds) -AtTip:$AtTip)
     }
     $node = ($Unit -split '\|', 2)[1]
-    $nf = Join-Path $RunDir (($Tag -replace '[^A-Za-z0-9._-]', '_') + ".nodes")
+    $nf = Join-Path $RunDir ((Get-HordeNightlyFileStem $Tag) + ".nodes")
     [System.IO.File]::WriteAllText($nf, $node + "`n")
     $r = Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $tree, "-Mode", "nodes", "-NodesFile", $nf) -Tag $Tag -Seconds $Seconds
     # pytest 4 (usage error: the file is not there) and 5 (nothing collected): the test is not in this commit.

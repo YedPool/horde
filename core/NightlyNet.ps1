@@ -459,6 +459,20 @@ function Get-HordeNightlyStoredVerdict {
     return ""
 }
 
+function Get-HordeNightlyFileStem {
+    # A run file's name (before .log, .gate, .args.json, .nodes) from a unit's tag. Night 2026-11-23 the net FAILED at
+    # 05:43 writing a bisect .nodes file named after a whole pytest node id: 281 characters of path, over MAX_PATH, and
+    # no report was written. A tag that fits keeps its readable name; a longer one keeps its first part (repo, bisect
+    # commit, unit kind) and ends in a short hash of the whole tag, so two long ids never share a file. The full id
+    # stays where it is read from: inside the .nodes file and in the log line.
+    param([string]$Tag, [int]$MaxLength = 80)
+    $safe = ($Tag -replace '[^A-Za-z0-9._-]', '_')
+    if ($safe.Length -le $MaxLength) { return $safe }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $hex = -join @($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Tag)) | ForEach-Object { $_.ToString("x2") }) } finally { $sha.Dispose() }
+    return ($safe.Substring(0, $MaxLength - 13) + "-" + $hex.Substring(0, 12))
+}
+
 function Format-HordeNightlyArgument {
     # One argument for a Windows command line (CommandLineToArgvW rules): bare when it holds no space or double quote,
     # otherwise quoted, with backslashes before a quote and at the end doubled.
