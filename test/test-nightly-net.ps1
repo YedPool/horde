@@ -833,6 +833,62 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
         Check ($netSource -like '*if ($NetClaimName -eq "" -and $AtTime -eq "" -and $HeavySlotScript -eq "") { $NetClaimName = "Global\HordeHeavySlot-NetClaim" }*') "a real run takes the machine's claim, a suite run never does"
     } else { $probe.Dispose(); Check ($true) "(the real net is running now: the machine's claim stands, not this suite's)" }
 
+    # A LONG PYTEST NODE ID NAMES NO FILE. Night 2026-11-23: the net FAILED at 05:43 writing a bisect .nodes file named
+    # after the whole node id, 281 characters of path (over MAX_PATH), and no report was written. Here the id is longer
+    # than a file name may be at all (255), so the old naming fails in both shells whatever the long-path setting.
+    $ln = Join-Path $work "long-node"; [void][System.IO.Directory]::CreateDirectory($ln)
+    $lGate = Join-Path $ln "gate.ps1"
+    $longNode = "tests/test_" + ("x" * 120) + ".py::Test" + ("Y" * 80) + "::test_" + ("z" * 100)
+    [System.IO.File]::WriteAllText((Join-Path $ln "exit.txt"), "0")
+    [System.IO.File]::WriteAllText((Join-Path $ln "node.txt"), $longNode)
+    [System.IO.File]::WriteAllText($lGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = @(); if ($ArgsFile -ne "") { $j = [System.IO.File]::ReadAllText($ArgsFile) | ConvertFrom-Json; foreach ($x in $j) { $a += ("" + $x) } }
+Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ($Script + " " + ($a -join " "))
+[System.IO.File]::WriteAllText($Out, "")
+$code = [int]([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "exit.txt")).Trim())
+$m = [array]::IndexOf($a, "-Mode"); $mode = $(if ($m -ge 0) { $a[$m + 1] } else { "" })
+$i = [array]::IndexOf($a, "-NodesFile")
+if ($Script -ceq "guards-wrap.ps1" -or $mode -ceq "flake8") { $code = 0 }
+elseif ($mode -ceq "all" -and $i -ge 0) { $body = $(if ($code -eq 0) { "" } else { [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "node.txt")) + "`n" }); [System.IO.File]::WriteAllText($a[$i + 1], $body) }
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out)
+Write-Output ("heavy-slot: released exit=" + $code)
+exit $code
+'@)
+    $lorigin = Join-Path $ln "origin"; [void][System.IO.Directory]::CreateDirectory($lorigin)
+    [void](Git $lorigin @("init", "-q", "-b", "main"))
+    [System.IO.File]::WriteAllText((Join-Path $lorigin "a.txt"), "base")
+    [void](Git $lorigin @("add", "-A")); [void](Git $lorigin @("commit", "-q", "-m", "base"))
+    $lwr = Join-Path $ln "wr"
+    & git.exe clone -q $lorigin (Join-Path $lwr "Fix__Ln\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $lArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $root "tools\NightlyNet.ps1"), "-AtTime", (Get-Date).Date.AddHours(23).ToString("s"), "-NoTell", "-BisectReserveMinutes", "30", "-CoverageFloorPercent", "0",
+        "-WorkRoot", $lwr, "-HeavySlotScript", $lGate, "-RunSeconds", "60", "-LongRunSeconds", "60", "-Repos", "Fix/Ln:pytest:main")
+    $o = @(& $exe @($lArgs + @("-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+    Check ($LASTEXITCODE -eq 0) ("long node: the first night is green (" + $LASTEXITCODE + ")")
+    foreach ($n in @("one", "two")) { [System.IO.File]::WriteAllText((Join-Path $lorigin ($n + ".txt")), $n); [void](Git $lorigin @("add", "-A")); [void](Git $lorigin @("commit", "-q", "-m", $n)) }
+    [System.IO.File]::WriteAllText((Join-Path $ln "exit.txt"), "1")
+    $o = @(& $exe @($lArgs + @("-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+    $lLog = [System.IO.File]::ReadAllText((Join-Path $lwr "nightly.log"))
+    $lTail = $lLog.Substring([Math]::Max(0, $lLog.LastIndexOf("window open")))
+    Check ($lTail -notlike "*the nightly net FAILED*") ("long node: the second night does not fail on the file name (" + (@($lTail -split "`n" | Where-Object { $_ -like "*FAILED*" }) -join " | ") + ")")
+    Check ($lTail -like ("* bisect pytest-node|" + $longNode + " -> *")) "long node: the bisect of the long node ran and logged its verdict under the full id"
+    Check ($lTail -like "*report written: *") "long node: and the report is written"
+    $lFiles = @(Get-ChildItem -LiteralPath (Join-Path $lwr "runs") -Recurse -File)
+    $lLong = @($lFiles | Where-Object { $_.Name.Length -gt 100 })
+    Check ($lFiles.Count -gt 0 -and $lLong.Count -eq 0) ("long node: no run file is named longer than 100 characters (" + $lFiles.Count + " files, longest " + (@($lFiles | ForEach-Object { $_.Name.Length } | Sort-Object -Descending) | Select-Object -First 1) + ")")
+    $lNodeFiles = @($lFiles | Where-Object { $_.Name -like "*-bisect-*.nodes" })
+    Check ($lNodeFiles.Count -ge 1 -and @($lNodeFiles | Where-Object { [System.IO.File]::ReadAllText($_.FullName).Trim() -cne $longNode }).Count -eq 0) ("long node: each bisect .nodes file holds the full node id (" + $lNodeFiles.Count + " files)")
+    $lShort = @($lNodeFiles | ForEach-Object { $_.Name } | Sort-Object -Unique)
+    Check ($lShort.Count -eq $lNodeFiles.Count) "long node: and the short names do not collide"
+    # The stem itself: a tag that fits is unchanged; a long one is cut to the limit with a hash of the WHOLE tag, so two
+    # ids that differ only past the cut get different files, and the same id always the same file.
+    Check ((Get-HordeNightlyFileStem "Fix_Ln-pytest-all") -ceq "Fix_Ln-pytest-all") "stem: a short tag keeps its name"
+    $stA = Get-HordeNightlyFileStem ("R-bisect-12345678-pytest-node|" + $longNode)
+    $stB = Get-HordeNightlyFileStem ("R-bisect-12345678-pytest-node|" + $longNode + "x")
+    Check ($stA.Length -le 80 -and $stA -like "R-bisect-12345678-pytest-node_tests_*") ("stem: a long tag is at most 80 characters and keeps its readable start (" + $stA + ")")
+    Check ($stA -cne $stB) "stem: two long tags that differ only past the cut get different names"
+    Check ($stA -ceq (Get-HordeNightlyFileStem ("R-bisect-12345678-pytest-node|" + $longNode))) "stem: the same tag always gives the same name"
+
     # T-0491: A UNIT WHOSE SLOT WAIT GAVE UP GOES BACK ON THE END OF THE QUEUE, through the real tool. 2026-11-16: a review
     # batch held the slot from 21:56, Universal pytest-all gave up at 22:16 (125) and was never tried again. This gate
     # gives up (125) the FIRST time it is asked for each run, then runs it green; the guards always run.
