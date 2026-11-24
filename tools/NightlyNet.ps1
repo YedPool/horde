@@ -500,7 +500,10 @@ function Invoke-NightlyUnitQueue {
         Invoke-NightlyAppCloser -Cutoff $Cutoff
         # The run limit fitted to the night (core Get-HordeNightlySuiteRunSeconds); the whole pytest run is never cut short.
         $secs = Get-HordeNightlySuiteRunSeconds -Now (Get-Date) -SuiteCutoff $Cutoff -RunCutoff $RunCutoff -WaitSeconds (Get-NightlySlotWait) -RunSeconds $need -MinSeconds $(if ($u -ceq "pytest-all") { $need } else { $MinFitSeconds })
-        if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; break }
+        # A unit that no longer fits is SKIPPED, never a break: a shorter unit behind it may still fit (T-0514; night
+        # 2026-11-22 the 3600 s pytest-all no longer fitted and the break dropped flake8-critical behind it, which did).
+        # It gets no verdict, so Complete-NightlyUnrun counts it not run.
+        if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not tried, the night has no room for it (needs " + $need + " s, " + [int][math]::Floor(($RunCutoff - (Get-Date)).TotalSeconds) + " s to the run cutoff, slot wait " + (Get-NightlySlotWait) + " s)"); continue }
         if ($u -ceq "pytest-all") {
             $nf = Join-Path $RunDir ($tag + "-nodes.txt")
             if (Test-Path -LiteralPath $nf) { Remove-Item -LiteralPath $nf -Force }
@@ -535,8 +538,8 @@ function Complete-NightlyUnrun {
     # After both passes: every unit with no verdict is NOT RUN, never dropped from the count.
     param($Ctx)
     $Ctx.unrun += @($Ctx.units | Where-Object { -not $Ctx.verdicts.ContainsKey($_) -and $_ -cne "pytest-all" }).Count
-    # pytest-all sent back whose second try never came (the night or a STOP ended the queue first): unrun.
-    if ($Ctx.requeued.ContainsKey("pytest-all") -and -not $Ctx.pytestDecided) { $Ctx.unrun++; if ($Ctx.incomplete -eq "") { $Ctx.incomplete = "the pytest run did not complete" } }
+    # pytest-all never decided (sent back with no second try, not tried because it no longer fitted, or a STOP): unrun.
+    if (@($Ctx.units) -ccontains "pytest-all" -and -not $Ctx.pytestDecided) { $Ctx.unrun++; if ($Ctx.incomplete -eq "") { $Ctx.incomplete = "the pytest run did not complete" } }
 }
 
 function Complete-NightlyCompare {
