@@ -129,10 +129,24 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Journal.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Join.ps1")
 . (Join-Path $PSScriptRoot "Sessions.ps1")
+# The founder's phone is told of a refused record through the notices the machine already sends for its own
+# events (Submit-HordeSystemNotice); channels/join loads the same file.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Decide.ps1")
 
 if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayChannels = [ordered]@{} }
 $script:HordeRelayChannelSenders = @("founder", "horde")
 $script:HordeRelayChannelOutcomes = @("done", "refused", "retry")
+# HOW MANY TIMES A CHANNEL MAY FAIL ON ONE RECORD (T-0467). A channel's Accept that throws, or answers with
+# something that is not done, refused or retry, is a retry that is the channel's own fault; a fault that
+# comes every time (a strict-mode error: a missing member, a mistyped variable) was handed the record again
+# on every turn for ever, and nobody was told. Past this many failures the record is refused for good, by
+# a line that names the channel, the count and the last error. FIVE: a transient fault (a file another
+# process holds, a store busy for a moment) mends within a turn or two, and each failure is a whole turn of
+# the runner, so five is a fault that has outlasted five turns and its backoffs; a smaller number would
+# refuse a founder's answer over a blip, a larger one repeats the same line for longer before anyone sees
+# it. A retry the channel ASKS for ("retry" with a reason, the decisions list busy) and the box's own
+# faults (the trust store, the journal) are not counted: they are not the record's fault.
+$script:HordeRelayChannelFailureCap = 5
 $script:HordeRelayChannelWordPattern = '\A[a-z][a-z0-9-]{0,31}\z'
 if ($null -eq (Get-Variable -Name HordeRelayDataKinds -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayDataKinds = [ordered]@{} }
 $script:HordeRelayDataKindPattern = '\A\{"v":1,"kind":"([a-z][a-z0-9-]{0,31})",'
@@ -675,6 +689,8 @@ function Invoke-HordeRelayUnfinished {
     # Step 6 of THE PATH IN: every journaled record of every registered channel that no channel has
     # finished, opened and handed to its channel. Known { done; refused; retry } - lines, one per record.
     # Unknown never: a channel whose journal cannot be read is a retry line, and the others go on.
+    # A channel that fails on a record (throws, or answers with nothing it may) is counted, and refused
+    # for good at HordeRelayChannelFailureCap failures (T-0467); every other retry is uncounted.
     param([Parameter(Mandatory = $true)]$Context, $Now = $null)
     $done = New-Object System.Collections.ArrayList
     $refused = New-Object System.Collections.ArrayList
@@ -688,10 +704,39 @@ function Invoke-HordeRelayUnfinished {
         foreach ($u in @($list.value)) {
             $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache -Now $Now
             $line = $u.key + ": " + $outcome.reason
+            $capped = $null
+            if ($outcome.outcome -ceq "retry" -and $outcome.channelFault) {
+                # The channel's own fault: count it beside the record, so the count outlives the runner. THE
+                # REFUSAL BELOW IS THE LINE A PERSON SEES: it goes out as "refused <key>: ..." in the run's
+                # log (cli/RelayRun.ps1, Get-HordeRelayRunLines), the line the runner says on every turn.
+                $counted = Add-HordeRelayJournalFailure -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome
+                if ($counted.state -cne "known") { [void]$retry.Add($line + "; its failure could not be counted (" + $counted.reason + "), so it comes again"); continue }
+                $times = [int]$counted.value.failures
+                if ($times -lt $script:HordeRelayChannelFailureCap) { [void]$retry.Add($line + " (failure " + $times + " of " + $script:HordeRelayChannelFailureCap + ")"); continue }
+                $capped = [pscustomobject]@{ times = $times; detail = $outcome.detail; detailType = $outcome.detailType }
+                $outcome = [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $name + " failed on this record " + $times + " times and is not asked again; the last: " + $outcome.detail); channelFault = $false; detail = "" }
+                $line = $u.key + ": " + $outcome.reason
+            }
             if ($outcome.outcome -ceq "retry") { [void]$retry.Add($line); continue }
             $mark = Complete-HordeRelayJournalReceived -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome -Now $Now
             if ($mark.state -cne "known") { [void]$retry.Add($line + "; but it could not be marked done (" + $mark.reason + "), so it comes again"); continue }
-            if ($outcome.outcome -ceq "done") { [void]$done.Add($line) } else { [void]$refused.Add($line) }
+            if ($outcome.outcome -ceq "done") { [void]$done.Add($line); continue }
+            # A RECORD REFUSED BY THE CAP IS USUALLY A FOUNDER'S ANSWER, SO HIS PHONE IS TOLD, ONCE (T-0467, no
+            # silent loss). It is sent only AFTER the done mark was made: a done mark that could not be made
+            # leaves the record unfinished, it comes again, and the notice would then be sent again; here it is
+            # sent once, by the turn that finished the record. The notice names the channel, the record's key
+            # (a sender, a channel, a number and a nonce) and a bounded last error - never the record's content;
+            # Submit-HordeSystemNotice refuses anything that looks like a secret.
+            if ($null -ne $capped) {
+                # THE NOTICE NAMES THE ERROR'S TYPE, NEVER ITS MESSAGE: a cast error quotes the value it could not cast
+                # (Cannot convert value "<the founder's answer>" to type "System.Int32"), so the message can carry the
+                # record's content. The full message stays in the runner's own log line (the refusal above).
+                $err = ([regex]::Replace("" + $capped.detailType, '\p{Cc}', ' ')).Trim()
+                if ($err.Length -gt 120) { $err = $err.Substring(0, 117) + "..." }
+                $told = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $Now -Text ("A record of the relay's " + $name + " channel was refused after " + $capped.times + " failures: " + $u.key + ". Last error type: " + $err)
+                if ($told.outcome -ceq "failed") { $line = $line + "; the founder could not be told (" + $told.reason + ")" }
+            }
+            [void]$refused.Add($line)
         }
     }
     return (New-HordeKnown -Value ([pscustomobject]@{ done = @($done.ToArray()); refused = @($refused.ToArray()); retry = @($retry.ToArray()) }))
@@ -740,17 +785,17 @@ function Invoke-HordeRelayChannelRecord {
     # journaled, it opens nothing.
     param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
     $o = Open-HordeRelayChannelRecord -Context $Context -Channel $Channel -Record $Record -Cache $Cache -Now $Now
-    if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason } }
+    if (-not $o.ok) { return [pscustomobject]@{ outcome = $o.outcome; reason = $o.reason; channelFault = $false; detail = "" } }
     $item = $o.item
     $got = $null
     try { $got = & $Channel.accept $Context $item }
-    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }
+    catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message); channelFault = $true; detail = $_.Exception.Message; detailType = $_.Exception.GetType().FullName } }
     $got = @($got) | Select-Object -Last 1
     if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayChannelOutcomes -cnotcontains "$($got.outcome)") {
-        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry") }
+        return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " answered with something that is not done, refused or retry"); channelFault = $true; detail = "it answered with something that is not done, refused or retry"; detailType = "an answer that is not done, refused or retry" }
     }
     $why = $(if ($null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
-    return [pscustomobject]@{ outcome = "$($got.outcome)"; reason = $why }
+    return [pscustomobject]@{ outcome = "$($got.outcome)"; reason = $why; channelFault = $false; detail = "" }
 }
 
 function Invoke-HordeRelayChannelTicks {

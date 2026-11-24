@@ -34,5 +34,18 @@
         @{ Name = "any-record-at-the-seq-is-the-snapshot"
            Find = '$same = ($r.meta.key -ceq $Key)'
            Replace = '$same = $true' }
+        # --- T-0467: failure marks, the count that outlives a runner ---
+        @{ Name = "failure-marks-not-read-back"
+           Find = '            if ($st.fails.ContainsKey($seqText)) { $failed = [int]$st.fails[$seqText] }'
+           Replace = '            if ($false) { $failed = [int]$st.fails[$seqText] }' }
+        @{ Name = "failure-mark-always-the-first"
+           Find = '        if ($st.fails.ContainsKey("" + $Seq)) { $n = [int]$st.fails["" + $Seq] + 1 }'
+           Replace = '        if ($false) { $n = [int]$st.fails["" + $Seq] + 1 }' }
+        @{ Name = "failure-count-by-file-miscounted"
+           Find = '$fnum = [int]$Matches[2]; if (-not $fails.ContainsKey($fk) -or $fnum -gt [int]$fails[$fk]) { $fails[$fk] = $fnum }'
+           Replace = '$fails[$fk] = 1' }
+        @{ Name = "failure-count-is-the-number-of-files"
+           Find = '$fnum = [int]$Matches[2]; if (-not $fails.ContainsKey($fk) -or $fnum -gt [int]$fails[$fk]) { $fails[$fk] = $fnum }'
+           Replace = 'if ($fails.ContainsKey($fk)) { $fails[$fk] = [int]$fails[$fk] + 1 } else { $fails[$fk] = 1 }' }
     )
 }

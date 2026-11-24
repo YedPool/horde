@@ -1328,6 +1328,151 @@ try {
     $tmps = @([System.IO.Directory]::GetFiles([System.IO.Path]::GetDirectoryName($tpath), "*.tmp"))
     Check ($why -cne "" -and $tmps.Count -eq 0) ("a ledger that cannot be moved into place says why and leaves no temp file behind (" + $tmps.Count + ")")
     }
+
+    # T-0467: A CHANNEL THAT FAILS ON A RECORD EVERY TIME IS REFUSED FOR GOOD, NOT RETRIED FOR EVER. The
+    # decisions channel's Accept is swapped for a stand-in (put back in the finally below), so the fault is the
+    # channel's and nothing else is in play: a strict-mode throw, or an answer that is none of the three.
+    Write-Host ""
+    Write-Host "--- a channel that fails on a record every time is refused for good after a few turns, and says so ---" -ForegroundColor Cyan
+    # The number is written here on purpose: a suite that read it from the code would pass for any cap.
+    $capN = 5
+    $capIs = Get-Variable -Name HordeRelayChannelFailureCap -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $decCh = Get-HordeRelayChannel -Name "decisions"
+    $realAccept = $decCh.accept
+    try {
+        Check ($capIs -eq $capN) ("the code's cap is the number the PR names (" + $capIs + ")")
+        # (1) a throw every time.
+        $W = New-World
+        $script:accepted = 0
+        $decCh.accept = { param($Context, $Item) $script:accepted++; throw "the member nope cannot be found on this object" }
+        $e = Get-Answer $W -Text "A founder's answer."
+        [void](Send-ToMachine $W $e.text)
+        $turns = @()
+        for ($i = 1; $i -le $capN; $i++) { $turns += (Invoke-Turn $W) }
+        $early = @($turns | Select-Object -First ($capN - 1))
+        $early1 = $early[0]
+        $earlyOk = $true
+        for ($i = 0; $i -lt $early.Count; $i++) { if (-not ((Has $early[$i] "retry") -and (Has $early[$i] "the channel decisions failed: the member nope") -and (Has $early[$i] ("(failure " + ($i + 1) + " of " + $capN + ")")) -and -not (Has $early[$i] "refused"))) { $earlyOk = $false } }
+        Check ($earlyOk -and $early.Count -eq ($capN - 1)) ("a throw is a retry, counted, for the first " + ($capN - 1) + " turns (" + $early1.text + ")")
+        $last = $turns[$capN - 1]
+        Check ((Has $last "refused ") -and (Has $last $e.header.from) -and (Has $last "the channel decisions failed on this record 5 times") -and (Has $last "the last: the member nope cannot be found on this object") -and -not (Has $last "retry")) ("the turn that reaches the cap refuses the record, naming the channel, the count and the last error (" + $last.text + ")")
+        Check (@((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "and the refusal is final: nothing is left unfinished"
+        $before = $script:accepted
+        $after = Invoke-Turn $W
+        Check ($before -eq $capN -and $script:accepted -eq $before -and -not (Has $after "decisions") -and -not (Has $after $e.header.from)) ("the channel is not handed the record again, and the turn is quiet about it (" + $before + " calls, " + $script:accepted + " after)")
+        # (2) an answer that is none of done, refused or retry counts the same way.
+        $W2 = New-World
+        $decCh.accept = { param($Context, $Item) $script:accepted++; return "no outcome here" }
+        [void](Send-ToMachine $W2 (Get-Answer $W2).text)
+        $t = $null
+        for ($i = 1; $i -le $capN; $i++) { $t = Invoke-Turn $W2 }
+        Check ((Has $t "refused ") -and (Has $t "failed on this record 5 times") -and (Has $t "the last: it answered with something that is not done, refused or retry")) ("a bad answer is capped like a throw (" + $t.text + ")")
+        # (3) a channel that throws twice and then works ends done, and is not refused.
+        $W3 = New-World
+        $script:flaky = 0
+        $decCh.accept = { param($Context, $Item) $script:flaky++; if ($script:flaky -le 2) { throw "a blip" }; return [pscustomobject]@{ outcome = "done"; reason = "taken" } }
+        [void](Send-ToMachine $W3 (Get-Answer $W3).text)
+        $f1 = Invoke-Turn $W3; $f2 = Invoke-Turn $W3; $f3 = Invoke-Turn $W3
+        Check ((Has $f1 "(failure 1 of 5)") -and (Has $f2 "(failure 2 of 5)") -and (Has $f3 "done ") -and -not (Has $f3 "refused") -and @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W3.home).value).Count -eq 0) ("a channel that throws twice and then succeeds ends done (" + $f3.text + ")")
+        # (4) a retry the channel asks for is never counted: far more than the cap, and still a plain retry.
+        $W4 = New-World
+        $decCh.accept = { param($Context, $Item) $script:accepted++; return [pscustomobject]@{ outcome = "retry"; reason = "the list is busy" } }
+        [void](Send-ToMachine $W4 (Get-Answer $W4).text)
+        $asked = @(); for ($i = 1; $i -le ($capN + 3); $i++) { $asked += (Invoke-Turn $W4) }
+        $stillPlain = @($asked | Where-Object { (Has $_ "retry") -and -not (Has $_ "refused") -and -not (Has $_ "failure ") }).Count
+        $unf4 = @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W4.home).value)
+        $f4 = $(if ($unf4.Count -eq 1) { $unf4[0].failures } else { -1 })
+        Check ($stillPlain -eq ($capN + 3) -and $f4 -eq 0) ("a retry the channel asks for is never capped (" + $stillPlain + " plain retries, " + $f4 + " failures kept)")
+        # (5) the box's own fault: the trust store cannot be read. Never capped, never counted.
+        $W5 = New-World
+        # The record is journaled first, by a channel that asks for a retry (uncounted); only a journaled record reaches the trust store's read.
+        $decCh.accept = { param($Context, $Item) return [pscustomobject]@{ outcome = "retry"; reason = "not yet" } }
+        [void](Send-ToMachine $W5 (Get-Answer $W5).text)
+        $null = Invoke-Turn $W5
+        $decCh.accept = { param($Context, $Item) throw "never reached" }
+        $junk5 = Join-Path $W5.home "relay\trust\devices\not-a-record.txt"
+        [System.IO.File]::WriteAllText($junk5, "x", $utf8)
+        $held5 = @(); for ($i = 1; $i -le ($capN + 3); $i++) { $held5 += (Invoke-Turn $W5) }
+        $stillHeld = @($held5 | Where-Object { (Has $_ "retry ") -and (Has $_ "the trust store cannot be read") -and @($_.lines | Where-Object { $_.StartsWith("refused ") }).Count -eq 0 -and -not (Has $_ "(failure ") }).Count
+        Remove-Item -LiteralPath $junk5
+        $marks5 = @(Get-ChildItem -LiteralPath (Join-Path $W5.home "relay\journal\in") -Recurse -File -Filter "*.fail*" -ErrorAction SilentlyContinue).Count
+        Check ($stillHeld -eq ($capN + 3) -and $marks5 -eq 0) ("an unreadable trust store holds the answer however long it lasts: never refused, never counted (" + $stillHeld + " turns, " + $marks5 + " marks; first: " + $held5[0].text + ")")
+        # (6) the same record, a trust store that cannot be read between two failures, is still counted by failures only.
+        $W6 = New-World
+        $decCh.accept = { param($Context, $Item) throw "boom" }
+        [void](Send-ToMachine $W6 (Get-Answer $W6).text)
+        $null = Invoke-Turn $W6
+        $junk6 = Join-Path $W6.home "relay\trust\devices\not-a-record.txt"
+        [System.IO.File]::WriteAllText($junk6, "x", $utf8)
+        for ($i = 1; $i -le 6; $i++) { $null = Invoke-Turn $W6 }
+        Remove-Item -LiteralPath $junk6
+        $unf6 = @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W6.home).value)
+        $f6 = $(if ($unf6.Count -eq 1) { $unf6[0].failures } else { -1 })
+        Check ($f6 -eq 1) ("six turns of an unreadable trust store add no failure to the one the channel had (" + $f6 + ")")
+        # (7) THE COUNT SURVIVES A RESTART: a fresh run context of the same home carries on from the marks.
+        $W7 = New-World
+        $decCh.accept = { param($Context, $Item) throw "after the restart" }
+        [void](Send-ToMachine $W7 (Get-Answer $W7).text)
+        for ($i = 1; $i -le 3; $i++) { $null = Invoke-Turn $W7 }
+        $c2 = New-HordeRelayRunContext -HordeHome $W7.home -Connection $W7.conn
+        if ($c2.state -cne "known") { throw ("no second context: " + $c2.reason) }
+        $W7b = [pscustomobject]@{ home = $W7.home; ctx = $c2.value; conn = $W7.conn; id = $W7.id; phone = $W7.phone; store = $W7.store; agree = $W7.agree }
+        $r4 = Invoke-Turn $W7b
+        $r5 = Invoke-Turn $W7b
+        Close-HordeRelayRunContext -Context $c2.value
+        Check ((Has $r4 "(failure 4 of 5)") -and (Has $r5 "refused ") -and (Has $r5 "failed on this record 5 times") -and (Has $r5 "the last: after the restart")) ("a runner started again carries on counting from the journal (" + $r4.text + " / " + $r5.text + ")")
+        # (8) WHERE IT SURFACES: the real runner says the refusal in its log, as a line a person or an Orc reads.
+        $W8 = New-World
+        [System.IO.File]::WriteAllText((Join-Path $W8.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50}}', $utf8)
+        $decCh.accept = { param($Context, $Item) throw "always" }
+        function Remove-HordeRelayRetiredAgreeKeys { param([string]$HordeHome = "", $Now = $null) return (New-HordeKnown -Value ([pscustomobject]@{ released = @(); problems = "" })) }
+        $e8 = Get-Answer $W8
+        [void](Send-ToMachine $W8 $e8.text)
+        $said8 = New-Object System.Collections.ArrayList
+        $r8 = Invoke-HordeRelayRun -HordeHome $W8.home -Connection $W8.conn -MaxTurns ($capN + 1) -Say { param($Line) [void]$said8.Add($Line) }
+        $log8 = @($said8)
+        $refusedLines = @($log8 | Where-Object { $_.StartsWith("refused " + $e8.header.from + "/decisions/") -and $_.Contains("the channel decisions failed on this record 5 times") -and $_.Contains("the last: always") })
+        $retryLines = @($log8 | Where-Object { $_.StartsWith("retry ") -and $_.Contains("(failure ") })
+        Check ($refusedLines.Count -eq 1 -and $retryLines.Count -eq ($capN - 1)) ("the runner's log carries each failure as a retry line and the refusal once, as 'refused <key>: ...' (" + $refusedLines.Count + " refused, " + $retryLines.Count + " retry)")
+        # (8b) NO SILENT LOSS: the founder's phone is told, once, through the machine's own notices (the log is not read by him).
+        $n8 = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
+        $mine8 = @($n8 | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("decisions") -and $_.text.Contains($e8.header.from + "/decisions/") -and $_.text.Contains("after 5 failures") -and $_.text.Contains("Last error type: System.") -and -not $_.text.Contains("always") })
+        $null = Invoke-Turn $W8
+        $null = Invoke-Turn $W8
+        $n8b = @((Read-HordeNoticeLog -Store (Join-Path $W8.home "notices")).value)
+        Check ($mine8.Count -eq 1 -and $n8b.Count -eq $n8.Count) ("a refusal by the cap sends the founder ONE notice naming the channel, the key and the last error, and later turns send no more (" + $mine8.Count + " of " + $n8.Count + " notices; " + $n8b.Count + " after two more turns)")
+        # (8c) THE NOTICE NEVER CARRIES THE RECORD'S CONTENT: a cast error quotes the value it could not cast, so a
+        # channel that casts a field of the founder's answer throws his words. The notice names the error's TYPE; the
+        # runner's own log line keeps the whole message.
+        $marker = "MARKER-the-founders-private-words-4471"
+        $expectType = ""
+        try { $null = [int]$marker } catch { $expectType = $_.Exception.GetType().FullName }
+        $W10 = New-World
+        [System.IO.File]::WriteAllText((Join-Path $W10.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50}}', $utf8)
+        $decCh.accept = { param($Context, $Item) return ([int]"MARKER-the-founders-private-words-4471") }
+        $e10 = Get-Answer $W10
+        [void](Send-ToMachine $W10 $e10.text)
+        $said10 = New-Object System.Collections.ArrayList
+        $null = Invoke-HordeRelayRun -HordeHome $W10.home -Connection $W10.conn -MaxTurns ($capN + 1) -Say { param($Line) [void]$said10.Add($Line) }
+        $n10 = @((Read-HordeNoticeLog -Store (Join-Path $W10.home "notices")).value | Where-Object { $_.from -ceq "Horde" -and $_.text.Contains("after 5 failures") })
+        $log10 = @($said10 | Where-Object { $_.StartsWith("refused ") })
+        Check ($expectType -cne "" -and $n10.Count -eq 1 -and $n10[0].text.Contains($expectType) -and -not $n10[0].text.Contains($marker) -and $log10.Count -eq 1 -and $log10[0].Contains($marker)) ("a cast error that quotes the founder's words is named by its type in the notice (" + $expectType + "), never quoted; the runner's log keeps the message (" + $n10.Count + " notice)")
+        # (9) A GAP IN THE MARKS DOES NOT MAKE THE CAP UNREACHABLE: fail1 and fail3 with fail2 deleted from outside.
+        $W9 = New-World
+        $decCh.accept = { param($Context, $Item) throw "gap" }
+        $e9 = Get-Answer $W9
+        [void](Send-ToMachine $W9 $e9.text)
+        for ($i = 1; $i -le 3; $i++) { $null = Invoke-Turn $W9 }
+        $dir9 = Split-Path -Parent (Get-RecordFile -World $W9 -Header $e9.header)
+        $mark2 = Join-Path $dir9 (([long]$e9.header.seq).ToString("D16") + ".fail2")
+        $had2 = Test-Path -LiteralPath $mark2
+        if ($had2) { [System.IO.File]::Delete($mark2) }
+        $g4 = Invoke-Turn $W9
+        $g5 = Invoke-Turn $W9
+        Check ($had2 -and (Has $g4 "(failure 4 of 5)") -and -not (Has $g4 "could not be counted") -and (Has $g5 "refused ") -and (Has $g5 "failed on this record 5 times")) ("with fail1 and fail3 and fail2 gone, the next mark is fail4 and the cap is still reached (" + $g4.text + " / " + $g5.text + ")")
+        $gone9 = @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W9.home).value).Count
+        Check ($gone9 -eq 0) "and the record is finished"
+    } finally { $decCh.accept = $realAccept }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
