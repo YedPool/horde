@@ -985,6 +985,95 @@ Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " +
     Check ($fr -like "*REPO Fix/Pf*not run (slot, memory or night ran out): 1*") ("T-0514: the pytest-all never tried is counted not run, never dropped (" + (@($fr -split "`n" | Where-Object { $_ -like "*not run*" }) -join " | ") + ")")
     Check ($fr -like "*INCOMPLETE: the night ran out before every unit ran*") "T-0514: and the night is reported incomplete, because the night ran out"
 
+    # T-0514 (c): EVERY UNIT NOT TRIED GETS A LINE SAYING WHY. The STOP night above ended with flake8-critical never asked
+    # for and pytest-all's second try never come; nightly.log said nothing about either (nights 11-20 to 11-22 the same).
+    $sl = $(if (Test-Path -LiteralPath (Join-Path $swr "nightly.log")) { [System.IO.File]::ReadAllText((Join-Path $swr "nightly.log")) } else { "" })
+    Check ($sl -like "*Fix/Ps flake8-critical -> not run, STOP file seen*") "T-0514 (c): a unit the STOP kept from its turn is logged not run, with the reason"
+    Check ($sl -like "*Fix/Ps pytest-all -> not run, it gave up waiting for the slot and its second try never came: STOP file seen*") "T-0514 (c): and pytest-all sent back whose second try never came, with the reason"
+    Check (@([regex]::Matches($fl, 'Fix/Pf pytest-all -> not ')).Count -eq 1) "T-0514 (c): a unit already logged not tried (no room) is not logged twice"
+
+    # T-0514 (a): A MEMORY GIVE-UP IS TRIED AGAIN AS SOON AS A GATE GETS ITS MEMORY, not only after every repo's first
+    # pass. Nights 11-20 to 11-22: Universal pytest-all gave up on memory early; memory came back within the hour, but its
+    # second try waited behind horde's 480 units and the night ran out first. This gate gives up on memory for the first
+    # pytest-all only; the next gate (flake8) gets its memory, so pytest-all must run again before Fix/Bm's suites.
+    $an = Join-Path $work "memback"; [void][System.IO.Directory]::CreateDirectory($an)
+    $aGate = Join-Path $an "gate.ps1"
+    [System.IO.File]::WriteAllText($aGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = @(); if ($ArgsFile -ne "") { $j = [System.IO.File]::ReadAllText($ArgsFile) | ConvertFrom-Json; foreach ($x in $j) { $a += ("" + $x) } }
+$key = $Script + " " + ($a -join " ")
+$seenF = Join-Path $PSScriptRoot "seen.txt"
+$seen = @(); if (Test-Path -LiteralPath $seenF) { $seen = @(Get-Content -LiteralPath $seenF) }
+Add-Content -LiteralPath $seenF -Value $key
+[System.IO.File]::WriteAllText($Out, "")
+if ($key -like "pytest-wrap.ps1 *-Mode all*" -and @($seen | Where-Object { $_ -like "pytest-wrap.ps1 *-Mode all*" }).Count -eq 0) { Write-Output "heavy-slot: gave up after 1 s waiting for 2.5 GB of free memory (now 1.90); nothing was run"; Write-Output "heavy-slot: released exit=125"; exit 125 }
+$i = [array]::IndexOf($a, "-NodesFile"); if ($i -ge 0) { [System.IO.File]::WriteAllText($a[$i + 1], "") }
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out); Write-Output "heavy-slot: released exit=0"; exit 0
+'@)
+    $awr = Join-Path $an "wr"
+    & git.exe clone -q $origin (Join-Path $awr "Fix__Am\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    & git.exe clone -q $qorigin (Join-Path $awr "Fix__Bm\tree"); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+    $o = @(& $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\NightlyNet.ps1") -AtTime $qNight.ToString("s") -NoTell -BisectReserveMinutes 0 -CoverageFloorPercent 0 -MutexName ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")) -WorkRoot $awr -HeavySlotScript $aGate -RunSeconds 60 -LongRunSeconds 60 -Repos "Fix/Am:pytest:main,Fix/Bm:horde:main")
+    $ac = $LASTEXITCODE
+    $aSeen = @(); if (Test-Path -LiteralPath (Join-Path $an "seen.txt")) { $aSeen = @(Get-Content -LiteralPath (Join-Path $an "seen.txt")) }
+    $aAll = @(for ($k = 0; $k -lt $aSeen.Count; $k++) { if ($aSeen[$k] -like "pytest-wrap.ps1 *-Mode all*") { $k } })
+    $aFl = @(for ($k = 0; $k -lt $aSeen.Count; $k++) { if ($aSeen[$k] -like "pytest-wrap.ps1 *-Mode flake8*") { $k } })
+    $aBm = @(for ($k = 0; $k -lt $aSeen.Count; $k++) { if ($aSeen[$k] -like "*test-a.ps1*") { $k } })
+    $aLog = $(if (Test-Path -LiteralPath (Join-Path $awr "nightly.log")) { [System.IO.File]::ReadAllText((Join-Path $awr "nightly.log")) } else { "" })
+    $arf = Join-Path $awr ("reports\" + $qNight.ToString("yyyy-MM-dd") + ".txt")
+    $ar = $(if (Test-Path -LiteralPath $arf) { [System.IO.File]::ReadAllText($arf) } else { "" })
+    Check ($ac -eq 0) ("T-0514 (a): the night ends exit 0 (" + $ac + ")")
+    Check ($aAll.Count -eq 2 -and $aFl.Count -eq 1 -and $aBm.Count -ge 1 -and $aFl[0] -lt $aBm[0]) ("T-0514 (a): Fix/Am runs first, pytest-all twice (" + (@($aSeen | ForEach-Object { ($_ -split ' ', 2)[0] + $(if ($_ -like "*-Mode all*") { ":all" } elseif ($_ -like "*-Mode flake8*") { ":flake8" } elseif ($_ -like "*test-a.ps1*") { ":test-a" } else { "" }) }) -join ", ") + ")")
+    $aGw = @(for ($k = 0; $k -lt $aSeen.Count; $k++) { if ($aSeen[$k] -like "guards-wrap.ps1*") { $k } })
+    Check ($aAll.Count -eq 2 -and $aBm.Count -ge 1 -and $aGw.Count -ge 1 -and $aAll[1] -gt $aFl[0] -and $aAll[1] -lt $aGw[0] -and $aAll[1] -lt $aBm[0]) "T-0514 (a): pytest-all's memory give-up is tried again as soon as flake8's gate got its memory, before the other repo's guards and suites"
+    Check ($aLog -like "*Fix/Am pytest-all: a gate got its memory, so it is tried again now*") "T-0514 (a): the log says so"
+    Check ($ar -like "*REPO Fix/Am*not run (slot, memory or night ran out): 0*" -and $ar -like "*REPO Fix/Bm*not run (slot, memory or night ran out): 0*") "T-0514 (a): and every unit ran"
+
+    # T-0514 (c), BISECTS: A BISECT STEP THAT DID NOT RUN SAYS SO, AND ITS RUNS ARE THE RUNS THAT HAPPENED. Night 11-25: 12
+    # Universal bisects, 7 whose gates gave up on memory and 5 stopped by the clock at 05:48:24 without a line; every one
+    # said "inconclusive in 1 runs", with 0 run. Two nights each: the first green, the second with one node red.
+    $bc = Join-Path $work "bisect-notrun"; [void][System.IO.Directory]::CreateDirectory($bc)
+    $bcGate = Join-Path $bc "gate.ps1"
+    [System.IO.File]::WriteAllText($bcGate, @'
+param([string]$Script, [string]$Worktree, [string]$Out, [string]$MinFreeGB, [string]$MinCommitHeadroomGB, [string]$WaitSeconds, [string]$RunSeconds, [string]$ArgsFile)
+$a = @(); if ($ArgsFile -ne "") { $j = [System.IO.File]::ReadAllText($ArgsFile) | ConvertFrom-Json; foreach ($x in $j) { $a += ("" + $x) } }
+Add-Content -LiteralPath (Join-Path $PSScriptRoot "calls.txt") -Value ($Script + " " + ($a -join " "))
+[System.IO.File]::WriteAllText($Out, "")
+$code = [int]([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "exit.txt")).Trim())
+$m = [array]::IndexOf($a, "-Mode"); $mode = $(if ($m -ge 0) { $a[$m + 1] } else { "" })
+$i = [array]::IndexOf($a, "-NodesFile")
+if ($mode -ceq "flake8") { $code = 0 }
+elseif ($mode -ceq "all" -and $i -ge 0) { $body = $(if ($code -eq 0) { "" } else { "tests/test_b.py::test_c`n" }); [System.IO.File]::WriteAllText($a[$i + 1], $body) }
+elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot "giveup.txt")) { Write-Output "heavy-slot: gave up after 1 s waiting for 2.5 GB of free memory (now 1.90); nothing was run"; Write-Output "heavy-slot: released exit=125"; exit 125 }
+Write-Output ("heavy-slot: running " + $Script + " with 5 GB free, output in " + $Out)
+Write-Output ("heavy-slot: released exit=" + $code)
+exit $code
+'@)
+    function Invoke-BisectNotRunNight { param([string]$Name, [string[]]$Night2Args, [switch]$GiveUp)
+        $dir = Join-Path $bc $Name; [void][System.IO.Directory]::CreateDirectory($dir)
+        $org = Join-Path $dir "origin"; [void][System.IO.Directory]::CreateDirectory($org)
+        [void](Git $org @("init", "-q", "-b", "main")); [System.IO.File]::WriteAllText((Join-Path $org "a.txt"), "base"); [void](Git $org @("add", "-A")); [void](Git $org @("commit", "-q", "-m", "base"))
+        $wr = Join-Path $dir "wr"
+        & git.exe clone -q $org (Join-Path $wr ("Fix__" + $Name + "\tree")); if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+        $base = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $root "tools\NightlyNet.ps1"), "-AtTime", $qNight.ToString("s"), "-NoTell", "-CoverageFloorPercent", "0", "-WorkRoot", $wr, "-HeavySlotScript", $bcGate, "-Repos", ("Fix/" + $Name + ":pytest:main"))
+        if (Test-Path -LiteralPath (Join-Path $bc "giveup.txt")) { Remove-Item -LiteralPath (Join-Path $bc "giveup.txt") -Force }
+        [System.IO.File]::WriteAllText((Join-Path $bc "exit.txt"), "0")
+        [void]@(& $exe @($base + @("-BisectReserveMinutes", "0", "-RunSeconds", "60", "-LongRunSeconds", "60", "-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+        foreach ($n in @("one", "two")) { [System.IO.File]::WriteAllText((Join-Path $org ($n + ".txt")), $n); [void](Git $org @("add", "-A")); [void](Git $org @("commit", "-q", "-m", $n)) }
+        [System.IO.File]::WriteAllText((Join-Path $bc "exit.txt"), "1")
+        if ($GiveUp) { [System.IO.File]::WriteAllText((Join-Path $bc "giveup.txt"), "") }
+        [void]@(& $exe @($base + $Night2Args + @("-MutexName", ("Local\horde-nightly-test-" + [guid]::NewGuid().ToString("N")))))
+        $log = [System.IO.File]::ReadAllText((Join-Path $wr "nightly.log"))
+        return $log.Substring([Math]::Max(0, $log.LastIndexOf("window open")))
+    }
+    $gNight = Invoke-BisectNotRunNight -Name "Bg" -GiveUp -Night2Args @("-BisectReserveMinutes", "30", "-RunSeconds", "60", "-LongRunSeconds", "60")
+    Check ($gNight -like "*Fix/Bg bisect pytest-node|tests/test_b.py::test_c at ???????? not run: the gate gave up waiting for memory (exit 125)*") ("T-0514 (c): a bisect step whose gate gave up on memory says so (" + (@($gNight -split "`n" | Where-Object { $_ -like "*bisect*" }) -join " | ") + ")")
+    Check ($gNight -like "*Fix/Bg bisect pytest-node|tests/test_b.py::test_c -> inconclusive  in 0 runs*") "T-0514 (c): and counts 0 runs, not 1"
+    $kWait = [int][math]::Floor(((Get-HordeNightlyRunCutoff -Now $qNight) - (Get-Date)).TotalSeconds) - 1800
+    $kNight = Invoke-BisectNotRunNight -Name "Bk" -Night2Args @("-BisectReserveMinutes", "0", "-RunSeconds", "1800", "-LongRunSeconds", "60", "-MinFitSeconds", "60", "-SlotWaitSeconds", ("" + $kWait))
+    Check ($kNight -like "*Fix/Bk bisect pytest-node|tests/test_b.py::test_c at ???????? not run: the night has no room for it (needs 1800 s*") ("T-0514 (c): a bisect step the clock stopped says so (" + (@($kNight -split "`n" | Where-Object { $_ -like "*bisect*" }) -join " | ") + ")")
+    Check ($kNight -like "*Fix/Bk bisect pytest-node|tests/test_b.py::test_c -> inconclusive  in 0 runs*") "T-0514 (c): and counts 0 runs, not 1"
+
     # ONLY PYTEST'S SUMMARY NAMES A FAILED TEST (2026-11-05: the night's report listed a captured log line,
     # "ERROR    root:web_reader_dialog.py:2953 ...", as a newly red test). A fake python replays that shape.
     $replay = Join-Path $work "replay"

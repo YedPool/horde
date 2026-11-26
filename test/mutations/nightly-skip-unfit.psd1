@@ -9,8 +9,8 @@
            Find = 'slot wait " + (Get-NightlySlotWait) + " s)"); continue }'
            Replace = 'slot wait " + (Get-NightlySlotWait) + " s)"); break }' }
         @{ Name = "unfit-unit-not-logged"
-           Find = '$Ctx.incomplete = "the night ran out before every unit ran"; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not tried'
-           Replace = '$Ctx.incomplete = "the night ran out before every unit ran"; [void]($Ctx.repo + " " + $u + " -> not tried' }
+           Find = '$Ctx.notRunTold[$u] = $true; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not tried'
+           Replace = '$Ctx.notRunTold[$u] = $true; [void]($Ctx.repo + " " + $u + " -> not tried' }
         @{ Name = "unfit-unit-night-still-complete"
            Find = 'if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; '
            Replace = 'if ($secs -le 0) { ' }
