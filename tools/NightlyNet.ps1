@@ -129,6 +129,14 @@ $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:MemoryShort = $false
 $script:MemoryGiveUps = 0
 $script:MemoryHolders = @()
+# A gate got its memory after a give-up: the units sent back on MEMORY are tried again at once (T-0514 a), not after
+# every repo's first pass. Nights 11-20 to 11-22 Universal pytest-all's memory give-up waited behind horde's 480 units.
+# The highest floor a gate RAN at since the last memory give-up: a unit is tried again only once memory at least its
+# own floor was had (a horde gate at 1 GB says nothing of pytest's 2.5 GB; trying then would spend its only second
+# try on another full wait).
+$script:MemoryBack = [pscustomobject]@{ freeGB = 0.0; commitGB = 0.0 }
+# Every repo's context, for those early second tries (set before the first pass).
+$script:NightCtxs = @()
 # The app closer's night: acted or given up (done), when to try next, how many tries, its report lines.
 $script:AppCloser = @{ done = $false; nextTry = [datetime]::MinValue; tries = 0; lines = @() }
 # The night's probe answers (tools/nightly/Probes.ps1), asked once, the first time a unit declares a need.
@@ -329,6 +337,8 @@ function Invoke-NightlySlot {
     # Fail fast on memory, and keep who held it (core Update-HordeNightlyMemoryShort, Read-HordeNightlyMemoryHolders).
     $wasShort = $script:MemoryShort
     $script:MemoryShort = Update-HordeNightlyMemoryShort -Short $script:MemoryShort -Gate $gate
+    if (Test-HordeNightlyMemoryGiveUp -Gate $gate) { $script:MemoryBack = [pscustomobject]@{ freeGB = 0.0; commitGB = 0.0 } }
+    elseif (("" + $gate) -match '(?m)^heavy-slot: running ') { $script:MemoryBack = [pscustomobject]@{ freeGB = [math]::Max([double]$script:MemoryBack.freeGB, [double]$floor.freeGB); commitGB = [math]::Max([double]$script:MemoryBack.commitGB, [double]$floor.commitGB) } }
     if (Test-HordeNightlyMemoryGiveUp -Gate $gate) {
         $script:MemoryGiveUps++
         $h = @(Read-HordeNightlyMemoryHolders -Gate $gate)
@@ -436,7 +446,7 @@ function New-NightlyContext {
     $merges = @(Get-HordeNightlyMerges -GitLines $gitLines -Owed $owed)
     return [pscustomobject]@{ repo = $repo; kind = $kind; branch = $branch; dir = $dir; tree = $tree; tip = $tip; statePath = $statePath; state = $state
         merges = $merges; notes = @($notes); units = @(); verdicts = @{}; skipReasons = @{}; guards = [pscustomobject]@{ state = "not run"; text = "" }; unrun = 0; compare = $null; culprits = @(); incomplete = ""
-        later = [System.Collections.Generic.List[string]]::new(); requeued = @{}; pytestDecided = $false }
+        later = [System.Collections.Generic.List[string]]::new(); requeued = @{}; pytestDecided = $false; memoryLater = @{}; notRunTold = @{} }
 }
 
 function Get-NightlyUnits {
@@ -482,6 +492,21 @@ function Invoke-NightlyPhaseOne {
     Invoke-NightlyUnitQueue -Ctx $Ctx -Queue @($units) -Tag $tag -Cutoff $Cutoff -RunCutoff $RunCutoff
 }
 
+function Invoke-NightlyMemoryRetries {
+    # T-0514 (a): once a gate has RUN at a floor at least a unit's own (its memory was had), every unit any repo sent back
+    # ON MEMORY at that floor or lower is tried again now, as a second try (never sent back again). A unit sent back because
+    # the SLOT was held keeps its T-0504 place after every repo's first pass: the slot holder may well still hold it.
+    param([datetime]$Cutoff, [datetime]$RunCutoff)
+    $back = $script:MemoryBack
+    if ([double]$back.freeGB -le 0) { return }
+    foreach ($c in @($script:NightCtxs)) {
+        $q = @($c.later | Where-Object { $c.memoryLater.ContainsKey($_) -and [double]$c.memoryLater[$_].freeGB -le [double]$back.freeGB -and [double]$c.memoryLater[$_].commitGB -le [double]$back.commitGB })
+        if ($q.Count -eq 0) { continue }
+        foreach ($u in $q) { [void]$c.later.Remove($u); Write-NightlyNetLine ($c.repo + " " + $u + ": a gate got its memory, so it is tried again now") }
+        Invoke-NightlyUnitQueue -Ctx $c -Queue $q -Tag ($c.repo -replace '/', '_') -Cutoff $Cutoff -RunCutoff $RunCutoff -Retries
+    }
+}
+
 function Invoke-NightlyUnitQueue {
     # The units of one repo, in order. A unit whose gate ran nothing (core Test-HordeNightlySlotLost: 125 or 128) is
     # tried again ONCE (T-0491), so a slot held by another lane early in the night costs a later try, not the unit.
@@ -490,6 +515,7 @@ function Invoke-NightlyUnitQueue {
     # 2-unit queue it came back 4 minutes later, with the memory still held, and gave up again; 480 horde units then ran.
     param($Ctx, [string[]]$Queue, [string]$Tag, [datetime]$Cutoff, [datetime]$RunCutoff, [switch]$Retries)
     foreach ($u in @($Queue)) {
+        if (-not $Retries) { Invoke-NightlyMemoryRetries -Cutoff $Cutoff -RunCutoff $RunCutoff }
         if (Test-Path -LiteralPath $StopFile) { $Ctx.incomplete = "STOP file seen"; break }
         # A unit whose declared need the night lacks is SKIPPED with the reason: not run, not red, never green.
         if ($Ctx.kind -ceq "horde") {
@@ -503,12 +529,12 @@ function Invoke-NightlyUnitQueue {
         # A unit that no longer fits is SKIPPED, never a break: a shorter unit behind it may still fit (T-0514; night
         # 2026-11-22 the 3600 s pytest-all no longer fitted and the break dropped flake8-critical behind it, which did).
         # It gets no verdict, so Complete-NightlyUnrun counts it not run.
-        if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not tried, the night has no room for it (needs " + $need + " s, " + [int][math]::Floor(($RunCutoff - (Get-Date)).TotalSeconds) + " s to the run cutoff, slot wait " + (Get-NightlySlotWait) + " s)"); continue }
+        if ($secs -le 0) { $Ctx.incomplete = "the night ran out before every unit ran"; $Ctx.notRunTold[$u] = $true; Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not tried, the night has no room for it (needs " + $need + " s, " + [int][math]::Floor(($RunCutoff - (Get-Date)).TotalSeconds) + " s to the run cutoff, slot wait " + (Get-NightlySlotWait) + " s)"); continue }
         if ($u -ceq "pytest-all") {
             $nf = Join-Path $RunDir ($tag + "-nodes.txt")
             if (Test-Path -LiteralPath $nf) { Remove-Item -LiteralPath $nf -Force }
             $r = Invoke-NightlySlot -Kind "pytest" -Script "pytest-wrap.ps1" -Worktree $WrapDir -ScriptArgs @("-Tree", $Ctx.tree, "-Mode", "all", "-NodesFile", $nf) -Tag ($tag + "-pytest-all") -Seconds $LongRunSeconds
-            if ((Test-HordeNightlySlotLost $r) -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u)) { $Ctx.requeued[$u] = $true; $Ctx.later.Add($u); Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $r.code + "): back on the end of the night's queue"); continue }
+            if ((Test-HordeNightlySlotLost $r) -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u)) { $Ctx.requeued[$u] = $true; $Ctx.later.Add($u); if (Test-HordeNightlyMemoryGiveUp -Gate $r.gate) { $Ctx.memoryLater[$u] = (Get-NightlyFloor $Ctx.kind) }; Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $r.code + "): back on the end of the night's queue"); continue }
             $Ctx.pytestDecided = $true
             $nodes = @()
             if (Test-Path -LiteralPath $nf) { $nodes = @(Get-Content -LiteralPath $nf | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) }
@@ -524,7 +550,7 @@ function Invoke-NightlyUnitQueue {
         $uclock = [System.Diagnostics.Stopwatch]::StartNew()
         $script:LastSlotRun = $null
         $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag ($tag + "-" + $u) -AtTip -Seconds $secs
-        if ($v -ceq "unrun" -and (Test-HordeNightlySlotLost $script:LastSlotRun) -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u)) { $Ctx.requeued[$u] = $true; $Ctx.later.Add($u); Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $script:LastSlotRun.code + "): back on the end of the night's queue"); continue }
+        if ($v -ceq "unrun" -and (Test-HordeNightlySlotLost $script:LastSlotRun) -and -not $Retries -and -not $Ctx.requeued.ContainsKey($u)) { $Ctx.requeued[$u] = $true; $Ctx.later.Add($u); if (Test-HordeNightlyMemoryGiveUp -Gate $script:LastSlotRun.gate) { $Ctx.memoryLater[$u] = (Get-NightlyFloor $Ctx.kind) }; Write-NightlyNetLine ($Ctx.repo + " " + $u + " gave up waiting for the slot (exit " + $script:LastSlotRun.code + "): back on the end of the night's queue"); continue }
         # Past a limit cut short by the end of the night is not a hang: it is unrun, and runs again tomorrow.
         if ($v -ceq "hung" -and $secs -lt $need) { $v = "unrun" }
         Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> " + $v + " in " + [int]$uclock.Elapsed.TotalSeconds + " s")
@@ -532,6 +558,8 @@ function Invoke-NightlyUnitQueue {
         $Ctx.verdicts[$u] = $v
         if ($v -ceq "unrun") { $Ctx.unrun++ }
     }
+    # The memory may have come back on this repo's last unit: try those now, before the next repo's guards.
+    if (-not $Retries) { Invoke-NightlyMemoryRetries -RunCutoff $RunCutoff -Cutoff $Cutoff }
 }
 
 function Complete-NightlyUnrun {
@@ -540,6 +568,16 @@ function Complete-NightlyUnrun {
     $Ctx.unrun += @($Ctx.units | Where-Object { -not $Ctx.verdicts.ContainsKey($_) -and $_ -cne "pytest-all" }).Count
     # pytest-all never decided (sent back with no second try, not tried because it no longer fitted, or a STOP): unrun.
     if (@($Ctx.units) -ccontains "pytest-all" -and -not $Ctx.pytestDecided) { $Ctx.unrun++; if ($Ctx.incomplete -eq "") { $Ctx.incomplete = "the pytest run did not complete" } }
+    # T-0514 (c): each of them gets ONE line saying why (nights 11-20 to 11-22 the log never said which units were not
+    # tried). A unit already logged as not tried (no room) is not logged again.
+    foreach ($u in @($Ctx.units)) {
+        if ($Ctx.verdicts.ContainsKey($u) -or $Ctx.notRunTold.ContainsKey($u)) { continue }
+        if ($u -ceq "pytest-all" -and $Ctx.pytestDecided) { continue }
+        $why = $(if ($Ctx.incomplete -ne "") { $Ctx.incomplete } else { "it was never reached" })
+        if ($Ctx.requeued.ContainsKey($u)) { $why = "it gave up waiting for the slot and its second try never came: " + $why }
+        $Ctx.notRunTold[$u] = $true
+        Write-NightlyNetLine ($Ctx.repo + " " + $u + " -> not run, " + $why)
+    }
 }
 
 function Complete-NightlyCompare {
@@ -566,16 +604,26 @@ function Invoke-NightlyBisect {
         # The reserve is shared by the whole repo: each unit gets its fair share of what is left (at least 2 runs).
         $budget = [Math]::Max(2, [int][Math]::Ceiling($script:BisectLeft / [Math]::Max(1, $left)))
         $left--
+        # T-0514 (c): the runs that HAPPENED. Find-HordeNightlyCulprit counts a step before it asks, so a step whose gate ran
+        # nothing, or that the clock or a STOP kept from starting, was reported as a run: night 11-25, 12 bisects each
+        # "inconclusive in 1 runs" with 0 run (7 gates gave up on memory, 5 stopped by the clock with no line at all).
+        $script:BisectRan = 0
         $isRed = {
             param($sha)
             $key = $sha + "|" + $u
             if ($memo.ContainsKey($key)) { return $memo[$key] }
-            if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $RunSeconds) -or (Test-Path -LiteralPath $StopFile)) { return $null }
+            $at = $Ctx.repo + " bisect " + $u + " at " + $sha.Substring(0, 8) + " not run: "
+            if (Test-Path -LiteralPath $StopFile) { Write-NightlyNetLine ($at + "STOP file seen"); return $null }
+            if (-not (Test-NightlyMayStart -Cutoff $Cutoff -Seconds $RunSeconds)) { Write-NightlyNetLine ($at + "the night has no room for it (needs " + $RunSeconds + " s, " + [int][math]::Floor(($Cutoff - (Get-Date)).TotalSeconds) + " s to the cutoff, slot wait " + (Get-NightlySlotWait) + " s)"); return $null }
             try {
                 [void](Invoke-NightlyGit $Ctx.tree @("checkout", "--quiet", "--detach", $sha))
                 [void](Invoke-NightlyGit $Ctx.tree @("clean", "-fdq"))
             } catch { Write-NightlyNetLine ("bisect checkout of " + $sha + " failed: " + $_.Exception.Message); return $null }
+            $script:LastSlotRun = $null
             $v = Invoke-NightlyUnit -Ctx $Ctx -Unit $u -Tag (($Ctx.repo -replace '/', '_') + "-bisect-" + $sha.Substring(0, 8) + "-" + $u)
+            if (Test-HordeNightlySlotLost $script:LastSlotRun) {
+                Write-NightlyNetLine ($at + $(if (Test-HordeNightlyMemoryGiveUp -Gate $script:LastSlotRun.gate) { "the gate gave up waiting for memory" } else { "the gate ran nothing" }) + " (exit " + $script:LastSlotRun.code + ")")
+            } elseif ($null -ne $script:LastSlotRun) { $script:BisectRan++ }
             $res = ConvertTo-HordeNightlyBisectAnswer $v
             $memo[$key] = $res
             return $res
@@ -583,9 +631,10 @@ function Invoke-NightlyBisect {
         $found = Find-HordeNightlyCulprit -Merges $shas -IsRed $isRed -MaxRuns $budget -Base $Ctx.state.lastTip
         $merge = $null
         if ($found.state -ceq "found") { $merge = @($Ctx.merges | Where-Object { $_.sha -ceq $found.sha })[0] }
-        $Ctx.culprits += [pscustomobject]@{ unit = $u; state = $found.state; sha = $found.sha; merge = $merge; runs = $found.runs; between = $found.between }
-        $script:BisectLeft = [Math]::Max(0, $script:BisectLeft - [int]$found.runs)
-        Write-NightlyNetLine ($Ctx.repo + " bisect " + $u + " -> " + $found.state + " " + $found.sha + " in " + $found.runs + " runs")
+        $ran = [int]$script:BisectRan
+        $Ctx.culprits += [pscustomobject]@{ unit = $u; state = $found.state; sha = $found.sha; merge = $merge; runs = $ran; between = $found.between }
+        $script:BisectLeft = [Math]::Max(0, $script:BisectLeft - $ran)
+        Write-NightlyNetLine ($Ctx.repo + " bisect " + $u + " -> " + $found.state + " " + $found.sha + " in " + $ran + " runs")
     }
     [void](Invoke-NightlyGit $Ctx.tree @("checkout", "--quiet", "--detach", $Ctx.tip))
 }
@@ -698,6 +747,7 @@ try {
         exit 0
     }
     $suiteCutoff = $cutoff.AddMinutes(-$reserve)
+    $script:NightCtxs = @($ctxs)
     foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff }
     # The second tries after every repo's first pass (T-0504), then the counts and the compare.
     foreach ($c in $ctxs) { Invoke-NightlyPhaseOne -Ctx $c -Cutoff $suiteCutoff -RunCutoff $cutoff -Retries }
