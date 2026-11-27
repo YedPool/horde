@@ -281,7 +281,17 @@ try {
     $null = Invoke-App @{ cmd = "refresh"; id = $hid }
     $chat = Invoke-App @{ cmd = "chat"; id = $hid }
     $photos = @(); if ($chat.ok) { $photos = @($chat.value.items | Where-Object { $_.kind -ceq "photo" }) }
-    Check ($photos.Count -eq 1 -and $photos[0].code -ceq "delivered" -and $inbox.Count -eq 1 -and $photos[0].file -ceq $inbox[0].Name) ("the app shows the photo once, delivered, with the PC's file name (" + $(if ($photos.Count) { $photos[0].words } else { "none" }) + ")")
+    # NO TAKEN YET (T-0391 slice 4): the line is in the Thrall's mailbox and no session's own hook has confirmed it, so the photo is
+    # on its way, not delivered - the app must not say the Thrall was told.
+    Check ($photos.Count -eq 1 -and $photos[0].code -cne "delivered" -and $photos[0].words -ceq "Photo on its way to the PC.") ("with no TAKEN from the Thrall's session the app shows the photo as on its way, not delivered (" + $(if ($photos.Count) { $photos[0].code + ": " + $photos[0].words } else { "none" }) + ")")
+    # THE TAKEN: the receiving session's own hook confirms the line, in the record the stand-in answers its status from; the real
+    # run asks the status through the messenger port as it does for a real session.
+    Check ($photoPosts.Count -eq 1 -and (Set-HordeTestFleetTaken -Folder $fake -Id $photoPosts[0].id -Stage "taken")) "CONTROL: the Thrall's session takes the photo's line (the stand-in's record says taken)"
+    $run = Invoke-Run -Turns 2
+    $null = Invoke-App @{ cmd = "refresh"; id = $hid }
+    $chat = Invoke-App @{ cmd = "chat"; id = $hid }
+    $photos = @(); if ($chat.ok) { $photos = @($chat.value.items | Where-Object { $_.kind -ceq "photo" }) }
+    Check ($photos.Count -eq 1 -and $photos[0].code -ceq "delivered" -and $inbox.Count -eq 1 -and $photos[0].file -ceq $inbox[0].Name) ("once the Thrall's session has taken it the app shows the photo once, delivered, with the PC's file name (" + $(if ($photos.Count) { $photos[0].words } else { "none" }) + ")")
     $pdf = Invoke-App @{ cmd = "photo"; b64 = (ConvertTo-HordeRelayBase64Url -Bytes ([System.Text.Encoding]::ASCII.GetBytes("%PDF-1.7 not a photo"))); id = ([guid]::NewGuid().ToString("N")) }
     Check ($pdf.ok -and $pdf.value.ok -eq $false -and $pdf.value.reason.Contains("not a picture")) "a PDF is refused on the phone in a plain line, and nothing is sent"
 

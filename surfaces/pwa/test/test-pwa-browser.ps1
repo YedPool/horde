@@ -612,8 +612,18 @@ try {
     Check ($null -ne $dims -and [math]::Max($dims[0], $dims[1]) -eq 1600 -and $dims[1] -eq [math]::Round(1600 * 2000 / 3000)) ("a photo is shrunk to 1600 px on its longest side, its shape kept (" + $(if ($null -ne $dims) { "" + $dims[0] + " x " + $dims[1] } else { "none" }) + ")")
     $photoPosts = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") })
     Check ($photoPosts.Count -eq 1 -and $landed.Count -eq 1 -and $photoPosts[0].body.Contains($landed[0].FullName)) ("one line to the Thrall names the file's path (" + $photoPosts.Count + ")")
+    # NO TAKEN YET (T-0391 slice 4): the line is in the Thrall's mailbox, no session's own hook has confirmed it, so the receipt says
+    # the photo is on its way and never that the Thrall was told.
+    $null = Invoke-Browser @{ cmd = "chatRefresh" }
+    $w2 = Invoke-Browser @{ cmd = "chatWait"; text = "Photo on its way to the PC." }
+    $w2b = Invoke-Browser @{ cmd = "chatWait"; text = "Photo saved on the PC, and the Thrall told."; timeoutMs = 3000 }
+    Check ($w2.ok -and $w2.value.found -and $w2b.ok -and -not $w2b.value.found) "with no TAKEN from the Thrall's session the receipt says the photo is on its way, and not that the Thrall was told"
+    # THE TAKEN: the receiving session's own hook confirms the line, in the record the stand-in answers its status from.
+    Check ($photoPosts.Count -eq 1 -and (Set-HordeTestFleetTaken -Folder $fake -Id $photoPosts[0].id -Stage "taken")) "CONTROL: the Thrall's session takes the photo's line (the stand-in's record says taken)"
+    $run = Invoke-Run -Turns 2
+    $null = Invoke-Browser @{ cmd = "chatRefresh" }
     $w3 = Invoke-Browser @{ cmd = "chatWait"; text = "Photo saved on the PC, and the Thrall told." }
-    Check ($w3.ok -and $w3.value.found) "the photo's receipt shows under it, in the app's own words"
+    Check ($w3.ok -and $w3.value.found) "once the Thrall's session has taken it, the photo's receipt shows under it, in the app's own words"
     $fake1 = Join-Path $work "evil.jpg"
     [System.IO.File]::WriteAllText($fake1, "<!DOCTYPE html><html><script>alert(1)</script></html>", $utf8)
     $np = Invoke-Browser @{ cmd = "chatPhoto"; path = $fake1; mailbox = $mailbox; expectNone = $true }

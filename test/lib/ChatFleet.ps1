@@ -79,3 +79,19 @@ function Get-HordeTestFleetPosts {
     if (-not (Test-Path -LiteralPath $store)) { return @() }
     return @(Get-ChildItem -LiteralPath $store -Filter "*.json" | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json })
 }
+
+function Set-HordeTestFleetTaken {
+    # The receiving session's own hook has taken message -Id: the record the stand-in keeps for that id (store\<id>.json, the one
+    # its `mail status` answers from) now says stage -Stage: wezfleet's own word "taken" by default (the messenger maps it to the
+    # port's seen), or "handed-over", the earlier of the two TAKEN stages. The port's word "seen" is NOT wezfleet's, and the
+    # messenger reads it as no answer at all. It is the file the stand-in writes at a post, changed the way the real hook changes the real record; the program
+    # that READS it - horde's own status call - is left as it is. $true when the record was there and is changed.
+    param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][string]$Id, [ValidateSet("handed-over", "taken")][string]$Stage = "taken")
+    $path = Join-Path (Join-Path $Folder "store") ($Id + ".json")
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $rec = [System.IO.File]::ReadAllText($path, $utf8) | ConvertFrom-Json
+    $rec.stage = $Stage
+    [System.IO.File]::WriteAllText($path, ($rec | ConvertTo-Json -Compress -Depth 4), $utf8)
+    return $true
+}
