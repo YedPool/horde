@@ -145,7 +145,7 @@ try {
         $text = [System.IO.File]::ReadAllText((Join-Path $root ($bf -replace '/', '\')))
         foreach ($m in [regex]::Matches($text, '(?m)^\. \(Join-Path .*"([A-Za-z]+\\[^"]+\.ps1)"\)')) {
             $dep = $m.Groups[1].Value -replace '\\', '/'
-            Check (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles)) -ccontains $dep) ("the builder's " + $dep + ", dot-sourced by " + $bf + ", is counted as the page or the deploy's own code")
+            Check (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + @(Get-HordeRelayDeployHelperFiles)) -ccontains $dep) ("the builder's " + $dep + ", dot-sourced by " + $bf + ", is counted as the page, the deploy's own code or a shared helper")
         }
     }
     # The Worker's imports, followed through this repository's own relays' code (no relay named): the
@@ -180,9 +180,17 @@ try {
     }
     $sh = Get-HordeRelayPublishShipped -Checkout $repo
     Check ($sh.state -ceq "known" -and (@($sh.value.workerPrefixes) -join ",") -ceq "relays/zorbrelay/" -and (@($sh.value.workerExcept) -join ",") -ceq "relays/zorbrelay/test/") "the deployed relay's folder, from the port, is the Worker's, but its tests"
-    Check ((@($sh.value.workerFiles) -join ",") -ceq "cli/RelayDeploy.ps1,core/JsonText.ps1,relay/js/more.js,relay/js/protocol.js,relays/Port.ps1") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
+    Check ((@($sh.value.workerFiles) -join ",") -ceq "cli/RelayDeploy.ps1,relay/js/more.js,relay/js/protocol.js,relays/Port.ps1") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
     Check ((@($sh.value.pageFiles) -ccontains "surfaces/pwa/page/app.js") -and (@($sh.value.pageFiles) -ccontains "surfaces/pwa/Site.ps1") -and -not (@($sh.value.pageFiles) -ccontains "cli/RelayDeploy.ps1")) "the site's sources and its builder are the page, and the deploy's own code is not"
     Check ((@($sh.value.sharedFiles) -join ",") -ceq "relay/js/protocol.js") ("shared: the Worker's files the site serves too, and not one it imports that the site does not serve (" + (@($sh.value.sharedFiles) -join ",") + ")")
+    # A shared helper the deploy loads is not the Worker (T-0435): a change to only it is ignored.
+    $hc = Get-HordeRelayPublishClasses -Shipped $sh.value -Paths @("core/JsonText.ps1")
+    Check (@($hc.worker).Count -eq 0 -and @($hc.page).Count -eq 0 -and (@($hc.ignored) -join ",") -ceq "core/JsonText.ps1") ("a change to only core/JsonText.ps1 is ignored, not the Worker (worker=" + (@($hc.worker) -join ",") + " ignored=" + (@($hc.ignored) -join ",") + ")")
+    $helpers = @(Get-HordeRelayDeployHelperFiles)
+    Check (($helpers -ccontains "core/JsonText.ps1") -and -not (@(Get-HordeRelayDeployMachineryFiles) -ccontains "core/JsonText.ps1")) "the helper list holds core/JsonText.ps1 and the machinery list no longer does"
+    Check ((@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + $helpers) | Sort-Object -Unique).Count -eq (@(Get-HordeRelayDeployBuildFiles).Count + @(Get-HordeRelayDeployMachineryFiles).Count + $helpers.Count)) "the build, machinery and helper lists share no file"
+    # CONTROL: the dot-source check fails on a file in none of the three lists.
+    Check (-not (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + $helpers) -ccontains "core/Unclassified.ps1")) "CONTROL: a dot-sourced file in none of the lists is not counted as classified"
 
     Write-Host ""
     Write-Host "--- the port's bundle ---" -ForegroundColor Cyan
