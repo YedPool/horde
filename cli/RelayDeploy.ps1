@@ -60,15 +60,26 @@ function Get-HordeRelayDeployBuildFiles {
     # The code that builds the site, as repository paths: Site.ps1 and the files it and this file
     # dot-source. A change to any of them can change every built file, so the supervisor counts it as the
     # page (cli/RelayPublish.ps1); test/test-relay-publish.ps1 reads the dot-source lines of this file and
-    # Site.ps1 and fails when one is in neither this list nor the machinery's.
+    # Site.ps1 and fails when one is in none of this list, the machinery's or the helpers'
+    # (Get-HordeRelayDeployHelperFiles).
     return @("surfaces/pwa/Site.ps1", "core/Tristate.ps1", "core/FileAtomic.ps1")
 }
 
 function Get-HordeRelayDeployMachineryFiles {
-    # The deploy's own code outside the relay's folder: this file, the parser that reads its record, and
+    # The deploy's own code outside the relay's folder: this file and
     # the port that runs a relay's deploy. A change to it is a change to how a deploy is made, which the supervisor never runs by
     # itself (review of PR 263): it counts as the Worker, warned, never deployed (cli/RelayPublish.ps1).
-    return @("cli/RelayDeploy.ps1", "core/JsonText.ps1", "relays/Port.ps1")
+    return @("cli/RelayDeploy.ps1", "relays/Port.ps1")
+}
+
+function Get-HordeRelayDeployHelperFiles {
+    # Shared helpers the deploy loads (dot-sources) that are neither the page's build code nor the deploy's
+    # own code: the parser that reads its record is used across Horde, so an edit to it is not a change to
+    # how a deploy is made. cli/RelayPublish.ps1 does not count them as the Worker or the page (T-0435);
+    # they fall to ignored. LIMIT: a change to a helper that gives wrong values without a throw is caught
+    # only by the suites, not by this hold. test/test-relay-publish.ps1 fails when a file the builder
+    # dot-sources is in none of the three lists.
+    return @("core/JsonText.ps1")
 }
 
 function Get-HordeRelayDeploySiteHashes {
