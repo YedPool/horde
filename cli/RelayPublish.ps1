@@ -22,7 +22,10 @@
 #                change to it runs at the next pass anyway, deployed or not;
 #        PAGE    the files the site serves (Site.ps1's list) and the code that builds them
 #                (Get-HordeRelayDeployBuildFiles);
-#        IGNORED everything else - tests, core, docs, planning, other relays' machine code.
+#        IGNORED everything else - tests, core, docs, planning, other relays' machine code, and the shared
+#                helpers the deploy loads (Get-HordeRelayDeployHelperFiles, today core/JsonText.ps1): a helper
+#                is not the Worker. A change to one that gives wrong values without a throw is caught only by
+#                the suites, not by this hold (T-0435).
 #   2. A WORKER file changed that the Worker does not share with the page: no deploy, and nothing is
 #      bundled - a change there can alter storage or the API, and a person reads it first. Told once.
 #   3. Otherwise, when a PAGE file or a SHARED one changed (the protocol, the page files the Worker
