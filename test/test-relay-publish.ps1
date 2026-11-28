@@ -141,13 +141,23 @@ try {
     Write-Host ""
     Write-Host "--- what the deploy ships is derived, not listed ---" -ForegroundColor Cyan
     # The build's own list: every file the builder dot-sources is in it.
-    foreach ($bf in @(@(Get-HordeRelayDeployBuildFiles) + "cli/RelayDeploy.ps1")) {
-        $text = [System.IO.File]::ReadAllText((Join-Path $root ($bf -replace '/', '\')))
-        foreach ($m in [regex]::Matches($text, '(?m)^\. \(Join-Path .*"([A-Za-z]+\\[^"]+\.ps1)"\)')) {
+    $helpers = @(if (Get-Command Get-HordeRelayDeployHelperFiles -ErrorAction SilentlyContinue) { Get-HordeRelayDeployHelperFiles })
+    Check ([bool](Get-Command Get-HordeRelayDeployHelperFiles -ErrorAction SilentlyContinue)) "the deploy has a list of shared helpers it loads (T-0435)"
+    $unclassified = {
+        param([string]$Text)
+        $out = @()
+        foreach ($m in [regex]::Matches($Text, '(?m)^\. \(Join-Path .*"([A-Za-z]+\\[^"]+\.ps1)"\)')) {
             $dep = $m.Groups[1].Value -replace '\\', '/'
-            Check (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + @(Get-HordeRelayDeployHelperFiles)) -ccontains $dep) ("the builder's " + $dep + ", dot-sourced by " + $bf + ", is counted as the page, the deploy's own code or a shared helper")
+            if (-not (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + $helpers) -ccontains $dep)) { $out += $dep }
         }
+        return $out
     }
+    foreach ($bf in @(@(Get-HordeRelayDeployBuildFiles) + "cli/RelayDeploy.ps1")) {
+        $got = @(& $unclassified ([System.IO.File]::ReadAllText((Join-Path $root ($bf -replace '/', '\')))))
+        Check ($got.Count -eq 0) ("every file " + $bf + " dot-sources is counted as the page, the deploy's own code or a shared helper (unclassified: " + ($got -join ",") + ")")
+    }
+    Check ((@(& $unclassified '. (Join-Path $PSScriptRoot "core\Unclassified.ps1")') -join ",") -ceq "core/Unclassified.ps1") "CONTROL: an unclassified dot-sourced file is caught"
+    Check (@(& $unclassified '. (Join-Path $PSScriptRoot "core\JsonText.ps1")').Count -eq 0) "CONTROL: a listed helper is not flagged"
     # The Worker's imports, followed through this repository's own relays' code (no relay named): the
     # protocol and the account client are imported by the Worker, so they are the Worker's.
     $relayCode = @(Get-ChildItem -LiteralPath (Join-Path $root "relays") -Recurse -File -Filter "*.js" | Where-Object { $_.FullName -notmatch '\\test\\' } | ForEach-Object { $_.FullName.Substring($root.Length + 1) -replace '\\', '/' })
@@ -186,11 +196,8 @@ try {
     # A shared helper the deploy loads is not the Worker (T-0435): a change to only it is ignored.
     $hc = Get-HordeRelayPublishClasses -Shipped $sh.value -Paths @("core/JsonText.ps1")
     Check (@($hc.worker).Count -eq 0 -and @($hc.page).Count -eq 0 -and (@($hc.ignored) -join ",") -ceq "core/JsonText.ps1") ("a change to only core/JsonText.ps1 is ignored, not the Worker (worker=" + (@($hc.worker) -join ",") + " ignored=" + (@($hc.ignored) -join ",") + ")")
-    $helpers = @(Get-HordeRelayDeployHelperFiles)
     Check (($helpers -ccontains "core/JsonText.ps1") -and -not (@(Get-HordeRelayDeployMachineryFiles) -ccontains "core/JsonText.ps1")) "the helper list holds core/JsonText.ps1 and the machinery list no longer does"
     Check ((@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + $helpers) | Sort-Object -Unique).Count -eq (@(Get-HordeRelayDeployBuildFiles).Count + @(Get-HordeRelayDeployMachineryFiles).Count + $helpers.Count)) "the build, machinery and helper lists share no file"
-    # CONTROL: the dot-source check fails on a file in none of the three lists.
-    Check (-not (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles) + $helpers) -ccontains "core/Unclassified.ps1")) "CONTROL: a dot-sourced file in none of the lists is not counted as classified"
 
     Write-Host ""
     Write-Host "--- the port's bundle ---" -ForegroundColor Cyan
