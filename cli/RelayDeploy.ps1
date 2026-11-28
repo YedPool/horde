@@ -60,7 +60,8 @@ function Get-HordeRelayDeployBuildFiles {
     # The code that builds the site, as repository paths: Site.ps1 and the files it and this file
     # dot-source. A change to any of them can change every built file, so the supervisor counts it as the
     # page (cli/RelayPublish.ps1); test/test-relay-publish.ps1 reads the dot-source lines of this file and
-    # Site.ps1 and fails when one is in neither this list nor the machinery's.
+    # Site.ps1 and fails when one is in none of this list, the machinery's or the helpers'
+    # (Get-HordeRelayDeployHelperFiles).
     return @("surfaces/pwa/Site.ps1", "core/Tristate.ps1", "core/FileAtomic.ps1")
 }
 
